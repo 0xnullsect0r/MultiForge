@@ -448,6 +448,67 @@ You need a first-class debugging stack:
 - docs, warnings, certifications
 - operational hardening
 
+## M7 — Ownership Enforcement in Real Source
+- wire OwnerToken/ViolationLogger/reroute logic (multiforge-runtime) into real
+  net.minecraft.* mutation sites via multiforge-patches/01-ownership/
+- connective tissue between M0/M1 scaffolding (already built, pure-Java) and
+  M2's region-tick MVP
+- exit gate: 01-ownership patches apply cleanly against a fresh :setup;
+  `./gradlew build -Pmc=true` succeeds; ownership-fixture GameTest proves
+  warn-not-crash-and-eventually-correct; deterministic-mode regression shows
+  byte-identical world save vs. an unpatched baseline fork on a fixed seed
+
+## M8 — Region Tick Loop
+- fulfills M2's region-tick MVP against real source: rewrites
+  MinecraftServer.runServer dispatch through TickRegionScheduler
+  (multiforge-patches/02-region-tick/); converts per-world mutable
+  ServerLevel fields to RegionizedData<T> slots
+  (multiforge-patches/03-world-data/)
+- M7's interim reroute target (main-executor defer) is replaced with real
+  RegionizedTaskQueue.queueChunkTask(...) dispatch
+- exit gate: deterministic-mode regression on real region-tick dispatch; no
+  blocking calls on a region worker thread (verified via strict-mode
+  regression run)
+
+## M9 — Chunk System Port
+- Moonrise-equivalent port: binds already-built
+  NewChunkHolder/ChunkHolderManager to real
+  ChunkMap/DistanceManager/ServerChunkCache
+  (multiforge-patches/04-chunk-system/)
+- largest and riskiest patch group; own milestone(s), sequenced as multiple
+  landable sub-steps like M7
+- exit gate: chunk loading/unloading/ticket lifecycle
+  deterministic-regression-verified region-by-region
+
+## M10 — Entity Migration + Networking
+- Entity#teleportAsync binds to EntityMigrationCoordinator
+  (multiforge-patches/05-entity-migration/); gameplay packet handlers in
+  ServerGamePacketListenerImpl hop to sender's owner region via
+  RegionizedTaskQueue (multiforge-patches/06-networking/)
+- exit gate: cross-region entity migration correctness test (no dual-writer
+  windows, no lost UUID references); packet-handler region-hop regression
+
+## M11 — Persistence + Globals
+- wires AutoSaveRunner/RegionJournal into the chunk pipeline
+  (multiforge-patches/07-persistence/); moves
+  weather/time/border/dragon/wither/raids/scoreboards/command dispatch to a
+  dedicated global-region tick (multiforge-patches/08-globals/)
+- exit gate: crash-safety replay test (WAL journal recovery); global-tick
+  systems verified to not require per-region ownership
+
+## M12 — Event Routing
+- IEventBus.post honors @DispatchDomain annotations (already defined in
+  multiforge-api/, currently ignored at post time)
+  (multiforge-patches/09-events/)
+- exit gate: event dispatch domain/ordering contract regression
+  (REGION/GLOBAL/LEGACY_SERIAL routing verified per-listener)
+
+Each milestone from M7 onward touching net.minecraft.* repeats the same
+discipline: deterministic-mode regression before landing, patches grouped
+per-directory (multiforge-patches/<NN-name>/) for rebase scoping, and
+auto-reroute+warn as the default with strict-mode only behind an explicit
+boot flag.
+
 ---
 
 ## Detailed Engineering Work Breakdown

@@ -1,0 +1,24 @@
+--- a/net/minecraft/world/level/Level.java
++++ b/net/minecraft/world/level/Level.java
+@@ -214,6 +214,21 @@
+ 
+     @Override
+     public boolean setBlock(BlockPos p_46605_, BlockState p_46606_, int p_46607_, int p_46608_) {
++        // MultiForge (multiforge-patches/01-ownership/): reroute+warn if
++        // called off the owning region/tick thread, instead of mutating
++        // world state from an arbitrary caller thread. See
++        // net.multiforge.neoforge.OwnershipGuard and docs/blueprint.md M7.
++        if (!net.multiforge.neoforge.OwnershipGuard.canMutate("Level.setBlock")) {
++            final BlockPos multiforge$pos = p_46605_;
++            final BlockState multiforge$state = p_46606_;
++            final int multiforge$flags = p_46607_;
++            final int multiforge$recursionLeft = p_46608_;
++            net.multiforge.neoforge.OwnershipGuard.reroute(
++                    "Level.setBlock",
++                    () -> this.setBlock(multiforge$pos, multiforge$state, multiforge$flags, multiforge$recursionLeft));
++            return false;
++        }
++
+         if (this.isOutsideBuildHeight(p_46605_)) {
+             return false;
+         } else if (!this.isClientSide && this.isDebug()) {

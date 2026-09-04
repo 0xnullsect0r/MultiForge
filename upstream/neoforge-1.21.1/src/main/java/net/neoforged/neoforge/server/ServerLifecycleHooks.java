@@ -91,6 +91,20 @@ public class ServerLifecycleHooks {
     }
 
     public static void handleServerAboutToStart(final MinecraftServer server) {
+        // MultiForge fork addition: this method runs on the dedicated
+        // server's own "Server thread" (called from
+        // DedicatedServer.initServer(), before loadLevel()), so this is
+        // the earliest safe point to record which thread is the
+        // legitimate single-threaded tick executor for
+        // net.multiforge.runtime.ownership.OwnershipEnforcer's ownership
+        // guard (multiforge-patches/01-ownership/) — without touching
+        // MinecraftServer.runServer itself. The reroute target is bound
+        // to the server's own executor as an interim measure until M2
+        // wires a real per-region RegionizedTaskQueue (see
+        // docs/blueprint.md M7/M8).
+        net.multiforge.runtime.ownership.OwnershipEnforcer.bindTickThread(Thread.currentThread());
+        net.multiforge.runtime.ownership.OwnershipEnforcer.bindRerouteTarget(server::execute);
+
         currentServer = server;
         // on the dedi server we need to force the stuff to setup properly
         LogicalSidedProvider.setServer(() -> server);

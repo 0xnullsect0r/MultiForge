@@ -1,0 +1,44 @@
+--- a/net/minecraft/world/level/LevelAccessor.java
++++ b/net/minecraft/world/level/LevelAccessor.java
+@@ -46,20 +46,41 @@
+     }
+ 
+     default void scheduleTick(BlockPos p_186465_, Block p_186466_, int p_186467_, TickPriority p_186468_) {
++        // MultiForge (multiforge-patches/01-ownership/): see Level.setBlock for rationale.
++        if (!net.multiforge.neoforge.OwnershipGuard.canMutate("LevelAccessor.scheduleTick")) {
++            net.multiforge.neoforge.OwnershipGuard.reroute(
++                    "LevelAccessor.scheduleTick", () -> this.scheduleTick(p_186465_, p_186466_, p_186467_, p_186468_));
++            return;
++        }
+         this.getBlockTicks().schedule(this.createTick(p_186465_, p_186466_, p_186467_, p_186468_));
+     }
+ 
+     default void scheduleTick(BlockPos p_186461_, Block p_186462_, int p_186463_) {
++        if (!net.multiforge.neoforge.OwnershipGuard.canMutate("LevelAccessor.scheduleTick")) {
++            net.multiforge.neoforge.OwnershipGuard.reroute(
++                    "LevelAccessor.scheduleTick", () -> this.scheduleTick(p_186461_, p_186462_, p_186463_));
++            return;
++        }
+         this.getBlockTicks().schedule(this.createTick(p_186461_, p_186462_, p_186463_));
+     }
+ 
+     LevelTickAccess<Fluid> getFluidTicks();
+ 
+     default void scheduleTick(BlockPos p_186474_, Fluid p_186475_, int p_186476_, TickPriority p_186477_) {
++        if (!net.multiforge.neoforge.OwnershipGuard.canMutate("LevelAccessor.scheduleTick")) {
++            net.multiforge.neoforge.OwnershipGuard.reroute(
++                    "LevelAccessor.scheduleTick", () -> this.scheduleTick(p_186474_, p_186475_, p_186476_, p_186477_));
++            return;
++        }
+         this.getFluidTicks().schedule(this.createTick(p_186474_, p_186475_, p_186476_, p_186477_));
+     }
+ 
+     default void scheduleTick(BlockPos p_186470_, Fluid p_186471_, int p_186472_) {
++        if (!net.multiforge.neoforge.OwnershipGuard.canMutate("LevelAccessor.scheduleTick")) {
++            net.multiforge.neoforge.OwnershipGuard.reroute(
++                    "LevelAccessor.scheduleTick", () -> this.scheduleTick(p_186470_, p_186471_, p_186472_));
++            return;
++        }
+         this.getFluidTicks().schedule(this.createTick(p_186470_, p_186471_, p_186472_));
+     }
+ 

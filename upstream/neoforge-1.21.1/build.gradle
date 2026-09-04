@@ -14,7 +14,20 @@ ext.isPreReleaseVersion = project.minecraft_version.contains('w') || project.min
 if (isPreReleaseVersion) {
     project.version = "${project.neoforge_snapshot_next_stable}.0-alpha.${project.minecraft_version}.${(new Date()).format('yyyyMMdd.HHmmss', TimeZone.getTimeZone('UTC'))}"
 } else {
-    project.version = gradleutils.version.toString()
+    // MultiForge fork note: gradleutils.version requires `git describe --tags`
+    // to find a tag reachable from HEAD, which upstream NeoForge's own repo
+    // always has. MultiForge vendors this fork directly into a single flat
+    // repo (no nested .git, no NeoForge release-tag history), and day-to-day
+    // work happens on `develop`, which does not carry the outer repo's own
+    // release tags (those live on `main`, cut per CLAUDE.md's milestone
+    // workflow). Rather than fabricate a git tag here, fall back to a static,
+    // MultiForge-scoped version string when the lookup fails.
+    try {
+        project.version = gradleutils.version.toString()
+    } catch (Exception e) {
+        project.version = "${project.minecraft_version}-multiforge-fork"
+        logger.warn("gradleutils version calculation failed (${e.message}); using fallback version ${project.version}")
+    }
 }
 
 // Print version, generally useful to know - also appears on CI
@@ -47,6 +60,15 @@ license {
             // Add all NeoForge sources
             files.from rootProject.fileTree("src", {
                 include "**/*.java"
+                // MultiForge fork addition: net/multiforge/** is MultiForge's
+                // own proprietary glue code (see net.multiforge.neoforge.*),
+                // not NeoForge's LGPL-licensed source — it carries the
+                // MultiForge proprietary header instead (multiforge-runtime's
+                // buildSrc/src/main/resources/license-header.txt), which
+                // this NeoForge-specific header check correctly does not
+                // recognize as a violation-free match, so it is out of scope
+                // here rather than treated as a missing/wrong NeoForge header.
+                exclude "**/net/multiforge/**"
             })
         }
     }

@@ -1,5 +1,6 @@
 plugins {
     id("multiforge.base")
+    `maven-publish`
 }
 
 description = "MultiForge runtime — region manager, schedulers, diagnostics."
@@ -33,5 +34,30 @@ tasks.processResources {
     filesMatching("multiforge-runtime.properties.in") {
         expand(tokens)
         rename { "multiforge-runtime.properties" }
+    }
+}
+
+// Published to mavenLocal so the vendored NeoForge fork build
+// (upstream/neoforge-1.21.1, a separate Gradle build with no includeBuild
+// wiring to this one) can depend on it as a normal versioned artifact —
+// see multiforge-patches/README.md and docs/blueprint.md M7.
+publishing {
+    publications {
+        create<MavenPublication>("maven") {
+            from(components["java"])
+            groupId = "net.multiforge"
+            artifactId = "multiforge-runtime"
+            pom {
+                name.set("MultiForge Runtime")
+                description.set(project.description)
+                licenses {
+                    license {
+                        name.set("MultiForge Proprietary")
+                        url.set("https://github.com/0xnullsect0r/MultiForge/blob/main/LICENSE")
+                        distribution.set("repo")
+                    }
+                }
+            }
+        }
     }
 }
