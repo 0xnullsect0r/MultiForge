@@ -24,6 +24,10 @@ import net.multiforge.api.scheduler.ServerDomains;
 import net.multiforge.api.spi.SchedulerHost;
 import net.multiforge.api.world.ChunkPos;
 import net.multiforge.api.world.WorldRef;
+import net.multiforge.runtime.chunk.ChunkHolderManager;
+import net.multiforge.runtime.chunk.ChunkTaskScheduler;
+import net.multiforge.runtime.chunk.Ticket;
+import net.multiforge.runtime.chunk.TicketType;
 import net.multiforge.runtime.config.MultiForgeConfig;
 import net.multiforge.runtime.ownership.OwnerToken;
 import net.multiforge.runtime.region.Region;
@@ -51,6 +55,8 @@ public final class MultiThreadedSchedulerHost implements SchedulerHost, AutoClos
 
     private final MultiForgeConfig config;
     private final ConcurrentMap<String, ThreadedRegionizer> regionizers = new ConcurrentHashMap<>();
+    private final ConcurrentMap<String, ChunkHolderManager> chunkManagers = new ConcurrentHashMap<>();
+    private final ChunkTaskScheduler chunkTaskScheduler;
     private final Function<WorldRef, ThreadedRegionizer> regionizerFactory;
     private final RegionizedTaskQueue taskQueue;
     private final TickRegionScheduler scheduler;
@@ -77,6 +83,10 @@ public final class MultiThreadedSchedulerHost implements SchedulerHost, AutoClos
             return r.regionAtChunk(x, z);
         });
         this.scheduler = new TickRegionScheduler(config.tickWorkerCount(), body, taskQueue, 128);
+        this.chunkTaskScheduler = new ChunkTaskScheduler(taskQueue, (w, x, z) -> {
+            ThreadedRegionizer r = regionizerFor(w);
+            return r.regionAtChunk(x, z);
+        });
 
         // Global region is exposed under a synthetic world so it uses the
         // same inbox+tick plumbing as any other region. Publish it into
@@ -123,11 +133,29 @@ public final class MultiThreadedSchedulerHost implements SchedulerHost, AutoClos
         });
     }
 
-    /** Ensure a chunk is occupied and its region is registered with the scheduler. */
+    public ChunkTaskScheduler chunkTaskScheduler() {
+        return chunkTaskScheduler;
+    }
+
+    public ChunkHolderManager chunkManagerFor(WorldRef world) {
+        return chunkManagers.computeIfAbsent(world.dimensionId(), id -> new ChunkHolderManager(world));
+    }
+
+    /**
+     * Ensure a chunk is occupied and its region is registered with the
+     * scheduler. Also creates a holder in the world's
+     * {@link ChunkHolderManager} owned by the region, and drops a
+     * {@link TicketType#PLUGIN} ticket so the chunk stays loaded at
+     * BORDER level.
+     */
     public Region touchChunk(WorldRef world, int chunkX, int chunkZ) {
         ThreadedRegionizer regionizer = regionizerFor(world);
-        Region r = regionizer.addChunk(new ChunkPos(chunkX, chunkZ));
+        ChunkPos pos = new ChunkPos(chunkX, chunkZ);
+        Region r = regionizer.addChunk(pos);
         scheduler.register(r);
+        ChunkHolderManager manager = chunkManagerFor(world);
+        manager.createHolder(pos, r.id());
+        manager.addTicket(r.id(), pos, Ticket.of(TicketType.PLUGIN, "multiforge:touch"));
         return r;
     }
 
