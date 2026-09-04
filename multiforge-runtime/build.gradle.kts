@@ -11,6 +11,9 @@ dependencies {
     // Slf4j API only. NeoForge already ships the logger binding at runtime.
     implementation("org.slf4j:slf4j-api:2.0.13")
 
+    // TOML parser for multiforge-server.toml.
+    implementation("org.tomlj:tomlj:1.1.1")
+
     // JetBrains annotations for @ApiStatus.Internal etc.
     compileOnly("org.jetbrains:annotations:24.1.0")
 
