@@ -21,6 +21,7 @@ rootProject.name = "multiforge"
 include(
     "multiforge-license",
     "multiforge-license-cli",
+    "multiforge-api",
     "multiforge-runtime",
 )
 
