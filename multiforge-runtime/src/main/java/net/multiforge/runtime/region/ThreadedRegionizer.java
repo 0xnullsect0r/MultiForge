@@ -13,6 +13,7 @@ import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.function.Consumer;
 import net.multiforge.api.world.ChunkPos;
 import net.multiforge.api.world.WorldRef;
@@ -43,6 +44,7 @@ public final class ThreadedRegionizer {
     private final int sectionChunkShift;
     private final ConcurrentMap<SectionPos, Region> sectionToRegion = new ConcurrentHashMap<>();
     private final Object writeLock = new Object();
+    private final List<RegionListener> listeners = new CopyOnWriteArrayList<>();
 
     public ThreadedRegionizer(WorldRef world, int sectionChunkShift) {
         if (sectionChunkShift < 0 || sectionChunkShift > 8) {
@@ -58,6 +60,21 @@ public final class ThreadedRegionizer {
 
     public int sectionChunkShift() {
         return sectionChunkShift;
+    }
+
+    /**
+     * Register a {@link RegionListener} that receives merge/split/death
+     * notifications for regions in this world. Listeners fire under the
+     * regionizer's write lock; they must not block or reenter the
+     * regionizer.
+     */
+    public void addListener(RegionListener listener) {
+        listeners.add(Objects.requireNonNull(listener, "listener"));
+    }
+
+    /** Remove a previously-added listener. No-op if not present. */
+    public void removeListener(RegionListener listener) {
+        listeners.remove(listener);
     }
 
     /** @return the region currently owning {@code (chunkX, chunkZ)}, or null if unoccupied. */
@@ -94,8 +111,10 @@ public final class ThreadedRegionizer {
 
             Set<Region> neighbours = neighbouringRegions(section);
             Region target;
+            boolean freshRegion = false;
             if (neighbours.isEmpty()) {
                 target = new Region(RegionId.next(), sectionChunkShift);
+                freshRegion = true;
             } else {
                 target = pickAnchor(neighbours);
                 neighbours.remove(target);
@@ -105,7 +124,10 @@ public final class ThreadedRegionizer {
             }
             target.addSection(section);
             sectionToRegion.put(section, target);
-            target.markReady(); // safe: transient → ready
+            if (freshRegion) {
+                target.markReady(); // safe: transient → ready
+                fireRegionCreated(target);
+            }
             return target;
         }
     }
@@ -123,6 +145,7 @@ public final class ThreadedRegionizer {
             region.removeSection(section);
             if (region.sectionCount() == 0) {
                 region.markDead();
+                fireRegionDied(region);
                 return;
             }
             // Recompute connected components; each becomes its own region.
@@ -133,12 +156,17 @@ public final class ThreadedRegionizer {
     /** Force a merge of {@code other} into {@code target}. Package-private for {@link Region} tests. */
     void mergeInto(Region target, Region other) {
         if (target == other) return;
+        // Fire the pre-death listener notification BEFORE touching state so
+        // listeners can fold side state while both regions are still queryable
+        // (chunks.md:60-72). After fold, sections migrate and other dies.
+        fireRegionsMerging(target, other);
         Set<SectionPos> drained = other.drainSections();
         for (SectionPos s : drained) {
             target.addSection(s);
             sectionToRegion.put(s, target);
         }
         other.markDead();
+        fireRegionDied(other);
     }
 
     private Set<Region> neighbouringRegions(SectionPos section) {
@@ -197,6 +225,8 @@ public final class ThreadedRegionizer {
                 sectionToRegion.put(s, fresh);
             }
             fresh.markReady();
+            fireRegionSplit(region, fresh);
+            fireRegionCreated(fresh);
             orphaned.removeAll(component);
         }
     }
@@ -219,5 +249,21 @@ public final class ThreadedRegionizer {
     /** Test/observability hook — visit every live region exactly once. */
     public void forEachRegion(Consumer<Region> visitor) {
         for (Region r : regions()) visitor.accept(r);
+    }
+
+    private void fireRegionCreated(Region region) {
+        for (RegionListener l : listeners) l.onRegionCreated(region);
+    }
+
+    private void fireRegionsMerging(Region surviving, Region dying) {
+        for (RegionListener l : listeners) l.onRegionsMerging(surviving, dying);
+    }
+
+    private void fireRegionSplit(Region source, Region child) {
+        for (RegionListener l : listeners) l.onRegionSplit(source, child);
+    }
+
+    private void fireRegionDied(Region region) {
+        for (RegionListener l : listeners) l.onRegionDied(region);
     }
 }
