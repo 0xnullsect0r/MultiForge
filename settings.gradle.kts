@@ -27,6 +27,7 @@ include(
     "multiforge-api",
     "multiforge-runtime",
     "multiforge-client",
+    "multiforge-installer",
 )
 
 // Modules that require a vendored NeoForge workspace at
@@ -36,7 +37,6 @@ val mcEnabled = providers.gradleProperty("mc").getOrElse("false").toBoolean()
 if (mcEnabled) {
     include(
         "multiforge-patches",
-        "multiforge-installer",
         "multiforge-testmods",
         "multiforge-bench",
     )
