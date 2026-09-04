@@ -11,5 +11,9 @@
 - [`migration.md`](migration.md) — entity migration (M4): two-phase
   remove/add protocol, MigrationState machine, passenger-tree
   atomicity, cross-dimension, player-join flow.
+- [`global-network.md`](global-network.md) — global systems + network
+  routing + operator commands (M5): GlobalSystems tickers,
+  NetworkPacketRouter, RegionPinManager, /multiforge command tree,
+  per-mod warn budget.
 - More coming (Operator Handbook, Mod Porting Cookbook, Debugging
   Manual, Performance Tuning) as milestones land.

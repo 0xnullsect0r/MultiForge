@@ -31,7 +31,17 @@ public final class ViolationLogger {
     private ViolationLogger() {}
 
     public static void warn(String site, String detail) {
-        String key = site;
+        warn(null, site, detail);
+    }
+
+    /**
+     * Site + per-mod scoped warn — each mod gets its own budget so a
+     * chatty mod can't crowd out other mods' warnings. Pass {@code
+     * null} for {@code modId} for site-scoped bucketing (matches the
+     * pre-M5 single-arg overload).
+     */
+    public static void warn(String modId, String site, String detail) {
+        String key = modId == null ? site : (modId + "::" + site);
         Bucket b = BUCKETS.computeIfAbsent(key, k -> new Bucket(PER_MIN, WINDOW_NANOS));
         long dropped = b.tryConsume();
         if (dropped == 0L) {
