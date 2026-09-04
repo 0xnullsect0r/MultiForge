@@ -470,16 +470,46 @@ You need a first-class debugging stack:
   makes chunk-save order legitimately non-deterministic.
 
 ## M8 — Region Tick Loop
-- fulfills M2's region-tick MVP against real source: rewrites
-  MinecraftServer.runServer dispatch through TickRegionScheduler
-  (multiforge-patches/02-region-tick/); converts per-world mutable
-  ServerLevel fields to RegionizedData<T> slots
-  (multiforge-patches/03-world-data/)
-- M7's interim reroute target (main-executor defer) is replaced with real
-  RegionizedTaskQueue.queueChunkTask(...) dispatch
-- exit gate: deterministic-mode regression on real region-tick dispatch; no
-  blocking calls on a region worker thread (verified via strict-mode
-  regression run)
+Broken into 8 landable sub-steps, sized similarly to M7's sub-steps:
+- **Sub-step 1 (DONE):** `RegionizedData<T>` pure-Java slot API +
+  `RegionListener` callback interface, wired into `ThreadedRegionizer`
+  so subsystems can fold/peel per-region state atomically with
+  merge/split.
+- **Sub-step 2 (DONE):** `PhasedRegionTickBody` — 6-phase composition
+  (INBOUND_MAILBOX, BLOCK_FLUID_TICKS, ENTITY_AI, BLOCK_ENTITIES,
+  REGION_EVENTS, FLUSH_OUTBOUND) matching blueprint.md §"Region local
+  phase ordering". Auto-wires `TickRegionScheduler` and
+  `RegionizedTaskQueue` as `RegionListener`s in
+  `MultiThreadedSchedulerHost.regionizerFor(...)` so region death
+  automatically deregisters and merges move inboxes.
+- **Sub-step 3 (DONE):** `MultiForgeRegionizedRuntime` static holder
+  the fork patches call at bootstrap and shutdown; `ServerDomains`
+  gains `uninstall()` so shutdown properly unbinds the API-side host.
+- **Sub-step 4 (DONE):** fork's `ServerLifecycleHooks` calls
+  `MultiForgeRegionizedRuntime.install(defaults, no-op body)` at
+  `handleServerAboutToStart` and `.shutdown()` at
+  `handleServerStopped`. GameTest fixture at
+  `net/multiforge/testfixtures/RegionizedRuntimeTests.java` asserts
+  the host is reachable during real server runtime.
+- Sub-step 5 (pending): rewrite `MinecraftServer.tickChildren`'s
+  per-`ServerLevel` loop to dispatch per-region via
+  `MultiForgeRegionizedRuntime.current().regionizerFor(...)` +
+  `RegionizedTaskQueue.queueChunkTask(...)`, replacing M7's
+  main-executor-defer reroute target with real region dispatch.
+- Sub-step 6 (pending): decompose `ServerLevel.tick` into per-region
+  phases wired via `PhasedRegionTickBody`.
+- Sub-step 7 (pending, `multiforge-patches/03-world-data/`): convert
+  per-world mutable `ServerLevel` fields (block-tick list, fluid-tick
+  list, block-event queue, entity iterator caches) to `RegionizedData<T>`
+  slots.
+- Sub-step 8 (pending): strict-mode watchdog behind
+  `-Dmultiforge.regiontick.strict=true` fails on blocking waits from a
+  region worker; upgrade `WorldDiff` to canonicalized/semantic NBT
+  diff so parallel-scheduled chunk save order stays testable.
+
+Exit gate for the milestone: deterministic-mode regression on real
+region-tick dispatch; no blocking calls on a region worker thread
+(verified via strict-mode regression run).
 
 ## M9 — Chunk System Port
 - Moonrise-equivalent port: binds already-built

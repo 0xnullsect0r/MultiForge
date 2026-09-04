@@ -41,8 +41,12 @@ dependencies {
     // MultiForge fork addition: the ownership-enforcement fixture under
     // net/multiforge/testfixtures/ (src/main/java) asserts against
     // ProbeRegistry/OwnershipEnforcer directly rather than only through
-    // observable in-world behavior.
+    // observable in-world behavior. multiforge-api is a compile-time dep
+    // because MultiThreadedSchedulerHost implements a multiforge-api
+    // interface (SchedulerHost), so consumers need the api on their
+    // classpath to reference host methods at compile time.
     implementation "net.multiforge:multiforge-runtime:${project.multiforge_runtime_version}"
+    implementation "net.multiforge:multiforge-api:${project.multiforge_runtime_version}"
 
     junitImplementation(platform("org.junit:junit-bom:${project.jupiter_api_version}"))
     junitImplementation "org.junit.jupiter:junit-jupiter-params"

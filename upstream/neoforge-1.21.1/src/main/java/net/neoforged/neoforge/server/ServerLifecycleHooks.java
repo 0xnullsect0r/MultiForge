@@ -105,6 +105,23 @@ public class ServerLifecycleHooks {
         net.multiforge.runtime.ownership.OwnershipEnforcer.bindTickThread(Thread.currentThread());
         net.multiforge.runtime.ownership.OwnershipEnforcer.bindRerouteTarget(server::execute);
 
+        // MultiForge M8 sub-step 4: bring up the process-wide regionized
+        // runtime. The tick body is a no-op for now — the M8 patches
+        // that decompose ServerLevel.tick into per-region phases
+        // (multiforge-patches/02-region-tick/ + /03-world-data/) will
+        // wire a real PhasedRegionTickBody in a follow-up. Installing
+        // early here means every subsequent runtime consumer
+        // (RegionizedData slots, per-world regionizers) has a live host
+        // to reach for.
+        try {
+            net.multiforge.runtime.scheduler.MultiForgeRegionizedRuntime.install(
+                    net.multiforge.runtime.config.MultiForgeConfig.defaults(),
+                    region -> {});
+        } catch (IllegalStateException already) {
+            // Test harnesses (GameTestServer) may install once per JVM and reuse
+            // across successive server instances — that's fine, keep going.
+        }
+
         currentServer = server;
         // on the dedi server we need to force the stuff to setup properly
         LogicalSidedProvider.setServer(() -> server);
@@ -137,6 +154,18 @@ public class ServerLifecycleHooks {
     }
 
     public static void handleServerStopped(final MinecraftServer server) {
+        // MultiForge M8 sub-step 4: tear down the regionized runtime.
+        // Called from every server-stop path, including the dedi
+        // GameTestServer between test runs, so a fresh install can
+        // happen next boot.
+        try {
+            net.multiforge.runtime.scheduler.MultiForgeRegionizedRuntime.shutdown();
+        } catch (Throwable t) {
+            // Never let a runtime-shutdown hiccup prevent normal server-stop cleanup.
+            org.slf4j.LoggerFactory.getLogger("multiforge.lifecycle")
+                    .warn("MultiForge regionized runtime shutdown threw; continuing normal shutdown", t);
+        }
+
         if (!server.isDedicatedServer()) RegistryManager.revertToFrozen();
         NeoForge.EVENT_BUS.post(new ServerStoppedEvent(server));
         currentServer = null;
