@@ -42,17 +42,32 @@ jobs:
           mkdir -p "$RELEASE_DIR"
 
           # Runtime library — mod authors compile against this.
-          cp multiforge-runtime/build/libs/*.jar "$RELEASE_DIR/"
+          cp multiforge-runtime/build/libs/multiforge-runtime-*.jar "$RELEASE_DIR/" \
+              2>/dev/null || cp multiforge-runtime/build/libs/*.jar "$RELEASE_DIR/"
           # License verifier + signer.
           cp multiforge-license/build/libs/*.jar "$RELEASE_DIR/"
           cp multiforge-license-cli/build/distributions/*.tar "$RELEASE_DIR/"
 
-          # Installer + server jar — produced only when the NeoForge
-          # workspace is vendored (mc=true). We build them best-effort
-          # so a source-only release still ships the runtime jars.
-          if [ -d upstream/neoforge-1.21.1 ]; then
-            ./gradlew :multiforge-installer:jar :multiforge-installer:serverJar -Pmc=true --no-daemon || true
-            find multiforge-installer/build/libs -name '*.jar' -exec cp {} "$RELEASE_DIR/" \; 2>/dev/null || true
+          # Fresh-install jar — the Fabric-installer-shaped path.
+          # Copy under both the versioned name (multiforge-installer-<v>.jar)
+          # and a version-free `latest` alias so the site can pin
+          # https://github.com/.../releases/latest/download/multiforge-installer.jar
+          # without churning the URL every release.
+          INSTALLER_JAR=$(find multiforge-installer/build/libs -maxdepth 1 -type f \
+              -name 'multiforge-installer-*.jar' ! -name '*-sources.jar' | head -1)
+          if [ -n "$INSTALLER_JAR" ]; then
+              cp "$INSTALLER_JAR" "$RELEASE_DIR/"
+              cp "$INSTALLER_JAR" "$RELEASE_DIR/multiforge-installer.jar"
+          fi
+
+          # Replacement zip — overlay onto an existing NeoForge server.
+          # Produced by the installer jar itself (build-zip subcommand)
+          # so the layout stays in sync with what `install` writes.
+          if [ -n "$INSTALLER_JAR" ]; then
+              java -jar "$INSTALLER_JAR" build-zip \
+                  --out "$RELEASE_DIR/multiforge-${VER}-replacement.zip"
+              cp "$RELEASE_DIR/multiforge-${VER}-replacement.zip" \
+                  "$RELEASE_DIR/multiforge-replacement.zip"
           fi
 
           # Operator install bundle — a self-contained tarball with
