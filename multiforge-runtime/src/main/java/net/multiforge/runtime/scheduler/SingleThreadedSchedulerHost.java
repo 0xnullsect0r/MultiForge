@@ -64,10 +64,16 @@ public final class SingleThreadedSchedulerHost implements SchedulerHost {
         ServerDomains.install(this);
     }
 
-    /** Test/shutdown helper. */
+    /** Test/shutdown helper. Blocks until every worker has actually terminated. */
     public void shutdown() {
         tickExec.shutdownNow();
         asyncExec.shutdownNow();
+        try {
+            tickExec.awaitTermination(2, TimeUnit.SECONDS);
+            asyncExec.awaitTermination(2, TimeUnit.SECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
     }
 
     @Override

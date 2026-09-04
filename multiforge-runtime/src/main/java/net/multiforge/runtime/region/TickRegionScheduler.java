@@ -59,14 +59,23 @@ public final class TickRegionScheduler implements AutoCloseable {
         return workerCount;
     }
 
-    /** Register a region for scheduling. Idempotent. */
+    /**
+     * Register a region for scheduling. Idempotent.
+     *
+     * <p>We publish {@code s} into {@code perRegion} <em>before</em>
+     * adding to the queue. If the queue add came first, a worker that
+     * poll()'d the entry between add and put would see
+     * {@code perRegion.get(id) == null}, hit the "deregistered"
+     * guard, and discard the entry — losing it forever. Ordering as
+     * put-first-then-add closes that race.
+     */
     public void register(Region region) {
         Objects.requireNonNull(region, "region");
-        perRegion.computeIfAbsent(region.id(), id -> {
-            RegionState_ s = new RegionState_(region);
-            queue.add(new ScheduleEntry(System.nanoTime(), region.id(), s));
-            return s;
-        });
+        RegionState_ fresh = new RegionState_(region);
+        RegionState_ existing = perRegion.putIfAbsent(region.id(), fresh);
+        if (existing == null) {
+            queue.add(new ScheduleEntry(System.nanoTime(), region.id(), fresh));
+        }
     }
 
     /** Deregister a region. Any pending schedule entries are ignored on pop. */
