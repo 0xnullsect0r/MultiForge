@@ -1,0 +1,26 @@
+# Minimal MultiForge server compose file.
+# See docs/license.md for how to obtain a MULTIFORGE_LICENSE token.
+
+services:
+  multiforge:
+    image: ghcr.io/multiforge/multiforge-server:0.1.0
+    container_name: multiforge
+    restart: unless-stopped
+    ports:
+      - "25565:25565/tcp"
+      - "25565:25565/udp"
+    environment:
+      EULA: "TRUE"
+      MEMORY: "8G"
+      MULTIFORGE_LICENSE: "${MULTIFORGE_LICENSE:?set MULTIFORGE_LICENSE in your environment or .env file}"
+      MULTIFORGE_MODE: "hybrid"
+      MULTIFORGE_CORES: "8"
+      MULTIFORGE_THREADS_PER_CORE: "2"
+    volumes:
+      - ./data:/data
+    healthcheck:
+      test: ["CMD", "sh", "-c", "printf 'GET / HTTP/1.0\\r\\n\\r\\n' | nc -w2 127.0.0.1 25565 > /dev/null 2>&1 || exit 0"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
