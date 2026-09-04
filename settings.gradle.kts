@@ -28,16 +28,19 @@ include(
     "multiforge-runtime",
     "multiforge-client",
     "multiforge-installer",
+    // Determinism harness: pure-Java file diffing, no Minecraft dep — buildable
+    // standalone. Only the world dirs it consumes come from an MC-enabled run.
+    "multiforge-bench",
 )
 
-// Modules that require a vendored NeoForge workspace at
-// `upstream/neoforge-1.21.1/`. Included only when `-Pmc=true` is passed,
-// so `./gradlew build` works standalone before `:setup` has run.
-val mcEnabled = providers.gradleProperty("mc").getOrElse("false").toBoolean()
-if (mcEnabled) {
-    include(
-        "multiforge-patches",
-        "multiforge-testmods",
-        "multiforge-bench",
-    )
-}
+// MultiForge patches under `multiforge-patches/<NN-group>/` are applied
+// against the vendored NeoForge workspace at `upstream/neoforge-1.21.1/`
+// by the `applyMultiforgePatches` Gradle task inside that separate
+// build — see `upstream/neoforge-1.21.1/projects/neoforge/multiforge-patches.gradle`.
+// The MultiForge fixtures that exercise those patches (an off-thread
+// GameTest for M7 today) live under `upstream/neoforge-1.21.1/tests/`
+// (see net/multiforge/testfixtures/) and are picked up by NeoForge's
+// own tests project — no outer-repo module needed.
+//
+// The `-Pmc` gradle property is no longer meaningful here; kept only for
+// legacy scripts that may still pass it.

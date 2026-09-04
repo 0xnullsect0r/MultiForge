@@ -38,6 +38,12 @@ dependencies {
     implementation project(path: ':neoforge', configuration: 'runtimeElements')
     implementation(testframeworkProject)
 
+    // MultiForge fork addition: the ownership-enforcement fixture under
+    // net/multiforge/testfixtures/ (src/main/java) asserts against
+    // ProbeRegistry/OwnershipEnforcer directly rather than only through
+    // observable in-world behavior.
+    implementation "net.multiforge:multiforge-runtime:${project.multiforge_runtime_version}"
+
     junitImplementation(platform("org.junit:junit-bom:${project.jupiter_api_version}"))
     junitImplementation "org.junit.jupiter:junit-jupiter-params"
     junitRuntimeOnly "org.junit.jupiter:junit-jupiter-engine"
@@ -116,4 +122,8 @@ license {
     header = rootProject.file('codeformat/HEADER.txt')
     skipExistingHeaders = true
     include '**/*.java'
+    // MultiForge fork addition: net/multiforge/** carries the MultiForge
+    // proprietary header, not NeoForge's LGPL one — see build.gradle's
+    // matching exclusion at the root project for the full rationale.
+    exclude '**/net/multiforge/**'
 }

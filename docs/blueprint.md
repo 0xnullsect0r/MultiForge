@@ -453,10 +453,21 @@ You need a first-class debugging stack:
   net.minecraft.* mutation sites via multiforge-patches/01-ownership/
 - connective tissue between M0/M1 scaffolding (already built, pure-Java) and
   M2's region-tick MVP
-- exit gate: 01-ownership patches apply cleanly against a fresh :setup;
-  `./gradlew build -Pmc=true` succeeds; ownership-fixture GameTest proves
-  warn-not-crash-and-eventually-correct; deterministic-mode regression shows
-  byte-identical world save vs. an unpatched baseline fork on a fixed seed
+- exit gate: 01-ownership patches apply cleanly (via the new
+  `applyMultiforgePatches` Gradle task) against a fresh `:setup` inside
+  `upstream/neoforge-1.21.1`; full fork `./gradlew build` succeeds with
+  patches applied; NeoForge GameTest fixture (see
+  `upstream/neoforge-1.21.1/tests/src/main/java/net/multiforge/testfixtures/`)
+  proves off-thread mutation is detected, warn-logged, rerouted, and
+  eventually applied without crashing the tick loop; `multiforge-bench`
+  determinism harness (`WorldDiff` — pure-Java file diff, tolerates
+  known-nondeterministic paths) is available for the manual byte-identical
+  world-save comparison against a baseline unpatched fork on a fixed seed.
+  Automating that comparison end-to-end (server launch + baseline vs.
+  patched run + diff) is future work per the harness's own scope note —
+  M8 will need to replace byte-identical comparison with a
+  canonicalized/semantic NBT diff anyway once real parallel scheduling
+  makes chunk-save order legitimately non-deterministic.
 
 ## M8 — Region Tick Loop
 - fulfills M2's region-tick MVP against real source: rewrites
