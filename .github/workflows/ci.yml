@@ -76,7 +76,17 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Gitleaks
-        uses: gitleaks/gitleaks-action@v2
+      # We invoke the gitleaks binary directly rather than via
+      # gitleaks/gitleaks-action so a fresh repo's first push (no parent
+      # commit to diff against) still scans cleanly. `detect` walks the
+      # full working tree.
+      - name: Install gitleaks
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_VERSION: "8.24.3"
+        run: |
+          curl -sSL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" \
+            | sudo tar -xz -C /usr/local/bin gitleaks
+          gitleaks version
+
+      - name: Scan working tree
+        run: gitleaks detect --redact --no-git --source . --verbose

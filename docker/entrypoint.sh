@@ -56,8 +56,8 @@ done
 if [ -z "${SERVER_JAR}" ]; then
     # M0 fallback: no installer jar yet; just verify the license and exit.
     log 'No server jar found (expected for pre-M2 builds). Running license gate only.'
-    RUNTIME_JAR=$(ls /opt/multiforge/lib/multiforge-runtime-*.jar 2>/dev/null | head -1 || true)
-    LICENSE_JAR=$(ls /opt/multiforge/lib/multiforge-license-*.jar 2>/dev/null | head -1 || true)
+    RUNTIME_JAR=$(find /opt/multiforge/lib -maxdepth 1 -type f -name 'multiforge-runtime-*.jar' 2>/dev/null | sort | head -1)
+    LICENSE_JAR=$(find /opt/multiforge/lib -maxdepth 1 -type f -name 'multiforge-license-*.jar' 2>/dev/null | sort | head -1)
     if [ -z "${LICENSE_JAR}" ] || [ -z "${RUNTIME_JAR}" ]; then
         log 'No MultiForge jars found under /opt/multiforge/. Broken image.'
         exit 2
