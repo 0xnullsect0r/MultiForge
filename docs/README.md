@@ -18,6 +18,9 @@
 - [`persistence.md`](persistence.md) — per-region autosave + WAL journal
   (M6): fsync-on-append, CRC-guarded frames, JournalReplayHarness for
   boot recovery, RegionShutdownCoordinator phase machine.
+- [`downloads-repo-setup.md`](downloads-repo-setup.md) — one-time setup
+  for the public `multiforge-releases` sibling repo + GHCR visibility,
+  so all download URLs work anonymously.
 - [`install.md`](install.md) — install guide (Docker + manual + systemd
   + Windows), migration from upstream NeoForge, rollback flow.
 - [`operator-handbook.md`](operator-handbook.md) — day-to-day operator
