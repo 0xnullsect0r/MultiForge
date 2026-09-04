@@ -228,13 +228,7 @@ public final class MultiThreadedSchedulerHost implements SchedulerHost, AutoClos
         @Override
         public ScheduledTask run(ModIdentifier mod, Consumer<ScheduledTask> task) {
             SchedulerTaskImpl handle = new SchedulerTaskImpl(mod, false);
-            taskQueue.queueChunkTask(
-                    globalRegion.sections().iterator().next() != null
-                            ? WorldRef.of("multiforge:global")
-                            : WorldRef.of("multiforge:global"),
-                    0,
-                    0,
-                    () -> runOnce(handle, task));
+            enqueueOnGlobal(() -> runOnce(handle, task));
             return handle;
         }
 
@@ -242,7 +236,7 @@ public final class MultiThreadedSchedulerHost implements SchedulerHost, AutoClos
         public ScheduledTask runDelayed(ModIdentifier mod, Consumer<ScheduledTask> task, long delayTicks) {
             SchedulerTaskImpl handle = new SchedulerTaskImpl(mod, false);
             delayedExec.schedule(
-                    () -> taskQueue.queueChunkTask(WorldRef.of("multiforge:global"), 0, 0, () -> runOnce(handle, task)),
+                    () -> enqueueOnGlobal(() -> runOnce(handle, task)),
                     Math.max(0, delayTicks) * TICK_MS,
                     TimeUnit.MILLISECONDS);
             return handle;
@@ -255,8 +249,7 @@ public final class MultiThreadedSchedulerHost implements SchedulerHost, AutoClos
             var future = delayedExec.scheduleAtFixedRate(
                     () -> {
                         if (handle.isTerminal()) return;
-                        taskQueue.queueChunkTask(
-                                WorldRef.of("multiforge:global"), 0, 0, () -> runRepeatingIteration(handle, task));
+                        enqueueOnGlobal(() -> runRepeatingIteration(handle, task));
                     },
                     Math.max(0, initialTicks) * TICK_MS,
                     Math.max(1, periodTicks) * TICK_MS,
@@ -264,6 +257,17 @@ public final class MultiThreadedSchedulerHost implements SchedulerHost, AutoClos
             handle.bindFuture(future);
             return handle;
         }
+    }
+
+    /**
+     * Deliver {@code r} into the global region's inbox. We keep the
+     * enqueue on the shared {@link RegionizedTaskQueue} (rather than
+     * poking the region's inbox directly) so the scheduler's tick
+     * loop stays the sole reader — but we bypass the world lookup
+     * because the global region is created eagerly and never moves.
+     */
+    private void enqueueOnGlobal(Runnable r) {
+        taskQueue.queueChunkTask(globalRegionizer.world(), 0, 0, r);
     }
 
     // ---- entity ---------------------------------------------------------
