@@ -8,5 +8,8 @@
   mapping, adaptive sizing, cross-region routing, operator config.
 - [`chunks.md`](chunks.md) — chunk system (M3): NewChunkHolder + ticket
   types + priority-routed ChunkTaskScheduler + per-region merge/split.
+- [`migration.md`](migration.md) — entity migration (M4): two-phase
+  remove/add protocol, MigrationState machine, passenger-tree
+  atomicity, cross-dimension, player-join flow.
 - More coming (Operator Handbook, Mod Porting Cookbook, Debugging
   Manual, Performance Tuning) as milestones land.
