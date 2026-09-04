@@ -36,11 +36,46 @@ jobs:
 
       - name: Assemble release bundle
         run: |
-          mkdir -p release
-          cp multiforge-runtime/build/libs/*.jar release/
-          cp multiforge-license/build/libs/*.jar release/
-          cp multiforge-license-cli/build/distributions/*.tar release/
-          ls -l release/
+          set -euo pipefail
+          VER="${GITHUB_REF_NAME#v}"
+          RELEASE_DIR="release"
+          mkdir -p "$RELEASE_DIR"
+
+          # Runtime library — mod authors compile against this.
+          cp multiforge-runtime/build/libs/*.jar "$RELEASE_DIR/"
+          # License verifier + signer.
+          cp multiforge-license/build/libs/*.jar "$RELEASE_DIR/"
+          cp multiforge-license-cli/build/distributions/*.tar "$RELEASE_DIR/"
+
+          # Installer + server jar — produced only when the NeoForge
+          # workspace is vendored (mc=true). We build them best-effort
+          # so a source-only release still ships the runtime jars.
+          if [ -d upstream/neoforge-1.21.1 ]; then
+            ./gradlew :multiforge-installer:jar :multiforge-installer:serverJar -Pmc=true --no-daemon || true
+            find multiforge-installer/build/libs -name '*.jar' -exec cp {} "$RELEASE_DIR/" \; 2>/dev/null || true
+          fi
+
+          # Operator install bundle — a self-contained tarball with
+          # docker-compose, install script, and every operator-facing
+          # doc, so a customer can grab one file and be running.
+          BUNDLE_DIR="multiforge-${VER}-install"
+          mkdir -p "$BUNDLE_DIR/docs"
+          cp docker/docker-compose.yml "$BUNDLE_DIR/"
+          cp docker/entrypoint.sh "$BUNDLE_DIR/" 2>/dev/null || true
+          cp docs/install.md "$BUNDLE_DIR/docs/"
+          cp docs/operator-handbook.md "$BUNDLE_DIR/docs/"
+          cp docs/persistence.md "$BUNDLE_DIR/docs/"
+          cp docs/regions.md "$BUNDLE_DIR/docs/"
+          cp docs/chunks.md "$BUNDLE_DIR/docs/"
+          cp docs/migration.md "$BUNDLE_DIR/docs/"
+          cp docs/global-network.md "$BUNDLE_DIR/docs/"
+          cp docs/license.md "$BUNDLE_DIR/docs/"
+          cp docs/README.md "$BUNDLE_DIR/docs/"
+          cp scripts/install.sh "$BUNDLE_DIR/install.sh"
+          chmod +x "$BUNDLE_DIR/install.sh"
+          tar czf "$RELEASE_DIR/${BUNDLE_DIR}.tar.gz" "$BUNDLE_DIR"
+
+          ls -l "$RELEASE_DIR/"
 
       - name: Upload jars artifact
         uses: actions/upload-artifact@v4

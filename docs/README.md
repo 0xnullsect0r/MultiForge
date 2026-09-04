@@ -15,5 +15,12 @@
   routing + operator commands (M5): GlobalSystems tickers,
   NetworkPacketRouter, RegionPinManager, /multiforge command tree,
   per-mod warn budget.
-- More coming (Operator Handbook, Mod Porting Cookbook, Debugging
-  Manual, Performance Tuning) as milestones land.
+- [`persistence.md`](persistence.md) — per-region autosave + WAL journal
+  (M6): fsync-on-append, CRC-guarded frames, JournalReplayHarness for
+  boot recovery, RegionShutdownCoordinator phase machine.
+- [`install.md`](install.md) — install guide (Docker + manual + systemd
+  + Windows), migration from upstream NeoForge, rollback flow.
+- [`operator-handbook.md`](operator-handbook.md) — day-to-day operator
+  guide: config, commands, debug client, shutdown, crash recovery.
+- [`website-install-copy.md`](website-install-copy.md) — drop-in copy
+  for the purchase site's Installation page.

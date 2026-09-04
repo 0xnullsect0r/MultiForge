@@ -3,7 +3,7 @@
 
 services:
   multiforge:
-    image: ghcr.io/multiforge/multiforge-server:0.1.0
+    image: ghcr.io/0xnullsect0r/multiforge-server:1.0.0
     container_name: multiforge
     restart: unless-stopped
     ports:
