@@ -31,7 +31,7 @@ import net.multiforge.api.world.WorldRef;
  * either the {@link ThreadedRegionizer} (production) or a stub map
  * (unit tests).
  */
-public final class RegionizedTaskQueue {
+public final class RegionizedTaskQueue implements RegionListener {
 
     /** Look up the owner region for a chunk. May return {@code null} for unloaded chunks. */
     @FunctionalInterface
@@ -142,6 +142,26 @@ public final class RegionizedTaskQueue {
     /** Drop every task for {@code region} — used when a region dies. */
     public void clear(Region region) {
         inboxes.remove(region.id());
+    }
+
+    /**
+     * {@link RegionListener} hook: on a merge, hand the dying region's
+     * pending inbox to the survivor so no queued task is lost.
+     */
+    @Override
+    public void onRegionsMerging(Region surviving, Region dying) {
+        moveInbox(dying, surviving);
+    }
+
+    /**
+     * {@link RegionListener} hook: on region death (after a merge or
+     * last-section removal), drop any residual entries. In the merge
+     * case {@link #onRegionsMerging} already moved them; in the
+     * last-chunk case the queue simply disappears.
+     */
+    @Override
+    public void onRegionDied(Region region) {
+        clear(region);
     }
 
     private Queue<Runnable> inboxFor(Region region) {

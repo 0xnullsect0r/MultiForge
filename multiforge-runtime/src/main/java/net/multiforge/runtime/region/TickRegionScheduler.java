@@ -26,7 +26,7 @@ import net.multiforge.runtime.ownership.OwnerToken;
  * deficit and get more back-to-back time until they catch up, but
  * cannot starve peers.
  */
-public final class TickRegionScheduler implements AutoCloseable {
+public final class TickRegionScheduler implements AutoCloseable, RegionListener {
 
     private static final long TICK_NANOS = 50L * 1_000_000L; // 20 TPS
 
@@ -81,6 +81,18 @@ public final class TickRegionScheduler implements AutoCloseable {
     /** Deregister a region. Any pending schedule entries are ignored on pop. */
     public void unregister(Region region) {
         perRegion.remove(region.id());
+    }
+
+    /**
+     * {@link RegionListener} hook: when a region dies (merged away or its
+     * last section removed), automatically deregister it. Safe to call
+     * concurrent with a worker actively ticking that region — the
+     * scheduler's own worker checks {@code perRegion.get(id) != state}
+     * on each pop (see {@link #runWorker} guard).
+     */
+    @Override
+    public void onRegionDied(Region region) {
+        unregister(region);
     }
 
     public RegionMspt mspt(Region region) {

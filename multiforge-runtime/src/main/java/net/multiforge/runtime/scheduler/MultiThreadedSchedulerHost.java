@@ -129,6 +129,12 @@ public final class MultiThreadedSchedulerHost implements SchedulerHost, AutoClos
     public ThreadedRegionizer regionizerFor(WorldRef world) {
         return regionizers.computeIfAbsent(world.dimensionId(), id -> {
             ThreadedRegionizer r = regionizerFactory.apply(world);
+            // M8: auto-wire the shared scheduler and task queue as
+            // RegionListeners on every world's regionizer so region death
+            // and merge/split automatically deregister and move pending
+            // inboxes — no manual bookkeeping in the M8 patches.
+            r.addListener(scheduler);
+            r.addListener(taskQueue);
             return r;
         });
     }
