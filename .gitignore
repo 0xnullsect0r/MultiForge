@@ -26,27 +26,28 @@ nbactions*.xml
 Thumbs.db
 desktop.ini
 
-# Logs / runtime
-logs/
+# Logs / runtime — root-anchored so nested `logs/` in module resources
+# and Java packages named `world`/`entity` are not matched.
+/logs/
 *.log
-crash-reports/
+/crash-reports/
 hs_err_pid*.log
 replay_pid*.log
 
-# Local run dirs
-run/
-run-*/
-world/
-world_nether/
-world_the_end/
-level.dat*
-session.lock
-usercache.json
-banned-players.json
-banned-ips.json
-whitelist.json
-ops.json
-eula.txt
+# Local run dirs (root-anchored)
+/run/
+/run-*/
+/world/
+/world_nether/
+/world_the_end/
+/level.dat*
+/session.lock
+/usercache.json
+/banned-players.json
+/banned-ips.json
+/whitelist.json
+/ops.json
+/eula.txt
 
 # License token (never commit)
 license.key
