@@ -25,6 +25,18 @@ RUN --mount=type=cache,target=/root/.gradle \
         ./gradlew --no-daemon :multiforge-license:build :multiforge-license-cli:build :multiforge-runtime:build ; \
     fi
 
+# Stage jars into a single directory regardless of MC=true|false so
+# the runtime stage's COPY is deterministic. When MC=false the installer
+# jar simply doesn't exist and the staging dir is empty except for a
+# placeholder — the runtime image still boots into the license gate.
+RUN mkdir -p /staging/lib /staging/root \
+    && cp /src/multiforge-runtime/build/libs/*.jar /staging/lib/ 2>/dev/null || true \
+    && cp /src/multiforge-license/build/libs/*.jar /staging/lib/ 2>/dev/null || true \
+    && if [ -d /src/multiforge-installer/build/libs ]; then \
+           cp /src/multiforge-installer/build/libs/*.jar /staging/root/ 2>/dev/null || true; \
+       fi \
+    && touch /staging/root/.keep
+
 # ---------- runtime stage ------------------------------------------------
 FROM eclipse-temurin:21-jre AS runtime
 
@@ -47,12 +59,11 @@ RUN useradd --system --create-home --home-dir /home/multiforge --shell /usr/sbin
     && mkdir -p ${DATA_DIR} \
     && chown -R multiforge:multiforge ${DATA_DIR} /home/multiforge
 
-# Copy the assembled installer + runtime jars from the builder stage.
-# During M0 this is only the pure-Java runtime; the installer jar is
-# populated once M2 lands the full server assembly.
-COPY --from=builder /src/multiforge-runtime/build/libs/*.jar        /opt/multiforge/lib/
-COPY --from=builder /src/multiforge-license/build/libs/*.jar        /opt/multiforge/lib/
-COPY --from=builder /src/multiforge-installer/build/libs/*.jar      /opt/multiforge/
+# Pull the staged jars in one go. The builder stage guarantees these
+# directories exist regardless of the MC=true|false build arg, so this
+# COPY never trips on an empty glob.
+COPY --from=builder /staging/lib/ /opt/multiforge/lib/
+COPY --from=builder /staging/root/ /opt/multiforge/
 COPY docker/entrypoint.sh /usr/local/bin/entrypoint
 
 RUN chmod +x /usr/local/bin/entrypoint
