@@ -88,6 +88,22 @@ Every tag push (`v*`) on the private repo:
 5. Creates a Release **on `multiforge-releases`** (the public repo)
    using `RELEASES_REPO_TOKEN` and uploads all binaries as assets.
 
+## What the sync workflow does
+
+`sync-downloads-repo.yml` runs on every push to `main` that touches
+`docs/**` or `.github/downloads-repo-content/**`. It:
+
+1. Clones the downloads repo using `RELEASES_REPO_TOKEN`.
+2. Overwrites the tracked mirrors: `README.md`, `SECURITY.md`,
+   `.github/ISSUE_TEMPLATE/`, and every operator-facing file under
+   `docs/`. Internal-only files (`blueprint.md`,
+   `website-install-copy.md`, `downloads-repo-setup.md`) stay private.
+3. Commits + pushes if anything changed.
+
+This is how the public repo gets its README, docs, and issue
+templates without any manual copy-paste. Edit the source of truth in
+this repo; the sync runs on the next merge to main.
+
 ## Rotating the PAT
 
 - Generate a new fine-grained PAT with the same scope.

@@ -1,0 +1,53 @@
+name: Feature request
+description: A missing capability, an API surface for mods, or a new debug view.
+title: "[feature] "
+labels: ["enhancement", "needs-triage"]
+body:
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Region scheduling / tick model
+        - Chunk system
+        - Entity migration
+        - Global systems / networking
+        - Persistence / autosave
+        - Public API (ServerDomains / Folia mirrors)
+        - Client debug mod
+        - Docker / installer
+        - Docs
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem this solves
+      description: Start from the user story, not the implementation.
+      placeholder: "As an operator running ATM10 with 30 players I want ..."
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you'd like to see
+      description: Rough sketch is fine. Concrete UX, API shape, or config would help.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives you considered
+      description: Existing workarounds, mods, or configs that partially cover it.
+    validations:
+      required: false
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Sanity checks
+      options:
+        - label: I searched existing issues.
+          required: true
+        - label: This is not a bug (bugs go through the [Bug template](https://github.com/0xnullsect0r/multiforge-releases/issues/new?template=bug.yml)).
+          required: true
