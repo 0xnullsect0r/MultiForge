@@ -1,0 +1,36 @@
+# MultiForge client debug mod. Loads on any vanilla NeoForge 1.21.x
+# client; opens the multiforge:debug/v1 channel when connecting to a
+# MultiForge server and shows the F3 overlay + chunk borders + heatmap +
+# pin selection boxes + violation side panel.
+modLoader = "javafml"
+loaderVersion = "[4,)"
+license = "Proprietary — see LICENSE at the multiforge repo root"
+issueTrackerURL = "https://github.com/0xnullsect0r/multiforge/issues"
+
+[[mods]]
+modId = "multiforge_client"
+version = "${version}"
+displayName = "MultiForge Debug Client"
+description = '''
+Client-side debug overlay for MultiForge servers. Shows region ids, MSPT,
+owned entity counts, coloured chunk borders, tick-cost heatmap, pinned
+region selection boxes, and a live reroute/warn violation panel.
+Load on any vanilla NeoForge 1.21.x client — the panel stays inert if
+the server does not advertise multiforge:debug/v1.
+'''
+logoFile = "logo.png"
+authors = "MultiForge authors"
+
+[[dependencies.multiforge_client]]
+modId = "neoforge"
+type = "required"
+versionRange = "[21.1,)"
+ordering = "NONE"
+side = "CLIENT"
+
+[[dependencies.multiforge_client]]
+modId = "minecraft"
+type = "required"
+versionRange = "[1.21.1,1.22)"
+ordering = "NONE"
+side = "CLIENT"
