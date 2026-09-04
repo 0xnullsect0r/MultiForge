@@ -121,6 +121,10 @@ public class ServerLifecycleHooks {
             // Test harnesses (GameTestServer) may install once per JVM and reuse
             // across successive server instances — that's fine, keep going.
         }
+        // M8 sub-step 6a: install the ChunkEvent.Load/Unload listeners
+        // that keep the regionizer in sync with Vanilla-loaded chunks.
+        // Idempotent per JVM.
+        net.multiforge.neoforge.RegionizedChunkLifecycle.installOnEventBus();
 
         currentServer = server;
         // on the dedi server we need to force the stuff to setup properly

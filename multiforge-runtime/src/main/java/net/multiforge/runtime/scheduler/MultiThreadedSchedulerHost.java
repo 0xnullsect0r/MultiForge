@@ -165,6 +165,36 @@ public final class MultiThreadedSchedulerHost implements SchedulerHost, AutoClos
         return r;
     }
 
+    /**
+     * Register a Vanilla-loaded chunk with the regionizer and tick
+     * scheduler, without adding any keep-loaded ticket or creating a
+     * chunk holder. Used from the {@link
+     * net.neoforged.neoforge.event.level.ChunkEvent.Load} handler
+     * (M8 sub-step 6a): the chunk is already loaded by Vanilla's own
+     * ticket, so MultiForge only needs to know it exists so region
+     * workers can eventually tick it. Ticket/holder management stays
+     * out of scope until M9.
+     */
+    public Region registerChunk(WorldRef world, int chunkX, int chunkZ) {
+        ThreadedRegionizer regionizer = regionizerFor(world);
+        Region r = regionizer.addChunk(new ChunkPos(chunkX, chunkZ));
+        scheduler.register(r);
+        return r;
+    }
+
+    /**
+     * Inverse of {@link #registerChunk}: called from {@link
+     * net.neoforged.neoforge.event.level.ChunkEvent.Unload}. The
+     * regionizer's own listener cascade automatically deregisters the
+     * dying region from the scheduler and clears its task-queue inbox
+     * (see {@link RegionListener} auto-wiring in {@link
+     * #regionizerFor}).
+     */
+    public void unregisterChunk(WorldRef world, int chunkX, int chunkZ) {
+        ThreadedRegionizer regionizer = regionizerFor(world);
+        regionizer.removeChunk(new ChunkPos(chunkX, chunkZ));
+    }
+
     @Override
     public void close() {
         scheduler.close();

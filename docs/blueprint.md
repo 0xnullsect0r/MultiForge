@@ -499,8 +499,20 @@ Broken into 8 landable sub-steps, sized similarly to M7's sub-steps:
   pass-through — no behavior change — so the vanilla patch can stay
   stable while future sub-steps swap the facade to real per-region
   dispatch. Second file in `multiforge-patches/02-region-tick/`.
-- Sub-step 6 (pending): decompose `ServerLevel.tick` into per-region
-  phases wired via `PhasedRegionTickBody`.
+- **Sub-step 6a (DONE):** `ChunkEvent.Load`/`ChunkEvent.Unload`
+  handlers auto-register/deregister loaded chunks with the world's
+  regionizer via new `registerChunk`/`unregisterChunk` primitives on
+  `MultiThreadedSchedulerHost` — deliberately without dropping a
+  keep-loaded ticket (Vanilla's own tickets already keep the chunk
+  loaded; adding one would leak). Region workers now have real regions
+  to tick against, though the body remains no-op from sub-step 4 until
+  6b/c wire real per-region tick work. GameTest fixture at
+  `RegionizedRuntimeTests.loadedChunksHaveRegions` asserts a region
+  exists for the GameTest's own structure chunk.
+- Sub-step 6b (pending): swap `RegionizedTickCoordinator.dispatchLevelTick`
+  from pass-through to real per-region dispatch, decomposing
+  `ServerLevel.tick`'s per-chunk work (block/fluid ticks, entity
+  iteration, block-entity iteration) so each region owns its slice.
 - Sub-step 7 (pending, `multiforge-patches/03-world-data/`): convert
   per-world mutable `ServerLevel` fields (block-tick list, fluid-tick
   list, block-event queue, entity iterator caches) to `RegionizedData<T>`
