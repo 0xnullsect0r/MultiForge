@@ -1,0 +1,72 @@
+# Gradle
+.gradle/
+build/
+!buildSrc/build/
+!**/src/**/build/
+out/
+bin/
+
+# Vendored NeoForge workspace (populated by :setup)
+upstream/neoforge-1.21.1/
+!upstream/neoforge-1.21.1/README.md
+
+# IDE
+.idea/
+*.iml
+*.iws
+*.ipr
+.vscode/
+!.vscode/settings.json.template
+.project
+.classpath
+.settings/
+nbproject/
+nbactions*.xml
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Logs / runtime
+logs/
+*.log
+crash-reports/
+hs_err_pid*.log
+replay_pid*.log
+
+# Local run dirs
+run/
+run-*/
+world/
+world_nether/
+world_the_end/
+level.dat*
+session.lock
+usercache.json
+banned-players.json
+banned-ips.json
+whitelist.json
+ops.json
+eula.txt
+
+# License token (never commit)
+license.key
+*.license
+multiforge-license.token
+
+# Ed25519 private keys (NEVER commit)
+*.private.pem
+*.priv
+private-key.*
+*-signing-key.*
+
+# Docker
+.docker-build/
+
+# Bench output
+bench/reports/
+bench/tmp/
+
+# Node (docs site future)
+node_modules/

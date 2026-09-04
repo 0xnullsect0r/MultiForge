@@ -1,0 +1,21 @@
+# MultiForge CODEOWNERS
+# One owner per top-level directory. Adjust as the team grows.
+
+# Global fallback — anything not otherwise owned.
+*                                @0xnullsect0r
+
+# License subsystem is security-sensitive — always requires the owner's review.
+/multiforge-license/             @0xnullsect0r
+/multiforge-license-cli/         @0xnullsect0r
+/docs/license.md                 @0xnullsect0r
+
+# CI / release plumbing.
+/.github/                        @0xnullsect0r
+/docker/                         @0xnullsect0r
+/gradle/                         @0xnullsect0r
+/buildSrc/                       @0xnullsect0r
+
+# Project conventions.
+/CLAUDE.md                       @0xnullsect0r
+/LICENSE                         @0xnullsect0r
+/README.md                       @0xnullsect0r

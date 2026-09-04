@@ -1,0 +1,650 @@
+# NeoForge Multithreaded Server (Folia-Inspired) — Comprehensive Architecture & Implementation Blueprint
+
+**Direct answer:** A Folia-style multithreaded NeoForge server is feasible only as a **new execution model** with strict ownership semantics, domain-aware APIs, and a robust legacy compatibility lane.  
+It cannot safely run “any mod” at full parallel speed without isolation/serialization for legacy behavior.
+
+---
+
+## Table of Contents
+
+1. [Executive Summary](#executive-summary)  
+2. [Goals, Non-Goals, and Constraints](#goals-non-goals-and-constraints)  
+3. [Terminology and Mental Model](#terminology-and-mental-model)  
+4. [Current NeoForge Reality vs Target Model](#current-neoforge-reality-vs-target-model)  
+5. [System Architecture Overview](#system-architecture-overview)  
+6. [Concurrency Contract (The New Law)](#concurrency-contract-the-new-law)  
+7. [Regionization Model](#regionization-model)  
+8. [Tick Pipeline and Scheduling](#tick-pipeline-and-scheduling)  
+9. [Cross-Region Communication Protocols](#cross-region-communication-protocols)  
+10. [Entity Ownership and Migration](#entity-ownership-and-migration)  
+11. [Event Bus Redesign for Multithreading](#event-bus-redesign-for-multithreading)  
+12. [Registries, Capabilities, Attachments, and Shared State](#registries-capabilities-attachments-and-shared-state)  
+13. [Task Scheduling API Redesign](#task-scheduling-api-redesign)  
+14. [Compatibility with “Any NeoForge Mod”](#compatibility-with-any-neoforge-mod)  
+15. [Legacy Compatibility Lane (Serialized Facade)](#legacy-compatibility-lane-serialized-facade)  
+16. [Networking Model](#networking-model)  
+17. [Persistence, Autosave, and Crash Safety](#ersistence-autosave-and-crash-safety)  
+18. [Determinism, Testing, and Debuggability](#determinism-testing-and-debuggability)  
+19. [Security and Failure Containment](#security-and-failure-containment)  
+20. [Performance Model and Expected Gains](#performance-model-and-expected-gains)  
+21. [Implementation Plan (Milestones)](#implementation-plan-milestones)  
+22. [Detailed Engineering Work Breakdown](#detailed-engineering-work-breakdown)  
+23. [API Surface Proposal](#api-surface-proposal)  
+24. [Compatibility Classification for Mods](#compatibility-classification-for-mods)  
+25. [Operational Modes and Server Config](#operational-modes-and-server-config)  
+26. [Migration Guidance for Mod Authors](#migration-guidance-for-mod-authors)  
+27. [Risk Register and Mitigations](#risk-register-and-mitigations)  
+28. [Acceptance Criteria and Exit Gates](#acceptance-criteria-and-exit-gates)  
+29. [Example Runtime Flows](#example-runtime-flows)  
+30. [Recommended Docs to Publish](#recommended-docs-to-publish)  
+31. [Final Recommendation](#final-recommendation)  
+
+---
+
+## Executive Summary
+
+A NeoForge multithreaded server should be designed as a **hybrid execution platform**:
+
+- **Parallel region execution** for engine subsystems and thread-safe mods.
+- **Serialized compatibility execution** for legacy mods that rely on classic single-thread assumptions.
+
+This avoids ecosystem collapse while allowing meaningful scalability. The main architectural pivot is replacing “main-thread safety” with **ownership safety**:
+
+- World/chunk/entity mutation is legal only in the owner domain.
+- Cross-domain interactions use messaging, continuations, or controlled coordination.
+- Event dispatch, schedulers, capabilities, and networking must all be domain-aware.
+
+---
+
+## Goals, Non-Goals, and Constraints
+
+## Goals
+- Increase server throughput and reduce tick lag in spread-out workloads.
+- Preserve broad modpack bootability.
+- Provide deterministic, diagnosable behavior under concurrency.
+- Offer clear migration path for mod authors.
+
+## Non-Goals
+- Full drop-in behavioral identity for all existing mods without adaptation.
+- Immediate parallelization of every global system.
+- Zero overhead compatibility mode.
+
+## Constraints
+- NeoForge ecosystem heavily depends on event ordering and thread affinity assumptions.
+- Many mods use shared mutable singleton state.
+- Mixed environments (safe + unsafe mods) must remain operable.
+
+---
+
+## Terminology and Mental Model
+
+- **Domain**: execution ownership context (`REGION`, `ENTITY`, `GLOBAL`, `ASYNC`, `LEGACY_SERIAL`).
+- **Owner thread**: currently authorized executor for a mutable object.
+- **Region**: spatial simulation unit containing chunk groups and associated entities.
+- **Mailbox**: per-region queue for inbound cross-region operations.
+- **Epoch**: global tick index used for coherence/ordering.
+- **Compat lane**: serialized execution environment emulating legacy behavior.
+
+---
+
+## Current NeoForge Reality vs Target Model
+
+## Current
+- Gameplay mutation mostly assumes one authoritative server thread.
+- Async exists for IO and specific subsystems, not general world mutation.
+- Event handlers and mod code often assume global order.
+
+## Target
+- Multiple region executors run simulation in parallel.
+- Most mutable objects are protected by ownership checks.
+- Event system advertises dispatch domain/ordering contracts.
+- Legacy mods run through serialized compatibility lane.
+
+---
+
+## System Architecture Overview
+
+Core components:
+
+1. **Region Manager**
+   - region graph, partitioning, merge/split logic.
+2. **Ownership Registry**
+   - maps objects (chunks/entities/block entities) to owner domain.
+3. **Tick Orchestrator**
+   - executes per-epoch region pipeline + global barriers.
+4. **Domain Scheduler Suite**
+   - region/entity/global/async/legacy schedulers.
+5. **Cross-Domain Message Bus**
+   - request/response, fire-and-forget, bounded mailboxes.
+6. **Compatibility Runtime**
+   - serialized facade + proxying for unsafe access.
+7. **Diagnostics & Enforcement**
+   - thread checks, race traps, trace IDs, deterministic mode.
+
+---
+
+## Concurrency Contract (The New Law)
+
+Every mutable API operation must declare one of:
+
+- **Owner-required** (must run in object owner domain).
+- **Global-only** (must run in global domain).
+- **Async-safe** (pure/immutable/side-effect constrained).
+
+Violations trigger:
+- dev mode: hard fail + stacktrace + owner metadata.
+- prod hybrid mode: reroute via safe proxy (configurable).
+
+No silent unsafe access.
+
+---
+
+## Regionization Model
+
+## Partitioning
+- Start with fixed chunk tile size (e.g., 8x8 or 16x16).
+- Maintain adjacency graph and interaction counters.
+- Auto-merge hotspots with high cross-boundary traffic.
+- Auto-split cold oversized regions.
+
+## Region metadata
+- region id
+- owned chunk set
+- entity set/index
+- inbox/outbox queues
+- performance counters (tick cost, queue depth)
+- last active tick, thermal score
+
+## Thermal policy
+- **Hot regions**: stable ownership, avoid churn.
+- **Cold regions**: candidates for split/park.
+- **Boundary pressure**: merge if inter-region chatter exceeds threshold.
+
+---
+
+## Tick Pipeline and Scheduling
+
+Per epoch `T`:
+
+1. **Build runnable set**
+2. **Dispatch region tasks** to worker pool
+3. **Execute deterministic region phases**
+4. **Run global phase/barriers**
+5. **Commit state and metrics**
+6. **Advance to epoch `T+1`**
+
+## Region local phase ordering
+1. apply inbound mailbox
+2. scheduled block/fluid updates
+3. entity AI/physics
+4. block entities
+5. region events/tasks
+6. flush outbound
+
+This preserves stable local determinism.
+
+## Worker model
+- fixed-size core pool + work-stealing
+- NUMA-aware pinning (optional advanced)
+- backpressure when global barriers dominate
+
+---
+
+## Cross-Region Communication Protocols
+
+Three primitives:
+
+1. **Cast (one-way)**  
+   enqueue operation to owner region
+2. **Call (request/response)**  
+   returns future/continuation
+3. **Txn (coordinated)**  
+   rare, controlled multi-owner atomic workflow
+
+## Requirements
+- bounded queues
+- timeout/cancellation semantics
+- idempotency metadata for retry paths
+- correlation IDs for tracing
+
+## Anti-pattern
+- blocking waits on region thread (deadlock/jitter risk)
+
+---
+
+## Entity Ownership and Migration
+
+## Rules
+- exactly one owner at a time
+- all mutations owner-bound
+- references use indirection table (`EntityRef -> current owner`)
+
+## Migration protocol
+1. mark entity `MIGRATING`
+2. snapshot authoritative mutable state
+3. transfer capsule to new owner inbox
+4. new owner attach + publish mapping
+5. old owner finalize detach
+
+## Guarantees
+- no dual-writer windows
+- consistent UUID/global lookup
+- deferred events rebased to new owner
+
+---
+
+## Event Bus Redesign for Multithreading
+
+Each event type declares:
+
+- `dispatch_domain`: REGION | GLOBAL | LEGACY_SERIAL
+- `ordering_contract`: PER_REGION | GLOBAL_TOTAL | BEST_EFFORT
+- `thread_affinity_notes`
+
+## Dispatch behavior
+- Region events execute on owner region.
+- Global events execute on global scheduler.
+- Legacy events serialized for compatibility mods.
+
+## Listener registration extensions
+- listener declares safe domains supported
+- optional strict validation at mod load
+
+---
+
+## Registries, Capabilities, Attachments, and Shared State
+
+## Registries
+- mutable during bootstrap phases only
+- immutable runtime views after freeze
+
+## Capabilities/attachments
+- entity/chunk/block-entity attached data => owner-bound
+- global attachments => concurrent container + consistency doc
+
+## Shared state patterns
+Preferred:
+- immutable snapshots
+- actor/message queues
+- concurrent maps with explicit update discipline
+Avoid:
+- unsynchronized mutable singletons
+- incidental global caches with object mutation
+
+---
+
+## Task Scheduling API Redesign
+
+Replace ambiguous “sync task” with domain-explicit APIs:
+
+- `runRegion(level, chunkPos, Runnable)`
+- `runEntity(entityId, Runnable)`
+- `runGlobal(Runnable)`
+- `runAsync(Supplier<T>)`
+- `thenRunRegion(...)`, `thenRunEntity(...)`
+
+## Contracts
+- scheduled tasks inherit trace context
+- cancellation tokens required for long pipelines
+- future continuation must not capture invalidated mutable refs
+
+---
+
+## Compatibility with Any NeoForge Mod
+
+You can approach “any mod runs” only with **hybrid execution**:
+
+- legacy mods in serialized lane
+- safe mods in parallel lane
+- cross-lane proxy boundaries
+
+Result:
+- high boot compatibility,
+- mixed runtime performance,
+- some behavior/timing differences possible.
+
+---
+
+## Legacy Compatibility Lane (Serialized Facade)
+
+## Purpose
+Preserve main-thread assumptions for unported mods.
+
+## Mechanics
+- dedicated single-thread executor (`LEGACY_SERIAL`)
+- all legacy event callbacks run there
+- sensitive world access proxied to owner domain via RPC/continuations
+- configurable strictness:
+  - reroute + warn
+  - reroute + rate-limit warnings
+  - hard-fail (strict test mode)
+
+## Cost
+- potential bottleneck under heavy legacy mod activity
+- marshalling overhead
+- partial reduction of parallel gains
+
+---
+
+## Networking Model
+
+- packet decode can remain async
+- gameplay-affecting handlers must enqueue to owner/global domain
+- outbound responses sent from safe context or via domain-safe sender proxy
+- per-player ownership usually follows current region/domain
+
+## Threats
+- packet storms amplifying mailbox pressure
+- abusive mods doing blocking call chains in packet handlers
+
+Mitigate via quotas, bounded mailboxes, and latency watchdogs.
+
+---
+
+## Persistence, Autosave, and Crash Safety
+
+## Save model
+- per-region dirty tracking
+- snapshot buffers at safe points
+- async disk flush coordinator
+- epoch-consistent savepoint metadata
+
+## Crash safety
+- write-ahead journal for in-flight critical changes
+- recovery replays committed journal segments
+- bounded flush windows to prevent unbounded memory growth
+
+---
+
+## Determinism, Testing, and Debuggability
+
+You need a first-class debugging stack:
+
+1. owner assertion framework
+2. deterministic scheduler mode (fixed ordering seed)
+3. event/message trace graph
+4. race violation telemetry
+5. replay harness for reported crashes/desyncs
+
+## Test matrix
+- single-thread baseline parity
+- hybrid mode with mixed mods
+- strict parallel mode with safe test mods
+- randomized stress for border migrations
+
+---
+
+## Security and Failure Containment
+
+## Safety objectives
+- prevent unauthorized cross-domain mutation
+- avoid deadlocks in multi-domain operations
+- bound queues and memory
+- isolate misbehaving legacy mods from collapsing server loop
+
+## Controls
+- domain ACL checks
+- timeout guards
+- watchdog for blocked executors
+- circuit-breakers on noisy mods/subsystems
+
+---
+
+## Performance Model and Expected Gains
+
+## Gains likely when
+- players geographically distributed
+- multiple independent farms/bases
+- low cross-region coupling
+
+## Limited gains when
+- single mega-base hotspot
+- many global-state-heavy mods
+- large proportion of logic in legacy serial lane
+
+## Key metrics
+- TPS p50/p95
+- tick jitter percentiles
+- region queue depth
+- global barrier stall time
+- % work in legacy lane
+- migration churn rate
+
+---
+
+## Implementation Plan (Milestones)
+
+## M0 — Instrumentation First
+- add owner-check framework (disabled by default)
+- telemetry for unsafe access hotspots
+- baseline perf/profile capture
+
+## M1 — Core Domain/Scheduler Scaffolding
+- introduce domain schedulers
+- add API prototypes
+- no major behavior changes yet
+
+## M2 — Region Tick MVP
+- region manager + partitioning
+- region tick phases for core world loops
+- basic cross-region mailbox
+
+## M3 — Compatibility Lane
+- legacy serialized executor
+- event virtualization
+- proxy/reroute world access
+
+## M4 — Entity Migration + Border Correctness
+- robust transfer protocol
+- conflict/tie-break policies
+- teleport/cross-dimension correctness
+
+## M5 — Subsystem Expansion
+- progressively parallelize safe global-ish systems
+- keep high-risk systems serialized until proven
+
+## M6 — Tooling + Ecosystem Rollout
+- mod safety scanner
+- docs, warnings, certifications
+- operational hardening
+
+---
+
+## Detailed Engineering Work Breakdown
+
+## A. Kernel & Runtime
+- Domain enum/types
+- Owner token propagation
+- Fast thread-owner checks (hot-path optimized)
+- Trace context propagation
+
+## B. Region Engine
+- chunk-to-region mapping
+- merge/split heuristics
+- hot/cold detection
+- region lifecycle state machine
+
+## C. Scheduler Layer
+- region scheduler
+- entity scheduler
+- global scheduler
+- compat scheduler
+- async bridge utilities
+
+## D. Event System
+- event metadata annotations
+- dispatcher routing table
+- listener compatibility flags
+- ordering policy enforcement
+
+## E. Compat Runtime
+- mod classification loader
+- serialized callback execution
+- unsafe API interception and reroute
+- warning/error policy framework
+
+## F. Data & State
+- attachment access guards
+- concurrent-safe global stores
+- immutable snapshot helpers
+
+## G. IO/Save
+- region dirty set tracking
+- journal and snapshot pipeline
+- save coordinator and backpressure
+
+## H. Tooling
+- debug UI/commands for region ownership
+- violation reports
+- deterministic replay mode
+- profiling dashboards
+
+---
+
+## API Surface Proposal
+
+Example conceptual API (names illustrative):
+
+- `ServerDomains.region(level, chunkPos).execute(task)`
+- `ServerDomains.entity(entity).execute(task)`
+- `ServerDomains.global().execute(task)`
+- `ServerDomains.async().supply(work).thenRegion(level, chunkPos, cont)`
+
+Event annotations:
+- `@DispatchDomain(REGION)`
+- `@Ordering(PER_REGION)`
+
+Mod manifest hint:
+- `multithreadSafety = LEGACY | HYBRID_SAFE | STRICT_SAFE`
+
+---
+
+## Compatibility Classification for Mods
+
+## Levels
+1. **LEGACY**
+   - runs in serialized lane only
+2. **HYBRID_SAFE**
+   - mostly safe, specific callbacks pinned to legacy/global
+3. **STRICT_SAFE**
+   - full domain-aware operation, parallel eligible
+
+## Classification inputs
+- manifest declaration
+- static bytecode heuristics
+- runtime violation sampling
+- optional certification test suite
+
+---
+
+## Operational Modes and Server Config
+
+- `mtserver=off`  
+  classic behavior
+- `mtserver=hybrid`  
+  default recommended; any-mod viability
+- `mtserver=strict`  
+  maximum performance, safe mods only
+
+Supporting knobs:
+- region tile size
+- merge/split thresholds
+- mailbox limits
+- violation policy (`warn|reroute|fail`)
+- compat lane watchdog thresholds
+
+---
+
+## Migration Guidance for Mod Authors
+
+1. Replace global-thread assumptions with domain scheduling.
+2. Treat entity/chunk access as owner-affine.
+3. Convert blocking sync patterns to async continuation flows.
+4. Protect global mutable state (or eliminate it).
+5. Annotate event handlers with expected affinity.
+6. Test in strict diagnostics mode early.
+
+---
+
+## Risk Register and Mitigations
+
+1. **Ecosystem breakage**  
+   Mitigate via hybrid default + compat lane.
+2. **Performance regression from compat overhead**  
+   Mitigate via profiling and targeted porting guidance.
+3. **Deadlocks in cross-region coordination**  
+   Mitigate via no-blocking policy + lock ordering.
+4. **Nondeterministic bug reports**  
+   Mitigate via deterministic replay mode.
+5. **Operational complexity**  
+   Mitigate with clear mode presets and diagnostics UX.
+
+---
+
+## Acceptance Criteria and Exit Gates
+
+## Functional
+- mixed legacy/safe modpacks run in hybrid mode without widespread crashes
+- owner violations detectable and actionable
+- core gameplay invariants preserved (duping/corruption avoided)
+
+## Performance
+- measurable TPS/jitter improvement in spread-player benchmarks
+- bounded global barrier time
+- legacy lane utilization visible and optimizable
+
+## Developer Experience
+- mod authors can identify safety issues with clear tooling
+- migration docs and examples reduce port friction
+
+---
+
+## Example Runtime Flows
+
+## Example 1: Player breaks block
+1. packet decoded async
+2. enqueue to player owner region
+3. region validates tool/state and mutates block
+4. neighbor updates local or cross-region cast
+5. result packets emitted safely
+
+## Example 2: Legacy mod event handler mutates world
+1. event dispatched in `LEGACY_SERIAL`
+2. mod calls world mutation API
+3. API intercept detects non-owner domain
+4. reroute call to target owner region
+5. continuation returns outcome (non-blocking preferred)
+
+## Example 3: Entity crossing border
+1. old region marks `MIGRATING`
+2. transfer capsule sent
+3. new region claims and publishes ownership
+4. pending references resolve via indirection map
+5. old owner finalizes detach
+
+---
+
+## Recommended Docs to Publish
+
+1. **Concurrency Contract Spec**
+2. **Scheduler API Guide**
+3. **Event Domain Reference**
+4. **Legacy Compatibility Behavior**
+5. **Mod Porting Cookbook**
+6. **Debugging Violations Manual**
+7. **Performance Tuning Guide**
+8. **Certification Checklist for STRICT_SAFE mods**
+
+---
+
+## Final Recommendation
+
+Do **not** attempt a literal Folia code transplant into NeoForge.  
+Instead, build a **NeoForge-native multithreaded server mode** with:
+
+- region ownership execution,
+- domain-aware scheduler/event APIs,
+- strict runtime checks,
+- and a serialized compatibility lane for legacy mods.
+
+That is the only path that balances **performance, correctness, and ecosystem survivability**.

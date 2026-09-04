@@ -1,0 +1,87 @@
+MultiForge Proprietary License
+
+Copyright (c) 2026 MultiForge authors. All rights reserved.
+
+1. Definitions.
+
+   "Software" means the MultiForge source code, patches, compiled artifacts,
+   Docker images, and any accompanying documentation distributed under this
+   License.
+
+   "Licensor" means the copyright holder(s) of the Software.
+
+   "Licensee" means the individual or legal entity that has been granted
+   access to the Software under a valid license token issued by Licensor.
+
+   "License Token" means an Ed25519-signed payload issued by Licensor that
+   authorizes use of the Software.
+
+2. Grant of License.
+
+   Subject to the terms of this License and a valid License Token, Licensor
+   grants Licensee a non-exclusive, non-transferable, revocable license to:
+
+   a) Install and run the Software on servers operated by Licensee for the
+      purpose of hosting Minecraft servers;
+   b) View the source code of the Software for the purposes of security
+      audit and interoperability with third-party mods, provided Licensee
+      has been granted source access separately in writing by Licensor.
+
+3. Restrictions.
+
+   Except as expressly permitted by this License, Licensee shall not:
+
+   a) Copy, modify, adapt, translate, or create derivative works of the
+      Software;
+   b) Distribute, sublicense, sell, rent, lease, or otherwise transfer the
+      Software or any License Token to any third party;
+   c) Reverse-engineer, decompile, disassemble, or attempt to derive the
+      source code of the Software, except to the extent that such activity
+      is expressly permitted by applicable law notwithstanding this
+      restriction;
+   d) Remove, alter, or obscure any proprietary notices, license terms, or
+      the License Token verification mechanism in the Software;
+   e) Use the Software in any manner that would cause the Software to
+      become subject to the terms of any open-source license.
+
+4. License Token.
+
+   The Software will refuse to operate without a valid License Token issued
+   by Licensor. Licensee shall keep its License Token confidential and
+   shall notify Licensor promptly if the Token is disclosed to any third
+   party. Licensor may revoke a License Token if Licensee is in material
+   breach of this License.
+
+5. Third-Party Components.
+
+   The Software incorporates portions of Minecraft (Copyright Mojang AB) via
+   the NeoForge modding framework (LGPL-2.1). Use of Minecraft is subject to
+   the Minecraft End User License Agreement. The Licensee is responsible for
+   holding a valid Minecraft license for each server on which the Software
+   is deployed. Portions of the Software are derived from or inspired by
+   NeoForge (LGPL-2.1); modifications to those portions are made available
+   to Licensees granted source access.
+
+6. No Warranty.
+
+   THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
+   OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+   MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, AND NON-INFRINGEMENT.
+
+7. Limitation of Liability.
+
+   IN NO EVENT SHALL LICENSOR BE LIABLE FOR ANY CLAIM, DAMAGES, OR OTHER
+   LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT, OR OTHERWISE, ARISING
+   FROM, OUT OF, OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+   DEALINGS IN THE SOFTWARE.
+
+8. Termination.
+
+   This License terminates automatically upon material breach by Licensee.
+   Upon termination, Licensee must cease all use of the Software and destroy
+   all copies in Licensee's possession.
+
+9. Governing Law.
+
+   This License is governed by the laws of the jurisdiction in which
+   Licensor is established, excluding conflict-of-law rules.
