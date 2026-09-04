@@ -18,11 +18,15 @@ dependencyResolutionManagement {
 rootProject.name = "multiforge"
 
 // Modules with no Minecraft dependency — always buildable.
+// multiforge-client currently ships the pure-Java wire glue + HUD state
+// model; the NeoForge-flavored bits are added by the M6 patch bundle
+// under `-Pmc=true`.
 include(
     "multiforge-license",
     "multiforge-license-cli",
     "multiforge-api",
     "multiforge-runtime",
+    "multiforge-client",
 )
 
 // Modules that require a vendored NeoForge workspace at
@@ -33,7 +37,6 @@ if (mcEnabled) {
     include(
         "multiforge-patches",
         "multiforge-installer",
-        "multiforge-client",
         "multiforge-testmods",
         "multiforge-bench",
     )
