@@ -62,9 +62,18 @@ public final class ServerDomains {
         HOST = host;
     }
 
-    /** Test-only: clear the installed host so a subsequent {@link #install} succeeds. */
-    public static void resetForTesting() {
+    /**
+     * Unbind the currently-installed host. Called during MultiForge's
+     * server shutdown so a subsequent {@link #install} on server
+     * restart succeeds cleanly. Idempotent.
+     */
+    public static void uninstall() {
         HOST = null;
+    }
+
+    /** Test-only alias for {@link #uninstall()}; kept for source compatibility. */
+    public static void resetForTesting() {
+        uninstall();
     }
 
     private static SchedulerHost host() {
