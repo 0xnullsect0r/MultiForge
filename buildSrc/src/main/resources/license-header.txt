@@ -1,0 +1,4 @@
+/*
+ * MultiForge — Proprietary. Copyright (c) $YEAR MultiForge authors.
+ * All rights reserved. See LICENSE at the repository root.
+ */

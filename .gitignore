@@ -1,8 +1,6 @@
 # Gradle
 .gradle/
 build/
-!buildSrc/build/
-!**/src/**/build/
 out/
 bin/
 
