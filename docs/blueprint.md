@@ -517,10 +517,20 @@ Broken into 8 landable sub-steps, sized similarly to M7's sub-steps:
   per-world mutable `ServerLevel` fields (block-tick list, fluid-tick
   list, block-event queue, entity iterator caches) to `RegionizedData<T>`
   slots.
-- Sub-step 8 (pending): strict-mode watchdog behind
-  `-Dmultiforge.regiontick.strict=true` fails on blocking waits from a
-  region worker; upgrade `WorldDiff` to canonicalized/semantic NBT
-  diff so parallel-scheduled chunk save order stays testable.
+- **Sub-step 8a (DONE):** `RegionTickWatchdog` — records per-region
+  tick duration via `TickRegionScheduler.runWorker`'s enter/exit
+  hooks; when duration exceeds the threshold
+  (`-Dmultiforge.watchdog.warn-ms=500` default) fires a rate-limited
+  warn + bumps `ProbeRegistry` key `region-tick.overrun` for CI hard
+  regression prevention. `-Dmultiforge.regiontick.strict=on` upgrades
+  the warn to a thrown `RegionTickOverrunException`, used by the
+  regression harness. Catches blocking-wait violations that would
+  otherwise silently degrade tick throughput, and gives operators a
+  first-class signal that a region is too hot to fit in one tick and
+  should split.
+- Sub-step 8b (pending): upgrade `WorldDiff` (multiforge-bench) to
+  canonicalized/semantic NBT diff so parallel-scheduled chunk save
+  order stays testable once sub-step 6b/c actually parallelizes work.
 
 Exit gate for the milestone: deterministic-mode regression on real
 region-tick dispatch; no blocking calls on a region worker thread

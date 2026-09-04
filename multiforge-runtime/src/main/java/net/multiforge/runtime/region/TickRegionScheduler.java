@@ -142,13 +142,18 @@ public final class TickRegionScheduler implements AutoCloseable, RegionListener 
             }
 
             long start = System.nanoTime();
+            RegionTickWatchdog.enterTick(region);
             try {
                 OwnerToken.runAs(OwnerToken.forRegion(region.id().value()), () -> {
                     taskQueue.drain(region, mailboxDrainBatch);
                     body.tickOnce(region);
                     taskQueue.drain(region, mailboxDrainBatch);
                 });
+                RegionTickWatchdog.exitTick(region);
             } catch (Throwable t) {
+                // exitTick did not run (either body threw or the watchdog itself threw in STRICT mode);
+                // ensure the watchdog's per-thread state is cleared before routing the exception.
+                RegionTickWatchdog.exitTickAfterThrow();
                 Thread.currentThread().getUncaughtExceptionHandler().uncaughtException(Thread.currentThread(), t);
             } finally {
                 long elapsed = System.nanoTime() - start;
