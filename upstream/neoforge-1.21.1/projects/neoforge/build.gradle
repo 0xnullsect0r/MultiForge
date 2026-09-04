@@ -90,8 +90,12 @@ dependencies {
     // patches under ../../multiforge-patches/ call into. Resolved from
     // mavenLocal (see build.gradle's allprojects{} repositories block) —
     // publish it first with `./gradlew :multiforge-runtime:publishToMavenLocal`
-    // from the outer repo root.
+    // from the outer repo root. multiforge-api is a compile-time dep too
+    // because RegionizedTickCoordinator references WorldRef (an api type),
+    // and multiforge-runtime declares its dep on api as `implementation`
+    // rather than `api` so it doesn't leak transitively.
     implementation "net.multiforge:multiforge-runtime:${project.multiforge_runtime_version}"
+    implementation "net.multiforge:multiforge-api:${project.multiforge_runtime_version}"
 
     runtimeOnly "cpw.mods:bootstraplauncher:${project.bootstraplauncher_version}"
 

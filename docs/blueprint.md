@@ -491,11 +491,14 @@ Broken into 8 landable sub-steps, sized similarly to M7's sub-steps:
   `handleServerStopped`. GameTest fixture at
   `net/multiforge/testfixtures/RegionizedRuntimeTests.java` asserts
   the host is reachable during real server runtime.
-- Sub-step 5 (pending): rewrite `MinecraftServer.tickChildren`'s
-  per-`ServerLevel` loop to dispatch per-region via
-  `MultiForgeRegionizedRuntime.current().regionizerFor(...)` +
-  `RegionizedTaskQueue.queueChunkTask(...)`, replacing M7's
-  main-executor-defer reroute target with real region dispatch.
+- **Sub-step 5 (DONE, facade-first):** patched vanilla
+  `MinecraftServer.tickChildren` routes each `serverlevel.tick(p)` call
+  through a new fork-local `RegionizedTickCoordinator` facade
+  (`upstream/neoforge-1.21.1/src/main/java/net/multiforge/neoforge/`),
+  mirroring the OwnershipGuard pattern M7 established. Currently a
+  pass-through — no behavior change — so the vanilla patch can stay
+  stable while future sub-steps swap the facade to real per-region
+  dispatch. Second file in `multiforge-patches/02-region-tick/`.
 - Sub-step 6 (pending): decompose `ServerLevel.tick` into per-region
   phases wired via `PhasedRegionTickBody`.
 - Sub-step 7 (pending, `multiforge-patches/03-world-data/`): convert

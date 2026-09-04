@@ -1,0 +1,17 @@
+--- a/net/minecraft/server/MinecraftServer.java
++++ b/net/minecraft/server/MinecraftServer.java
+@@ -1034,7 +1034,13 @@
+             net.neoforged.neoforge.event.EventHooks.fireLevelTickPre(serverlevel, p_129954_);
+ 
+             try {
+-                serverlevel.tick(p_129954_);
++                // MultiForge (multiforge-patches/02-region-tick/): route the
++                // per-level tick through the RegionizedTickCoordinator facade
++                // so future sub-steps can swap the inline call for real
++                // per-region dispatch without touching this file again.
++                // Currently a pass-through — see the facade javadoc.
++                net.multiforge.neoforge.RegionizedTickCoordinator.dispatchLevelTick(
++                        serverlevel, () -> serverlevel.tick(p_129954_));
+             } catch (Throwable throwable) {
+                 CrashReport crashreport = CrashReport.forThrowable(throwable, "Exception ticking world");
+                 serverlevel.fillReportDetails(crashreport);
