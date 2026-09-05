@@ -103,7 +103,25 @@ public class ServerLifecycleHooks {
         // wires a real per-region RegionizedTaskQueue (see
         // docs/blueprint.md M7/M8).
         net.multiforge.runtime.ownership.OwnershipEnforcer.bindTickThread(Thread.currentThread());
-        net.multiforge.runtime.ownership.OwnershipEnforcer.bindRerouteTarget(server::execute);
+        // Wrap server::execute in a RejectedExecutionException-catching
+        // adapter so the reroute target is no-throw even after server
+        // shutdown. /67 round-2 finding: the fundamental race (a caller
+        // that already loaded the old reroute-target reference into a
+        // local variable) can't be closed by any swap protocol —
+        // volatile reads don't invalidate cached locals. But making the
+        // target no-throw makes the race benign: worst case the
+        // deferred mutation runs on the shutdown-executor and gets
+        // silently rejected (with a rate-limited warn), instead of
+        // crashing the caller with RejectedExecutionException.
+        net.multiforge.runtime.ownership.OwnershipEnforcer.bindRerouteTarget(runnable -> {
+            try {
+                server.execute(runnable);
+            } catch (java.util.concurrent.RejectedExecutionException rejected) {
+                net.multiforge.runtime.diagnostics.ViolationLogger.warn(
+                        "OwnershipEnforcer.reroute",
+                        "reroute target rejected — server executor is shut down; mutation dropped");
+            }
+        });
 
         // MultiForge M8 sub-step 4: bring up the process-wide regionized
         // runtime. The tick body is a no-op for now — the M8 patches
