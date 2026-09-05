@@ -94,18 +94,35 @@ public final class DistanceManagerBridge {
      * opaque String derived from the Vanilla key's identity so
      * per-key deduplication in {@link
      * net.multiforge.runtime.chunk.PerChunkTickets} stays honest.
+     *
+     * <p>Phase 4 fix 4.8: the Vanilla {@code createdTick} (set by
+     * {@code DistanceManager.addTicket} immediately before this bridge
+     * fires) and the Vanilla {@code TicketType.timeout} are threaded
+     * through so MultiForge's {@link
+     * net.multiforge.runtime.chunk.TicketExpiryTicker} sweeps expiring
+     * tickets on the same clock as Vanilla's own
+     * {@code DistanceManager.purgeStaleTickets}. Vanilla remains
+     * authoritative — this only aligns the shadow's expiry accounting
+     * with the source of truth so a future flip of the arrow doesn't
+     * silently re-parent already-expiring tickets to tick 0.
      */
     private static net.multiforge.runtime.chunk.Ticket toMultiForgeTicket(Ticket<?> v) {
         String typeName = v.getType().toString();
         int level = v.getTicketLevel();
-        // Vanilla TicketType.timeout is 0 for permanent tickets; use MultiForge equivalent
-        // (0 = never expires). Non-zero timeouts are per-type — MultiForge derives from
-        // the well-known stock TicketTypes below when the name matches; unknown types
-        // default to 0 (permanent) since Vanilla's expiry sweep is authoritative.
-        int timeout = 0;
+        // Vanilla TicketType.timeout is 0 for permanent tickets; carry it
+        // through so MultiForge's TicketType.timeoutTicks matches Vanilla's
+        // per-type expiry (POST_TELEPORT=5, PORTAL=300, UNKNOWN=1, ender
+        // pearls=40, everything else permanent). Cast is safe: Vanilla
+        // timeouts are game-tick counts well under Integer.MAX_VALUE.
+        int timeout = (int) v.getType().timeout();
         TicketType mfType = TicketType.of(typeName, level, timeout);
         String keyStr = String.valueOf(v);
-        return net.multiforge.runtime.chunk.Ticket.at(mfType, level, keyStr);
+        // Vanilla's setCreatedTick runs inside DistanceManager.addTicket
+        // just before it dispatches through ChunkMap.DistanceManagerImpl,
+        // so getCreatedTick() is always populated by the time this bridge
+        // sees the ticket. See Ticket.java.patch under 04-chunk-system.
+        long createdAtTick = v.getCreatedTick();
+        return net.multiforge.runtime.chunk.Ticket.at(mfType, level, keyStr, createdAtTick);
     }
 
     /**
