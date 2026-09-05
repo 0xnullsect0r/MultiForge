@@ -61,12 +61,23 @@ public final class WorldDiff {
     private WorldDiff() {}
 
     public static Result compare(Path baselineRoot, Path patchedRoot) {
-        TreeMap<String, String> baselineHashes = hashTree(baselineRoot);
-        TreeMap<String, String> patchedHashes = hashTree(patchedRoot);
+        return compare(baselineRoot, patchedRoot, DiffMode.BYTE_IDENTICAL);
+    }
+
+    /**
+     * Compare two world directories under the requested {@link DiffMode}.
+     * {@code BYTE_IDENTICAL} is the M7 single-worker check; {@code
+     * SEMANTIC} is the M8/M9 N-worker check — see {@link DiffMode} for
+     * the full contract. Only {@code .mca} region files are affected by
+     * the mode; every other file is still hashed verbatim regardless.
+     */
+    public static Result compare(Path baselineRoot, Path patchedRoot, DiffMode mode) {
+        TreeMap<String, String> baselineHashes = hashTree(baselineRoot, mode);
+        TreeMap<String, String> patchedHashes = hashTree(patchedRoot, mode);
         return new Result(baselineRoot, patchedRoot, baselineHashes, patchedHashes);
     }
 
-    private static TreeMap<String, String> hashTree(Path root) {
+    private static TreeMap<String, String> hashTree(Path root, DiffMode mode) {
         TreeMap<String, String> out = new TreeMap<>();
         try {
             Files.walkFileTree(root, new SimpleFileVisitor<>() {
@@ -82,7 +93,7 @@ public final class WorldDiff {
                         }
                     }
                     String rel = root.relativize(file).toString();
-                    out.put(rel, hashFile(file, name));
+                    out.put(rel, hashFile(file, name, mode));
                     return FileVisitResult.CONTINUE;
                 }
 
@@ -143,10 +154,21 @@ public final class WorldDiff {
      * chunk-loss regressions are caught.
      */
     static String hashFile(Path file, String name) {
+        return hashFile(file, name, DiffMode.BYTE_IDENTICAL);
+    }
+
+    /**
+     * Mode-aware sibling of {@link #hashFile(Path, String)}: dispatches
+     * {@code .mca} region files to {@link #canonicalMcaHash(byte[],
+     * DiffMode)} under the requested {@code mode}; every other file is
+     * still hashed verbatim (mode has no meaning outside Anvil region
+     * files).
+     */
+    static String hashFile(Path file, String name, DiffMode mode) {
         if (!name.endsWith(".mca")) return sha256(file);
         try {
             byte[] bytes = Files.readAllBytes(file);
-            return canonicalMcaHash(bytes);
+            return canonicalMcaHash(bytes, mode);
         } catch (IOException e) {
             throw new UncheckedIOException(e);
         }

@@ -4,6 +4,10 @@
  */
 package net.multiforge.runtime.config;
 
+import java.util.concurrent.atomic.AtomicBoolean;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 /**
  * Snapshot of the operator-visible knobs from
  * {@code multiforge-server.toml}. Every field is immutable; a change
@@ -56,7 +60,49 @@ public record MultiForgeConfig(
         FAIL
     }
 
+    private static final Logger LOG = LoggerFactory.getLogger("multiforge.config");
+
+    /**
+     * Set once the first time {@link #tickWorkerCount()} honours the
+     * {@code -Dmultiforge.workers=N} override, so the "override active"
+     * notice is logged exactly once per JVM rather than once per tick.
+     */
+    private static final AtomicBoolean WORKERS_OVERRIDE_LOGGED = new AtomicBoolean(false);
+
+    /**
+     * Worker count for the tick-region scheduler. {@code cores *
+     * threadsPerCore} from {@code multiforge.toml}, unless
+     * {@code -Dmultiforge.workers=N} is set on the JVM command line, in
+     * which case that value short-circuits the TOML-derived computation
+     * entirely (see Phase 7 runbook §7 — lets 7.3's N-worker verification
+     * run flex worker count without editing {@code multiforge.toml}).
+     *
+     * <p>An unparsable or non-positive override (blank, non-numeric,
+     * zero, negative) is not a meaningful worker count, so it silently
+     * falls through to the normal {@code cores * threadsPerCore}
+     * computation rather than throwing or clamping to 1.
+     */
     public int tickWorkerCount() {
+        String override = System.getProperty("multiforge.workers");
+        if (override != null && !override.isBlank()) {
+            try {
+                int n = Integer.parseInt(override.trim());
+                if (n > 0) {
+                    if (WORKERS_OVERRIDE_LOGGED.compareAndSet(false, true)) {
+                        LOG.info(
+                                "multiforge.workers override active: using {} tick worker(s) "
+                                        + "instead of the computed cores({}) * threadsPerCore({})",
+                                n,
+                                cores,
+                                threadsPerCore);
+                    }
+                    return n;
+                }
+                // 0 or negative — not a meaningful worker count, fall through.
+            } catch (NumberFormatException ignored) {
+                // Invalid value — fall through to the computed default.
+            }
+        }
         return Math.max(1, cores * threadsPerCore);
     }
 

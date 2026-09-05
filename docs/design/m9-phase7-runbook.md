@@ -123,34 +123,37 @@ strips `random_state`, canonicalises idle `Motion`, drops `Air /
 HurtTime / DeathTime / PortalCooldown`, and sorts entity / block-entity
 / ticker lists — see `docs/design/nbt-semantic-diff.md`.
 
-**Bench target (existing, args-based):**
+**Bench target (wired):**
 
-The current `:determinism` task accepts only two positional world dirs.
-Worker count is set on the server side via `mtserver.tick_workers` in
-`multiforge.toml`; there is no `-Pworkers=8` / `-Dmultiforge.workers=8`
-JVM flag today. The runbook shape below reflects that — do **not**
-copy-paste the plan's `-Pworkers=8 -PdiffMode=SEMANTIC` invocation
-without wiring the flags first (tracked below in §7).
+`-PdiffMode=` and `-Dmultiforge.workers=N` are now wired (see §7 — both
+struck as fixed). Worker count can still be set via `mtserver.tick_workers`
+in `multiforge.toml`, or overridden at launch with
+`-Dmultiforge.workers=N` without editing the TOML.
 
 ```
-# 1. On the server side, set multiforge.toml:
+# 1. On the server side, either set multiforge.toml:
 #      [region]
 #      cores = 8
 #      threads_per_core = 1
+#    or launch with -Dmultiforge.workers=8 to override without editing the TOML.
 # 2. Boot with the same --seed as 7.2.
 # 3. Capture world to docs/verification/m9/7.3/patched-Nw/.
-# 4. Diff against the 7.2 baseline-1w capture:
-./gradlew :multiforge-bench:determinism \
+# 4. Diff against the 7.2 baseline-1w capture under SEMANTIC mode:
+./gradlew :multiforge-bench:determinism -PdiffMode=SEMANTIC -Pseed=1234567890 \
   --args='docs/verification/m9/7.2/baseline-1w \
           docs/verification/m9/7.3/patched-Nw'
 ```
 
-The default `DeterminismHarness` main runs `WorldDiff.compare` which
-dispatches per-file to `canonicalMcaHash(bytes)` — that overload uses
-`BYTE_IDENTICAL`. A `SEMANTIC`-mode CLI switch is not wired to the
-JavaExec entry point yet; see §7. Until it is, drive the semantic
-comparison via a small ad-hoc `main` or a JUnit fixture that calls
-`WorldDiff.canonicalMcaHash(file, DiffMode.SEMANTIC)` directly.
+`-PdiffMode=SEMANTIC` appends `--mode=SEMANTIC` to the harness's args,
+which `DeterminismHarness.main` now parses and threads through to
+`WorldDiff.compare(baseline, patched, DiffMode.SEMANTIC)`. `-Pseed=` is
+provenance-only — it is printed in the run log so an artifact under
+`docs/verification/m9/7.3/` can be traced back to the seed that
+produced it, but it is not consumed by the diff itself (the diff
+compares two already-captured world directories; it does not re-run
+the server). Without `-PdiffMode`, the task still defaults to
+`BYTE_IDENTICAL`, so the old two-positional invocation from §2 keeps
+working unchanged.
 
 **Expected duration:** 20 min server tick + a few seconds for the diff.
 
@@ -279,7 +282,12 @@ Read from the current tree, not guessed:
   against an unpatched-NeoForge baseline until this is fixed** —
   the baseline writes real chunk NBT via Vanilla's serializer, the
   patched side writes 0-byte journal entries, so `world/region/*.mca`
-  will diverge on every occupied chunk.
+  will diverge on every occupied chunk. **Being fixed in a parallel
+  commit** by a sibling agent — not touched by this pass. Do not edit
+  `MultiThreadedSchedulerHost.java`, `AutoSaveRunner.java`,
+  `RegionChunkSerializer.java`, `NewChunkHolder.java`,
+  `MultiForgeRegionizedRuntime.java`, or `ServerLifecycleHooks.java`
+  here; treat this blocker as still open until that commit lands.
 
 - **No headless-server launcher exists in `multiforge-bench/`.** The
   bench module today ships only the file-diff harness; the two world
@@ -287,39 +295,50 @@ Read from the current tree, not guessed:
   MultiForge server (via `multiforge-installer` or the vendored
   NeoForge workspace's `runServer` task). Formalising a launcher
   wrapper would let 7.2 / 7.3 be a single Gradle invocation instead of
-  the multi-step recipe in §2 / §3.
+  the multi-step recipe in §2 / §3. **This is a much bigger piece of
+  work than the mechanical gaps below and remains open** — not
+  attempted as part of this pass.
 
-- **`:multiforge-bench:determinism` accepts only positional world dirs
-  — no `--seed`, `-Pworkers=`, `-PdiffMode=` flags.** The plan's
-  reference invocations
-  (`./gradlew :multiforge-bench:determinism --seed=<pinned>`,
-  `-Pworkers=8 -PdiffMode=SEMANTIC`) do not work as written today.
-  Wire these into either `DeterminismHarness` (arg parser) or the
-  Gradle task (property → JavaExec args) before shipping the runbook
-  as a one-liner.
+- ~~**`:multiforge-bench:determinism` accepts only positional world
+  dirs — no `--seed`, `-Pworkers=`, `-PdiffMode=` flags.**~~ **Fixed.**
+  `DeterminismHarness.main` now parses an optional `--mode=` flag
+  (default `BYTE_IDENTICAL`) after the two positional world dirs, and
+  threads it through to `WorldDiff.compare(baseline, patched, mode)`.
+  The `:determinism` Gradle task reads `-PdiffMode=` and `-Pseed=`
+  properties and appends `--mode=<value>` / `--seed=<value>` to the
+  JavaExec `args`. `-Pseed` is provenance-only (printed in the log, not
+  consumed by the diff — see §3). The old two-positional invocation
+  from §2 still works unchanged, defaulting to `BYTE_IDENTICAL`.
 
-- **Worker count has no JVM-flag override.** N-worker parallelism is
-  set via `mtserver.tick_workers` (`cores * threads_per_core`) in
-  `multiforge.toml` — see `MultiForgeConfig.tickWorkerCount()`. There
-  is no `-Dmultiforge.workers=N` short-circuit. 7.3 either configures
-  via the TOML or a `System.getProperty("multiforge.workers")`
-  override is added to `MultiForgeConfig.defaults()`.
+- ~~**Worker count has no JVM-flag override.**~~ **Fixed.**
+  `MultiForgeConfig.tickWorkerCount()` now checks
+  `System.getProperty("multiforge.workers")` first; a valid positive
+  integer short-circuits the `cores * threadsPerCore` computation
+  entirely and logs once that the override is active. A blank,
+  non-numeric, zero, or negative value falls through to the normal
+  computation rather than throwing. 7.3 can now flex worker count with
+  `-Dmultiforge.workers=N` on the server launch command without
+  touching `multiforge.toml`. See
+  `multiforge-runtime/src/test/java/net/multiforge/runtime/config/WorkerOverrideTest.java`.
 
 - **`:multiforge-bench:atm10`, `:vanilla`, `:swarm` are stubs.** This
   runbook's Gradle-target changes register them so `./gradlew tasks`
   documents the shape, but invoking any of them throws a
   `GradleException` pointing back here. Implementing them (Phase 7.4a)
-  is a separate work item.
+  is a separate work item — left as a known TODO, not attempted here.
 
-- **No `docs/verification/m9/` directory yet.** Create the tree
-  (`7.2/`, `7.3/`, `7.4/`, `7.6/`) on the first run; the runbook
-  references it as if it already exists.
+- ~~**No `docs/verification/m9/` directory yet.**~~ **Fixed.** The tree
+  (`7.2/`, `7.3/`, `7.4/`, `7.6/`, each with a `README.md` describing
+  what lands there) now exists under `docs/verification/m9/`, with a
+  top-level index `README.md` linking to each subdirectory and back to
+  this runbook.
 
 - **Baseline hash file
   `multiforge-bench/src/test/resources/determinism-baseline.txt` does
   not exist.** First green 7.2 run seeds it; every subsequent run
   compares against the stored hash instead of re-capturing.
 
-Once the AutoSaveRunner serializer is real, the four remaining gaps
-(launcher, CLI flags, worker flag, stub bench tasks) are mechanical.
-The serializer is the only functional blocker.
+Of the gaps above, only the headless-server launcher and the stub bench
+tasks (`atm10`/`vanilla`/`swarm`) remain open after this pass, plus the
+AutoSaveRunner serializer fix landing separately. The CLI flags, worker
+override, and verification directory tree are done.

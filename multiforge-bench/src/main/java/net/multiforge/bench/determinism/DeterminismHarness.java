@@ -7,6 +7,7 @@ package net.multiforge.bench.determinism;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.Locale;
 
 /**
  * CLI entry point for the M7-scoped determinism regression: given two
@@ -34,16 +35,49 @@ import java.util.List;
  */
 public final class DeterminismHarness {
 
+    /**
+     * Two positional world-dir arguments, plus optional {@code --mode=}
+     * and {@code --seed=} flags in any order after them. Positional args
+     * must come first — this keeps the pre-Phase-7 two-arg invocation
+     * ({@code DeterminismHarness <baseline> <patched>}) working unchanged
+     * with the default {@link WorldDiff.DiffMode#BYTE_IDENTICAL}.
+     */
     public static void main(String[] args) {
-        if (args.length != 2) {
-            System.err.println("usage: DeterminismHarness <baseline-world-dir> <patched-world-dir>");
-            System.err.println(
-                    "  each argument must point to a saved world directory (contains region/, level.dat, etc.)");
-            System.exit(2);
+        if (args.length < 2) {
+            printUsageAndExit();
+            return; // unreachable — printUsageAndExit exits — but keeps args non-null to the compiler
         }
 
         Path baseline = Path.of(args[0]);
         Path patched = Path.of(args[1]);
+
+        WorldDiff.DiffMode mode = WorldDiff.DiffMode.BYTE_IDENTICAL;
+        String seed = null;
+
+        for (int i = 2; i < args.length; i++) {
+            String arg = args[i];
+            if (arg.startsWith("--mode=")) {
+                String raw = arg.substring("--mode=".length());
+                try {
+                    mode = WorldDiff.DiffMode.valueOf(raw.trim().toUpperCase(Locale.ROOT));
+                } catch (IllegalArgumentException e) {
+                    System.err.println("invalid --mode value: " + raw + " (expected BYTE_IDENTICAL or SEMANTIC)");
+                    System.exit(2);
+                }
+            } else if (arg.startsWith("--seed=")) {
+                // Not consumed by the diff itself — WorldDiff.compare has no seed
+                // parameter, since determinism is verified by comparing two
+                // already-captured world directories, not by re-running the
+                // server. Printed back below purely for provenance in the run
+                // log (so a CI artifact or verification-doc entry can be
+                // traced back to the seed that produced the two captures).
+                seed = arg.substring("--seed=".length());
+            } else {
+                System.err.println("unrecognized argument: " + arg);
+                printUsageAndExit();
+                return;
+            }
+        }
 
         for (Path p : List.of(baseline, patched)) {
             if (!Files.isDirectory(p)) {
@@ -52,11 +86,23 @@ public final class DeterminismHarness {
             }
         }
 
-        WorldDiff.Result result = WorldDiff.compare(baseline, patched);
+        System.out.println("DeterminismHarness: mode=" + mode + (seed != null ? ", seed=" + seed : ""));
+
+        WorldDiff.Result result = WorldDiff.compare(baseline, patched, mode);
         System.out.println(result.summary());
         if (!result.matches()) {
             System.exit(1);
         }
+    }
+
+    private static void printUsageAndExit() {
+        System.err.println(
+                "usage: DeterminismHarness <baseline-world-dir> <patched-world-dir> [--mode=BYTE_IDENTICAL|SEMANTIC] [--seed=<n>]");
+        System.err.println(
+                "  each positional argument must point to a saved world directory (contains region/, level.dat, etc.)");
+        System.err.println("  --mode defaults to BYTE_IDENTICAL when omitted");
+        System.err.println("  --seed is provenance-only — printed back in the log, not used by the diff itself");
+        System.exit(2);
     }
 
     private DeterminismHarness() {}

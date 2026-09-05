@@ -47,11 +47,29 @@ application {
 tasks.register<JavaExec>("determinism") {
     group = "verification"
     description =
-            "Compare two world save directories for byte-identical parity. " +
+            "Compare two world save directories for byte-identical (or semantic) parity. " +
             "Usage: ./gradlew :multiforge-bench:determinism " +
-            "--args='<baseline-world-dir> <patched-world-dir>'"
+            "--args='<baseline-world-dir> <patched-world-dir>' " +
+            "[-PdiffMode=BYTE_IDENTICAL|SEMANTIC] [-Pseed=<n>]. " +
+            "-PdiffMode selects WorldDiff.DiffMode (default BYTE_IDENTICAL, per Phase 7 task 7.2; " +
+            "use SEMANTIC for the N-worker Phase 7.3 run). " +
+            "-Pseed is provenance-only — tags the run in the log, not consumed by the diff itself."
     classpath = sourceSets["main"].runtimeClasspath
     mainClass.set("net.multiforge.bench.determinism.DeterminismHarness")
+
+    // Property pass-through: `--args` on the command line still supplies the two
+    // positional world dirs (and, for direct control, its own --mode=/--seed=
+    // flags); these -P properties are the ergonomic alternative for the flags
+    // documented in docs/design/m9-phase7-runbook.md §3/§7 so a Phase 7.3 run
+    // doesn't need to hand-splice --args itself.
+    doFirst {
+        val extra = mutableListOf<String>()
+        (project.findProperty("diffMode") as String?)?.let { extra += "--mode=$it" }
+        (project.findProperty("seed") as String?)?.let { extra += "--seed=$it" }
+        if (extra.isNotEmpty()) {
+            args = args.orEmpty() + extra
+        }
+    }
 }
 
 // Phase 7.4 bench harness — ATM10 modpack profile.
