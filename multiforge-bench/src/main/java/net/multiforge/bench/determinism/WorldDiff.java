@@ -99,36 +99,81 @@ public final class WorldDiff {
     }
 
     /**
-     * File dispatcher: {@code .mca} region files get their per-sector
-     * timestamp headers zeroed before hashing, so an identical-seed
-     * rerun that writes the same chunk contents at a different wall
-     * time still compares equal. Every other file is hashed verbatim.
+     * File dispatcher: {@code .mca} region files get canonically hashed
+     * per-chunk-slot rather than as raw bytes, so identical-seed reruns
+     * that write the same chunks in a different order (and therefore land
+     * at different sector offsets in the location table) still compare
+     * equal. Every other file is hashed verbatim.
      *
-     * <p>Per the Anvil (MCA) format: each 4 KiB sector at offset
-     * {@code 0x1000..0x1FFF} holds a big-endian {@code SecondsSinceEpoch}
-     * timestamp per chunk slot ({@code (chunkX & 31) + (chunkZ & 31) * 32})
-     * indicating when that chunk was last written. Zeroing that
-     * region only changes the reported "last write time" — chunk
-     * payload starts at sector 2 (0x2000) — so the game is not
-     * affected. /67 review finding #13.
+     * <p>Anvil (MCA) format:
+     * <ul>
+     *   <li>bytes 0–4095: location table, 1024 big-endian entries of
+     *       {@code (sectorOffset << 8) | sectorCount}; all-zero = slot
+     *       empty. Non-deterministic across reruns when chunks defrag
+     *       or grow past their prior sector count.
+     *   <li>bytes 4096–8191: timestamp table, 1024 big-endian
+     *       {@code SecondsSinceEpoch} entries. Wall-clock-derived, so
+     *       always differs across reruns.
+     *   <li>bytes 8192+: chunk payload data at sector-aligned offsets;
+     *       each starts with a big-endian 32-bit length + 1 compression
+     *       byte + compressed payload.
+     * </ul>
+     *
+     * <p>We iterate 1024 chunk slots in fixed order; for each occupied
+     * slot we hash {@code (slotIndex, payloadBytes)} where
+     * {@code payloadBytes} is the length-prefixed chunk body read from
+     * its own declared length (not the sector-count in the location
+     * table). Empty slots and malformed entries are silently skipped —
+     * an empty slot in one run vs. an occupied slot in the other still
+     * causes a hash mismatch through the slotIndex prefix, so real
+     * chunk-loss regressions are caught.
      */
     static String hashFile(Path file, String name) {
         if (!name.endsWith(".mca")) return sha256(file);
         try {
             byte[] bytes = Files.readAllBytes(file);
-            // If the file is shorter than the timestamp table, hash as-is.
-            if (bytes.length >= 8192) {
-                // Zero the second 4KiB sector (timestamps table).
-                java.util.Arrays.fill(bytes, 4096, 8192, (byte) 0);
-            }
-            MessageDigest md = MessageDigest.getInstance("SHA-256");
-            md.update(bytes);
-            return toHex(md.digest());
-        } catch (NoSuchAlgorithmException e) {
-            throw new IllegalStateException("SHA-256 not available", e);
+            return canonicalMcaHash(bytes);
         } catch (IOException e) {
             throw new UncheckedIOException(e);
         }
+    }
+
+    static String canonicalMcaHash(byte[] bytes) {
+        try {
+            MessageDigest md = MessageDigest.getInstance("SHA-256");
+            // Files smaller than the location table can't be a valid MCA — hash as-is
+            // so a truncated file still produces a stable but distinctive hash.
+            if (bytes.length < 4096) {
+                md.update(bytes);
+                return toHex(md.digest());
+            }
+            for (int slot = 0; slot < 1024; slot++) {
+                int loc = readBigEndianInt(bytes, slot * 4);
+                if (loc == 0) continue; // slot empty
+                int sectorOffset = loc >>> 8; // 24 bits
+                int sectorCount = loc & 0xFF;
+                if (sectorOffset < 2 || sectorCount <= 0) continue; // sector 0-1 reserved for headers
+                int payloadStart = sectorOffset * 4096;
+                if (payloadStart + 5 > bytes.length) continue; // malformed, past EOF
+                int chunkLength = readBigEndianInt(bytes, payloadStart); // includes the 1 compression byte
+                if (chunkLength <= 0) continue;
+                int payloadEnd = payloadStart + 4 + chunkLength; // 4-byte length prefix + length itself
+                if (payloadEnd > bytes.length) continue; // malformed
+                // Feed slot index (fixed order) + payload bytes (length-prefixed).
+                md.update(new byte[] {(byte) (slot >>> 24), (byte) (slot >>> 16), (byte) (slot >>> 8), (byte) slot});
+                md.update(bytes, payloadStart, 4 + chunkLength);
+            }
+            return toHex(md.digest());
+        } catch (NoSuchAlgorithmException e) {
+            throw new IllegalStateException("SHA-256 not available", e);
+        }
+    }
+
+    private static int readBigEndianInt(byte[] bytes, int offset) {
+        return ((bytes[offset] & 0xFF) << 24)
+                | ((bytes[offset + 1] & 0xFF) << 16)
+                | ((bytes[offset + 2] & 0xFF) << 8)
+                | (bytes[offset + 3] & 0xFF);
     }
 
     private static String toHex(byte[] digest) {

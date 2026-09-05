@@ -1,10 +1,23 @@
 --- a/net/minecraft/world/level/LevelAccessor.java
 +++ b/net/minecraft/world/level/LevelAccessor.java
-@@ -46,20 +46,41 @@
+@@ -46,20 +46,69 @@
      }
  
      default void scheduleTick(BlockPos p_186465_, Block p_186466_, int p_186467_, TickPriority p_186468_) {
-+        // MultiForge (multiforge-patches/01-ownership/): see Level.setBlock for rationale.
++        // MultiForge (multiforge-patches/01-ownership/): guard for ServerLevel
++        // callers (the main runtime path). Skip for pure worldgen carriers
++        // (WorldGenRegion) that call this from Util.backgroundExecutor threads
++        // during feature/structure gen — those are single-owner for the region's
++        // lifetime, so guarding+rerouting them would lose scheduled ticks
++        // against a stale WorldGenRegion scope. Discriminator: WorldGenLevel
++        // AND NOT ServerLevel (ServerLevel implements both — the earlier
++        // fix that skipped on WorldGenLevel alone silently regressed the
++        // guard for the main runtime path).
++        if (this instanceof net.minecraft.world.level.WorldGenLevel
++                && !(this instanceof net.minecraft.server.level.ServerLevel)) {
++            this.getBlockTicks().schedule(this.createTick(p_186465_, p_186466_, p_186467_, p_186468_));
++            return;
++        }
 +        if (!net.multiforge.neoforge.OwnershipGuard.canMutate("LevelAccessor.scheduleTick")) {
 +            net.multiforge.neoforge.OwnershipGuard.reroute(
 +                    "LevelAccessor.scheduleTick", () -> this.scheduleTick(p_186465_, p_186466_, p_186467_, p_186468_));
@@ -14,6 +27,11 @@
      }
  
      default void scheduleTick(BlockPos p_186461_, Block p_186462_, int p_186463_) {
++        if (this instanceof net.minecraft.world.level.WorldGenLevel
++                && !(this instanceof net.minecraft.server.level.ServerLevel)) {
++            this.getBlockTicks().schedule(this.createTick(p_186461_, p_186462_, p_186463_));
++            return;
++        }
 +        if (!net.multiforge.neoforge.OwnershipGuard.canMutate("LevelAccessor.scheduleTick")) {
 +            net.multiforge.neoforge.OwnershipGuard.reroute(
 +                    "LevelAccessor.scheduleTick", () -> this.scheduleTick(p_186461_, p_186462_, p_186463_));
@@ -25,6 +43,11 @@
      LevelTickAccess<Fluid> getFluidTicks();
  
      default void scheduleTick(BlockPos p_186474_, Fluid p_186475_, int p_186476_, TickPriority p_186477_) {
++        if (this instanceof net.minecraft.world.level.WorldGenLevel
++                && !(this instanceof net.minecraft.server.level.ServerLevel)) {
++            this.getFluidTicks().schedule(this.createTick(p_186474_, p_186475_, p_186476_, p_186477_));
++            return;
++        }
 +        if (!net.multiforge.neoforge.OwnershipGuard.canMutate("LevelAccessor.scheduleTick")) {
 +            net.multiforge.neoforge.OwnershipGuard.reroute(
 +                    "LevelAccessor.scheduleTick", () -> this.scheduleTick(p_186474_, p_186475_, p_186476_, p_186477_));
@@ -34,6 +57,11 @@
      }
  
      default void scheduleTick(BlockPos p_186470_, Fluid p_186471_, int p_186472_) {
++        if (this instanceof net.minecraft.world.level.WorldGenLevel
++                && !(this instanceof net.minecraft.server.level.ServerLevel)) {
++            this.getFluidTicks().schedule(this.createTick(p_186470_, p_186471_, p_186472_));
++            return;
++        }
 +        if (!net.multiforge.neoforge.OwnershipGuard.canMutate("LevelAccessor.scheduleTick")) {
 +            net.multiforge.neoforge.OwnershipGuard.reroute(
 +                    "LevelAccessor.scheduleTick", () -> this.scheduleTick(p_186470_, p_186471_, p_186472_));
