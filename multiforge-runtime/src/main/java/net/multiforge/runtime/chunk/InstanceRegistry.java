@@ -4,7 +4,9 @@
  */
 package net.multiforge.runtime.chunk;
 
+import java.util.ArrayList;
 import java.util.Collections;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.WeakHashMap;
@@ -24,8 +26,14 @@ import java.util.WeakHashMap;
  * path is a hint, not a leak-prevention requirement.
  *
  * <p><b>Threading:</b> every operation is safe from any thread; the
- * backing map is wrapped in {@link Collections#synchronizedMap}.
- * Iteration is not exposed.
+ * backing map is wrapped in {@link Collections#synchronizedMap}. Direct
+ * iteration over the backing map is intentionally not exposed —
+ * {@code Collections.synchronizedMap}'s javadoc requires the caller hold
+ * the wrapper's monitor for the whole iteration, which every value-side
+ * caller of this class would otherwise have to know and get right.
+ * {@link #snapshot()} is the safe substitute: it takes the monitor once,
+ * copies the live values, and hands the caller a plain {@link List} it
+ * can walk lock-free (round-5 H6).
  */
 public final class InstanceRegistry<K, V> {
 
@@ -72,6 +80,34 @@ public final class InstanceRegistry<K, V> {
     /** Current entry count. Consistent-at-a-moment; may race with concurrent GC. */
     public int size() {
         return map.size();
+    }
+
+    /**
+     * A point-in-time copy of every currently-registered value, safe to
+     * iterate on any thread without holding this registry's internal
+     * lock. Takes the {@code synchronizedMap} monitor once, for the
+     * duration of the copy, then releases it — the returned {@link List}
+     * is a private snapshot the caller owns outright.
+     *
+     * <p>Round-5 H6: added so a {@code WeakHashMap}-backed registry can
+     * be walked (e.g. a future {@code /multiforge distancemanagers}-style
+     * command) without the caller re-deriving the "iteration needs the
+     * wrapper's monitor" rule from the {@link Collections#synchronizedMap}
+     * javadoc itself. Filters out any {@code null} value defensively —
+     * weak keys can be reclaimed mid-copy, but {@link WeakHashMap} never
+     * surfaces a null value for a live entry, so this is a belt-and-
+     * braces guard rather than an expected path.
+     */
+    public List<V> snapshot() {
+        synchronized (map) {
+            List<V> out = new ArrayList<>(map.size());
+            for (V v : map.values()) {
+                if (v != null) {
+                    out.add(v);
+                }
+            }
+            return out;
+        }
     }
 
     /** Wipe every entry. Present for test hygiene. */

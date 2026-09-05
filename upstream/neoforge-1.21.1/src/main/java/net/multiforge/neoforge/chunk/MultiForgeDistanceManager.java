@@ -23,6 +23,7 @@ import net.minecraft.world.level.ChunkPos;
 import net.multiforge.api.world.WorldRef;
 import net.multiforge.runtime.chunk.ChunkHolderManager;
 import net.multiforge.runtime.chunk.ChunkLoadLevel;
+import net.multiforge.runtime.chunk.InstanceRegistry;
 import net.multiforge.runtime.chunk.NewChunkHolder;
 import net.multiforge.runtime.chunk.PerChunkTickets;
 import net.multiforge.runtime.chunk.PerRegionTicketMap;
@@ -116,19 +117,28 @@ public abstract class MultiForgeDistanceManager extends DistanceManager {
      * {@code multiforge-patches/04-chunk-system/net/minecraft/server/level/DistanceManager.java.patch}
      * (Phase 4 task 4.2c).
      *
-     * <p>{@link java.util.WeakHashMap} lets a discarded {@link DistanceManager}
-     * + {@link MultiForgeDistanceManager} pair reclaim without the registry
-     * pinning them. Wrapped through
-     * {@link java.util.Collections#synchronizedMap(java.util.Map)} because the
-     * map is written once per world (rare) and read on every observed
-     * base-class call (frequent): the synchronised wrapper adds a tiny
-     * critical section around a hash lookup — no cross-region contention
+     * <p>Backed by {@link InstanceRegistry#weak()} — weak keys let a
+     * discarded {@link DistanceManager} + {@link MultiForgeDistanceManager}
+     * pair reclaim without the registry pinning them, and the shared
+     * helper's {@code synchronized(WeakHashMap)} wrapper adds only a tiny
+     * critical section around a hash lookup: no cross-region contention
      * (CLAUDE.md §4 stays satisfied because the section is unconditionally
-     * microscopic and never blocks the owning worker on anything the calling
-     * thread doesn't own).
+     * microscopic and never blocks the owning worker on anything the
+     * calling thread doesn't own).
+     *
+     * <p>Round-5 H6: previously a raw {@code Collections.synchronizedMap(new
+     * WeakHashMap<>())} field on this class. That shape is safe for
+     * {@code get}/{@code put} but requires the caller hold the wrapper's
+     * monitor for any iteration — a latent hazard for a future
+     * all-instances walk (e.g. a {@code /multiforge distancemanagers}
+     * command). {@link InstanceRegistry} centralizes this exact shape
+     * (shared with {@link MultiForgeChunkMap} and
+     * {@link MultiForgeLightEngine}) and exposes {@link
+     * InstanceRegistry#snapshot()} for safe iteration, so the hazard is
+     * fixed once for every facade instead of per call site.
      */
-    private static final java.util.Map<DistanceManager, MultiForgeDistanceManager> INSTANCE_REGISTRY =
-            java.util.Collections.synchronizedMap(new java.util.WeakHashMap<>());
+    private static final InstanceRegistry<DistanceManager, MultiForgeDistanceManager> INSTANCE_REGISTRY =
+            InstanceRegistry.weak();
 
     protected final MultiThreadedSchedulerHost host;
     protected final WorldRef worldRef;
@@ -207,7 +217,7 @@ public abstract class MultiForgeDistanceManager extends DistanceManager {
         // observation hunks in the abstract DistanceManager base
         // (multiforge-patches/04-chunk-system/.../DistanceManager.java.patch)
         // can resolve `this` back to a MultiForgeDistanceManager.
-        INSTANCE_REGISTRY.put(this, this);
+        INSTANCE_REGISTRY.register(this, this);
     }
 
     // === Region resolution ===
@@ -759,8 +769,7 @@ public abstract class MultiForgeDistanceManager extends DistanceManager {
      *     none. Never throws.
      */
     public static java.util.Optional<MultiForgeDistanceManager> of(@Nullable DistanceManager dm) {
-        if (dm == null) return java.util.Optional.empty();
-        return java.util.Optional.ofNullable(INSTANCE_REGISTRY.get(dm));
+        return INSTANCE_REGISTRY.of(dm);
     }
 
     /**

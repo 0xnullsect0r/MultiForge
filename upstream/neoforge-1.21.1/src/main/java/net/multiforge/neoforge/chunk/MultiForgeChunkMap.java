@@ -390,16 +390,23 @@ public final class MultiForgeChunkMap extends ChunkStorage
      * NEW — observability seam for {@code /multiforge chunks} and
      * diagnostics. Any thread. Returns null if the runtime is not
      * installed (bootstrap-order guard).
+     *
+     * <p>Round-5 H2: package-private. Every current caller
+     * (this class, {@code /multiforge chunks} plumbing) lives in {@code
+     * net.multiforge.neoforge.*}; no cross-package/mod-facing caller
+     * depends on the internal {@link ChunkHolderManager} return type.
      */
-    public @Nullable ChunkHolderManager holders() {
+    @Nullable ChunkHolderManager holders() {
         MultiThreadedSchedulerHost h = host();
         return h == null ? null : h.chunkManagerForOrNull(worldRef);
     }
 
     /**
      * NEW — test seam for the shared chunk-task scheduler. Any thread.
+     *
+     * <p>Round-5 H2: package-private — same rationale as {@link #holders()}.
      */
-    public @Nullable ChunkTaskScheduler tasks() {
+    @Nullable ChunkTaskScheduler tasks() {
         MultiThreadedSchedulerHost h = host();
         return h == null ? null : h.chunkTaskScheduler();
     }
@@ -409,8 +416,12 @@ public final class MultiForgeChunkMap extends ChunkStorage
      * caller must hold the regionizer read lock OR accept eventual-
      * consistency reroute (m9-contracts.md §2.2). Returns {@code null}
      * for chunks with no owner yet.
+     *
+     * <p>Round-5 H2: package-private. Zero callers exist today (grep
+     * across {@code upstream/} and {@code multiforge-runtime/}); leaking
+     * {@link RegionId} publicly ahead of an actual caller buys nothing.
      */
-    public @Nullable RegionId regionIdFor(ChunkPos pos) {
+    @Nullable RegionId regionIdFor(ChunkPos pos) {
         MultiThreadedSchedulerHost h = host();
         if (h == null) return null;
         ThreadedRegionizer r = h.regionizerForOrNull(worldRef);
@@ -1548,10 +1559,13 @@ public final class MultiForgeChunkMap extends ChunkStorage
      * Test-only: expose the underlying MultiForge chunk manager for the
      * facade so unit tests (4.1d) can inject state without going through
      * the runtime host lookup.
+     *
+     * <p>Round-5 H2: package-private. No caller exists anywhere in the
+     * tree today; a same-package test source set can still reach it.
      */
     @ApiStatus.Internal
     @Nullable
-    public ChunkHolderManager _testHolders() {
+    ChunkHolderManager _testHolders() {
         return holders();
     }
 }

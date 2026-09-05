@@ -5,11 +5,8 @@
 package net.multiforge.neoforge.chunk;
 
 import java.lang.ref.WeakReference;
-import java.util.Collections;
-import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
-import java.util.WeakHashMap;
 import java.util.concurrent.CompletableFuture;
 import javax.annotation.Nullable;
 import net.minecraft.core.BlockPos;
@@ -26,6 +23,7 @@ import net.minecraft.world.level.chunk.DataLayer;
 import net.minecraft.world.level.chunk.LevelChunkSection;
 import net.minecraft.world.level.chunk.LightChunkGetter;
 import net.multiforge.api.world.WorldRef;
+import net.multiforge.runtime.chunk.InstanceRegistry;
 import net.multiforge.runtime.diagnostics.ProbeRegistry;
 import net.multiforge.runtime.region.RegionizedTaskQueue;
 import net.multiforge.runtime.scheduler.MultiForgeRegionizedRuntime;
@@ -109,16 +107,27 @@ public final class MultiForgeLightEngine extends ThreadedLevelLightEngine {
      * {@link ThreadedLevelLightEngine} observation hunks resolve the
      * per-instance {@code MultiForgeLightEngine} facade without holding
      * the facade alive past ChunkMap teardown. Keyed by the vanilla
-     * engine identity ({@link WeakHashMap} compares by {@code equals},
+     * engine identity ({@code WeakHashMap} compares by {@code equals},
      * which for the un-overriding {@code ThreadedLevelLightEngine}
      * defaults to identity), value is a {@link WeakReference} so the
-     * value chain does not strong-hold the key (facade is-a key). Access
-     * is synchronised via {@link Collections#synchronizedMap(Map)} — the
-     * hunks call {@link #of} once per invocation and no hot path lives
-     * here.
+     * value chain does not strong-hold the key (facade is-a key: this
+     * class registers itself, under itself, so an {@code InstanceRegistry
+     * <ThreadedLevelLightEngine, MultiForgeLightEngine>} storing the
+     * facade directly as the strong value would pin the very key it is
+     * supposed to let go — the {@link WeakReference} indirection is load
+     * -bearing, not incidental, and must survive the round-5 H6 swap).
+     * The hunks call {@link #of} once per invocation and no hot path
+     * lives here.
+     *
+     * <p>Round-5 H6: backed by {@link InstanceRegistry#weak()} instead of
+     * a hand-rolled {@code Collections.synchronizedMap(new
+     * WeakHashMap<>())} — same rationale as {@link MultiForgeDistanceManager
+     * #INSTANCE_REGISTRY}. {@link InstanceRegistry#snapshot()} gives any
+     * future all-engines walk a safe-iteration path this class doesn't
+     * currently need.
      */
-    private static final Map<ThreadedLevelLightEngine, WeakReference<MultiForgeLightEngine>> REGISTRY =
-            Collections.synchronizedMap(new WeakHashMap<>());
+    private static final InstanceRegistry<ThreadedLevelLightEngine, WeakReference<MultiForgeLightEngine>> REGISTRY =
+            InstanceRegistry.weak();
 
     /**
      * No-op sorter handle handed to super so the inherited
@@ -154,7 +163,7 @@ public final class MultiForgeLightEngine extends ThreadedLevelLightEngine {
         // Task 4.5c — publish this facade under the vanilla engine
         // identity so Vanilla-side observation hunks can locate it via
         // {@link #of}.
-        REGISTRY.put(this, new WeakReference<>(this));
+        REGISTRY.register(this, new WeakReference<>(this));
     }
 
     /**
@@ -165,7 +174,7 @@ public final class MultiForgeLightEngine extends ThreadedLevelLightEngine {
      */
     @Override
     public void close() {
-        REGISTRY.remove(this);
+        REGISTRY.unregister(this);
         super.close();
     }
 
@@ -182,11 +191,11 @@ public final class MultiForgeLightEngine extends ThreadedLevelLightEngine {
         if (engine == null) {
             return Optional.empty();
         }
-        WeakReference<MultiForgeLightEngine> ref = REGISTRY.get(engine);
-        if (ref == null) {
+        Optional<WeakReference<MultiForgeLightEngine>> ref = REGISTRY.of(engine);
+        if (ref.isEmpty()) {
             return Optional.empty();
         }
-        MultiForgeLightEngine facade = ref.get();
+        MultiForgeLightEngine facade = ref.get().get();
         return facade == null ? Optional.empty() : Optional.of(facade);
     }
 
