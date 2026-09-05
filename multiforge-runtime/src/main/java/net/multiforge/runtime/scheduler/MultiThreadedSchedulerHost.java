@@ -299,7 +299,17 @@ public final class MultiThreadedSchedulerHost implements SchedulerHost, AutoClos
     }
 
     public ChunkHolderManager chunkManagerFor(WorldRef world) {
-        return chunkManagers.computeIfAbsent(world.dimensionId(), id -> new ChunkHolderManager(world));
+        // Round-5 H4: wire the per-world regionizer accessor so
+        // ChunkHolderManager.addTicket/removeTicket pin the section→region
+        // mapping across their resolve→write pair. The supplier is queried
+        // lazily on every ticket write (not captured at construction) so
+        // the manager can be created inside regionizerFor's
+        // computeIfAbsent — where the regionizer itself is not yet
+        // published to the regionizers map. Same "null when regionizer
+        // not materialised" contract as the OwnerLookup / ReadLockLookup
+        // pair in RegionizedTaskQueue (Phase 1.2).
+        return chunkManagers.computeIfAbsent(
+                world.dimensionId(), id -> new ChunkHolderManager(world, () -> regionizerForOrNull(world)));
     }
 
     /**

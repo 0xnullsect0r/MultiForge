@@ -10,12 +10,15 @@ import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.locks.Lock;
+import java.util.function.Supplier;
 import net.multiforge.api.world.ChunkPos;
 import net.multiforge.api.world.WorldRef;
 import net.multiforge.runtime.region.Region;
 import net.multiforge.runtime.region.RegionId;
 import net.multiforge.runtime.region.RegionListener;
 import net.multiforge.runtime.region.SectionPos;
+import net.multiforge.runtime.region.ThreadedRegionizer;
 
 /**
  * Per-world map of {@code (chunk pos) → NewChunkHolder} plus per-region
@@ -37,6 +40,18 @@ import net.multiforge.runtime.region.SectionPos;
  * below existed but were never invoked (signature mismatch against
  * {@code RegionListener}) — per-region tickets, region data, and
  * holder ownership silently leaked across every merge/split.
+ *
+ * <p><b>Round-5 H4 fix.</b> When the optional {@link ThreadedRegionizer}
+ * accessor is wired at construction, {@link #addTicket} and
+ * {@link #removeTicket} acquire the regionizer's read lock across the
+ * resolve→write pair — same shape as the Phase 1.2 fix in
+ * {@link net.multiforge.runtime.region.RegionizedTaskQueue#queueChunkTask}.
+ * A concurrent merge cannot fold the target region out from under a
+ * pending ticket write, and a caller's stale {@link RegionId} hint is
+ * re-resolved to the current owner of the position (so a ticket keyed
+ * on a just-merged-away region routes to the survivor instead of
+ * landing in a dead map). Legacy tests that pass no accessor keep the
+ * prior lock-free shape.
  */
 public final class ChunkHolderManager implements RegionListener {
 
@@ -45,8 +60,43 @@ public final class ChunkHolderManager implements RegionListener {
     private final ConcurrentMap<RegionId, HolderManagerRegionData> perRegion = new ConcurrentHashMap<>();
     private final ConcurrentMap<RegionId, PerRegionTicketMap> ticketsByRegion = new ConcurrentHashMap<>();
 
+    /**
+     * Lazy accessor for this world's regionizer. Non-null in production
+     * wiring (via {@link
+     * net.multiforge.runtime.scheduler.MultiThreadedSchedulerHost#chunkManagerFor});
+     * {@code null} in legacy tests that construct a bare
+     * {@link ChunkHolderManager} without a regionizer. The supplier is
+     * queried on every {@link #addTicket}/{@link #removeTicket} call
+     * rather than captured at construction so it can bridge the
+     * chicken-and-egg between {@code regionizerFor} and
+     * {@code chunkManagerFor} in the host (a manager is created inside
+     * the regionizer's {@code computeIfAbsent}, so the regionizer is
+     * not yet published when the manager's constructor runs).
+     */
+    private final Supplier<ThreadedRegionizer> regionizerAccess;
+
+    /**
+     * Legacy constructor for tests and callers that don't need the
+     * round-5 H4 merge-race protection (typically single-threaded unit
+     * tests with a stub or absent regionizer). The addTicket/removeTicket
+     * path degrades to the prior lock-free shape.
+     */
     public ChunkHolderManager(WorldRef world) {
+        this(world, null);
+    }
+
+    /**
+     * Production constructor. {@code regionizerAccess} is a lazy accessor
+     * for this world's {@link ThreadedRegionizer}; supply {@code null}
+     * (or a supplier returning {@code null}) to keep the legacy
+     * lock-free shape. When non-null and the supplier returns a live
+     * regionizer, {@link #addTicket}/{@link #removeTicket} acquire the
+     * regionizer's {@linkplain ThreadedRegionizer#readLock read lock}
+     * across the resolve→write pair (Phase 1.2 pattern, round-5 H4).
+     */
+    public ChunkHolderManager(WorldRef world, Supplier<ThreadedRegionizer> regionizerAccess) {
         this.world = Objects.requireNonNull(world, "world");
+        this.regionizerAccess = regionizerAccess;
     }
 
     public WorldRef world() {
@@ -76,44 +126,101 @@ public final class ChunkHolderManager implements RegionListener {
     /**
      * Add a ticket, promoting the holder's level if the ticket lowers
      * the effective distance below the current level's threshold. The
-     * holder must already exist ({@link #createHolder(ChunkPos, RegionId)}).
+     * holder is created lazily if it does not already exist.
+     *
+     * <p><b>Round-5 H4 fix.</b> When a regionizer accessor was wired at
+     * construction, the resolve→write pair (holder lookup, ticket write,
+     * level promotion, {@link HolderManagerRegionData#enqueueFullLoadUpdate})
+     * runs under the regionizer's read lock. This blocks concurrent
+     * merges (which hold the write lock in {@link
+     * ThreadedRegionizer#mergeInto}) so the target region cannot fold
+     * out from under the write. Additionally, the caller's {@code owner}
+     * argument is treated as a hint: under the lock we re-resolve the
+     * current owner of {@code pos} via
+     * {@link ThreadedRegionizer#regionAtChunk(int, int)} and use that
+     * as the write target. A stale hint (region merged away between the
+     * caller's resolve and this call) is transparently rerouted to the
+     * surviving region — the ticket is never written into a dead
+     * per-region map.
+     *
+     * <p>Legacy callers (no regionizer accessor) fall through to the
+     * prior lock-free shape and trust the caller-supplied {@code owner}.
      */
     public boolean addTicket(RegionId owner, ChunkPos pos, Ticket ticket) {
-        NewChunkHolder holder = byChunk.computeIfAbsent(pos, p -> {
-            NewChunkHolder h = new NewChunkHolder(world, p);
-            h.setOwningRegion(owner);
-            return h;
-        });
-        PerRegionTicketMap tickets = ticketsFor(owner);
-        boolean added = tickets.addTicket(pos, ticket);
-        if (!added) return false;
-        ChunkLoadLevel prev = holder.level();
-        ChunkLoadLevel now = tickets.effectiveLevel(pos);
-        if (!now.equals(prev)) {
-            holder.setLevel(now);
-            regionData(owner).enqueueFullLoadUpdate(holder);
+        ThreadedRegionizer regionizer = regionizerAccess == null ? null : regionizerAccess.get();
+        Lock readLock = regionizer == null ? null : regionizer.readLock();
+        if (readLock != null) readLock.lock();
+        try {
+            RegionId actualOwner = resolveActualOwner(regionizer, pos, owner);
+            NewChunkHolder holder = byChunk.computeIfAbsent(pos, p -> {
+                NewChunkHolder h = new NewChunkHolder(world, p);
+                h.setOwningRegion(actualOwner);
+                return h;
+            });
+            PerRegionTicketMap tickets = ticketsFor(actualOwner);
+            boolean added = tickets.addTicket(pos, ticket);
+            if (!added) return false;
+            ChunkLoadLevel prev = holder.level();
+            ChunkLoadLevel now = tickets.effectiveLevel(pos);
+            if (!now.equals(prev)) {
+                holder.setLevel(now);
+                regionData(actualOwner).enqueueFullLoadUpdate(holder);
+            }
+            return true;
+        } finally {
+            if (readLock != null) readLock.unlock();
         }
-        return true;
     }
 
     /**
      * Remove a ticket, demoting the holder's level if the effective
      * distance rises above the current level's threshold. Removing
      * the last ticket transitions the holder to INACCESSIBLE.
+     *
+     * <p><b>Round-5 H4 fix.</b> Symmetric to {@link #addTicket}: the
+     * resolve→write pair runs under the regionizer read lock when a
+     * regionizer accessor was wired, and the caller's {@code owner}
+     * is re-resolved to the current owner of {@code pos} so a stale
+     * hint reroutes to the surviving region instead of missing the
+     * merged-away region's ticket map entirely.
      */
     public boolean removeTicket(RegionId owner, ChunkPos pos, Ticket ticket) {
-        PerRegionTicketMap tickets = ticketsByRegion.get(owner);
-        if (tickets == null) return false;
-        boolean removed = tickets.removeTicket(pos, ticket);
-        if (!removed) return false;
-        NewChunkHolder holder = byChunk.get(pos);
-        if (holder == null) return true;
-        ChunkLoadLevel now = tickets.effectiveLevel(pos);
-        if (!now.equals(holder.level())) {
-            holder.setLevel(now);
-            regionData(owner).enqueueFullLoadUpdate(holder);
+        ThreadedRegionizer regionizer = regionizerAccess == null ? null : regionizerAccess.get();
+        Lock readLock = regionizer == null ? null : regionizer.readLock();
+        if (readLock != null) readLock.lock();
+        try {
+            RegionId actualOwner = resolveActualOwner(regionizer, pos, owner);
+            PerRegionTicketMap tickets = ticketsByRegion.get(actualOwner);
+            if (tickets == null) return false;
+            boolean removed = tickets.removeTicket(pos, ticket);
+            if (!removed) return false;
+            NewChunkHolder holder = byChunk.get(pos);
+            if (holder == null) return true;
+            ChunkLoadLevel now = tickets.effectiveLevel(pos);
+            if (!now.equals(holder.level())) {
+                holder.setLevel(now);
+                regionData(actualOwner).enqueueFullLoadUpdate(holder);
+            }
+            return true;
+        } finally {
+            if (readLock != null) readLock.unlock();
         }
-        return true;
+    }
+
+    /**
+     * Round-5 H4 helper. Under the regionizer read lock (held by the
+     * caller), re-resolve the current owner of {@code pos} to defeat a
+     * stale {@link RegionId} hint from a caller that resolved before a
+     * merge fired. Falls back to the caller's {@code hint} when either
+     * (a) no regionizer accessor is wired (legacy tests), or (b) the
+     * chunk is currently unloaded from the regionizer's POV (defensive:
+     * addTicket races vs. removeChunk are already covered by the
+     * regionizer's own {@link RegionListener#onRegionDied} cleanup).
+     */
+    private static RegionId resolveActualOwner(ThreadedRegionizer regionizer, ChunkPos pos, RegionId hint) {
+        if (regionizer == null) return hint;
+        Region current = regionizer.regionAtChunk(pos.x(), pos.z());
+        return current == null ? hint : current.id();
     }
 
     /** Marks {@code pos} dirty and puts it on the owning region's autosave queue. */

@@ -91,6 +91,16 @@ public final class RegionizedChunkLifecycle {
         // through the pending-full-load-update pump). The addTicket
         // choke below is thread-safe and cross-region-callable — see
         // ChunkHolderManager.addTicket contract (§ M9 contracts 2.2).
+        //
+        // /67 round-5 H5 fix: the H4 remediation moved the resolve→write
+        // read-lock acquisition INSIDE ChunkHolderManager.addTicket, and
+        // host.chunkManagerFor wires the per-world regionizer accessor
+        // that supplies both the lock and the current-owner lookup. The
+        // region.id() we pass here is now treated as a hint — if a
+        // concurrent merge folds it away between our host.registerChunk
+        // and addTicket, the manager re-resolves the surviving owner
+        // under the read lock so the ticket cannot land in a dead
+        // per-region map. No caller-side lock ceremony needed here.
         ChunkHolderManager manager = host.chunkManagerFor(world);
         net.multiforge.api.world.ChunkPos mfPos = new net.multiforge.api.world.ChunkPos(pos.x, pos.z);
         if (manager.holderAt(mfPos) == null) {
@@ -130,6 +140,11 @@ public final class RegionizedChunkLifecycle {
         // non-creating chunkManagerForOrNull so a foreign-world Unload
         // (theoretically possible for a world MultiForge never saw
         // Load-side) doesn't allocate a fresh manager on the way out.
+        //
+        // /67 round-5 H5 fix: same rationale as the Load-side call —
+        // removeTicket now takes the regionizer read lock and re-resolves
+        // the current owner internally, so the region.id() we pass is a
+        // hint that survives a concurrent merge.
         ChunkHolderManager manager = host.chunkManagerForOrNull(world);
         if (manager != null) {
             net.multiforge.runtime.region.ThreadedRegionizer regionizer = host.regionizerForOrNull(world);
