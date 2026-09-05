@@ -79,13 +79,17 @@ public final class MultiThreadedSchedulerHost implements SchedulerHost, AutoClos
         this.config = Objects.requireNonNull(config, "config");
         this.regionizerFactory = world -> new ThreadedRegionizer(world, config.regionSize());
         this.taskQueue = new RegionizedTaskQueue((w, x, z) -> {
-            ThreadedRegionizer r = regionizerFor(w);
-            return r.regionAtChunk(x, z);
+            // Use regionizerForOrNull here (not regionizerFor): OwnerLookup's
+            // contract is "return null for unloaded/unknown chunks", and
+            // auto-creating a regionizer on lookup lets a typoed WorldRef
+            // grow the map unboundedly (finding #11 of the /67 review).
+            ThreadedRegionizer r = regionizerForOrNull(w);
+            return r == null ? null : r.regionAtChunk(x, z);
         });
         this.scheduler = new TickRegionScheduler(config.tickWorkerCount(), body, taskQueue, 128);
         this.chunkTaskScheduler = new ChunkTaskScheduler(taskQueue, (w, x, z) -> {
-            ThreadedRegionizer r = regionizerFor(w);
-            return r.regionAtChunk(x, z);
+            ThreadedRegionizer r = regionizerForOrNull(w);
+            return r == null ? null : r.regionAtChunk(x, z);
         });
 
         // Global region is exposed under a synthetic world so it uses the
@@ -95,8 +99,19 @@ public final class MultiThreadedSchedulerHost implements SchedulerHost, AutoClos
         // regionizer as `globalRegionizer` here.
         WorldRef globalWorld = WorldRef.of("multiforge:global");
         this.globalRegionizer = new ThreadedRegionizer(globalWorld, 0);
+        // Wire the scheduler+taskQueue as listeners BEFORE publishing to
+        // regionizers so any future addChunk/removeChunk on the global
+        // regionizer cascades cleanup exactly like every other world's
+        // regionizer. Direct `regionizers.put` here bypasses regionizerFor
+        // (which would double-register from computeIfAbsent), so listener
+        // wiring must be done explicitly.
+        this.globalRegionizer.addListener(this.scheduler);
+        this.globalRegionizer.addListener(this.taskQueue);
         regionizers.put(globalWorld.dimensionId(), globalRegionizer);
         this.globalRegion = globalRegionizer.addChunk(new ChunkPos(0, 0));
+        // scheduler.register(globalRegion) is redundant now (onRegionCreated
+        // handles it via the listener) — keeping the explicit call for
+        // symmetry with the previous shape / test readability.
         scheduler.register(globalRegion);
 
         AtomicInteger dSeq = new AtomicInteger();
@@ -137,6 +152,19 @@ public final class MultiThreadedSchedulerHost implements SchedulerHost, AutoClos
             r.addListener(taskQueue);
             return r;
         });
+    }
+
+    /**
+     * Non-creating variant of {@link #regionizerFor}. Returns {@code
+     * null} when no regionizer has been established for {@code world}
+     * (i.e. no {@code registerChunk} or {@code touchChunk} call has
+     * happened for that world yet). Used by owner-lookup call sites
+     * where "unloaded/unknown chunk" is the semantically correct
+     * answer and where auto-creating on lookup would let typoed
+     * WorldRefs grow the map without bound.
+     */
+    public ThreadedRegionizer regionizerForOrNull(WorldRef world) {
+        return regionizers.get(world.dimensionId());
     }
 
     public ChunkTaskScheduler chunkTaskScheduler() {

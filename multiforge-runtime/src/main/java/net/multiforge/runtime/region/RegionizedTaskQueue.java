@@ -60,6 +60,14 @@ public final class RegionizedTaskQueue implements RegionListener {
      * in {@code world}. If the chunk is currently unloaded the task
      * lands in the orphan queue and will be re-routed the next time
      * {@link #reroute()} runs — after chunk load.
+     *
+     * <p>After appending the task, re-checks region ownership: if the
+     * region we just enqueued to has died (via a merge or last-section
+     * removal that raced our lookup), moves the task to the orphan
+     * queue so the next {@link #reroute()} homes it correctly. Without
+     * this recheck, a task queued into a dying region's freshly
+     * {@code computeIfAbsent}-fabricated inbox would be silently
+     * discarded when the merge/death listener clears the inbox map.
      */
     public void queueChunkTask(WorldRef world, int chunkX, int chunkZ, Runnable task) {
         Objects.requireNonNull(world, "world");
@@ -70,6 +78,22 @@ public final class RegionizedTaskQueue implements RegionListener {
             return;
         }
         inboxFor(owner).add(task);
+        // Recheck: if a concurrent merge/death cleared owner's inbox between
+        // our lookup and add, our task is stuck in a dead region's queue.
+        // The regionizer's write lock protects the transition, but we never
+        // hold it; the recheck is a lock-free way to detect the race.
+        if (owner.state() == RegionState.DEAD || ownerLookup.regionAtChunk(world, chunkX, chunkZ) != owner) {
+            Queue<Runnable> stale = inboxes.get(owner.id());
+            if (stale != null && stale.remove(task)) {
+                orphaned.add(new PendingTask(world, chunkX, chunkZ, task));
+            }
+            // If stale == null the merge already cleared the inbox (and our
+            // task with it) — recover by orphaning a fresh reference so the
+            // next reroute() picks it up.
+            if (stale == null) {
+                orphaned.add(new PendingTask(world, chunkX, chunkZ, task));
+            }
+        }
     }
 
     public void queueChunkTask(WorldRef world, ChunkPos pos, Runnable task) {

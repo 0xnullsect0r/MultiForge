@@ -95,6 +95,19 @@ public final class TickRegionScheduler implements AutoCloseable, RegionListener 
         unregister(region);
     }
 
+    /**
+     * {@link RegionListener} hook: register newly-created regions so
+     * fresh split-children (peeled off by {@link
+     * ThreadedRegionizer#splitIfDisconnected} when a chunk unload
+     * disconnects a region) actually enter the tick pool. Without this,
+     * tasks queued for the child region's chunks would accumulate in
+     * the inbox forever with no worker to drain them.
+     */
+    @Override
+    public void onRegionCreated(Region region) {
+        register(region);
+    }
+
     public RegionMspt mspt(Region region) {
         RegionState_ s = perRegion.get(region.id());
         return s == null ? null : s.mspt;
@@ -159,6 +172,9 @@ public final class TickRegionScheduler implements AutoCloseable, RegionListener 
                 long elapsed = System.nanoTime() - start;
                 s.mspt.recordNanos(elapsed);
                 region.markNotTicking();
+                // Drain any actions deferred from this tick (e.g. merge folds
+                // that RegionizedData deferred because target was TICKING).
+                region.runPostTickActions();
                 // Deadline = start-of-tick + one tick period, not
                 // now + one period — so slow regions catch up rather
                 // than drift.

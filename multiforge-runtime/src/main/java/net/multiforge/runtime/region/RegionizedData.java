@@ -161,6 +161,25 @@ public final class RegionizedData<T> implements RegionListener {
     public void onRegionsMerging(Region surviving, Region dying) {
         T sourceValue = slots.remove(dying.id());
         if (sourceValue == null) return;
+
+        // If the surviving region is currently TICKING on a worker, the
+        // merger callback would mutate that region's slot value while the
+        // tick body is iterating it (CME on a plain collection, silent
+        // lost updates on a hash map). Defer the fold to run on that
+        // worker after the tick completes — see Region.addPostTickAction.
+        // Note: there's a small window where surviving is READY here but
+        // starts TICKING before merger.accept — that window is closed
+        // separately by the tick body's own snapshot semantics on
+        // region.sections() and any RegionizedData user's discipline of
+        // reading through get() rather than caching references.
+        if (surviving.state() == RegionState.TICKING) {
+            surviving.addPostTickAction(() -> {
+                T targetValue = slots.computeIfAbsent(surviving.id(), k -> factory.get());
+                merger.accept(targetValue, sourceValue);
+            });
+            return;
+        }
+
         // computeIfAbsent so surviving is guaranteed to have a slot to fold into.
         T targetValue = slots.computeIfAbsent(surviving.id(), k -> factory.get());
         merger.accept(targetValue, sourceValue);
