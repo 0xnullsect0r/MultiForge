@@ -42,7 +42,6 @@ import org.jetbrains.annotations.ApiStatus;
  */
 @ApiStatus.Internal
 public final class ServerChunkCacheBridge {
-
     /** Probe name for {@link #observeGet}. */
     private static final String PROBE_GET = "mfservercc.observe.get";
 
@@ -64,15 +63,15 @@ public final class ServerChunkCacheBridge {
      * {@code currentlyLoading} bypass. Never blocks, never throws
      * upward.
      *
-     * @param cache the invoking chunk cache; unused today, threaded
-     *     through so Phase 5 can key per-level state without another
-     *     patch pass.
-     * @param chunkX chunk-x from the caller.
-     * @param chunkZ chunk-z from the caller.
-     * @param status requested {@link ChunkStatus}.
+     * @param cache        the invoking chunk cache; unused today, threaded
+     *                     through so Phase 5 can key per-level state without another
+     *                     patch pass.
+     * @param chunkX       chunk-x from the caller.
+     * @param chunkZ       chunk-z from the caller.
+     * @param status       requested {@link ChunkStatus}.
      * @param requireChunk Vanilla's {@code p_8363_}; when true, a
-     *     missing chunk becomes a hard error downstream. Threaded
-     *     through for Phase 5 telemetry.
+     *                     missing chunk becomes a hard error downstream. Threaded
+     *                     through for Phase 5 telemetry.
      */
     public static void observeGet(
             ServerChunkCache cache, int chunkX, int chunkZ, ChunkStatus status, boolean requireChunk) {
@@ -90,10 +89,10 @@ public final class ServerChunkCacheBridge {
      * the chunk-tick pass has run for one level tick. Never blocks,
      * never throws upward.
      *
-     * @param cache the invoking chunk cache.
+     * @param cache       the invoking chunk cache.
      * @param hasTimeLeft Vanilla's {@code p_201913_} tick budget
-     *     supplier; threaded through so Phase 5's per-region
-     *     dispatcher can honour it.
+     *                    supplier; threaded through so Phase 5's per-region
+     *                    dispatcher can honour it.
      */
     public static void afterTickChunks(ServerChunkCache cache, BooleanSupplier hasTimeLeft) {
         try {
@@ -113,7 +112,7 @@ public final class ServerChunkCacheBridge {
      *
      * @param cache the invoking chunk cache.
      * @param flush Vanilla's {@code p_8420_}; when true, a
-     *     synchronous flush was requested (shutdown / world save).
+     *              synchronous flush was requested (shutdown / world save).
      */
     public static void afterSave(ServerChunkCache cache, boolean flush) {
         try {
