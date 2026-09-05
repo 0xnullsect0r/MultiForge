@@ -196,6 +196,89 @@ class WorldDiffTest {
         return file;
     }
 
+    // /67 round-3 finding D1: `sectorOffset * 4096` used to overflow signed int for
+    // sectorOffset ≥ 524_288, producing a negative payloadStart that defeated the bounds
+    // check and crashed the whole diff run on any adversarial/corrupt input.
+    @Test
+    void mcaCorruptSectorOffsetDoesNotCrash(@TempDir Path tmp) throws IOException {
+        Path a = Files.createDirectory(tmp.resolve("a"));
+        Path b = Files.createDirectory(tmp.resolve("b"));
+        // Slot 0 has a location entry pointing at sector 0x00FFFFFF — the 24-bit maximum.
+        // 0x00FFFFFF * 4096 = 0xFFFFFF000 which wraps a signed int to -4096. Prior code
+        // read bytes[-4096] and threw ArrayIndexOutOfBoundsException from the whole diff.
+        byte[] corrupt = new byte[8192];
+        // Write loc entry: sectorOffset=0xFFFFFF, sectorCount=1
+        corrupt[0] = 0x00;
+        corrupt[1] = (byte) 0xFF;
+        corrupt[2] = (byte) 0xFF;
+        corrupt[3] = (byte) 0xFF;
+        Files.createDirectories(a.resolve("region"));
+        Files.createDirectories(b.resolve("region"));
+        Files.write(a.resolve("region/r.0.0.mca"), corrupt);
+        Files.write(b.resolve("region/r.0.0.mca"), new byte[8192]); // slot 0 empty
+
+        // Must not throw; corrupt-vs-empty should MISMATCH via the malformed-slot sentinel.
+        WorldDiff.Result r = WorldDiff.compare(a, b);
+        assertThat(r.matches()).isFalse();
+    }
+
+    // /67 round-3 finding D2: `payloadStart + 4 + chunkLength` also overflows. Adversarial
+    // input with chunkLength near Integer.MAX_VALUE would wrap to negative payloadEnd,
+    // pass the guard, and trip IllegalArgumentException from MessageDigest.update.
+    @Test
+    void mcaCorruptChunkLengthDoesNotCrash(@TempDir Path tmp) throws IOException {
+        Path a = Files.createDirectory(tmp.resolve("a"));
+        Path b = Files.createDirectory(tmp.resolve("b"));
+        // Slot 0 has a valid-looking location entry pointing at a chunk with a lie:
+        // chunkLength = Integer.MAX_VALUE, way past file end.
+        byte[] corrupt = new byte[12288]; // 3 sectors
+        // loc entry: sectorOffset=2, sectorCount=1
+        corrupt[0] = 0;
+        corrupt[1] = 0;
+        corrupt[2] = 2;
+        corrupt[3] = 1;
+        // Chunk header at byte 8192 (sector 2): chunkLength=0x7FFFFFFF, compression=2
+        corrupt[8192] = 0x7F;
+        corrupt[8193] = (byte) 0xFF;
+        corrupt[8194] = (byte) 0xFF;
+        corrupt[8195] = (byte) 0xFF;
+        corrupt[8196] = 2;
+        Files.createDirectories(a.resolve("region"));
+        Files.createDirectories(b.resolve("region"));
+        Files.write(a.resolve("region/r.0.0.mca"), corrupt);
+        Files.write(b.resolve("region/r.0.0.mca"), new byte[12288]);
+
+        WorldDiff.Result r = WorldDiff.compare(a, b);
+        assertThat(r.matches()).isFalse();
+    }
+
+    // /67 round-3 finding D3: prior code silently `continue`d for malformed slots,
+    // making corrupt-slot indistinguishable from empty-slot. Real chunk-loss regressions
+    // (a bad byte in the location entry drops the chunk) reported as MATCH.
+    @Test
+    void mcaEmptySlotVsMalformedSlotMismatches(@TempDir Path tmp) throws IOException {
+        Path a = Files.createDirectory(tmp.resolve("a"));
+        Path b = Files.createDirectory(tmp.resolve("b"));
+        // A: slot 5 = 0 (empty)
+        byte[] empty = new byte[8192];
+        // B: slot 5 has a nonzero-but-malformed location entry (sectorOffset=1 which is < 2)
+        byte[] malformed = new byte[8192];
+        malformed[20] = 0;
+        malformed[21] = 0;
+        malformed[22] = 1;
+        malformed[23] = 1;
+
+        Files.createDirectories(a.resolve("region"));
+        Files.createDirectories(b.resolve("region"));
+        Files.write(a.resolve("region/r.0.0.mca"), empty);
+        Files.write(b.resolve("region/r.0.0.mca"), malformed);
+
+        // Real bug: prior code hashed both as "no data" → false MATCH. Now must MISMATCH.
+        WorldDiff.Result r = WorldDiff.compare(a, b);
+        assertThat(r.matches()).isFalse();
+        assertThat(r.mismatched()).containsKey("region/r.0.0.mca");
+    }
+
     @Test
     void nondeterministicDirectoriesAreSkippedWhole(@TempDir Path tmp) throws IOException {
         Path a = Files.createDirectory(tmp.resolve("a"));

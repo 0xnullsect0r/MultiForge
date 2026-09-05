@@ -94,6 +94,13 @@ public final class ViolationLogger {
          * @return 0 = fire, 1 = fire the "suppressing" note, >1 = drop silently.
          */
         long tryConsume() {
+            // Capacity 0 = documented "silence all warnings" idiom
+            // (-Dmultiforge.violations.warn-per-min=0). Skip the
+            // "further suppressed" note branch entirely — the old
+            // capacity-plus-one path emitted one WARN per site per
+            // window, which contradicted the documented contract.
+            // /67 round-3 finding.
+            if (capacity == 0L) return 2L;
             long now = System.nanoTime();
             long start = windowStart;
             if (now - start >= windowNanos) {

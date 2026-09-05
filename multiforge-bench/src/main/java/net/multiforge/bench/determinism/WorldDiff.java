@@ -149,24 +149,58 @@ public final class WorldDiff {
             }
             for (int slot = 0; slot < 1024; slot++) {
                 int loc = readBigEndianInt(bytes, slot * 4);
-                if (loc == 0) continue; // slot empty
+                if (loc == 0) {
+                    // Truly empty slot — the "no data present" sentinel below is what
+                    // distinguishes this from a MALFORMED-but-nonzero slot.
+                    md.update(SLOT_EMPTY_SENTINEL);
+                    continue;
+                }
+                // long arithmetic throughout so a 24-bit sectorOffset × 4096 = up to 36 bits
+                // does NOT wrap to a negative int and defeat the bounds checks. /67 round-3
+                // finding: prior signed-int arithmetic crashed the whole harness on any
+                // adversarial/corrupt input (single bad .mca killed the diff run).
                 int sectorOffset = loc >>> 8; // 24 bits
-                int sectorCount = loc & 0xFF;
-                if (sectorOffset < 2 || sectorCount <= 0) continue; // sector 0-1 reserved for headers
-                int payloadStart = sectorOffset * 4096;
-                if (payloadStart + 5 > bytes.length) continue; // malformed, past EOF
+                int sectorCount = loc & 0xFF; // 8 bits, 0..255
+                long payloadStartL = (long) sectorOffset * 4096L;
+                if (sectorOffset < 2 || sectorCount == 0 || payloadStartL + 5L > (long) bytes.length) {
+                    // Nonzero-but-malformed slot: hash the raw location entry so run A's
+                    // "slot 5 = 0x00000001" is DISTINGUISHABLE from run B's "slot 5 = 0".
+                    // Prior code fell through to the same `continue` as empty → silent
+                    // MATCH on corruption regressions.
+                    hashMalformedSlot(md, slot, loc);
+                    continue;
+                }
+                int payloadStart = (int) payloadStartL; // safe: bounded by bytes.length < Integer.MAX_VALUE
                 int chunkLength = readBigEndianInt(bytes, payloadStart); // includes the 1 compression byte
-                if (chunkLength <= 0) continue;
-                int payloadEnd = payloadStart + 4 + chunkLength; // 4-byte length prefix + length itself
-                if (payloadEnd > bytes.length) continue; // malformed
+                // Guard the second overflow site: `payloadStart + 4 + chunkLength` also wraps
+                // to a negative int for chunkLength ≥ ~2 GiB. Same crash pattern.
+                if (chunkLength <= 0 || (long) chunkLength > (long) bytes.length - (long) payloadStart - 4L) {
+                    hashMalformedSlot(md, slot, loc);
+                    continue;
+                }
                 // Feed slot index (fixed order) + payload bytes (length-prefixed).
-                md.update(new byte[] {(byte) (slot >>> 24), (byte) (slot >>> 16), (byte) (slot >>> 8), (byte) slot});
+                md.update(slotIndexBytes(slot));
                 md.update(bytes, payloadStart, 4 + chunkLength);
             }
             return toHex(md.digest());
         } catch (NoSuchAlgorithmException e) {
             throw new IllegalStateException("SHA-256 not available", e);
         }
+    }
+
+    private static final byte[] SLOT_EMPTY_SENTINEL = {(byte) 0xE0, (byte) 0x5E, 0, 0}; // "àSE  "
+
+    private static final byte[] SLOT_MALFORMED_SENTINEL = {(byte) 0xBA, (byte) 0xDF, (byte) 0x00, (byte) 0x0D};
+
+    private static byte[] slotIndexBytes(int slot) {
+        return new byte[] {(byte) (slot >>> 24), (byte) (slot >>> 16), (byte) (slot >>> 8), (byte) slot};
+    }
+
+    private static void hashMalformedSlot(MessageDigest md, int slot, int loc) {
+        md.update(SLOT_MALFORMED_SENTINEL);
+        md.update(slotIndexBytes(slot));
+        // Include the raw loc entry so different corrupt values distinguish from each other.
+        md.update(new byte[] {(byte) (loc >>> 24), (byte) (loc >>> 16), (byte) (loc >>> 8), (byte) loc});
     }
 
     private static int readBigEndianInt(byte[] bytes, int offset) {

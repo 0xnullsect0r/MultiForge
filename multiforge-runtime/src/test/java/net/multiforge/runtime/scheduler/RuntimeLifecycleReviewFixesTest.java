@@ -95,6 +95,38 @@ class RuntimeLifecycleReviewFixesTest {
         assertThat(ViolationLogger.parsePerMin("10")).isEqualTo(10L);
     }
 
+    // /67 round-3 finding: `parsePerMin("0")` was documented as "silence all warnings" but
+    // Bucket.tryConsume with capacity=0 returned 1 on first call → still emitted the
+    // "further identical messages suppressed" WARN per site per window. Not silence.
+    @Test
+    void violationLoggerPerMinZeroActuallySilencesInsteadOfFiringOnce() {
+        ViolationLogger.resetForTesting();
+        // Set up a bucket with capacity 0 by directly using the ViolationLogger.warn
+        // path — but we can't set PER_MIN dynamically (it's final). Instead, verify the
+        // Bucket contract at capacity=0 via an indirect proof: with the fix,
+        // Bucket.tryConsume returns 2 (silent drop) unconditionally. Without the fix,
+        // it returned 1 (fire suppressing note) on the first call. Since PER_MIN is
+        // parsed at class-load, we verify by reflection into Bucket directly.
+        try {
+            var bucketClass = Class.forName("net.multiforge.runtime.diagnostics.ViolationLogger$Bucket");
+            var ctor = bucketClass.getDeclaredConstructor(long.class, long.class);
+            ctor.setAccessible(true);
+            Object bucket = ctor.newInstance(0L, 60_000_000_000L);
+            var tryConsume = bucketClass.getDeclaredMethod("tryConsume");
+            tryConsume.setAccessible(true);
+            long first = (Long) tryConsume.invoke(bucket);
+            long second = (Long) tryConsume.invoke(bucket);
+            long third = (Long) tryConsume.invoke(bucket);
+            // All calls with capacity=0 must return 2 (silent drop); no "1" for the
+            // suppressing note branch — that would emit one WARN per site.
+            assertThat(first).isEqualTo(2L);
+            assertThat(second).isEqualTo(2L);
+            assertThat(third).isEqualTo(2L);
+        } catch (ReflectiveOperationException e) {
+            throw new RuntimeException("reflection into ViolationLogger.Bucket failed", e);
+        }
+    }
+
     /** Minimal SchedulerHost to occupy the ServerDomains binding. Never actually invoked. */
     private static final class StubSchedulerHost implements SchedulerHost {
         @Override

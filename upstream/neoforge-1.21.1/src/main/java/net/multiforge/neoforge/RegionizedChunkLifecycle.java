@@ -60,6 +60,18 @@ public final class RegionizedChunkLifecycle {
         if (world == null) return;
         ChunkPos pos = event.getChunk().getPos();
         host.registerChunk(world, pos.x, pos.z);
+        // Drain the orphan queue: tasks queued for this chunk BEFORE its region
+        // existed (typically from mods that scheduled work at
+        // ServerAboutToStart) can now be delivered to the fresh region. Without
+        // this call the orphan queue leaks for the JVM lifetime, since no other
+        // production code calls reroute() (found by /67 round-2 finding #9; the
+        // fix was accidentally reverted in b829f99 alongside a separate broken
+        // mapInPlace change — /67 round-3 flagged the regression).
+        //
+        // Cost: amortized O(orphans) per chunk load. Orphan queue is normally
+        // empty; worst case at server-start is O(chunks × orphans_initial) which
+        // is O(N) total work per boot for N mod-queued orphans.
+        host.taskQueue().reroute();
     }
 
     private static void onChunkUnloaded(final ChunkEvent.Unload event) {
