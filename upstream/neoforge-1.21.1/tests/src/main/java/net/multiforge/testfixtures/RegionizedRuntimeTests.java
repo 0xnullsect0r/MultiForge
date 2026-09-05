@@ -41,6 +41,42 @@ public class RegionizedRuntimeTests {
 
     @GameTest(template = TestsMod.TEMPLATE_3x3)
     @TestHolder(description = {
+            "M9 sub-step 1: ChunkHolderManagerBridge shadows Vanilla ChunkMap into",
+            "MultiForge's ChunkHolderManager. After GameTest chunks load, the shadow",
+            "must have holder entries with non-INACCESSIBLE ChunkLoadLevel."
+    })
+    static void chunkBridgeShadowsRealChunks(final DynamicTest test) {
+        test.onGameTest(helper -> {
+            MultiThreadedSchedulerHost host = MultiForgeRegionizedRuntime.current();
+            helper.assertTrue(host != null, "runtime must be installed");
+            net.multiforge.api.world.WorldRef world = net.multiforge.neoforge.RegionizedTickCoordinator.asWorldRef(helper.getLevel());
+            net.multiforge.runtime.chunk.ChunkHolderManager manager = host.chunkManagerFor(world);
+            // The GameTest structure sits at some chunk; the bridge should have shadowed at
+            // least that chunk into a holder by now.
+            helper.assertTrue(
+                    manager.holderCount() > 0,
+                    "expected ChunkHolderManager to have shadowed at least one chunk from "
+                            + "Vanilla ChunkMap; got holderCount=" + manager.holderCount()
+                            + " for world " + world.dimensionId());
+            // At least one holder should be at BORDER or higher (loaded state), not INACCESSIBLE.
+            boolean anyLoaded = false;
+            for (net.multiforge.runtime.chunk.NewChunkHolder h : manager.holders()) {
+                if (h.level().isAtLeast(net.multiforge.runtime.chunk.ChunkLoadLevel.BORDER)) {
+                    anyLoaded = true;
+                    break;
+                }
+            }
+            helper.assertTrue(
+                    anyLoaded,
+                    "expected at least one shadowed holder at BORDER or higher; "
+                            + "all holders are still INACCESSIBLE. Bridge is receiving events "
+                            + "but not translating levels correctly.");
+            helper.succeed();
+        });
+    }
+
+    @GameTest(template = TestsMod.TEMPLATE_3x3)
+    @TestHolder(description = {
             "M8 sub-step 6a: ChunkEvent.Load handler auto-registers loaded chunks",
             "with the regionizer, so regions exist for the level the GameTest runs in."
     })

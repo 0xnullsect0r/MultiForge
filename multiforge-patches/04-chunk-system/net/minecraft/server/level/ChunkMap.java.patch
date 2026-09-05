@@ -1,0 +1,15 @@
+--- a/net/minecraft/server/level/ChunkMap.java
++++ b/net/minecraft/server/level/ChunkMap.java
+@@ -396,6 +396,12 @@
+             }
+ 
+             net.neoforged.neoforge.event.EventHooks.fireChunkTicketLevelUpdated(this.level, p_140177_, p_140180_, p_140178_, p_140179_);
++            // MultiForge (multiforge-patches/04-chunk-system/): read-only
++            // shadow of Vanilla ticket-level state into ChunkHolderManager
++            // — see net.multiforge.neoforge.ChunkHolderManagerBridge. Zero
++            // behavior change; observability substrate for future M9 work.
++            net.multiforge.neoforge.ChunkHolderManagerBridge.onTicketLevelUpdated(
++                    this.level, p_140177_, p_140180_, p_140178_, p_140179_);
+             return p_140179_;
+         }
+     }

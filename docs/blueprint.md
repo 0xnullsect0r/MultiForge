@@ -597,6 +597,34 @@ a real body:
 - exit gate: chunk loading/unloading/ticket lifecycle
   deterministic-regression-verified region-by-region
 
+### M9 sub-step 1 (DONE)
+
+- **Read-only ChunkMap → ChunkHolderManager shadow bridge**
+  (`multiforge-patches/04-chunk-system/net/minecraft/server/level/ChunkMap.java.patch`).
+  Single-line patch in `ChunkMap.updateChunkScheduling`, co-located
+  with NeoForge's existing `fireChunkTicketLevelUpdated` event hook,
+  calls `net.multiforge.neoforge.ChunkHolderManagerBridge.onTicketLevelUpdated`.
+  Bridge translates Vanilla coordinates + level to MultiForge equivalents
+  and populates `ChunkHolderManager` (which was already unit-tested but
+  had no Vanilla feed). Zero behavior change to Vanilla ticket-level
+  transitions.
+
+  Deliverables:
+  - `net.multiforge.neoforge.ChunkHolderManagerBridge` — fork facade
+  - `multiforge-patches/04-chunk-system/ChunkMap.java.patch` — 6-line
+    hunk right after the NeoForge event hook
+  - `/multiforge chunks <world>` command dumps per-level holder counts
+    from the shadow
+  - GameTest `chunkBridgeShadowsRealChunks` asserts the shadow has
+    ≥1 holder at ≥BORDER level after the test's own chunks load
+
+  Scope note: this is deliberately the smallest foundational M9 slice.
+  Real M9 requires REPLACING (not shadowing) Vanilla ChunkMap /
+  DistanceManager / ServerChunkCache with the per-region model —
+  months of work, ~30K lines in Folia's Moonrise. This bridge
+  establishes the coordinate + level translation infrastructure that
+  future substantive M9 sub-steps will build on.
+
 ## M10 — Entity Migration + Networking
 - Entity#teleportAsync binds to EntityMigrationCoordinator
   (multiforge-patches/05-entity-migration/); gameplay packet handlers in
