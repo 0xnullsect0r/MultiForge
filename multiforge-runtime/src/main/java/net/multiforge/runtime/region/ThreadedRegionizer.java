@@ -7,8 +7,10 @@ package net.multiforge.runtime.region;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
@@ -197,23 +199,30 @@ public final class ThreadedRegionizer {
      * Rebuild the section→region mapping for {@code region} by
      * flood-filling from its remaining sections. Sections in a
      * different connected component are moved to fresh regions.
+     *
+     * <p>/67 round-4 fix (1.3): the previous implementation removed
+     * leaving sections from {@link #sectionToRegion} BEFORE
+     * constructing the replacement regions, opening a window where
+     * concurrent lock-free {@link #regionAtChunk} readers (including
+     * the M9 shadow bridge) saw a spurious {@code null} and silently
+     * dropped observations. The fixed shape stages every reassignment
+     * off-map first, then applies each `put(section, fresh)` directly
+     * over the existing source-region mapping — no intermediate null
+     * state ever exists in {@code sectionToRegion}. Listener fires
+     * happen only after all reassignments are applied so callbacks
+     * observe a fully-consistent map.
      */
     private void splitIfDisconnected(Region region) {
         Set<SectionPos> remaining = new HashSet<>(region.sections());
         if (remaining.size() <= 1) return; // nothing to split
 
         // Flood fill from any starting section.
-        Set<SectionPos> firstComponent =
-                floodFill(remaining, remaining.iterator().next());
+        Set<SectionPos> firstComponent = floodFill(remaining, remaining.iterator().next());
         if (firstComponent.size() == remaining.size()) return; // still connected
 
-        // Multiple components. Region keeps the first component; the
-        // rest are peeled off into new regions.
-        for (SectionPos leaving : new ArrayList<>(remaining)) {
-            if (firstComponent.contains(leaving)) continue;
-            region.removeSection(leaving);
-            sectionToRegion.remove(leaving);
-        }
+        // Stage the (section → fresh region) reassignment map fully off-map first.
+        List<Region> freshRegions = new ArrayList<>();
+        Map<SectionPos, Region> reassignments = new HashMap<>();
         Set<SectionPos> orphaned = new HashSet<>(remaining);
         orphaned.removeAll(firstComponent);
         while (!orphaned.isEmpty()) {
@@ -222,12 +231,27 @@ public final class ThreadedRegionizer {
             Region fresh = new Region(RegionId.next(), sectionChunkShift);
             for (SectionPos s : component) {
                 fresh.addSection(s);
-                sectionToRegion.put(s, fresh);
+                reassignments.put(s, fresh);
             }
             fresh.markReady();
+            freshRegions.add(fresh);
+            orphaned.removeAll(component);
+        }
+
+        // Apply: each put overwrites the existing source-region mapping directly,
+        // so a concurrent regionAtChunk never sees a null entry. removeSection
+        // on the source is a distinct set mutation and does not affect the
+        // sectionToRegion map's atomicity for readers.
+        for (Map.Entry<SectionPos, Region> e : reassignments.entrySet()) {
+            region.removeSection(e.getKey());
+            sectionToRegion.put(e.getKey(), e.getValue());
+        }
+
+        // Fire listeners AFTER all reassignments so any callback that reads
+        // regionAtChunk observes final state, not partial state.
+        for (Region fresh : freshRegions) {
             fireRegionSplit(region, fresh);
             fireRegionCreated(fresh);
-            orphaned.removeAll(component);
         }
     }
 

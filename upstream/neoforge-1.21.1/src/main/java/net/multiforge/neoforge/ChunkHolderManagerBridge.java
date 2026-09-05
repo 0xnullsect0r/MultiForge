@@ -67,8 +67,16 @@ public final class ChunkHolderManagerBridge {
         if (host == null) return; // runtime not installed yet (bootstrap ordering)
 
         WorldRef world = RegionizedTickCoordinator.asWorldRef(level);
-        ThreadedRegionizer regionizer = host.regionizerForOrNull(world);
-        if (regionizer == null) return; // no world regionizer yet (fresh boot)
+        // /67 round-4 (finding 1.7): Vanilla fired a real ticket-level
+        // transition for a real chunk in a real world — this is the
+        // authoritative signal that MultiForge should track the world.
+        // The prior `regionizerForOrNull → silent-return` path missed
+        // every transition that fired before ChunkEvent.Load created
+        // the regionizer, undercounting the shadow. Lazy-create here
+        // via `regionizerFor` — the world is authoritative, so unlike
+        // observability lookups this is not a "typoed WorldRef leak"
+        // vector.
+        ThreadedRegionizer regionizer = host.regionizerFor(world);
 
         // Decode Vanilla's packed long chunk key into (x, z).
         int chunkX = (int) chunkKey;

@@ -135,9 +135,24 @@ public class ServerLifecycleHooks {
             net.multiforge.runtime.scheduler.MultiForgeRegionizedRuntime.install(
                     net.multiforge.runtime.config.MultiForgeConfig.defaults(),
                     region -> {});
-        } catch (IllegalStateException already) {
+        } catch (net.multiforge.runtime.scheduler.MultiForgeRegionizedRuntime.AlreadyInstalledException already) {
             // Test harnesses (GameTestServer) may install once per JVM and reuse
             // across successive server instances — that's fine, keep going.
+        } catch (IllegalStateException foreign) {
+            // /67 round-4 fix (1.4): the pre-fix catch swallowed BOTH the
+            // benign "already installed same instance" case AND the "foreign
+            // SchedulerHost bound to ServerDomains — refuse to overwrite"
+            // case, leaving MultiForgeRegionizedRuntime.current() null for
+            // the whole server lifetime with no operator warning. Now the
+            // benign case has its own subclass (AlreadyInstalledException,
+            // caught above) and every other IllegalStateException gets
+            // logged loudly + rethrown so a rogue ServiceLoader binding
+            // does not silently degrade MultiForge to a no-op.
+            net.multiforge.runtime.diagnostics.ViolationLogger.warn(
+                    "MultiForgeRegionizedRuntime.install",
+                    "install rejected — a non-MultiForge SchedulerHost is bound to ServerDomains: "
+                            + foreign.getMessage());
+            throw foreign;
         }
         // M8 sub-step 6a: install the ChunkEvent.Load/Unload listeners
         // that keep the regionizer in sync with Vanilla-loaded chunks.

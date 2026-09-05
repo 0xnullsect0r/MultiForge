@@ -14,10 +14,17 @@ import java.util.Objects;
  * entity id.
  *
  * <p>Two tickets are equal iff their type + distance + key are all
- * equal. This lets a {@link PerChunkTickets} set deduplicate and let
- * the caller re-add the "same" ticket idempotently.
+ * equal — {@code createdAtTick} is intentionally excluded from equality
+ * so re-adding the "same" ticket is idempotent even when the tick
+ * counter has advanced.
+ *
+ * <p>{@code createdAtTick} is set at construction time and read by
+ * {@link TicketExpiryTicker} to compute {@code (createdAtTick +
+ * type.timeoutTicks()) &lt;= now} for expiry. Value {@code -1} means
+ * "unknown creation tick" (constructed outside a tick body — no
+ * expiry applied).
  */
-public record Ticket(TicketType type, int distance, Object key) {
+public record Ticket(TicketType type, int distance, Object key, long createdAtTick) {
 
     public Ticket {
         Objects.requireNonNull(type, "type");
@@ -27,13 +34,37 @@ public record Ticket(TicketType type, int distance, Object key) {
         Objects.requireNonNull(key, "key");
     }
 
-    /** Ticket at the type's default distance. */
+    /**
+     * Ticket at the type's default distance. Creation tick is unknown
+     * (use {@link #of(TicketType, Object, long)} for expiring tickets).
+     */
     public static Ticket of(TicketType type, Object key) {
-        return new Ticket(type, type.defaultDistance(), key);
+        return new Ticket(type, type.defaultDistance(), key, -1L);
     }
 
-    /** Ticket at an explicit distance. */
+    /** Ticket at the type's default distance, with a known creation tick for expiry accounting. */
+    public static Ticket of(TicketType type, Object key, long createdAtTick) {
+        return new Ticket(type, type.defaultDistance(), key, createdAtTick);
+    }
+
+    /** Ticket at an explicit distance. Creation tick is unknown. */
     public static Ticket at(TicketType type, int distance, Object key) {
-        return new Ticket(type, distance, key);
+        return new Ticket(type, distance, key, -1L);
+    }
+
+    /** Ticket at an explicit distance with a known creation tick. */
+    public static Ticket at(TicketType type, int distance, Object key, long createdAtTick) {
+        return new Ticket(type, distance, key, createdAtTick);
+    }
+
+    /**
+     * @return true if the ticket has a finite timeout and would have
+     *         expired by {@code now}. {@code -1} creation tick and
+     *         {@code 0} timeout both mean "never expires" and return
+     *         false regardless.
+     */
+    public boolean isExpiredAt(long now) {
+        if (createdAtTick < 0 || type.timeoutTicks() == 0) return false;
+        return now >= (createdAtTick + type.timeoutTicks());
     }
 }

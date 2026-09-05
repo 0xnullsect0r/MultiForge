@@ -32,19 +32,51 @@ public final class MultiForgeRegionizedRuntime {
     private MultiForgeRegionizedRuntime() {}
 
     /**
+     * Thrown by {@link #install} when a MultiForge host is already
+     * installed in {@link #CURRENT}. This is the "same-JVM re-install"
+     * case — usually a dedi GameTestServer reusing one JVM across
+     * successive servers without a preceding {@link #shutdown}. The
+     * fork's {@code ServerLifecycleHooks} handler swallows this
+     * specific subclass silently (idempotent bootstrap); every other
+     * {@link IllegalStateException} propagates.
+     *
+     * <p>/67 round-4 fix (1.4): pre-fix the fork handler swallowed
+     * every {@code IllegalStateException} the same way, masking the
+     * "foreign {@code SchedulerHost} bound to {@link ServerDomains} —
+     * refuse to overwrite" case. That case now propagates as a raw
+     * {@code IllegalStateException} from {@link ServerDomains#install}.
+     */
+    public static final class AlreadyInstalledException extends IllegalStateException {
+        private static final long serialVersionUID = 1L;
+
+        AlreadyInstalledException() {
+            super("A regionized runtime is already installed; call shutdown() first");
+        }
+    }
+
+    /**
      * Construct a {@link MultiThreadedSchedulerHost} with the supplied
      * {@code config} and {@code body}, install it as the {@link
      * net.multiforge.api.scheduler.ServerDomains} binding, and record
      * it as the process-wide current runtime.
      *
-     * @throws IllegalStateException if a runtime is already installed —
-     *         call {@link #shutdown} first to replace it.
+     * @throws AlreadyInstalledException if a MultiForge runtime is
+     *         already installed in {@link #CURRENT} — call {@link
+     *         #shutdown} first to replace it. This is a subclass of
+     *         {@link IllegalStateException} so callers that swallow
+     *         "already installed" specifically can catch it without
+     *         also masking the foreign-host case below.
+     * @throws IllegalStateException if a non-MultiForge {@link
+     *         net.multiforge.api.spi.SchedulerHost} is bound in
+     *         {@link ServerDomains} — this is a hard error (usually a
+     *         rogue ServiceLoader binding); the fork handler must NOT
+     *         swallow it.
      */
     public static MultiThreadedSchedulerHost install(MultiForgeConfig config, RegionTickBody body) {
         MultiThreadedSchedulerHost host = new MultiThreadedSchedulerHost(config, body);
         if (!CURRENT.compareAndSet(null, host)) {
             host.close();
-            throw new IllegalStateException("A regionized runtime is already installed; call shutdown() first");
+            throw new AlreadyInstalledException();
         }
         try {
             host.install();
