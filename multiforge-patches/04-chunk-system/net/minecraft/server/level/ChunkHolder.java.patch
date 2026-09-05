@@ -1,6 +1,6 @@
 --- a/net/minecraft/server/level/ChunkHolder.java
 +++ b/net/minecraft/server/level/ChunkHolder.java
-@@ -43,40 +43,84 @@
+@@ -43,40 +43,96 @@
      private final ShortSet[] changedBlocksPerSection;
      private final BitSet blockChangedLightSectionFilter = new BitSet();
      private final BitSet skyChangedLightSectionFilter = new BitSet();
@@ -18,8 +18,16 @@
 +     * when {@code MultiForgeChunkMap} finishes creating the holder after
 +     * Vanilla constructed this one. Shadow authoritative post-Phase-5-
 +     * migration; today it mirrors.
++     *
++     * <p>Package-private (m9 round-5 review fix): {@code
++     * net.multiforge.runtime.chunk.NewChunkHolder} is an
++     * {@code @ApiStatus.Internal} type and must not appear on the public
++     * surface of a Vanilla-facing class. Reads inside this class use
++     * {@code this.mfShadow} directly; cross-package callers must go
++     * through {@code MultiForgeChunkMap.getVisibleChunkIfPresent(long)}
++     * and the {@code ChunkHolderShim.shadowOrNull(ChunkHolder)} helper.
 +     */
-+    public volatile net.multiforge.runtime.chunk.NewChunkHolder mfShadow;
++    volatile net.multiforge.runtime.chunk.NewChunkHolder mfShadow;
  
      public ChunkHolder(
          ChunkPos p_142986_,
@@ -70,6 +78,10 @@
 +     * from {@code net.multiforge.neoforge.chunk.ChunkHolderShim} while
 +     * still keeping the setter out of the mod-facing API surface.
 +     * Idempotent — a duplicate bind is safe.
++     *
++     * <p>The parameter type is an {@code @ApiStatus.Internal} runtime
++     * type; this method is {@code protected} rather than {@code public}
++     * so it does not appear as a mod-callable entry point.
 +     */
 +    protected void attachMfShadow(net.multiforge.runtime.chunk.NewChunkHolder holder) {
 +        this.mfShadow = holder;
@@ -85,7 +97,7 @@
  
      public CompletableFuture<ChunkResult<LevelChunk>> getFullChunkFuture() {
          return this.fullChunkFuture;
-@@ -232,20 +276,28 @@
+@@ -232,20 +288,28 @@
      public int getQueueLevel() {
          return this.queueLevel;
      }
