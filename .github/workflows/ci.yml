@@ -67,6 +67,63 @@ jobs:
           sudo apt-get update && sudo apt-get install -y shellcheck
           shellcheck docker/entrypoint.sh
 
+  fork-build:
+    name: fork compile (upstream/neoforge-1.21.1)
+    runs-on: ubuntu-latest
+    # 30 minutes: :setup takes ~3 min, mavenLocal publish ~10s, patch apply
+    # ~1s, fork compile ~30s. The rest is Gradle warm-up + cache miss slack.
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v3
+        with:
+          cache-read-only: ${{ github.event_name == 'pull_request' }}
+
+      # Bigger heap for the fork build — NeoForge's :setup + platform plugin
+      # OOMs with the default 3G. Matches the local runner override we use
+      # for `runGameTestServer` per docs/blueprint.md notes.
+      - name: Set fork-build heap
+        run: echo "GRADLE_OPTS=-Xmx6G" >> "$GITHUB_ENV"
+
+      - name: Publish multiforge-runtime + api + license to mavenLocal
+        # Fork's projects/neoforge/build.gradle depends on these via mavenLocal
+        # — without publishing first, `:neoforge:compileJava` fails at the
+        # dependency resolution step. Also catches finding #14 of the /67
+        # review: runtime API drift would break the fork at this step, whereas
+        # the pure-Java `build` job would still report green.
+        run: |
+          ./gradlew \
+            :multiforge-license:publishToMavenLocal \
+            :multiforge-api:publishToMavenLocal \
+            :multiforge-runtime:publishToMavenLocal \
+            --no-daemon --stacktrace
+
+      - name: NeoForge :setup (decompile + apply upstream patches)
+        working-directory: upstream/neoforge-1.21.1
+        run: ./gradlew --no-configuration-cache --no-daemon --stacktrace setup
+
+      - name: Apply MultiForge patches + compile fork
+        working-directory: upstream/neoforge-1.21.1
+        run: ./gradlew :neoforge:applyMultiforgePatches :neoforge:compileJava spotlessCheck licenseCheck --no-daemon --stacktrace
+
+      - name: Upload fork test/build reports on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fork-build-reports-${{ github.sha }}
+          path: |
+            upstream/neoforge-1.21.1/**/build/reports/
+            upstream/neoforge-1.21.1/**/build/patch-rejects/
+          retention-days: 7
+
   gitleaks:
     name: secret scan
     runs-on: ubuntu-latest
