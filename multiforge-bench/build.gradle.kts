@@ -9,6 +9,11 @@ description =
         "verifies byte-identical parity per docs/blueprint.md M7 exit gate."
 
 dependencies {
+    // Phase 3 task 3.7 parity regression exercises the MultiForge MCA
+    // reader/writer end-to-end. Runtime is MC-free so it can be pulled in
+    // here without dragging the Minecraft classpath into the bench module.
+    testImplementation(project(":multiforge-runtime"))
+
     testImplementation("org.junit.jupiter:junit-jupiter:5.10.3")
     testImplementation("org.assertj:assertj-core:3.26.3")
     testImplementation("org.junit.jupiter:junit-jupiter-params:5.10.3")
