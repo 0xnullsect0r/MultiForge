@@ -1,15 +1,14 @@
 --- a/net/minecraft/server/level/ServerLevel.java
 +++ b/net/minecraft/server/level/ServerLevel.java
-@@ -888,6 +888,12 @@
+@@ -888,6 +888,11 @@
  
      @Override
      public boolean addFreshEntity(Entity p_8837_) {
-+        // MultiForge (multiforge-patches/01-ownership/): detect-only, do
-+        // not reroute — see /67 finding #4 and the matching guard in
-+        // Level.setBlock. addFreshEntity's boolean return means "was the
-+        // entity added?"; rerouting-then-returning-false makes off-thread
-+        // callers duplicate entities or fail to send spawn packets.
-+        net.multiforge.neoforge.OwnershipGuard.checkOnly("ServerLevel.addFreshEntity");
++        // MultiForge (multiforge-patches/01-ownership/): see Level.setBlock for rationale.
++        if (!net.multiforge.neoforge.OwnershipGuard.canMutate("ServerLevel.addFreshEntity")) {
++            net.multiforge.neoforge.OwnershipGuard.reroute("ServerLevel.addFreshEntity", () -> this.addFreshEntity(p_8837_));
++            return false;
++        }
          return this.addEntity(p_8837_);
      }
  

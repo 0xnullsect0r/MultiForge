@@ -1,61 +1,44 @@
 --- a/net/minecraft/world/level/LevelAccessor.java
 +++ b/net/minecraft/world/level/LevelAccessor.java
-@@ -46,21 +46,54 @@
+@@ -46,20 +46,41 @@
      }
  
      default void scheduleTick(BlockPos p_186465_, Block p_186466_, int p_186467_, TickPriority p_186468_) {
--        this.getBlockTicks().schedule(this.createTick(p_186465_, p_186466_, p_186467_, p_186468_));
-+        // MultiForge (multiforge-patches/01-ownership/): WorldGenLevel
-+        // instances tick worldgen scheduled ticks from background threads
-+        // during feature/structure gen, which is legitimate and safe (each
-+        // WorldGenRegion is single-owner for its lifetime). Skipping the
-+        // guard for worldgen prevents the reroute from firing an inline
-+        // lambda later against a stale WorldGenRegion scope — see /67
-+        // review finding #2. For real ServerLevel callers, keep the M7
-+        // reroute+warn behaviour: scheduleTick returns void, so deferring
-+        // is safe here (contrast Level.setBlock which needs checkOnly).
-+        if (this instanceof net.minecraft.world.level.WorldGenLevel
-+                || net.multiforge.neoforge.OwnershipGuard.canMutate("LevelAccessor.scheduleTick")) {
-+            this.getBlockTicks().schedule(this.createTick(p_186465_, p_186466_, p_186467_, p_186468_));
++        // MultiForge (multiforge-patches/01-ownership/): see Level.setBlock for rationale.
++        if (!net.multiforge.neoforge.OwnershipGuard.canMutate("LevelAccessor.scheduleTick")) {
++            net.multiforge.neoforge.OwnershipGuard.reroute(
++                    "LevelAccessor.scheduleTick", () -> this.scheduleTick(p_186465_, p_186466_, p_186467_, p_186468_));
 +            return;
 +        }
-+        net.multiforge.neoforge.OwnershipGuard.reroute(
-+                "LevelAccessor.scheduleTick", () -> this.scheduleTick(p_186465_, p_186466_, p_186467_, p_186468_));
+         this.getBlockTicks().schedule(this.createTick(p_186465_, p_186466_, p_186467_, p_186468_));
      }
  
      default void scheduleTick(BlockPos p_186461_, Block p_186462_, int p_186463_) {
--        this.getBlockTicks().schedule(this.createTick(p_186461_, p_186462_, p_186463_));
-+        if (this instanceof net.minecraft.world.level.WorldGenLevel
-+                || net.multiforge.neoforge.OwnershipGuard.canMutate("LevelAccessor.scheduleTick")) {
-+            this.getBlockTicks().schedule(this.createTick(p_186461_, p_186462_, p_186463_));
++        if (!net.multiforge.neoforge.OwnershipGuard.canMutate("LevelAccessor.scheduleTick")) {
++            net.multiforge.neoforge.OwnershipGuard.reroute(
++                    "LevelAccessor.scheduleTick", () -> this.scheduleTick(p_186461_, p_186462_, p_186463_));
 +            return;
 +        }
-+        net.multiforge.neoforge.OwnershipGuard.reroute(
-+                "LevelAccessor.scheduleTick", () -> this.scheduleTick(p_186461_, p_186462_, p_186463_));
+         this.getBlockTicks().schedule(this.createTick(p_186461_, p_186462_, p_186463_));
      }
  
      LevelTickAccess<Fluid> getFluidTicks();
  
      default void scheduleTick(BlockPos p_186474_, Fluid p_186475_, int p_186476_, TickPriority p_186477_) {
--        this.getFluidTicks().schedule(this.createTick(p_186474_, p_186475_, p_186476_, p_186477_));
-+        if (this instanceof net.minecraft.world.level.WorldGenLevel
-+                || net.multiforge.neoforge.OwnershipGuard.canMutate("LevelAccessor.scheduleTick")) {
-+            this.getFluidTicks().schedule(this.createTick(p_186474_, p_186475_, p_186476_, p_186477_));
++        if (!net.multiforge.neoforge.OwnershipGuard.canMutate("LevelAccessor.scheduleTick")) {
++            net.multiforge.neoforge.OwnershipGuard.reroute(
++                    "LevelAccessor.scheduleTick", () -> this.scheduleTick(p_186474_, p_186475_, p_186476_, p_186477_));
 +            return;
 +        }
-+        net.multiforge.neoforge.OwnershipGuard.reroute(
-+                "LevelAccessor.scheduleTick", () -> this.scheduleTick(p_186474_, p_186475_, p_186476_, p_186477_));
+         this.getFluidTicks().schedule(this.createTick(p_186474_, p_186475_, p_186476_, p_186477_));
      }
  
      default void scheduleTick(BlockPos p_186470_, Fluid p_186471_, int p_186472_) {
--        this.getFluidTicks().schedule(this.createTick(p_186470_, p_186471_, p_186472_));
-+        if (this instanceof net.minecraft.world.level.WorldGenLevel
-+                || net.multiforge.neoforge.OwnershipGuard.canMutate("LevelAccessor.scheduleTick")) {
-+            this.getFluidTicks().schedule(this.createTick(p_186470_, p_186471_, p_186472_));
++        if (!net.multiforge.neoforge.OwnershipGuard.canMutate("LevelAccessor.scheduleTick")) {
++            net.multiforge.neoforge.OwnershipGuard.reroute(
++                    "LevelAccessor.scheduleTick", () -> this.scheduleTick(p_186470_, p_186471_, p_186472_));
 +            return;
 +        }
-+        net.multiforge.neoforge.OwnershipGuard.reroute(
-+                "LevelAccessor.scheduleTick", () -> this.scheduleTick(p_186470_, p_186471_, p_186472_));
+         this.getFluidTicks().schedule(this.createTick(p_186470_, p_186471_, p_186472_));
      }
  
-     LevelData getLevelData();
