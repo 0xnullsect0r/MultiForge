@@ -15,6 +15,7 @@ import net.multiforge.api.world.ChunkPos;
 import net.multiforge.api.world.WorldRef;
 import net.multiforge.runtime.region.Region;
 import net.multiforge.runtime.region.RegionId;
+import net.multiforge.runtime.region.RegionListener;
 import net.multiforge.runtime.region.RegionizedTaskQueue;
 
 /**
@@ -26,8 +27,14 @@ import net.multiforge.runtime.region.RegionizedTaskQueue;
  * <p>The scheduler doesn't run tasks itself — it only enqueues them.
  * {@link net.multiforge.runtime.region.TickRegionScheduler} draining
  * the {@link RegionizedTaskQueue} is what pulls them.
+ *
+ * <p>Implements {@link RegionListener} so the regionizer's fire path
+ * folds per-region priority deques automatically on merge; on split
+ * the priority deques stay with the source region and re-enqueue
+ * naturally as their holders migrate (the split-handoff shape the
+ * class was already designed around).
  */
-public final class ChunkTaskScheduler {
+public final class ChunkTaskScheduler implements RegionListener {
 
     private final RegionizedTaskQueue taskQueue;
     private final RegionOwnerLookup regionLookup;
@@ -142,5 +149,27 @@ public final class ChunkTaskScheduler {
         EnumMap<ChunkTaskPriority, ConcurrentLinkedDeque<Runnable>> m = new EnumMap<>(ChunkTaskPriority.class);
         for (ChunkTaskPriority p : ChunkTaskPriority.values()) m.put(p, new ConcurrentLinkedDeque<>());
         return m;
+    }
+
+    // === RegionListener ===
+
+    @Override
+    public void onRegionsMerging(Region surviving, Region dying) {
+        onRegionMerged(surviving.id(), dying.id());
+    }
+
+    @Override
+    public void onRegionSplit(Region source, Region child) {
+        // Simplified: chunk-priority deques stay with the source; when a
+        // chunk migrates into the child region, subsequent scheduleChunkTask
+        // calls create the child's deque via ownerLookup. The pre-existing
+        // enqueued tasks fire on the source's next tick and no-op if the
+        // owning region has moved. This matches the split shape the class
+        // was originally designed with (see the RegionId-typed overload).
+    }
+
+    @Override
+    public void onRegionDied(Region region) {
+        perRegionPriority.remove(region.id());
     }
 }

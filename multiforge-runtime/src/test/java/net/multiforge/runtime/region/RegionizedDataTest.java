@@ -119,7 +119,13 @@ class RegionizedDataTest {
     }
 
     @Test
-    void offRegionAccessThrows() {
+    void offRegionAccessDoesNotThrowInProductionMode() {
+        // /67 round-4 fix (B1): pre-fix code unconditionally threw
+        // IllegalStateException on wrong-owner access, violating CLAUDE.md
+        // rule 5 ("Never throw from a mod's code path"). With
+        // -Dmultiforge.assert=on (dev/CI) it still throws; without it
+        // (production default) the call degrades to a warn + probe bump
+        // and returns the slot value anyway.
         ThreadedRegionizer regionizer = new ThreadedRegionizer(WORLD, 0);
         RegionizedData<List<String>> data = RegionizedData.of(ArrayList::new, (t, s) -> t.addAll(s));
         regionizer.addListener(data);
@@ -127,9 +133,23 @@ class RegionizedDataTest {
         Region a = regionizer.addChunk(new ChunkPos(0, 0));
         Region b = regionizer.addChunk(new ChunkPos(100, 100));
 
-        OwnerToken.runAs(OwnerToken.forRegion(b.id().value()), () -> assertThatThrownBy(() -> data.getOrCreate(a))
-                .isInstanceOf(IllegalStateException.class)
-                .hasMessageContaining("non-owner"));
+        // Under the default (assertions off) the off-owner call must NOT
+        // throw. If DomainAssertions.enabled() is true (JVM launched with
+        // -Dmultiforge.assert=on) the call throws — test tolerates both.
+        net.multiforge.runtime.diagnostics.ProbeRegistry.resetForTesting();
+        boolean strictModeOn = net.multiforge.runtime.ownership.DomainAssertions.enabled();
+        OwnerToken.runAs(OwnerToken.forRegion(b.id().value()), () -> {
+            if (strictModeOn) {
+                assertThatThrownBy(() -> data.getOrCreate(a))
+                        .isInstanceOf(IllegalStateException.class)
+                        .hasMessageContaining("non-owner");
+            } else {
+                // Production degradation: no throw, probe bumped.
+                data.getOrCreate(a).add("degraded-access");
+                assertThat(net.multiforge.runtime.diagnostics.ProbeRegistry.get("RegionizedData.get:wrong-owner"))
+                        .isGreaterThanOrEqualTo(1);
+            }
+        });
     }
 
     @Test

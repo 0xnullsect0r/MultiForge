@@ -54,8 +54,18 @@ public final class PhasedRegionTickBody implements RegionTickBody {
     public void tickOnce(Region region) {
         // Phase.values() is defined in blueprint order — iterating over it
         // is the canonical way to run phases in sequence.
+        //
+        // /67 round-4 fix (B7): each phase runs inside its own try/catch so
+        // one throwing phase (say REGION_EVENTS from a mod handler) doesn't
+        // strand the FLUSH_OUTBOUND phase and lose cross-region messages.
+        // Exceptions route to the uncaught handler — same shape as
+        // RegionizedTaskQueue.drain — so the tick pipeline stays alive.
         for (Phase p : Phase.values()) {
-            phases.getOrDefault(p, NOOP).tickOnce(region);
+            try {
+                phases.getOrDefault(p, NOOP).tickOnce(region);
+            } catch (Throwable t) {
+                Thread.currentThread().getUncaughtExceptionHandler().uncaughtException(Thread.currentThread(), t);
+            }
         }
     }
 

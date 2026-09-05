@@ -150,6 +150,15 @@ public final class MultiThreadedSchedulerHost implements SchedulerHost, AutoClos
             // inboxes — no manual bookkeeping in the M8 patches.
             r.addListener(scheduler);
             r.addListener(taskQueue);
+            // /67 round-4 fix: also wire the per-world ChunkHolderManager
+            // and the shared ChunkTaskScheduler so ticket state, holder
+            // ownership, and chunk-priority deques auto-migrate on merge
+            // and are cleaned up on death. Previously these two listeners
+            // were silently dropped (signature mismatch); every merge
+            // leaked per-region state and left holders pointing at dead
+            // RegionIds.
+            r.addListener(chunkManagerFor(world));
+            r.addListener(chunkTaskScheduler);
             return r;
         });
     }
@@ -173,6 +182,19 @@ public final class MultiThreadedSchedulerHost implements SchedulerHost, AutoClos
 
     public ChunkHolderManager chunkManagerFor(WorldRef world) {
         return chunkManagers.computeIfAbsent(world.dimensionId(), id -> new ChunkHolderManager(world));
+    }
+
+    /**
+     * Non-creating variant of {@link #chunkManagerFor}. Returns {@code
+     * null} when no chunk manager has been established for {@code
+     * world} (i.e. no chunk in that world has been shadowed yet). Used
+     * by observability call sites (e.g. {@code /multiforge chunks} and
+     * bridge diagnostics) where "unknown world" is the semantically
+     * correct answer and where auto-creating on lookup would let a
+     * typoed WorldRef grow the map without bound.
+     */
+    public ChunkHolderManager chunkManagerForOrNull(WorldRef world) {
+        return chunkManagers.get(world.dimensionId());
     }
 
     /**

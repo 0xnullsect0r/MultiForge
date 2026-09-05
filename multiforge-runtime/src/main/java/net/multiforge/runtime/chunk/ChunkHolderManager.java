@@ -7,11 +7,15 @@ package net.multiforge.runtime.chunk;
 import java.util.Collection;
 import java.util.List;
 import java.util.Objects;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import net.multiforge.api.world.ChunkPos;
 import net.multiforge.api.world.WorldRef;
+import net.multiforge.runtime.region.Region;
 import net.multiforge.runtime.region.RegionId;
+import net.multiforge.runtime.region.RegionListener;
+import net.multiforge.runtime.region.SectionPos;
 
 /**
  * Per-world map of {@code (chunk pos) → NewChunkHolder} plus per-region
@@ -23,8 +27,18 @@ import net.multiforge.runtime.region.RegionId;
  * <p>Ticket writes go through here; they update the holder's
  * effective {@link ChunkLoadLevel} and, when the level crosses a
  * threshold, enqueue a full-load-update on the owning region's data.
+ *
+ * <p>Also implements {@link RegionListener} so the regionizer's own
+ * fire path drives merge/split/death cleanup automatically — matching
+ * the pattern already used by {@link
+ * net.multiforge.runtime.region.RegionizedTaskQueue} and
+ * {@link net.multiforge.runtime.region.RegionizedData}. Prior to /67
+ * round-4 the two {@code onRegionMerged}/{@code onRegionSplit} methods
+ * below existed but were never invoked (signature mismatch against
+ * {@code RegionListener}) — per-region tickets, region data, and
+ * holder ownership silently leaked across every merge/split.
  */
-public final class ChunkHolderManager {
+public final class ChunkHolderManager implements RegionListener {
 
     private final WorldRef world;
     private final ConcurrentMap<ChunkPos, NewChunkHolder> byChunk = new ConcurrentHashMap<>();
@@ -144,5 +158,56 @@ public final class ChunkHolderManager {
 
     public int holderCount() {
         return byChunk.size();
+    }
+
+    /**
+     * Remove and return the holder at {@code pos}. Used by the M9 shadow
+     * bridge on chunk unload / INACCESSIBLE ticket transitions to keep
+     * {@link #byChunk} from growing unbounded over a server's lifetime.
+     */
+    public NewChunkHolder dropHolder(ChunkPos pos) {
+        return byChunk.remove(pos);
+    }
+
+    // === RegionListener ===
+
+    /**
+     * Regionizer fired a merge: fold {@code dying}'s side state into
+     * {@code surviving}. Delegates to the RegionId-typed {@link
+     * #onRegionMerged(RegionId, RegionId)} which handles the actual
+     * data movement.
+     */
+    @Override
+    public void onRegionsMerging(Region surviving, Region dying) {
+        onRegionMerged(surviving.id(), dying.id());
+    }
+
+    /**
+     * Regionizer fired a split: hand child region {@code child} its
+     * share of holders + region data + tickets that were previously
+     * under {@code source}. Determines membership by testing whether
+     * each holder's chunk position falls in one of {@code child}'s
+     * sections.
+     */
+    @Override
+    public void onRegionSplit(Region source, Region child) {
+        int shift = child.sectionChunkShift();
+        Set<SectionPos> childSections = child.sections();
+        onRegionSplit(
+                source.id(), child.id(), pos -> childSections.contains(SectionPos.ofChunk(pos.x(), pos.z(), shift)));
+    }
+
+    /**
+     * Regionizer fired region death — clean up per-region maps that
+     * would otherwise leak. In the merge case {@link #onRegionsMerging}
+     * has already moved the data; this handles the natural-death case
+     * (last chunk removed) where no merge happened. Holders keyed by
+     * chunk position are cleaned up separately by the bridge on
+     * {@code ChunkEvent.Unload} / INACCESSIBLE transitions.
+     */
+    @Override
+    public void onRegionDied(Region region) {
+        perRegion.remove(region.id());
+        ticketsByRegion.remove(region.id());
     }
 }

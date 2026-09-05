@@ -60,18 +60,25 @@ public final class RegionizedChunkLifecycle {
         if (world == null) return;
         ChunkPos pos = event.getChunk().getPos();
         host.registerChunk(world, pos.x, pos.z);
-        // Drain the orphan queue: tasks queued for this chunk BEFORE its region
-        // existed (typically from mods that scheduled work at
-        // ServerAboutToStart) can now be delivered to the fresh region. Without
-        // this call the orphan queue leaks for the JVM lifetime, since no other
-        // production code calls reroute() (found by /67 round-2 finding #9; the
-        // fix was accidentally reverted in b829f99 alongside a separate broken
-        // mapInPlace change — /67 round-3 flagged the regression).
-        //
-        // Cost: amortized O(orphans) per chunk load. Orphan queue is normally
-        // empty; worst case at server-start is O(chunks × orphans_initial) which
-        // is O(N) total work per boot for N mod-queued orphans.
-        host.taskQueue().reroute();
+        // /67 round-4 fix: seed the M9 shadow holder now so idle chunks
+        // that reach BORDER via Vanilla's initial updateChunkScheduling
+        // (which fires BEFORE this Load event and hits the bridge's
+        // "no region yet → silently return" path) still appear in
+        // /multiforge chunks. Vanilla ChunkEvent.Load fires when a chunk
+        // transitions to FULL, i.e. BORDER (level 33); subsequent ticket
+        // promotions upgrade this to TICKING/ENTITY_TICKING via the
+        // ChunkMap patch.
+        if (level instanceof net.minecraft.server.level.ServerLevel serverLevel) {
+            net.multiforge.neoforge.ChunkHolderManagerBridge.onChunkLoaded(
+                    serverLevel, pos.x, pos.z, 33);
+        }
+        // Drain the orphan queue for this chunk's section only: tasks queued
+        // BEFORE the region existed (typically from mods scheduling at
+        // ServerAboutToStart) can now be delivered. /67 round-4 changed the
+        // per-chunk O(orphans) full-queue scan to an O(bucket) per-section
+        // reroute — for N chunks loaded and K persistent orphans that live
+        // in unrelated sections, boot cost drops from O(N × K) to O(N).
+        host.taskQueue().rerouteAtChunk(world, pos.x, pos.z);
     }
 
     private static void onChunkUnloaded(final ChunkEvent.Unload event) {
@@ -82,6 +89,13 @@ public final class RegionizedChunkLifecycle {
         WorldRef world = worldRefFor(level);
         if (world == null) return;
         ChunkPos pos = event.getChunk().getPos();
+        // Drop the shadow holder BEFORE unregistering the region so
+        // ChunkHolderManager.onRegionDied doesn't race with a live holder
+        // pointing at a soon-to-be-DEAD RegionId.
+        if (level instanceof net.minecraft.server.level.ServerLevel serverLevel) {
+            net.multiforge.neoforge.ChunkHolderManagerBridge.onChunkUnloaded(
+                    serverLevel, pos.x, pos.z);
+        }
         host.unregisterChunk(world, pos.x, pos.z);
     }
 

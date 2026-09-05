@@ -53,21 +53,37 @@ class RuntimeLifecycleReviewFixesTest {
     // /67 finding #10: shutdown must unbind OwnershipEnforcer's tick-thread and reroute-target.
     @Test
     void shutdownUnbindsOwnershipEnforcerBindings() {
+        // Sentinel that captures whether the PRE-shutdown reroute target
+        // ever fires. If shutdown correctly unbinds the target, a
+        // reroute() after shutdown routes through the "unconfigured
+        // fallback" instead — so this sentinel must remain false.
+        // /67 round-4 fix (C2): the previous test only asserted the
+        // tick-thread half of the unbind. If a regression left the
+        // reroute target pointing at a dying server executor, the
+        // previous test still passed. This half completes the coverage.
+        java.util.concurrent.atomic.AtomicBoolean staleTargetFired =
+                new java.util.concurrent.atomic.AtomicBoolean(false);
         OwnershipEnforcer.bindTickThread(Thread.currentThread());
-        OwnershipEnforcer.bindRerouteTarget(r -> {}); // pretend server::execute
+        OwnershipEnforcer.bindRerouteTarget(r -> staleTargetFired.set(true));
 
         MultiForgeRegionizedRuntime.install(MultiForgeConfig.defaults(), r -> {});
         MultiForgeRegionizedRuntime.shutdown();
 
-        // The reroute target should now be the "unconfigured" fallback again — an off-thread
-        // mutation submitted after shutdown must not route into a dead server::execute.
-        // We prove this by observing that reroute() runs inline via the fallback (which
-        // itself logs a warn, but does not throw RejectedExecutionException).
-        ViolationLogger.resetForTesting();
-        // A canMutate call on an unowned thread returns false (reroute mode) — safe to call.
-        boolean canMutate = OwnershipEnforcer.canMutate("test-site");
         // The tick thread binding is cleared, so the current thread no longer counts as the tick thread.
+        ViolationLogger.resetForTesting();
+        boolean canMutate = OwnershipEnforcer.canMutate("test-site");
         assertThat(canMutate).isFalse();
+
+        // Now the reroute-target check: an off-thread reroute submitted
+        // AFTER shutdown must NOT reach the pre-shutdown binding (which
+        // in production would be server::execute on a dying server, and
+        // would throw RejectedExecutionException). It should route
+        // through the unconfigured fallback instead, which runs the
+        // mutation inline + logs a warn.
+        java.util.concurrent.atomic.AtomicBoolean mutationRan = new java.util.concurrent.atomic.AtomicBoolean(false);
+        OwnershipEnforcer.reroute("test-site", () -> mutationRan.set(true));
+        assertThat(staleTargetFired).isFalse();
+        assertThat(mutationRan).isTrue(); // fallback ran it inline
     }
 
     // /67 finding #3: RegionTickWatchdog and ViolationLogger tolerate garbage sysprop values.

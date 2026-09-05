@@ -10,7 +10,10 @@ import java.util.concurrent.ConcurrentMap;
 import java.util.function.BiConsumer;
 import java.util.function.Function;
 import java.util.function.Supplier;
+import net.multiforge.runtime.diagnostics.ProbeRegistry;
+import net.multiforge.runtime.diagnostics.ViolationLogger;
 import net.multiforge.runtime.ownership.Domain;
+import net.multiforge.runtime.ownership.DomainAssertions;
 import net.multiforge.runtime.ownership.OwnerToken;
 
 /**
@@ -193,6 +196,21 @@ public final class RegionizedData<T> implements RegionListener {
         if (tok.domain() == Domain.UNKNOWN) return; // no owner bound (bootstrap/test) → skip
         if (tok.domain() == Domain.GLOBAL) return; // global thread may reach any slot
         if (tok.domain() == Domain.REGION && tok.regionId() == region.id().value()) return;
-        throw new IllegalStateException("RegionizedData.get(" + region.id() + ") on non-owner thread; token=" + tok);
+        // /67 round-4 fix (finding B1): the javadoc on this class and on
+        // get/getOrCreate promised "dev-only, off in production", but the
+        // pre-fix code unconditionally threw — which directly violates
+        // CLAUDE.md rule 5 ("Never throw from a mod's code path — reroute
+        // and log a rate-limited warning"). Gate throwing on
+        // DomainAssertions.enabled() (strict-mode / dev builds). In
+        // production, degrade to a rate-limited warn + probe bump so
+        // mishaps are visible in diagnostics without killing the caller.
+        if (DomainAssertions.enabled()) {
+            throw new IllegalStateException(
+                    "RegionizedData.get(" + region.id() + ") on non-owner thread; token=" + tok);
+        }
+        ProbeRegistry.bump("RegionizedData.get:wrong-owner");
+        ViolationLogger.warn(
+                "RegionizedData.get",
+                "region=" + region.id() + " token=" + tok + " — degraded to warn (assertions off)");
     }
 }

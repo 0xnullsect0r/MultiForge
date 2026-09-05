@@ -10,6 +10,7 @@ import net.multiforge.api.entity.EntityRef;
 import net.multiforge.api.spi.SchedulerHost;
 import net.multiforge.api.world.ChunkPos;
 import net.multiforge.api.world.WorldRef;
+import org.jetbrains.annotations.ApiStatus;
 
 /**
  * Native MultiForge scheduler façade. Prefer these over the Folia-shaped
@@ -51,6 +52,7 @@ public final class ServerDomains {
      * must not call this — it is guarded so a second call throws
      * unless the caller passes the same instance already installed.
      */
+    @ApiStatus.Internal
     public static void install(SchedulerHost host) {
         if (host == null) throw new NullPointerException("host");
         SchedulerHost current = HOST;
@@ -66,7 +68,13 @@ public final class ServerDomains {
      * Unbind the currently-installed host. Called during MultiForge's
      * server shutdown so a subsequent {@link #install} on server
      * restart succeeds cleanly. Idempotent.
+     *
+     * <p>Runtime-only; must not be called from mod code (would strand
+     * every other mod's dispatch on the fallback path — /67 round-4
+     * finding B9). Marked {@code @ApiStatus.Internal} to signal the
+     * boundary.
      */
+    @ApiStatus.Internal
     public static void uninstall() {
         HOST = null;
     }

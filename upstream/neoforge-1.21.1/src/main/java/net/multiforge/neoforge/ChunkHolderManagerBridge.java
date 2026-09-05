@@ -79,6 +79,17 @@ public final class ChunkHolderManagerBridge {
 
         ChunkHolderManager manager = host.chunkManagerFor(world);
         net.multiforge.api.world.ChunkPos mfPos = new net.multiforge.api.world.ChunkPos(chunkX, chunkZ);
+        ChunkLoadLevel newMfLevel = ChunkLoadLevel.forDistance(newLevel);
+
+        // /67 round-4 fix: on INACCESSIBLE transitions (level > 33) drop
+        // the holder so byChunk doesn't grow unbounded across the server's
+        // lifetime. Vanilla's own updateChunkScheduling enqueues the drop
+        // into `toDrop` on the same transition; we mirror that.
+        if (newMfLevel == ChunkLoadLevel.INACCESSIBLE) {
+            manager.dropHolder(mfPos);
+            return;
+        }
+
         NewChunkHolder mfHolder = manager.holderAt(mfPos);
         if (mfHolder == null) {
             mfHolder = manager.createHolder(mfPos, region.id());
@@ -87,21 +98,68 @@ public final class ChunkHolderManagerBridge {
         // Vanilla uses inverted numbers where lower = more loaded:
         // 31 = ENTITY_TICKING, 32 = BLOCK_TICKING, 33 = FULL/BORDER, 34+ = INACCESSIBLE.
         // MultiForge's ChunkLoadLevel.forDistance uses the same convention.
-        ChunkLoadLevel newMfLevel = ChunkLoadLevel.forDistance(newLevel);
         mfHolder.setLevel(newMfLevel);
+    }
+
+    /**
+     * Called from {@link RegionizedChunkLifecycle} on {@code
+     * ChunkEvent.Load} once the chunk's region has been created,
+     * seeding the shadow holder at the chunk's current Vanilla ticket
+     * level. Fixes the "silently drop pre-Load transitions" race
+     * caught by /67 round-4: {@link #onTicketLevelUpdated} early-returns
+     * when the chunk's region doesn't exist yet, so a chunk that reaches
+     * BORDER via Vanilla's initial {@code updateChunkScheduling} BEFORE
+     * {@code ChunkEvent.Load} fires would otherwise never appear in the
+     * shadow.
+     */
+    public static void onChunkLoaded(ServerLevel level, int chunkX, int chunkZ, int currentVanillaLevel) {
+        MultiThreadedSchedulerHost host = MultiForgeRegionizedRuntime.current();
+        if (host == null) return;
+        WorldRef world = RegionizedTickCoordinator.asWorldRef(level);
+        ThreadedRegionizer regionizer = host.regionizerForOrNull(world);
+        if (regionizer == null) return;
+        Region region = regionizer.regionAtChunk(chunkX, chunkZ);
+        if (region == null) return;
+        ChunkLoadLevel newMfLevel = ChunkLoadLevel.forDistance(currentVanillaLevel);
+        if (newMfLevel == ChunkLoadLevel.INACCESSIBLE) return; // shouldn't happen at Load-time, defensive
+        ChunkHolderManager manager = host.chunkManagerFor(world);
+        net.multiforge.api.world.ChunkPos mfPos = new net.multiforge.api.world.ChunkPos(chunkX, chunkZ);
+        NewChunkHolder mfHolder = manager.holderAt(mfPos);
+        if (mfHolder == null) {
+            mfHolder = manager.createHolder(mfPos, region.id());
+        }
+        mfHolder.setLevel(newMfLevel);
+    }
+
+    /**
+     * Called from {@link RegionizedChunkLifecycle} on {@code
+     * ChunkEvent.Unload}. Drops the shadow holder so
+     * {@link ChunkHolderManager#byChunk} does not grow unbounded.
+     */
+    public static void onChunkUnloaded(ServerLevel level, int chunkX, int chunkZ) {
+        MultiThreadedSchedulerHost host = MultiForgeRegionizedRuntime.current();
+        if (host == null) return;
+        WorldRef world = RegionizedTickCoordinator.asWorldRef(level);
+        ChunkHolderManager manager = host.chunkManagerForOrNull(world);
+        if (manager == null) return;
+        manager.dropHolder(new net.multiforge.api.world.ChunkPos(chunkX, chunkZ));
     }
 
     /**
      * Best-effort ChunkLoadLevel snapshot for a specific chunk in a
      * specific world; used by observability commands like
      * {@code /multiforge chunks}. Returns null if the runtime isn't
-     * installed or the chunk isn't tracked yet.
+     * installed, the world has no shadow yet, or the chunk isn't
+     * tracked. Uses the non-creating {@code chunkManagerForOrNull} so
+     * a typoed world lookup doesn't permanently allocate an empty
+     * shadow (finding B6 of /67 round-4).
      */
     public static ChunkLoadLevel currentLevel(ServerLevel level, int chunkX, int chunkZ) {
         MultiThreadedSchedulerHost host = MultiForgeRegionizedRuntime.current();
         if (host == null) return null;
         WorldRef world = RegionizedTickCoordinator.asWorldRef(level);
-        ChunkHolderManager manager = host.chunkManagerFor(world);
+        ChunkHolderManager manager = host.chunkManagerForOrNull(world);
+        if (manager == null) return null;
         NewChunkHolder h = manager.holderAt(new net.multiforge.api.world.ChunkPos(chunkX, chunkZ));
         return h == null ? null : h.level();
     }

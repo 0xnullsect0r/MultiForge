@@ -203,15 +203,19 @@ class WorldDiffTest {
     void mcaCorruptSectorOffsetDoesNotCrash(@TempDir Path tmp) throws IOException {
         Path a = Files.createDirectory(tmp.resolve("a"));
         Path b = Files.createDirectory(tmp.resolve("b"));
-        // Slot 0 has a location entry pointing at sector 0x00FFFFFF — the 24-bit maximum.
-        // 0x00FFFFFF * 4096 = 0xFFFFFF000 which wraps a signed int to -4096. Prior code
-        // read bytes[-4096] and threw ArrayIndexOutOfBoundsException from the whole diff.
+        // Slot 0 has a location entry with sectorOffset=0xFFFFFF (24-bit maximum).
+        // Layout: bytes 0..2 = 3-byte big-endian sectorOffset, byte 3 = sectorCount.
+        // 0xFFFFFF * 4096 = 0xFFF_FFFF_000 = 68_719_472_640, which wraps a signed int
+        // to -4096. Prior code read bytes[-4096] and threw
+        // ArrayIndexOutOfBoundsException from the whole diff. /67 round-4 corrected the
+        // byte pattern — pre-fix `00 FF FF FF` gave only sectorOffset=0xFFFF (65535)
+        // which fits in int and did not exercise the wrap.
         byte[] corrupt = new byte[8192];
         // Write loc entry: sectorOffset=0xFFFFFF, sectorCount=1
-        corrupt[0] = 0x00;
+        corrupt[0] = (byte) 0xFF;
         corrupt[1] = (byte) 0xFF;
         corrupt[2] = (byte) 0xFF;
-        corrupt[3] = (byte) 0xFF;
+        corrupt[3] = 0x01;
         Files.createDirectories(a.resolve("region"));
         Files.createDirectories(b.resolve("region"));
         Files.write(a.resolve("region/r.0.0.mca"), corrupt);

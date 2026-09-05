@@ -87,18 +87,27 @@ class RegionTickWatchdogTest {
     @Test
     void exitAfterThrowClearsStateWithoutFiring() {
         Region region = new ThreadedRegionizer(WORLD, 0).addChunk(new ChunkPos(0, 0));
+        // Use warnMs=0 during the throw phase to prove exitTickAfterThrow
+        // doesn't itself fire a violation even under the most eager warn
+        // setting.
         RegionTickWatchdog.setWarnMsForTesting(0);
 
         RegionTickWatchdog.enterTick(region);
         // Simulate: body threw; scheduler calls exitTickAfterThrow instead of exitTick.
         RegionTickWatchdog.exitTickAfterThrow();
 
-        // The scheduler recovery path doesn't fire a violation (the body's own exception already carries the info).
+        // The scheduler recovery path doesn't fire a violation (the body's own exception
+        // already carries the info). Assert IMMEDIATELY — before doing anything else that
+        // could touch the probe — so a regression in exitTickAfterThrow is caught cleanly.
         assertThat(ProbeRegistry.get("region-tick.overrun")).isZero();
-        // And the next tick starts clean.
+
+        // Now separately verify per-thread state is properly cleared: the next tick starts
+        // clean so a fast enter/exit under a generous warnMs must NOT emit anything.
+        // (Under the previous warnMs=0 this assertion was always-green — /67 round-4 fix.)
+        RegionTickWatchdog.setWarnMsForTesting(10_000);
         RegionTickWatchdog.enterTick(region);
-        RegionTickWatchdog.exitTick(region); // fast; no elapsed → no violation
-        assertThat(ProbeRegistry.get("region-tick.overrun")).isLessThanOrEqualTo(1);
+        RegionTickWatchdog.exitTick(region);
+        assertThat(ProbeRegistry.get("region-tick.overrun")).isZero();
     }
 
     @Test

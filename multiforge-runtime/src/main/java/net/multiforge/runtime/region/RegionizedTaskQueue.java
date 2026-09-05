@@ -39,9 +39,19 @@ public final class RegionizedTaskQueue implements RegionListener {
         Region regionAtChunk(WorldRef world, int chunkX, int chunkZ);
     }
 
+    /**
+     * Section-shift used to bucket orphaned tasks. /67 round-4 changed
+     * the orphan queue from a single flat list to a per-section
+     * partition so per-chunk-load reroute is O(bucket) instead of
+     * O(all orphans). 4 = 16-chunk sections (matches the regionizer's
+     * default sectionChunkShift); orphan-bucket size is independent of
+     * region size so we hardcode it.
+     */
+    private static final int ORPHAN_SECTION_SHIFT = 4;
+
     private final OwnerLookup ownerLookup;
     private final ConcurrentMap<RegionId, Queue<Runnable>> inboxes = new ConcurrentHashMap<>();
-    private final Queue<PendingTask> orphaned = new ConcurrentLinkedQueue<>();
+    private final ConcurrentMap<OrphanBucket, Queue<PendingTask>> orphanedBySection = new ConcurrentHashMap<>();
 
     public RegionizedTaskQueue(OwnerLookup ownerLookup) {
         this.ownerLookup = Objects.requireNonNull(ownerLookup, "ownerLookup");
@@ -76,7 +86,7 @@ public final class RegionizedTaskQueue implements RegionListener {
         Objects.requireNonNull(task, "task");
         Region owner = ownerLookup.regionAtChunk(world, chunkX, chunkZ);
         if (owner == null) {
-            orphaned.add(new PendingTask(world, chunkX, chunkZ, task));
+            orphanBucketFor(world, chunkX, chunkZ).add(new PendingTask(world, chunkX, chunkZ, task));
             return;
         }
         inboxFor(owner).add(task);
@@ -117,13 +127,33 @@ public final class RegionizedTaskQueue implements RegionListener {
      * of each epoch.
      */
     public void reroute() {
-        PendingTask pending;
+        for (OrphanBucket key : orphanedBySection.keySet()) {
+            rerouteBucket(key);
+        }
+    }
+
+    /**
+     * Reroute only the orphan bucket covering {@code (chunkX, chunkZ)}
+     * in {@code world}. /67 round-4 fix — {@link
+     * net.multiforge.neoforge.RegionizedChunkLifecycle} calls this
+     * once per {@code ChunkEvent.Load} instead of the whole-queue
+     * {@link #reroute()}, so per-chunk cost is O(bucket) rather than
+     * O(all orphans).
+     */
+    public void rerouteAtChunk(WorldRef world, int chunkX, int chunkZ) {
+        rerouteBucket(OrphanBucket.of(world, chunkX, chunkZ));
+    }
+
+    private void rerouteBucket(OrphanBucket key) {
+        Queue<PendingTask> bucket = orphanedBySection.get(key);
+        if (bucket == null) return;
+        int size = bucket.size();
         int drained = 0;
-        int size = orphaned.size();
-        while (drained < size && (pending = orphaned.poll()) != null) {
+        PendingTask pending;
+        while (drained < size && (pending = bucket.poll()) != null) {
             Region owner = ownerLookup.regionAtChunk(pending.world, pending.chunkX, pending.chunkZ);
             if (owner == null) {
-                orphaned.add(pending); // still no home
+                bucket.add(pending);
             } else {
                 inboxFor(owner).add(pending.task);
             }
@@ -137,7 +167,9 @@ public final class RegionizedTaskQueue implements RegionListener {
     }
 
     public int orphanedSize() {
-        return orphaned.size();
+        int n = 0;
+        for (Queue<PendingTask> q : orphanedBySection.values()) n += q.size();
+        return n;
     }
 
     /** Merge {@code source}'s pending inbox into {@code target}'s. */
@@ -176,6 +208,19 @@ public final class RegionizedTaskQueue implements RegionListener {
 
     private Queue<Runnable> inboxFor(Region region) {
         return inboxes.computeIfAbsent(region.id(), id -> new ConcurrentLinkedQueue<>());
+    }
+
+    private Queue<PendingTask> orphanBucketFor(WorldRef world, int chunkX, int chunkZ) {
+        return orphanedBySection.computeIfAbsent(
+                OrphanBucket.of(world, chunkX, chunkZ), k -> new ConcurrentLinkedQueue<>());
+    }
+
+    /** Section-shifted key used to bucket orphan tasks per (world, section). */
+    private record OrphanBucket(String worldId, int sectionX, int sectionZ) {
+        static OrphanBucket of(WorldRef world, int chunkX, int chunkZ) {
+            return new OrphanBucket(
+                    world.dimensionId(), chunkX >> ORPHAN_SECTION_SHIFT, chunkZ >> ORPHAN_SECTION_SHIFT);
+        }
     }
 
     private record PendingTask(WorldRef world, int chunkX, int chunkZ, Runnable task) {}
