@@ -6,7 +6,6 @@ package net.multiforge.runtime.chunk;
 
 import java.util.ArrayList;
 import java.util.List;
-import net.multiforge.api.world.ChunkPos;
 import net.multiforge.runtime.region.RegionId;
 
 /**

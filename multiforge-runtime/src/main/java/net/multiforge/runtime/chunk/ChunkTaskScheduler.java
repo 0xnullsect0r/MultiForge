@@ -4,9 +4,12 @@
  */
 package net.multiforge.runtime.chunk;
 
+import java.util.ArrayList;
 import java.util.EnumMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedDeque;
 import java.util.concurrent.ConcurrentMap;
@@ -17,6 +20,7 @@ import net.multiforge.runtime.region.Region;
 import net.multiforge.runtime.region.RegionId;
 import net.multiforge.runtime.region.RegionListener;
 import net.multiforge.runtime.region.RegionizedTaskQueue;
+import net.multiforge.runtime.region.SectionPos;
 
 /**
  * Routes chunk-level work (load / unload / generate / light / IO)
@@ -29,16 +33,19 @@ import net.multiforge.runtime.region.RegionizedTaskQueue;
  * the {@link RegionizedTaskQueue} is what pulls them.
  *
  * <p>Implements {@link RegionListener} so the regionizer's fire path
- * folds per-region priority deques automatically on merge; on split
- * the priority deques stay with the source region and re-enqueue
- * naturally as their holders migrate (the split-handoff shape the
- * class was already designed around).
+ * folds per-region priority deques automatically on merge and PEELS
+ * per-priority queue entries into the child region on split. Prior to
+ * /67 round-4 the split path was a documented no-op ("chunk-priority
+ * deques stay with the source") — safe only because no production
+ * caller wired the scheduler yet. Phase-1 fix 1.6 wraps each queued
+ * task in a {@link ChunkPositionedTask} so the split callback can
+ * filter by chunk position via the child region's section membership.
  */
 public final class ChunkTaskScheduler implements RegionListener {
 
     private final RegionizedTaskQueue taskQueue;
     private final RegionOwnerLookup regionLookup;
-    private final ConcurrentMap<RegionId, EnumMap<ChunkTaskPriority, ConcurrentLinkedDeque<Runnable>>>
+    private final ConcurrentMap<RegionId, EnumMap<ChunkTaskPriority, ConcurrentLinkedDeque<ChunkPositionedTask>>>
             perRegionPriority = new ConcurrentHashMap<>();
 
     /** Resolve the owner region for a chunk. Same shape as {@link RegionizedTaskQueue}'s. */
@@ -46,6 +53,14 @@ public final class ChunkTaskScheduler implements RegionListener {
     public interface RegionOwnerLookup {
         Region regionAtChunk(WorldRef world, int chunkX, int chunkZ);
     }
+
+    /**
+     * Deque element that carries the chunk position alongside the
+     * runnable so the split path can filter by position. Records also
+     * carry the enqueuing world so future distance-based prioritisation
+     * has the info it needs.
+     */
+    private record ChunkPositionedTask(WorldRef world, int chunkX, int chunkZ, Runnable task) {}
 
     public ChunkTaskScheduler(RegionizedTaskQueue taskQueue, RegionOwnerLookup regionLookup) {
         this.taskQueue = Objects.requireNonNull(taskQueue, "taskQueue");
@@ -66,7 +81,7 @@ public final class ChunkTaskScheduler implements RegionListener {
             taskQueue.queueChunkTask(world, chunkX, chunkZ, task);
             return;
         }
-        priorityDeque(owner.id(), priority).addLast(task);
+        priorityDeque(owner.id(), priority).addLast(new ChunkPositionedTask(world, chunkX, chunkZ, task));
         // Wake the owning region by enqueueing a drain trampoline into its inbox.
         // The trampoline pulls tasks in priority order at region tick time.
         taskQueue.queueChunkTask(world, chunkX, chunkZ, () -> drainInto(owner.id()));
@@ -87,17 +102,17 @@ public final class ChunkTaskScheduler implements RegionListener {
     }
 
     public int drainInto(RegionId region, int max) {
-        EnumMap<ChunkTaskPriority, ConcurrentLinkedDeque<Runnable>> pri = perRegionPriority.get(region);
+        EnumMap<ChunkTaskPriority, ConcurrentLinkedDeque<ChunkPositionedTask>> pri = perRegionPriority.get(region);
         if (pri == null) return 0;
         int run = 0;
         for (ChunkTaskPriority p : ChunkTaskPriority.values()) {
-            ConcurrentLinkedDeque<Runnable> q = pri.get(p);
+            ConcurrentLinkedDeque<ChunkPositionedTask> q = pri.get(p);
             if (q == null) continue;
             while (run < max) {
-                Runnable r = q.pollFirst();
-                if (r == null) break;
+                ChunkPositionedTask wrapped = q.pollFirst();
+                if (wrapped == null) break;
                 try {
-                    r.run();
+                    wrapped.task().run();
                 } catch (Throwable t) {
                     Thread.currentThread().getUncaughtExceptionHandler().uncaughtException(Thread.currentThread(), t);
                 }
@@ -109,21 +124,21 @@ public final class ChunkTaskScheduler implements RegionListener {
     }
 
     public int pending(RegionId region, ChunkTaskPriority priority) {
-        EnumMap<ChunkTaskPriority, ConcurrentLinkedDeque<Runnable>> pri = perRegionPriority.get(region);
+        EnumMap<ChunkTaskPriority, ConcurrentLinkedDeque<ChunkPositionedTask>> pri = perRegionPriority.get(region);
         if (pri == null) return 0;
-        ConcurrentLinkedDeque<Runnable> q = pri.get(priority);
+        ConcurrentLinkedDeque<ChunkPositionedTask> q = pri.get(priority);
         return q == null ? 0 : q.size();
     }
 
     /** Merge {@code source}'s priority queues into {@code target}'s. */
     public void onRegionMerged(RegionId target, RegionId source) {
-        EnumMap<ChunkTaskPriority, ConcurrentLinkedDeque<Runnable>> src = perRegionPriority.remove(source);
+        EnumMap<ChunkTaskPriority, ConcurrentLinkedDeque<ChunkPositionedTask>> src = perRegionPriority.remove(source);
         if (src == null) return;
-        EnumMap<ChunkTaskPriority, ConcurrentLinkedDeque<Runnable>> tgt =
+        EnumMap<ChunkTaskPriority, ConcurrentLinkedDeque<ChunkPositionedTask>> tgt =
                 perRegionPriority.computeIfAbsent(target, id -> newPriorityMap());
-        for (Map.Entry<ChunkTaskPriority, ConcurrentLinkedDeque<Runnable>> e : src.entrySet()) {
-            ConcurrentLinkedDeque<Runnable> tgtQ = tgt.get(e.getKey());
-            Runnable r;
+        for (Map.Entry<ChunkTaskPriority, ConcurrentLinkedDeque<ChunkPositionedTask>> e : src.entrySet()) {
+            ConcurrentLinkedDeque<ChunkPositionedTask> tgtQ = tgt.get(e.getKey());
+            ChunkPositionedTask r;
             while ((r = e.getValue().pollFirst()) != null) tgtQ.addLast(r);
         }
     }
@@ -132,21 +147,27 @@ public final class ChunkTaskScheduler implements RegionListener {
      * For split events: move tasks matching {@code shouldLeave} into
      * {@code target}'s queues. Task deque is treated in insertion
      * order — callers get FIFO within each priority.
+     *
+     * <p>Note: retained for API compatibility with the RegionId-typed
+     * legacy overload. Prefer the {@link RegionListener} overload
+     * that takes {@code Region} instances — the regionizer's fire path
+     * already invokes it under the write lock with the child region's
+     * section membership implicitly available via
+     * {@link Region#sections()}.
      */
     public void onRegionSplit(RegionId source, RegionId target, BiConsumer<RegionId, Runnable> reroute) {
-        // Simplified: the M3 tick-body binding knows exactly which
-        // tasks belong to which chunk. For now, we hand off nothing —
-        // the split callback exists to preserve the API shape.
-        // (Real chunk tasks are re-enqueued via scheduleChunkTask when
-        // the new owner processes its holders.)
+        // Deferred: callers using the RegionId-typed overload must
+        // provide their own position → predicate mapping. Production
+        // fires via the RegionListener overload below.
     }
 
-    private ConcurrentLinkedDeque<Runnable> priorityDeque(RegionId region, ChunkTaskPriority priority) {
+    private ConcurrentLinkedDeque<ChunkPositionedTask> priorityDeque(RegionId region, ChunkTaskPriority priority) {
         return perRegionPriority.computeIfAbsent(region, id -> newPriorityMap()).get(priority);
     }
 
-    private static EnumMap<ChunkTaskPriority, ConcurrentLinkedDeque<Runnable>> newPriorityMap() {
-        EnumMap<ChunkTaskPriority, ConcurrentLinkedDeque<Runnable>> m = new EnumMap<>(ChunkTaskPriority.class);
+    private static EnumMap<ChunkTaskPriority, ConcurrentLinkedDeque<ChunkPositionedTask>> newPriorityMap() {
+        EnumMap<ChunkTaskPriority, ConcurrentLinkedDeque<ChunkPositionedTask>> m =
+                new EnumMap<>(ChunkTaskPriority.class);
         for (ChunkTaskPriority p : ChunkTaskPriority.values()) m.put(p, new ConcurrentLinkedDeque<>());
         return m;
     }
@@ -158,14 +179,41 @@ public final class ChunkTaskScheduler implements RegionListener {
         onRegionMerged(surviving.id(), dying.id());
     }
 
+    /**
+     * /67 round-4 fix (1.6): peel per-priority tasks whose chunk
+     * position falls in {@code child}'s section membership out of
+     * {@code source}'s deque into {@code child}'s. Preserves per-
+     * priority FIFO ordering; source deque keeps every task the child
+     * doesn't claim. Prior no-op behaviour would have discarded the
+     * child region's chunk work when the source region died via a
+     * subsequent merge (onRegionDied removes source's map, and split
+     * had never moved the child's tasks out).
+     */
     @Override
     public void onRegionSplit(Region source, Region child) {
-        // Simplified: chunk-priority deques stay with the source; when a
-        // chunk migrates into the child region, subsequent scheduleChunkTask
-        // calls create the child's deque via ownerLookup. The pre-existing
-        // enqueued tasks fire on the source's next tick and no-op if the
-        // owning region has moved. This matches the split shape the class
-        // was originally designed with (see the RegionId-typed overload).
+        EnumMap<ChunkTaskPriority, ConcurrentLinkedDeque<ChunkPositionedTask>> src = perRegionPriority.get(source.id());
+        if (src == null) return;
+        int shift = child.sectionChunkShift();
+        Set<SectionPos> childSections = child.sections();
+        EnumMap<ChunkTaskPriority, ConcurrentLinkedDeque<ChunkPositionedTask>> dst =
+                perRegionPriority.computeIfAbsent(child.id(), id -> newPriorityMap());
+        for (ChunkTaskPriority p : ChunkTaskPriority.values()) {
+            ConcurrentLinkedDeque<ChunkPositionedTask> srcQ = src.get(p);
+            if (srcQ == null || srcQ.isEmpty()) continue;
+            ConcurrentLinkedDeque<ChunkPositionedTask> dstQ = dst.get(p);
+            // ConcurrentLinkedDeque iterator.remove() is weakly-consistent and
+            // may silently fail to remove — use removeIf which is spec'd to
+            // remove all matching elements atomically per-element. Collect
+            // matches first, add to child, then removeIf on source to detach.
+            List<ChunkPositionedTask> moving = new ArrayList<>();
+            for (ChunkPositionedTask t : srcQ) {
+                if (childSections.contains(SectionPos.ofChunk(t.chunkX(), t.chunkZ(), shift))) {
+                    moving.add(t);
+                }
+            }
+            for (ChunkPositionedTask t : moving) dstQ.addLast(t);
+            srcQ.removeIf(moving::contains);
+        }
     }
 
     @Override
