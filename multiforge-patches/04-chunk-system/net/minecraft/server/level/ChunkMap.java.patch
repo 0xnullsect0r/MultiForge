@@ -2,7 +2,7 @@
 +++ b/net/minecraft/server/level/ChunkMap.java
 @@ -396,6 +396,12 @@
              }
- 
+
              net.neoforged.neoforge.event.EventHooks.fireChunkTicketLevelUpdated(this.level, p_140177_, p_140180_, p_140178_, p_140179_);
 +            // MultiForge (multiforge-patches/04-chunk-system/): read-only
 +            // shadow of Vanilla ticket-level state into ChunkHolderManager
@@ -12,4 +12,25 @@
 +                    this.level, p_140177_, p_140180_, p_140178_, p_140179_);
              return p_140179_;
          }
+     }
+@@ -1234,4 +1240,20 @@
+         protected ChunkHolder updateChunkScheduling(long p_140464_, int p_140465_, @Nullable ChunkHolder p_140466_, int p_140467_) {
+             return ChunkMap.this.updateChunkScheduling(p_140464_, p_140465_, p_140466_, p_140467_);
+         }
++
++        // MultiForge M9 (Phase 1 fix 1.8 + 1.9): shadow-mirror every ticket
++        // write into ChunkHolderManager. Vanilla's addTicket/removeTicket
++        // are package-private choke points that every public
++        // addRegionTicket / removeRegionTicket / addPlayer / removePlayer /
++        // updateChunkForced eventually reaches — one override here covers
++        // every ticket source (players, /forceload, ender pearls, portals,
++        // mod-side adders). Zero behavior change to Vanilla ticket state.
++        @Override void addTicket(long p_140785_, net.minecraft.server.level.Ticket<?> p_140786_) {
++            super.addTicket(p_140785_, p_140786_);
++            net.multiforge.neoforge.DistanceManagerBridge.onAddTicket(ChunkMap.this.level, p_140785_, p_140786_);
++        }
++        @Override void removeTicket(long p_140819_, net.minecraft.server.level.Ticket<?> p_140820_) {
++            super.removeTicket(p_140819_, p_140820_);
++            net.multiforge.neoforge.DistanceManagerBridge.onRemoveTicket(ChunkMap.this.level, p_140819_, p_140820_);
++        }
      }
