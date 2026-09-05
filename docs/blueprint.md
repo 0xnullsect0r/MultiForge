@@ -538,7 +538,7 @@ region-tick dispatch; no blocking calls on a region worker thread
 
 ### Known deferred races (documented, unfixed)
 
-Two rounds of /67 review surfaced concurrency bugs that admit no
+Four rounds of /67 review surfaced concurrency bugs that admit no
 correct local fix without larger design work. Each is documented
 inline in the affected class's javadoc; enumerated here for
 future-session visibility. All are safe TODAY (M8 sub-step 4 keeps
@@ -586,6 +586,24 @@ a real body:
   rate-limited warn. The fundamental race (cached local reference
   after volatile swap) is unclosable via any swap protocol, but
   making the target no-throw makes the race benign.
+- **`splitIfDisconnected` publishes empty section→region mapping
+  mid-split** (`ThreadedRegionizer.splitIfDisconnected`): between
+  `sectionToRegion.remove(leaving)` and `put(s, fresh)` for the
+  new component, those sections have no owner. `regionAtChunk` is
+  lock-free (only writes hold the write lock) so any concurrent
+  lookup — including the M9 shadow bridge's `regionAtChunk` — sees
+  a spurious `null` and drops the observation. Fix: stage new
+  regions off-map, then swap atomically under the write lock (Folia's
+  ThreadedRegionizer shape). Surfaced by /67 round-4 prior-art lens.
+- **`ServerLifecycleHooks` swallows `IllegalStateException` on
+  install failure** (both "already installed" cases are caught the
+  same way): if a rogue ServiceLoader-bound host is already in
+  `ServerDomains`, MultiForge silently boots without regionization
+  and `MultiForgeRegionizedRuntime.current()` returns `null` forever.
+  Fix: distinguish the two `IllegalStateException` sources (dedicated
+  subclass or message discriminator), swallow only the "same instance
+  installed" case, log/rethrow the other. Surfaced by /67 round-4
+  wildcard lens.
 
 ## M9 — Chunk System Port
 - Moonrise-equivalent port: binds already-built
@@ -624,6 +642,57 @@ a real body:
   months of work, ~30K lines in Folia's Moonrise. This bridge
   establishes the coordinate + level translation infrastructure that
   future substantive M9 sub-steps will build on.
+
+### M9 sub-step 1 hardening (DONE — /67 round-4)
+
+Six-agent /67 review across the M8+M9 landing surface (commits
+e3878b3..54b4ad7) surfaced 27 raw findings; 13 real after dedup, 10
+of them fixed in commit ee136a7:
+
+- **Central M9 correctness bug** (4-agent convergence): pre-fix
+  `ChunkHolderManager` and `ChunkTaskScheduler` defined
+  `onRegionMerged(RegionId, RegionId)` / `onRegionSplit(RegionId,
+  RegionId, Predicate)` methods that never fired — the
+  `RegionListener` interface requires `Region`-typed signatures. Fix:
+  both classes now `implements RegionListener` with the correct
+  signatures (existing methods retained as internal delegates); wired
+  into `MultiThreadedSchedulerHost.regionizerFor` alongside the
+  existing scheduler + taskQueue listeners. Every merge/split now
+  correctly folds per-region tickets and holder ownership.
+- **Bridge drops pre-Load transitions** (3-agent convergence):
+  Vanilla's initial `updateChunkScheduling` fires BEFORE
+  `ChunkEvent.Load` creates the region. Fix: seed shadow holder at
+  BORDER on Load via new `ChunkHolderManagerBridge.onChunkLoaded`.
+- **Bridge leaks holders forever**: no cleanup on INACCESSIBLE
+  transitions or unload. Fix: bridge drops holder when
+  `newLevel > 33`; new `onChunkUnloaded` handler symmetric with
+  Load.
+- **O(N × K) per-boot reroute** (2-agent convergence):
+  `RegionizedTaskQueue.orphaned` was a flat queue scanned in full on
+  every chunk load. Fix: partitioned into
+  `ConcurrentMap<OrphanBucket, Queue>` keyed by section, new
+  `rerouteAtChunk(world, x, z)` touches only the matching bucket.
+- **Always-green watchdog test** (2-agent convergence):
+  `exitAfterThrowClearsStateWithoutFiring` passed regardless of
+  behavior under `warnMs=0`. Split into two proper phase assertions.
+- **`RegionizedData` threw in production**: violated CLAUDE.md rule 5.
+  Fix: gate throw on `DomainAssertions.enabled()`, degrade to
+  warn+probe otherwise.
+- **Auto-creating lookups leaked maps on typos**: added
+  `chunkManagerForOrNull` and wired into observability paths.
+- **`PhasedRegionTickBody` had no per-phase exception isolation**:
+  fixed with try/catch inside phase iteration.
+- **`ServerDomains.uninstall` was public without `@ApiStatus.Internal`**:
+  annotated.
+- **Test-quality fixes**: `mcaCorruptSectorOffsetDoesNotCrash` used
+  byte pattern that didn't trigger the wrap it guarded against;
+  `shutdownUnbindsOwnershipEnforcerBindings` only asserted the
+  tick-thread half of the unbind.
+
+Deferred (require load-bearing scheduler changes): `RegionizedData`
+merger race, `queueChunkTask` merge race, `splitIfDisconnected` empty
+window, `ServerLifecycleHooks` `IllegalStateException` dedup — all
+added to the "Known deferred races" section above.
 
 ## M10 — Entity Migration + Networking
 - Entity#teleportAsync binds to EntityMigrationCoordinator
