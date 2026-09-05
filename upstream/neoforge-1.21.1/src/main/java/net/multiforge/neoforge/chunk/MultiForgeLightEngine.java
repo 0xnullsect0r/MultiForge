@@ -1,0 +1,340 @@
+/*
+ * MultiForge — Proprietary. Copyright (c) 2026 MultiForge authors.
+ * All rights reserved. See LICENSE at the repository root.
+ */
+package net.multiforge.neoforge.chunk;
+
+import java.util.Objects;
+import java.util.concurrent.CompletableFuture;
+import javax.annotation.Nullable;
+import net.minecraft.core.BlockPos;
+import net.minecraft.core.SectionPos;
+import net.minecraft.server.level.ChunkMap;
+import net.minecraft.server.level.ChunkTaskPriorityQueueSorter;
+import net.minecraft.server.level.ThreadedLevelLightEngine;
+import net.minecraft.util.thread.ProcessorHandle;
+import net.minecraft.util.thread.ProcessorMailbox;
+import net.minecraft.world.level.ChunkPos;
+import net.minecraft.world.level.LightLayer;
+import net.minecraft.world.level.chunk.ChunkAccess;
+import net.minecraft.world.level.chunk.DataLayer;
+import net.minecraft.world.level.chunk.LevelChunkSection;
+import net.minecraft.world.level.chunk.LightChunkGetter;
+import net.multiforge.api.world.WorldRef;
+import net.multiforge.runtime.region.RegionizedTaskQueue;
+import net.multiforge.runtime.scheduler.MultiForgeRegionizedRuntime;
+import net.multiforge.runtime.scheduler.MultiThreadedSchedulerHost;
+
+/**
+ * M9 Phase 4 task 4.5b — fork facade replacing the single-mailbox
+ * {@link ThreadedLevelLightEngine} with per-region light propagation
+ * routed through {@link RegionizedTaskQueue}. Design frozen at
+ * {@code docs/design/multiforge-lightengine.md}.
+ *
+ * <p>Every mutating call (checkBlock, updateSectionStatus,
+ * propagateLightSources, setLightEnabled, queueSectionData, retainData,
+ * initializeLight, lightChunk, updateChunkStatus) is queued as a chunk
+ * task on the target chunk's owning region worker via
+ * {@link RegionizedTaskQueue#queueChunkTask(WorldRef, int, int, Runnable)}.
+ * The task body invokes the corresponding {@code super} method — so
+ * block/sky storage updates happen in the region worker's serial
+ * context, matching Vanilla's per-chunk mailbox invariant. Reads (see
+ * {@code LevelLightEngine#getRawBrightness}, {@code getLightData} via
+ * {@link LightChunkGetter}, {@code getBlockLight} / {@code getSkyLight})
+ * are inherited verbatim — the superclass storage
+ * ({@code LayerLightSectionStorage} + block/sky engines) is publish-once
+ * and safe from any thread.
+ *
+ * <p>Cross-region light propagation is handled by design §6: when a
+ * region worker running {@code super.checkBlock} triggers a neighbour
+ * update that lands back in this override for a chunk in a different
+ * region, {@link RegionizedTaskQueue#queueChunkTask} resolves the
+ * neighbour's owning region under the regionizer read lock and hops the
+ * task onto that region's inbox. Per-chunk light updates are FIFO
+ * within a region; across regions there is no total order, but
+ * {@code BlockLightEngine.checkNeighborsAfterUpdate} is idempotent per
+ * position — no correctness issue.
+ *
+ * <p>The Vanilla super's mailbox / sorter fields
+ * ({@code taskMailbox}, {@code sorterMailbox}, {@code lightTasks},
+ * {@code scheduled}) are inherited but never used by this class. The
+ * constructor forwards a pair of {@linkplain #NO_OP_TASK_MAILBOX no-op
+ * handles} so reflective mods that probe those fields resolve without
+ * NPE. {@link #runLightUpdates()} is a NO-OP — Phase 5 (M11) wires
+ * per-region drain from
+ * {@code PhasedRegionTickBody.Phase.REGION_EVENTS}, driven off a region
+ * worker rather than the caller thread.
+ *
+ * <p><b>Boundary with Phase 4 task 4.5c:</b> this task ({@code 4.5b})
+ * creates the facade only. Task 4.5c will patch Vanilla
+ * {@link net.minecraft.server.level.ChunkMap ChunkMap} to construct
+ * {@code MultiForgeLightEngine} in place of {@code new
+ * ThreadedLevelLightEngine(...)} and patch
+ * {@link ThreadedLevelLightEngine} to route {@code super.<mutator>}
+ * calls inline rather than through the (no-op) sorter mailbox — closing
+ * the invocation-site loop so the delegated
+ * {@code super.checkBlock(...)} inside each region task body actually
+ * propagates light. Until 4.5c lands, this class is compile-clean but
+ * the runtime path is inert; no Vanilla behaviour changes.
+ *
+ * <p>Constructor signature diverges from Vanilla's 5-arg shape (the
+ * mailbox+sorter slots are replaced by
+ * {@link MultiThreadedSchedulerHost} + {@link WorldRef}). Design §3
+ * mandates the swap so the routing target is bound at construction
+ * rather than resolved lazily on every call; task 4.5c's ChunkMap
+ * patch will pass {@code MultiForgeRegionizedRuntime.current()} and
+ * {@code RegionizedTickCoordinator.asWorldRef(this.level)}. The super
+ * call still uses the Vanilla 5-arg shape with no-op mailbox handles,
+ * preserving reflective-mod compatibility.
+ */
+public final class MultiForgeLightEngine extends ThreadedLevelLightEngine {
+
+    /**
+     * No-op mailbox handed to super so the inherited {@code taskMailbox}
+     * field resolves for any reflective mod that probes it. The
+     * executor swallows every {@code Runnable} submitted; we never
+     * enqueue onto this mailbox from this class.
+     */
+    private static final ProcessorMailbox<Runnable> NO_OP_TASK_MAILBOX =
+            ProcessorMailbox.create(r -> {}, "multiforge-light-noop-mailbox");
+
+    /**
+     * No-op sorter handle handed to super so the inherited
+     * {@code sorterMailbox} field resolves for reflective mods. Every
+     * {@code tell(msg)} drops the message — this class never enqueues
+     * onto the sorter path.
+     */
+    private static final ProcessorHandle<ChunkTaskPriorityQueueSorter.Message<Runnable>> NO_OP_SORTER =
+            ProcessorHandle.of("multiforge-light-noop-sorter", msg -> {});
+
+    /**
+     * Nullable — resolved at construction from
+     * {@link MultiForgeRegionizedRuntime#current()} when possible.
+     * When {@code null} (bootstrap / unit test without an installed
+     * runtime), every mutating override falls back to inline invocation
+     * of {@code super}, preserving Vanilla behaviour until the runtime
+     * comes up.
+     */
+    @Nullable
+    private final MultiThreadedSchedulerHost host;
+
+    private final WorldRef worldRef;
+
+    public MultiForgeLightEngine(
+            LightChunkGetter lightChunkGetter,
+            ChunkMap chunkMap,
+            boolean skyLight,
+            @Nullable MultiThreadedSchedulerHost host,
+            WorldRef worldRef) {
+        super(lightChunkGetter, chunkMap, skyLight, NO_OP_TASK_MAILBOX, NO_OP_SORTER);
+        this.host = host;
+        this.worldRef = Objects.requireNonNull(worldRef, "worldRef");
+    }
+
+    // -----------------------------------------------------------------
+    // Delegation helpers
+    // -----------------------------------------------------------------
+
+    /**
+     * Lazy host resolution: prefer the reference bound at construction,
+     * otherwise fall back to
+     * {@link MultiForgeRegionizedRuntime#current()} so a runtime that
+     * came up after this engine was built is still picked up. Returns
+     * {@code null} only during bootstrap before the runtime installs
+     * (or in unit tests without a runtime), in which case callers run
+     * the delegated body inline as a Vanilla-parity fallback.
+     */
+    @Nullable
+    private MultiThreadedSchedulerHost currentHost() {
+        return host != null ? host : MultiForgeRegionizedRuntime.current();
+    }
+
+    /**
+     * Route {@code task} to the region owning {@code (chunkX, chunkZ)}
+     * in this engine's world. Falls back to inline execution when the
+     * runtime is not yet installed (bootstrap) — the caller's context
+     * is then equivalent to Vanilla's single-mailbox thread and no
+     * cross-region hazard can exist because no regions exist.
+     */
+    private void routeChunkTask(int chunkX, int chunkZ, Runnable task) {
+        MultiThreadedSchedulerHost h = currentHost();
+        if (h == null) {
+            // Bootstrap: no runtime, no regions — behave like Vanilla.
+            task.run();
+            return;
+        }
+        h.taskQueue().queueChunkTask(worldRef, chunkX, chunkZ, task);
+    }
+
+    // -----------------------------------------------------------------
+    // Mutating overrides — design §4
+    // -----------------------------------------------------------------
+
+    /** Design §4.1 — route per-block light-update onto the owning region. */
+    @Override
+    public void checkBlock(BlockPos pos) {
+        BlockPos immutable = pos.immutable();
+        int chunkX = SectionPos.blockToSectionCoord(immutable.getX());
+        int chunkZ = SectionPos.blockToSectionCoord(immutable.getZ());
+        routeChunkTask(chunkX, chunkZ, () -> super.checkBlock(immutable));
+    }
+
+    /** Design §4.2 — route section-status update onto the owning region. */
+    @Override
+    public void updateSectionStatus(SectionPos pos, boolean isEmpty) {
+        routeChunkTask(pos.x(), pos.z(), () -> super.updateSectionStatus(pos, isEmpty));
+    }
+
+    /** Design §4.3 — route light-source propagation onto the owning region. */
+    @Override
+    public void propagateLightSources(ChunkPos pos) {
+        routeChunkTask(pos.x, pos.z, () -> super.propagateLightSources(pos));
+    }
+
+    /** Design §4.4 — route light-enable toggle onto the owning region. */
+    @Override
+    public void setLightEnabled(ChunkPos pos, boolean enabled) {
+        routeChunkTask(pos.x, pos.z, () -> super.setLightEnabled(pos, enabled));
+    }
+
+    /** Design §4.5 — route section-data replacement onto the owning region. */
+    @Override
+    public void queueSectionData(LightLayer layer, SectionPos pos, @Nullable DataLayer data) {
+        routeChunkTask(pos.x(), pos.z(), () -> super.queueSectionData(layer, pos, data));
+    }
+
+    /** Design §4.6 — route retain-data toggle onto the owning region. */
+    @Override
+    public void retainData(ChunkPos pos, boolean retain) {
+        routeChunkTask(pos.x, pos.z, () -> super.retainData(pos, retain));
+    }
+
+    /**
+     * Design §4.7 — collapse Vanilla's PRE/POST split into a single
+     * region-worker task. Under Vanilla the PRE pass seeds
+     * {@code updateSectionStatus} for every non-air section and the POST
+     * pass follows with {@code setLightEnabled} + {@code retainData} on a
+     * batch-flush boundary. Under MultiForge the region worker is
+     * already single-threaded per chunk, so no batch-flush interleave
+     * exists and both passes run inline in FIFO order on the owning
+     * region.
+     */
+    @Override
+    public CompletableFuture<ChunkAccess> initializeLight(ChunkAccess chunk, boolean lit) {
+        ChunkPos pos = chunk.getPos();
+        CompletableFuture<ChunkAccess> future = new CompletableFuture<>();
+        routeChunkTask(pos.x, pos.z, () -> {
+            try {
+                LevelChunkSection[] sections = chunk.getSections();
+                int sectionCount = chunk.getSectionsCount();
+                for (int i = 0; i < sectionCount; i++) {
+                    LevelChunkSection section = sections[i];
+                    if (!section.hasOnlyAir()) {
+                        int sy = this.levelHeightAccessor.getSectionYFromSectionIndex(i);
+                        super.updateSectionStatus(SectionPos.of(pos, sy), false);
+                    }
+                }
+                super.setLightEnabled(pos, lit);
+                super.retainData(pos, false);
+                future.complete(chunk);
+            } catch (Throwable t) {
+                future.completeExceptionally(t);
+            }
+        });
+        return future;
+    }
+
+    /**
+     * Design §4.8 — clear {@code setLightCorrect} on the caller thread
+     * (matches Vanilla; some callers rely on the flag flipping before
+     * this method returns), then queue the propagate + flip-back onto
+     * the owning region worker.
+     */
+    @Override
+    public CompletableFuture<ChunkAccess> lightChunk(ChunkAccess chunk, boolean lit) {
+        ChunkPos pos = chunk.getPos();
+        chunk.setLightCorrect(false);
+        CompletableFuture<ChunkAccess> future = new CompletableFuture<>();
+        routeChunkTask(pos.x, pos.z, () -> {
+            try {
+                if (!lit) {
+                    super.propagateLightSources(pos);
+                }
+                chunk.setLightCorrect(true);
+                future.complete(chunk);
+            } catch (Throwable t) {
+                future.completeExceptionally(t);
+            }
+        });
+        return future;
+    }
+
+    /**
+     * Design §4.9 — the multi-step clear-and-reset dance runs as one
+     * task on the owning region worker so no other light task on that
+     * chunk can interleave a partial state.
+     */
+    @Override
+    protected void updateChunkStatus(ChunkPos pos) {
+        routeChunkTask(pos.x, pos.z, () -> {
+            super.retainData(pos, false);
+            super.setLightEnabled(pos, false);
+            int minSection = this.getMinLightSection();
+            int maxSection = this.getMaxLightSection();
+            for (int y = minSection; y < maxSection; y++) {
+                super.queueSectionData(LightLayer.BLOCK, SectionPos.of(pos, y), null);
+                super.queueSectionData(LightLayer.SKY, SectionPos.of(pos, y), null);
+            }
+            int minWorldSection = this.levelHeightAccessor.getMinSection();
+            int maxWorldSection = this.levelHeightAccessor.getMaxSection();
+            for (int y = minWorldSection; y < maxWorldSection; y++) {
+                super.updateSectionStatus(SectionPos.of(pos, y), true);
+            }
+        });
+    }
+
+    /**
+     * Design §4.10 / task 4.5b — NO-OP. Vanilla throws
+     * {@code UnsupportedOperationException} to make caller-thread drain
+     * an obvious bug; MultiForge instead relies on Phase 5 (M11) wiring
+     * per-region drain from
+     * {@code PhasedRegionTickBody.Phase.REGION_EVENTS} in the tick
+     * pipeline — that call path always lands on a region worker, so
+     * "the caller thread is wrong" is not a class of bug we can catch
+     * here. Returning zero indicates "no light propagated by this call"
+     * which is truthful for a NO-OP.
+     */
+    @Override
+    public int runLightUpdates() {
+        // Phase 5 (M11) will wire real per-region drain in tick phase 5
+        // (REGION_EVENTS). See docs/design/multiforge-lightengine.md §4.10.
+        return 0;
+    }
+
+    /**
+     * Design §4.11 — NO-OP. Under Vanilla,
+     * {@code tryScheduleUpdate} posts the batch drain onto
+     * {@code taskMailbox}; under MultiForge each region task runs
+     * inline on its worker, so there is nothing to schedule.
+     */
+    @Override
+    public void tryScheduleUpdate() {
+        // Intentionally empty — Phase 5 wires per-region drain instead.
+    }
+
+    /**
+     * Design §4.12 — barrier for chunk-send ordering. Because
+     * {@link RegionizedTaskQueue#queueChunkTask} is FIFO within a region,
+     * queuing an empty completion task after every prior light task on
+     * {@code (chunkX, chunkZ)} guarantees the returned future completes
+     * only once every previously queued light task on that chunk has
+     * finished — preserving Vanilla's happens-before contract for
+     * {@code PlayerChunkSender}.
+     */
+    @Override
+    public CompletableFuture<?> waitForPendingTasks(int chunkX, int chunkZ) {
+        CompletableFuture<Void> future = new CompletableFuture<>();
+        routeChunkTask(chunkX, chunkZ, () -> future.complete(null));
+        return future;
+    }
+}
