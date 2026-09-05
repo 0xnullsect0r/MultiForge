@@ -88,6 +88,7 @@ import net.multiforge.neoforge.RegionizedTickCoordinator;
 import net.multiforge.runtime.chunk.ChunkHolderManager;
 import net.multiforge.runtime.chunk.ChunkTaskPriority;
 import net.multiforge.runtime.chunk.ChunkTaskScheduler;
+import net.multiforge.runtime.chunk.InstanceRegistry;
 import net.multiforge.runtime.chunk.NewChunkHolder;
 import net.multiforge.runtime.chunk.Ticket;
 import net.multiforge.runtime.chunk.TicketType;
@@ -188,26 +189,29 @@ public final class MultiForgeChunkMap extends ChunkStorage
      * observability seams patched into Vanilla {@link ChunkMap} can locate
      * the facade for a given level without a runtime-host lookup. Populated
      * from the ctor via {@link #register(ServerLevel, MultiForgeChunkMap)};
-     * evicted on {@link #unregister(ServerLevel)}. Backed by a synchronized
-     * {@link java.util.WeakHashMap} so a level GC'd without an explicit
-     * unregister does not leak. Any thread.
+     * evicted on {@link #unregister(ServerLevel)}. Backed by
+     * {@link InstanceRegistry#weak()} — weak keys mean a level GC'd
+     * without an explicit unregister does not leak; the synchronized
+     * backing map keeps register/unregister/of safe from any thread.
+     *
+     * <p>The registry helper lives in the MC-free runtime module so its
+     * pure logic can be unit-tested (see {@code InstanceRegistryTest}).
      */
-    private static final Map<ServerLevel, MultiForgeChunkMap> INSTANCES =
-            Collections.synchronizedMap(new java.util.WeakHashMap<>());
+    private static final InstanceRegistry<ServerLevel, MultiForgeChunkMap> INSTANCES = InstanceRegistry.weak();
 
     /** Register a facade for a level. Idempotent. Any thread. */
     public static void register(ServerLevel level, MultiForgeChunkMap map) {
-        INSTANCES.put(level, map);
+        INSTANCES.register(level, map);
     }
 
     /** Drop the facade registration for a level. Idempotent. Any thread. */
     public static void unregister(ServerLevel level) {
-        INSTANCES.remove(level);
+        INSTANCES.unregister(level);
     }
 
     /** Look up the facade for a level. Any thread. */
     public static java.util.Optional<MultiForgeChunkMap> of(ServerLevel level) {
-        return java.util.Optional.ofNullable(INSTANCES.get(level));
+        return INSTANCES.of(level);
     }
 
     // === §7 fields carried over unchanged from Vanilla ChunkMap ===
