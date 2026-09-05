@@ -1,0 +1,18 @@
+--- a/net/minecraft/server/level/GenerationChunkHolder.java
++++ b/net/minecraft/server/level/GenerationChunkHolder.java
+@@ -58,6 +58,7 @@
+     }
+
+     CompletableFuture<ChunkResult<ChunkAccess>> applyStep(ChunkStep p_347491_, GeneratingChunkMap p_347490_, StaticCache2D<GenerationChunkHolder> p_347657_) {
++        net.multiforge.neoforge.chunk.GenerationBridge.observeStepStart(this, p_347491_);
+         if (this.isStatusDisallowed(p_347491_.targetStatus())) {
+             return UNLOADED_CHUNK_FUTURE;
+         } else {
+@@ -69,6 +70,7 @@
+                     this.completeFuture(p_347491_.targetStatus(), p_347506_);
+                 }
+
++                net.multiforge.neoforge.chunk.GenerationBridge.observeStepComplete(this, p_347491_, p_347622_ == null);
+                 return ChunkResult.of(p_347506_);
+             }) : this.getOrCreateFuture(p_347491_.targetStatus());
+         }
