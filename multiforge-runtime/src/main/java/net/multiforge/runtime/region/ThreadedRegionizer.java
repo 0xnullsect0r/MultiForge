@@ -192,20 +192,77 @@ public final class ThreadedRegionizer {
         }
     }
 
-    /** Force a merge of {@code other} into {@code target}. Package-private for {@link Region} tests. */
+    /**
+     * Force a merge of {@code other} into {@code target}. Package-private for
+     * {@link Region} tests.
+     *
+     * <p><b>Quiescence guarantee (Phase 1 task 1.1).</b> Before firing merge
+     * listeners, {@code target} is transitioned from {@link RegionState#READY}
+     * to {@link RegionState#FOLDING} via {@link Region#tryMarkFolding()}. If
+     * {@code target} is currently {@link RegionState#TICKING}, this thread
+     * spin-waits (via {@link Thread#onSpinWait()}) until the tick completes
+     * and the state returns to READY. Once in FOLDING, {@link
+     * Region#tryMarkTicking()} refuses so no worker can start a new tick on
+     * {@code target} while listeners fold side state into its slots.
+     * After section transfer, {@code target} is transitioned back to READY
+     * via {@link Region#markReadyFromFolding()}.
+     *
+     * <p>Callers holding the regionizer write lock are already serialised
+     * against other structural mutations; the spin here bounds only on
+     * {@code target}'s remaining tick time (one tick period at most).
+     * A {@code Condition.await} approach was rejected because the caller
+     * may itself be a region worker (CLAUDE.md rule 4: no blocking calls
+     * on a region worker thread) and because we already hold the write lock
+     * which would deadlock any wake path.
+     */
     void mergeInto(Region target, Region other) {
         if (target == other) return;
-        // Fire the pre-death listener notification BEFORE touching state so
-        // listeners can fold side state while both regions are still queryable
-        // (chunks.md:60-72). After fold, sections migrate and other dies.
-        fireRegionsMerging(target, other);
-        Set<SectionPos> drained = other.drainSections();
-        for (SectionPos s : drained) {
-            target.addSection(s);
-            sectionToRegion.put(s, target);
+
+        // Quiesce target: it must not be TICKING while merge listeners fold
+        // dying region's state into surviving region's slot values. Bounded
+        // spin — write lock holder is already serialised against structural
+        // mutations, so the only wait is target finishing its in-flight tick.
+        boolean folding = false;
+        while (true) {
+            if (target.tryMarkFolding()) {
+                folding = true;
+                break;
+            }
+            RegionState ts = target.state();
+            if (ts == RegionState.DEAD) {
+                // Target died out from under us (shouldn't happen under the write lock,
+                // but defensive). Nothing to merge into.
+                return;
+            }
+            if (ts == RegionState.TRANSIENT) {
+                // Not yet published to the scheduler — no worker can tick it,
+                // so no quiesce is needed. Proceed without a state transition;
+                // markReady() at end of addChunk() will still see TRANSIENT.
+                break;
+            }
+            // ts is TICKING (worker is mid-tick) or FOLDING (should be unreachable
+            // under the write lock, but tolerate). Spin until it returns to READY.
+            Thread.onSpinWait();
         }
-        other.markDead();
-        fireRegionDied(other);
+
+        try {
+            // Fire the pre-death listener notification BEFORE touching state so
+            // listeners can fold side state while both regions are still queryable
+            // (chunks.md:60-72). After fold, sections migrate and other dies.
+            // Listeners are guaranteed target is non-TICKING per the quiesce above.
+            fireRegionsMerging(target, other);
+            Set<SectionPos> drained = other.drainSections();
+            for (SectionPos s : drained) {
+                target.addSection(s);
+                sectionToRegion.put(s, target);
+            }
+            other.markDead();
+            fireRegionDied(other);
+        } finally {
+            if (folding) {
+                target.markReadyFromFolding();
+            }
+        }
     }
 
     private Set<Region> neighbouringRegions(SectionPos section) {

@@ -9,6 +9,9 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import net.multiforge.api.world.ChunkPos;
 import net.multiforge.api.world.WorldRef;
@@ -177,6 +180,118 @@ class RegionizedDataTest {
         });
         assertThat(data.peek(a)).containsExactly("g-touch-a");
         assertThat(data.peek(b)).containsExactly("g-touch-b");
+    }
+
+    @Test
+    void mergeSpinWaitsForSurvivingRegionToStopTicking() throws Exception {
+        // Phase 1 task 1.1 quiescence contract: ThreadedRegionizer.mergeInto
+        // must not fire onRegionsMerging while surviving is TICKING. We stage
+        // the merge on the main thread while a worker thread holds surviving
+        // in the TICKING state; the merge call must block (spin) until the
+        // worker releases TICKING, then proceed.
+        ThreadedRegionizer regionizer = new ThreadedRegionizer(WORLD, 0);
+        RegionizedData<List<String>> data = RegionizedData.of(ArrayList::new, (t, s) -> t.addAll(s));
+        regionizer.addListener(data);
+
+        // Build two adjacent regions the same way as mergeFoldsSourceIntoTarget:
+        // left at (0,0), right at (3,0), then bridge with (1,0) then (2,0).
+        Region left = regionizer.addChunk(new ChunkPos(0, 0));
+        Region right = regionizer.addChunk(new ChunkPos(3, 0));
+        OwnerToken.runAs(OwnerToken.forRegion(left.id().value()), () -> data.getOrCreate(left)
+                .add("L"));
+        OwnerToken.runAs(OwnerToken.forRegion(right.id().value()), () -> data.getOrCreate(right)
+                .add("R"));
+        regionizer.addChunk(new ChunkPos(1, 0));
+
+        // Pin the anchor (the larger of left+bridged-1 vs. right) in TICKING on a worker thread.
+        // pickAnchor picks the larger neighbour; after (1,0) is bridged into `left`, `left` has
+        // sections {(0,0),(1,0)} while `right` has {(3,0)}. So the merge triggered by (2,0)
+        // will pick `left` as surviving. We pin `left` in TICKING.
+        Region survivingCandidate = regionizer.regionAtChunk(0, 0);
+        assertThat(survivingCandidate.tryMarkTicking()).isTrue();
+        assertThat(survivingCandidate.state()).isEqualTo(RegionState.TICKING);
+
+        CountDownLatch mergeStarted = new CountDownLatch(1);
+        AtomicBoolean mergeReturned = new AtomicBoolean(false);
+        Thread merger = new Thread(
+                () -> {
+                    mergeStarted.countDown();
+                    regionizer.addChunk(new ChunkPos(2, 0)); // triggers left+right merge
+                    mergeReturned.set(true);
+                },
+                "test-merger");
+        merger.start();
+        assertThat(mergeStarted.await(2, TimeUnit.SECONDS)).isTrue();
+
+        // Give the merger thread time to reach the mergeInto spin. It must NOT complete
+        // while surviving is TICKING — the spin holds it.
+        Thread.sleep(100);
+        assertThat(mergeReturned.get())
+                .as("merge must spin-wait while surviving is TICKING")
+                .isFalse();
+        // Slot must not have been touched by the merger yet — surviving still owns its READY value.
+        assertThat(data.peek(survivingCandidate)).containsExactly("L");
+
+        // Release: mark not-ticking → merger's spin observes READY → tryMarkFolding succeeds → fold runs.
+        survivingCandidate.markNotTicking();
+        merger.join(5000);
+        assertThat(mergeReturned.get()).isTrue();
+
+        // Post-merge: surviving is back to READY (never left as FOLDING), and the fold happened.
+        Region survivor = regionizer.regionAtChunk(0, 0);
+        assertThat(survivor.state()).isEqualTo(RegionState.READY);
+        assertThat(data.peek(survivor)).contains("L", "R");
+    }
+
+    @Test
+    void mergeRunsInlineWhenSurvivingIsReady() {
+        // Under normal (non-TICKING) conditions the merge fold happens
+        // synchronously as before — the FOLDING quiesce is a no-op-fast-path
+        // when surviving is READY (single successful CAS, no spin).
+        ThreadedRegionizer regionizer = new ThreadedRegionizer(WORLD, 0);
+        RegionizedData<List<String>> data = RegionizedData.of(ArrayList::new, (t, s) -> t.addAll(s));
+        regionizer.addListener(data);
+
+        Region left = regionizer.addChunk(new ChunkPos(0, 0));
+        Region right = regionizer.addChunk(new ChunkPos(3, 0));
+        OwnerToken.runAs(OwnerToken.forRegion(left.id().value()), () -> data.getOrCreate(left)
+                .add("L"));
+        OwnerToken.runAs(OwnerToken.forRegion(right.id().value()), () -> data.getOrCreate(right)
+                .add("R"));
+        regionizer.addChunk(new ChunkPos(1, 0));
+
+        // Both left and right are READY. Trigger the merge; it must complete synchronously.
+        long start = System.nanoTime();
+        regionizer.addChunk(new ChunkPos(2, 0));
+        long elapsedMs = (System.nanoTime() - start) / 1_000_000L;
+
+        Region survivor = regionizer.regionAtChunk(0, 0);
+        assertThat(survivor.state()).isEqualTo(RegionState.READY);
+        assertThat(data.peek(survivor)).contains("L", "R");
+        // Sanity check that the "no wait" path completed fast (well under any realistic tick).
+        assertThat(elapsedMs).isLessThan(500L);
+    }
+
+    @Test
+    void tryMarkTickingRefusesFoldingState() {
+        // Direct unit check on the new state transitions: a region in FOLDING
+        // must not be markable as TICKING (so a worker cannot start a tick
+        // while the regionizer is folding merge listener state into it).
+        ThreadedRegionizer regionizer = new ThreadedRegionizer(WORLD, 0);
+        Region r = regionizer.addChunk(new ChunkPos(0, 0));
+        assertThat(r.state()).isEqualTo(RegionState.READY);
+
+        assertThat(r.tryMarkFolding()).isTrue();
+        assertThat(r.state()).isEqualTo(RegionState.FOLDING);
+        assertThat(r.tryMarkTicking()).as("tryMarkTicking must refuse FOLDING").isFalse();
+        assertThat(r.state()).isEqualTo(RegionState.FOLDING);
+
+        assertThat(r.markReadyFromFolding()).isTrue();
+        assertThat(r.state()).isEqualTo(RegionState.READY);
+        // Now that we're back to READY, tryMarkTicking works normally.
+        assertThat(r.tryMarkTicking()).isTrue();
+        assertThat(r.state()).isEqualTo(RegionState.TICKING);
+        r.markNotTicking();
     }
 
     @Test

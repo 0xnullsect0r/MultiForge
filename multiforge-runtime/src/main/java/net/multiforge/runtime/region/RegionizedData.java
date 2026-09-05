@@ -164,17 +164,17 @@ public final class RegionizedData<T> implements RegionListener {
     public void onRegionsMerging(Region surviving, Region dying) {
         T sourceValue = slots.remove(dying.id());
         if (sourceValue == null) return;
-        // NOTE (documented race, unfixed as of session-2 revert): if the
-        // surviving region is currently TICKING on a worker, this merger
-        // callback mutates the surviving region's slot value from the
-        // caller thread while the tick body may be iterating it (CME on
-        // a plain collection, silent lost updates on a hash map). A prior
-        // fix deferred the fold via Region.postTickActions but had a
-        // TOCTOU + lost-fold-on-death race and was reverted; proper fix
-        // requires quiescing surviving before invoking merge listeners
-        // (Folia's ThreadedRegionizer model). Deferred to a design
-        // session. Safe today because no production RegionTickBody
-        // (per M8 sub-step 4) is bound yet.
+        // Phase 1 task 1.1: ThreadedRegionizer.mergeInto transitions
+        // {@code surviving} from READY to FOLDING before firing this
+        // listener, and Region.tryMarkTicking() refuses the FOLDING
+        // state. So while this callback runs, no worker can be mid-tick
+        // on {@code surviving}, and the merger's mutation of the
+        // surviving slot value is race-free. See
+        // ThreadedRegionizer.mergeInto javadoc for the quiescence
+        // contract. (The prior attempt to defer the fold via
+        // Region.postTickActions had a TOCTOU + lost-fold-on-death
+        // race and was reverted; quiesce-before-fire is the correct
+        // Folia-parity shape.)
         T targetValue = slots.computeIfAbsent(surviving.id(), k -> factory.get());
         merger.accept(targetValue, sourceValue);
     }
