@@ -536,6 +536,59 @@ Exit gate for the milestone: deterministic-mode regression on real
 region-tick dispatch; no blocking calls on a region worker thread
 (verified via strict-mode regression run).
 
+### Known deferred races (documented, unfixed)
+
+Two rounds of /67 review surfaced concurrency bugs that admit no
+correct local fix without larger design work. Each is documented
+inline in the affected class's javadoc; enumerated here for
+future-session visibility. All are safe TODAY (M8 sub-step 4 keeps
+the RegionTickBody a no-op, so no production tick body triggers any
+of these), but each becomes catastrophic the moment sub-step 6b lands
+a real body:
+
+- **Merge-during-tick race** (`RegionizedData.onRegionsMerging`,
+  `ThreadedRegionizer.mergeInto`): merger callbacks run under the
+  regionizer write lock on the caller thread, but the surviving
+  region may be TICKING on a worker at the same time. Fix requires
+  quiescing the surviving region before firing merge listeners
+  (Folia's ThreadedRegionizer model — CAS through a CLOSING state
+  or block-until-not-ticking on the write path). Attempted-and-reverted
+  post-tick-action-queue approach had TOCTOU + lost-fold + slot
+  resurrection bugs.
+- **`queueChunkTask` merge race** (`RegionizedTaskQueue.queueChunkTask`):
+  producer's `ownerLookup → inboxFor(owner).add(task)` is lock-free vs.
+  the regionizer's merge/death path. A merge landing between the two
+  operations can drop the task via the merger's `inboxes.remove(dying)`.
+  Fix requires taking the regionizer's read lock around the enqueue.
+  Attempted-and-reverted post-add-recheck approach had a
+  double-execute race.
+- **`WorldGenLevel`-guard bypass** (`multiforge-patches/01-ownership/
+  LevelAccessor.java.patch`): a prior fix attempted to skip the
+  ownership guard for worldgen calls via `this instanceof WorldGenLevel`
+  — regressed the guard for ServerLevel too, because
+  `ServerLevel implements WorldGenLevel`. Reverted. Proper fix
+  discriminates on `WorldGenRegion` specifically (or the actual
+  non-server worldgen carrier), not the interface.
+- **`checkOnly` semantics for return-value patches** (attempted for
+  Level.setBlock / ServerLevel.addFreshEntity): trading dishonest
+  sentinel return for real concurrent corruption is not net-safer.
+  Currently patches keep the reroute+return-false shape from M7 —
+  callers see false (dishonest, but callers branching on it don't
+  cause races), rerouted mutation runs later on the main executor.
+  Proper fix requires a synchronous-round-trip mechanism that does
+  not block on a region worker thread.
+- **`WorldDiff` MCA location table not stripped**: sector-0 (bytes
+  0-4095) holds per-chunk `(sectorOffset, sectorCount)` which vanilla
+  writes non-deterministically across identical-seed reruns when
+  chunks grow or defrag. Only the timestamp table (bytes 4096-8191)
+  is currently zeroed. Sub-step 8b's semantic NBT diff will supersede
+  this bespoke handling.
+- **`OwnershipEnforcer.unbindTickThreadAndRerouteTarget` race**:
+  narrows-not-closes the executor race — an off-thread mutation
+  observing `tickThread` between the null-write and the reroute-target
+  swap can still hit a dead server. Fix requires an atomic-swap
+  handoff.
+
 ## M9 — Chunk System Port
 - Moonrise-equivalent port: binds already-built
   NewChunkHolder/ChunkHolderManager to real
