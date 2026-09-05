@@ -580,11 +580,12 @@ a real body:
   slot-id order. Stable across timestamp + sector-reorder variation;
   still catches payload and presence differences. Supersedes the
   prior byte-range stripping.
-- **`OwnershipEnforcer.unbindTickThreadAndRerouteTarget` race**:
-  narrows-not-closes the executor race — an off-thread mutation
-  observing `tickThread` between the null-write and the reroute-target
-  swap can still hit a dead server. Fix requires an atomic-swap
-  handoff.
+- ~~**`OwnershipEnforcer.unbindTickThreadAndRerouteTarget` race**~~
+  FIXED (via commit 97ef3f9) — wrapped `server::execute` bind in a
+  lambda that catches `RejectedExecutionException` and logs a
+  rate-limited warn. The fundamental race (cached local reference
+  after volatile swap) is unclosable via any swap protocol, but
+  making the target no-throw makes the race benign.
 
 ## M9 — Chunk System Port
 - Moonrise-equivalent port: binds already-built
