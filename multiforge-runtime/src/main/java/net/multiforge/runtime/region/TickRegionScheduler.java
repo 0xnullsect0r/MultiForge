@@ -4,6 +4,9 @@
  */
 package net.multiforge.runtime.region;
 
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
@@ -111,6 +114,94 @@ public final class TickRegionScheduler implements AutoCloseable, RegionListener 
     public RegionMspt mspt(Region region) {
         RegionState_ s = perRegion.get(region.id());
         return s == null ? null : s.mspt;
+    }
+
+    /**
+     * Deterministic barrier used by
+     * {@code net.multiforge.neoforge.RegionizedTickCoordinator#dispatchLevelTick}
+     * (M8 sub-step 6b — real per-region tick dispatch). Blocks the caller
+     * until every region in {@code regions} that is currently mid-tick
+     * ({@link RegionState#TICKING}) has returned to {@link RegionState#READY},
+     * or the deadline expires — whichever comes first.
+     *
+     * <p>Semantics: the scheduler already ticks each registered region
+     * autonomously on the worker pool at ~20 TPS. This method does not
+     * <em>drive</em> those ticks — it <em>observes</em> them, giving the
+     * caller a place to safely synchronise before running per-level
+     * global work (weather, time, etc.) that must not race a region
+     * worker mid-tick. Regions not currently ticking are skipped
+     * without waiting.
+     *
+     * <p>The wait uses {@link Thread#onSpinWait()} rather than a
+     * {@link java.util.concurrent.locks.LockSupport#parkNanos parkNanos}
+     * sleep because expected wait times are microseconds — a full tick
+     * body under the no-op body currently bound completes in well under
+     * 1 ms, and even with a real body wired (Phase 5) the barrier is
+     * only invoked once per server tick.
+     *
+     * @param regions the set of regions the caller wishes to synchronise
+     *                against — typically a per-world snapshot of
+     *                {@link ThreadedRegionizer#regions()}. May be empty
+     *                (returns immediately).
+     * @param deadlineNanos how long the caller is willing to wait for a
+     *                      TICKING region to return to READY before
+     *                      marking it as an overrun. Applies once across
+     *                      the whole collection, not per region.
+     * @return a {@link TickAllResult} carrying the total region count and
+     *         the ids of regions that did not complete within the
+     *         deadline. Never {@code null}.
+     */
+    public TickAllResult tickAll(Collection<Region> regions, long deadlineNanos) {
+        Objects.requireNonNull(regions, "regions");
+        if (regions.isEmpty()) return TickAllResult.EMPTY;
+        long deadline = System.nanoTime() + Math.max(0L, deadlineNanos);
+        List<RegionId> overrun = new ArrayList<>();
+        int total = 0;
+        for (Region region : regions) {
+            total++;
+            // Only wait for regions currently mid-tick. READY, TRANSIENT,
+            // FOLDING, DEAD all pass through instantly — the caller is
+            // synchronising with in-flight work, not driving new ticks.
+            while (region.state() == RegionState.TICKING) {
+                if (System.nanoTime() >= deadline) {
+                    overrun.add(region.id());
+                    break;
+                }
+                Thread.onSpinWait();
+            }
+        }
+        return new TickAllResult(total, List.copyOf(overrun));
+    }
+
+    /**
+     * Result of {@link #tickAll(Collection, long)}: how many regions the
+     * caller synchronised against, and the ids of any that did not
+     * complete their in-flight tick within the deadline. The coordinator
+     * uses {@link #allCompleted()} to decide whether to route to the
+     * warn (default) or STRICT-mode throw path.
+     */
+    public static final class TickAllResult {
+        static final TickAllResult EMPTY = new TickAllResult(0, List.of());
+
+        private final int regionCount;
+        private final List<RegionId> overrunRegions;
+
+        public TickAllResult(int regionCount, List<RegionId> overrunRegions) {
+            this.regionCount = regionCount;
+            this.overrunRegions = List.copyOf(overrunRegions);
+        }
+
+        public int regionCount() {
+            return regionCount;
+        }
+
+        public List<RegionId> overrunRegions() {
+            return overrunRegions;
+        }
+
+        public boolean allCompleted() {
+            return overrunRegions.isEmpty();
+        }
     }
 
     @Override
