@@ -1,23 +1,18 @@
 --- a/net/minecraft/world/level/Level.java
 +++ b/net/minecraft/world/level/Level.java
-@@ -214,6 +214,21 @@
+@@ -214,6 +214,16 @@
  
      @Override
      public boolean setBlock(BlockPos p_46605_, BlockState p_46606_, int p_46607_, int p_46608_) {
-+        // MultiForge (multiforge-patches/01-ownership/): reroute+warn if
-+        // called off the owning region/tick thread, instead of mutating
-+        // world state from an arbitrary caller thread. See
-+        // net.multiforge.neoforge.OwnershipGuard and docs/blueprint.md M7.
-+        if (!net.multiforge.neoforge.OwnershipGuard.canMutate("Level.setBlock")) {
-+            final BlockPos multiforge$pos = p_46605_;
-+            final BlockState multiforge$state = p_46606_;
-+            final int multiforge$flags = p_46607_;
-+            final int multiforge$recursionLeft = p_46608_;
-+            net.multiforge.neoforge.OwnershipGuard.reroute(
-+                    "Level.setBlock",
-+                    () -> this.setBlock(multiforge$pos, multiforge$state, multiforge$flags, multiforge$recursionLeft));
-+            return false;
-+        }
++        // MultiForge (multiforge-patches/01-ownership/): detect off-region
++        // callers and log a violation, but do NOT reroute — the caller
++        // depends on a real boolean return, and a rerouted-then-return-false
++        // makes the API lie about whether the mutation happened (see /67
++        // review finding #4: mods interpret false as "not placed" and
++        // fire retry loops, duplication, or send bogus packets while the
++        // rerouted mutation later actually places the block). Fall through
++        // to run inline; STRICT mode still throws.
++        net.multiforge.neoforge.OwnershipGuard.checkOnly("Level.setBlock");
 +
          if (this.isOutsideBuildHeight(p_46605_)) {
              return false;

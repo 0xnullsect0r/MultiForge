@@ -38,4 +38,22 @@ public final class OwnershipGuard {
     public static void reroute(String site, Runnable mutation) {
         OwnershipEnforcer.reroute(site, mutation);
     }
+
+    /**
+     * Same detect-and-log as {@link #canMutate} — bumps the ProbeRegistry
+     * and fires the rate-limited warn if the current caller is off-region
+     * — but always allows the caller to continue with the inline mutation
+     * (except in STRICT mode, where it still throws). Used at patched
+     * call sites that return a value the caller genuinely depends on
+     * (Level.setBlock, ServerLevel.addFreshEntity): rerouting them would
+     * make the sync return value a lie, so we accept the race and log
+     * loudly instead — matching Vanilla's pre-M7 behaviour at these sites
+     * plus observability. See /67 review finding #4.
+     */
+    public static void checkOnly(String site) {
+        // Discard the boolean — the return-value patch sites don't act on it.
+        // canMutate still does the probe bump + violation log for us,
+        // and STRICT mode still throws.
+        OwnershipEnforcer.canMutate(site);
+    }
 }
