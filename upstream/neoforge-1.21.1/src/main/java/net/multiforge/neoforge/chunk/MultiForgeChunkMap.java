@@ -183,6 +183,33 @@ public final class MultiForgeChunkMap extends ChunkStorage
     private static final CompletableFuture<ChunkResult<LevelChunk>> UNLOADED_LEVEL_CHUNK_FUTURE =
             CompletableFuture.completedFuture(ChunkHolder.UNLOADED_LEVEL_CHUNK);
 
+    /**
+     * NEW (Phase 4.1c) — ServerLevel to MultiForgeChunkMap registry so the
+     * observability seams patched into Vanilla {@link ChunkMap} can locate
+     * the facade for a given level without a runtime-host lookup. Populated
+     * from the ctor via {@link #register(ServerLevel, MultiForgeChunkMap)};
+     * evicted on {@link #unregister(ServerLevel)}. Backed by a synchronized
+     * {@link java.util.WeakHashMap} so a level GC'd without an explicit
+     * unregister does not leak. Any thread.
+     */
+    private static final Map<ServerLevel, MultiForgeChunkMap> INSTANCES =
+            Collections.synchronizedMap(new java.util.WeakHashMap<>());
+
+    /** Register a facade for a level. Idempotent. Any thread. */
+    public static void register(ServerLevel level, MultiForgeChunkMap map) {
+        INSTANCES.put(level, map);
+    }
+
+    /** Drop the facade registration for a level. Idempotent. Any thread. */
+    public static void unregister(ServerLevel level) {
+        INSTANCES.remove(level);
+    }
+
+    /** Look up the facade for a level. Any thread. */
+    public static java.util.Optional<MultiForgeChunkMap> of(ServerLevel level) {
+        return java.util.Optional.ofNullable(INSTANCES.get(level));
+    }
+
     // === §7 fields carried over unchanged from Vanilla ChunkMap ===
     final ServerLevel level;
     private final ChunkGenerator generator;
@@ -304,6 +331,12 @@ public final class MultiForgeChunkMap extends ChunkStorage
                 level.getServer(),
                 level);
         this.setServerViewDistance(viewDistance);
+
+        // Phase 4.1c: register this facade so the observability seams
+        // patched into Vanilla ChunkMap can locate it by ServerLevel.
+        // Safe even before the runtime host installs — of(level) is a
+        // pure Map lookup.
+        register(level, this);
 
         // WorldGenContext holds a ProcessorHandle for main-thread hand-off.
         // Under MultiForge the "hand-off" routes into the ChunkTaskScheduler
@@ -1310,6 +1343,59 @@ public final class MultiForgeChunkMap extends ChunkStorage
                     h.getCurrentChunk() != null,
                     h.owningRegion()));
         }
+    }
+
+    // === §3.8 Vanilla-ChunkMap observability seams (Phase 4.1c) ===
+
+    /**
+     * NEW (Phase 4.1c) — Vanilla-ChunkMap patch observer hook: fires when a
+     * player enters or leaves the chunk-tracking window. The facade uses this
+     * to build a parallel watcher-set view; if no facade is registered for
+     * {@code level} this is a diagnostic probe bump plus a Map miss. Never
+     * throws, never blocks. Any thread.
+     */
+    public static void observePlayerStatus(ServerLevel level, ServerPlayer player, boolean added) {
+        net.multiforge.runtime.diagnostics.ProbeRegistry.bump("mfchunkmap.observe.playerStatus");
+        of(level).ifPresent(map -> {
+            // Phase 5.7 wires facade-side per-player tracker updates; the
+            // registered facade is looked up but not yet mutated here.
+        });
+    }
+
+    /**
+     * NEW (Phase 4.1c) — Vanilla-ChunkMap patch observer hook: fires when a
+     * player crosses a chunk-section boundary. Any thread; see
+     * {@link #observePlayerStatus} for the no-facade / probe-only path.
+     */
+    public static void observeMove(ServerLevel level, ServerPlayer player) {
+        net.multiforge.runtime.diagnostics.ProbeRegistry.bump("mfchunkmap.observe.move");
+        of(level).ifPresent(map -> {
+            // Phase 5.7 wires facade-side per-region section-move tracking.
+        });
+    }
+
+    /**
+     * NEW (Phase 4.1c) — Vanilla-ChunkMap patch observer hook: fires when a
+     * chunk is saved. Any thread; see {@link #observePlayerStatus} for the
+     * no-facade / probe-only path.
+     */
+    public static void observeSave(ServerLevel level, ChunkPos pos) {
+        net.multiforge.runtime.diagnostics.ProbeRegistry.bump("mfchunkmap.observe.save");
+        of(level).ifPresent(map -> {
+            // Phase 5.3 wires facade-side per-region dirty-set clearing.
+        });
+    }
+
+    /**
+     * NEW (Phase 4.1c) — Vanilla-ChunkMap patch observer hook: fires on a
+     * worldgen step dispatch. Any thread; see {@link #observePlayerStatus}
+     * for the no-facade / probe-only path.
+     */
+    public static void observeGenStep(ServerLevel level, ChunkPos pos, ChunkStep step) {
+        net.multiforge.runtime.diagnostics.ProbeRegistry.bump("mfchunkmap.observe.genStep");
+        of(level).ifPresent(map -> {
+            // Phase 4.7 wires facade-side ChunkGenerationTask observation.
+        });
     }
 
     // === §4 helpers ===

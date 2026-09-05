@@ -13,7 +13,42 @@
              return p_140179_;
          }
      }
-@@ -1234,4 +1240,20 @@
+@@ -616,6 +622,9 @@
+     @Override
+     public CompletableFuture<ChunkAccess> applyStep(GenerationChunkHolder p_347627_, ChunkStep p_347638_, StaticCache2D<GenerationChunkHolder> p_347552_) {
+         ChunkPos chunkpos = p_347627_.getPos();
++        // MultiForge M9 Phase 4.1c: observability seam — the facade
++        // MultiForgeChunkMap builds a parallel view of worldgen dispatch.
++        net.multiforge.neoforge.chunk.MultiForgeChunkMap.observeGenStep(this.level, chunkpos, p_347638_);
+         if (p_347638_.targetStatus() == ChunkStatus.EMPTY) {
+             return this.scheduleChunkLoad(chunkpos);
+         } else {
+@@ -741,5 +750,8 @@
+     private boolean save(ChunkAccess p_140259_) {
+         this.poiManager.flush(p_140259_.getPos());
++        // MultiForge M9 Phase 4.1c: observability seam — MultiForgeChunkMap
++        // tracks per-chunk save events for its parallel dirty-set view.
++        net.multiforge.neoforge.chunk.MultiForgeChunkMap.observeSave(this.level, p_140259_.getPos());
+         if (!p_140259_.isUnsaved()) {
+             return false;
+         } else {
+@@ -968,4 +980,7 @@
+     void updatePlayerStatus(ServerPlayer p_140193_, boolean p_140194_) {
++        // MultiForge M9 Phase 4.1c: observability seam — MultiForgeChunkMap
++        // mirrors player-track-window entry/exit into its facade watcher set.
++        net.multiforge.neoforge.chunk.MultiForgeChunkMap.observePlayerStatus(this.level, p_140193_, p_140194_);
+         boolean flag = this.skipPlayer(p_140193_);
+         boolean flag1 = this.playerMap.ignoredOrUnknown(p_140193_);
+         if (p_140194_) {
+@@ -996,4 +1011,7 @@
+     public void move(ServerPlayer p_140185_) {
++        // MultiForge M9 Phase 4.1c: observability seam — MultiForgeChunkMap
++        // observes player chunk-section moves for the per-region tracker.
++        net.multiforge.neoforge.chunk.MultiForgeChunkMap.observeMove(this.level, p_140185_);
+         for (ChunkMap.TrackedEntity chunkmap$trackedentity : this.entityMap.values()) {
+             if (chunkmap$trackedentity.entity == p_140185_) {
+                 chunkmap$trackedentity.updatePlayers(this.level.players());
+@@ -1234,4 +1252,20 @@
          protected ChunkHolder updateChunkScheduling(long p_140464_, int p_140465_, @Nullable ChunkHolder p_140466_, int p_140467_) {
              return ChunkMap.this.updateChunkScheduling(p_140464_, p_140465_, p_140466_, p_140467_);
          }
