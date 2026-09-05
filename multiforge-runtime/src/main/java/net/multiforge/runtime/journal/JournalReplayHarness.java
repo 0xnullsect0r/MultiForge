@@ -5,10 +5,16 @@
 package net.multiforge.runtime.journal;
 
 import java.io.IOException;
+import java.nio.file.DirectoryStream;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.EnumMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.function.Consumer;
+import net.multiforge.runtime.region.RegionId;
 
 /**
  * Boot-time replayer for a {@link RegionJournal}. Callers register a
@@ -52,6 +58,49 @@ public final class JournalReplayHarness {
     /** Number of entries with no matching handler (routed to {@link #onUnknown}). */
     public int unknownCount() {
         return unknownCount;
+    }
+
+    /**
+     * Boot-time helper: walk every {@code region-*.mjl} file in
+     * {@code journalDir} and dispatch its entries through {@code
+     * harness}. Files whose name does not parse as a region id are
+     * ignored. Returns the total number of entries walked across every
+     * file. A missing (or empty) directory returns 0.
+     *
+     * <p>Ordering is per-file (files themselves are visited in
+     * directory order). Callers that need a cross-region total order
+     * must re-sort in their own handler (Vanilla worlds don't rely on
+     * cross-region ordering; each region is independent).
+     *
+     * <p>Wired by Phase 5.4 into
+     * {@link net.multiforge.runtime.scheduler.MultiThreadedSchedulerHost#replayJournalsFromDir(Path)}
+     * as the boot-time recovery entry point.
+     */
+    public static int replayAll(Path journalDir, JournalReplayHarness harness) throws IOException {
+        Objects.requireNonNull(journalDir, "journalDir");
+        Objects.requireNonNull(harness, "harness");
+        if (!Files.isDirectory(journalDir)) return 0;
+        int total = 0;
+        List<Path> files = new ArrayList<>();
+        try (DirectoryStream<Path> stream = Files.newDirectoryStream(journalDir, "region-*.mjl")) {
+            for (Path p : stream) files.add(p);
+        }
+        for (Path file : files) {
+            String name = file.getFileName().toString();
+            // Expect "region-<id>.mjl"; skip anything the glob let through by shape.
+            if (!name.startsWith("region-") || !name.endsWith(".mjl")) continue;
+            String idPart = name.substring("region-".length(), name.length() - ".mjl".length());
+            long id;
+            try {
+                id = Long.parseLong(idPart);
+            } catch (NumberFormatException e) {
+                continue;
+            }
+            try (RegionJournal j = new RegionJournal(new RegionId(id), file)) {
+                total += harness.replay(j);
+            }
+        }
+        return total;
     }
 
     /**

@@ -37,7 +37,14 @@ public final class TickRegionScheduler implements AutoCloseable, RegionListener 
     private final ExecutorService pool;
     private final PriorityBlockingQueue<ScheduleEntry> queue = new PriorityBlockingQueue<>();
     private final ConcurrentMap<RegionId, RegionState_> perRegion = new ConcurrentHashMap<>();
-    private final RegionTickBody body;
+    // Volatile so a mid-run swap via setBody() publishes to every worker
+    // without needing the executor's memory barrier. Workers re-read the
+    // field once per tick (the read in runWorker: `body.tickOnce(region)`),
+    // so a swap is picked up on the following tick — no in-flight tick is
+    // preempted, no torn state exposed. Phase 5 wiring uses this to install
+    // an M9-wired PhasedRegionTickBody after MultiThreadedSchedulerHost has
+    // constructed its per-world managers.
+    private volatile RegionTickBody body;
     private final RegionizedTaskQueue taskQueue;
     private final int mailboxDrainBatch;
     private final AtomicBoolean running = new AtomicBoolean(true);
@@ -60,6 +67,24 @@ public final class TickRegionScheduler implements AutoCloseable, RegionListener 
 
     public int workerCount() {
         return workerCount;
+    }
+
+    /**
+     * Swap in a new per-region tick body. Applied on the next tick each
+     * worker starts — no in-flight tick is preempted. Callers must not
+     * pass {@code null}. Used by Phase 5 wiring in {@link
+     * net.multiforge.runtime.scheduler.MultiThreadedSchedulerHost} to
+     * install a {@link PhasedRegionTickBody} with M9 wiring
+     * (pollFullLoadUpdate, ChunkTaskScheduler.drainInto, AutoSaveRunner)
+     * after the host has constructed its per-world managers.
+     */
+    public void setBody(RegionTickBody body) {
+        this.body = Objects.requireNonNull(body, "body");
+    }
+
+    /** For observability + tests. */
+    public RegionTickBody body() {
+        return body;
     }
 
     /**

@@ -9,6 +9,8 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
@@ -16,6 +18,7 @@ import net.multiforge.runtime.entity.MigratingEntityRef;
 import net.multiforge.runtime.entity.MigrationState;
 import net.multiforge.runtime.journal.RegionJournal;
 import net.multiforge.runtime.region.Region;
+import net.multiforge.runtime.region.RegionId;
 import net.multiforge.runtime.region.RegionizedTaskQueue;
 import net.multiforge.runtime.region.TickRegionScheduler;
 
@@ -52,6 +55,14 @@ public final class RegionShutdownCoordinator {
     private final RegionizedTaskQueue taskQueue;
     private final List<Region> regions = new CopyOnWriteArrayList<>();
     private final List<RegionJournal> journals = new CopyOnWriteArrayList<>();
+    // Region-id-keyed journal slots, populated by RegionJournalLifecycle and
+    // similar wire-in listeners. Kept parallel to `journals` (which is the
+    // legacy list-only API) so callers can trackJournal(RegionId, journal)
+    // and later untrackJournal(RegionId) without a linear scan or a
+    // reference-identity collision. Both containers are walked during the
+    // FLUSHING_JOURNAL phase; a single journal appearing in both is closed
+    // twice, which RegionJournal.close() tolerates via its idempotent guard.
+    private final ConcurrentMap<RegionId, RegionJournal> journalsByRegion = new ConcurrentHashMap<>();
     private final List<MigratingEntityRef> migratingRefs = new CopyOnWriteArrayList<>();
     private final AtomicReference<ShutdownPhase> phase = new AtomicReference<>(ShutdownPhase.ACCEPTING);
     private final CopyOnWriteArrayList<ProgressListener> listeners = new CopyOnWriteArrayList<>();
@@ -75,6 +86,38 @@ public final class RegionShutdownCoordinator {
 
     public void trackJournal(RegionJournal journal) {
         journals.add(Objects.requireNonNull(journal, "journal"));
+    }
+
+    /**
+     * Region-id-keyed journal tracking. Used by {@link
+     * net.multiforge.runtime.journal.RegionJournalLifecycle} so the
+     * coordinator's {@link ShutdownPhase#FLUSHING_JOURNAL} phase closes
+     * every live per-region journal, and so a dead region's journal can
+     * be un-tracked via {@link #untrackJournal(RegionId)} without a
+     * linear scan. Replaces a prior slot for the same region id
+     * (silently — the old journal must have been closed by its owner
+     * before re-registering).
+     */
+    public void trackJournal(RegionId regionId, RegionJournal journal) {
+        Objects.requireNonNull(regionId, "regionId");
+        Objects.requireNonNull(journal, "journal");
+        journalsByRegion.put(regionId, journal);
+    }
+
+    /**
+     * Remove the journal slot previously registered via
+     * {@link #trackJournal(RegionId, RegionJournal)}. No-op if none.
+     * Caller is responsible for closing the journal; this only detaches
+     * it from the coordinator's flush walk.
+     */
+    public RegionJournal untrackJournal(RegionId regionId) {
+        Objects.requireNonNull(regionId, "regionId");
+        return journalsByRegion.remove(regionId);
+    }
+
+    /** Snapshot of every region-id-keyed journal currently tracked. */
+    public List<RegionJournal> trackedJournalsByRegion() {
+        return List.copyOf(journalsByRegion.values());
     }
 
     public void trackMigrationRef(MigratingEntityRef ref) {
@@ -105,6 +148,18 @@ public final class RegionShutdownCoordinator {
         advance(ShutdownPhase.DRAINING_INBOX, ShutdownPhase.FLUSHING_JOURNAL);
         IOException first = null;
         for (RegionJournal j : journals) {
+            try {
+                j.close();
+            } catch (IOException e) {
+                if (first == null) first = e;
+                else first.addSuppressed(e);
+            }
+        }
+        // Also drain region-id-keyed journals registered via
+        // trackJournal(RegionId, ...). A journal that lives in both
+        // slots is closed twice; RegionJournal.close() is idempotent
+        // (guarded by its own `closed` flag) so this is safe.
+        for (RegionJournal j : journalsByRegion.values()) {
             try {
                 j.close();
             } catch (IOException e) {

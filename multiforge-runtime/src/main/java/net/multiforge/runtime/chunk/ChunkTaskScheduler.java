@@ -102,6 +102,23 @@ public final class ChunkTaskScheduler implements RegionListener {
     }
 
     public int drainInto(RegionId region, int max) {
+        return drainInto(region, max, Long.MAX_VALUE);
+    }
+
+    /**
+     * Drain up to {@code max} tasks from {@code region}'s priority
+     * queues, in strict priority order (BLOCKING first), giving up
+     * early once {@code deadlineNanos} (an absolute {@link
+     * System#nanoTime()} instant) is reached. Undrained tasks stay
+     * enqueued and are retried on the next tick's drain — this is the
+     * CLAUDE.md rule 4 (no blocking on a region worker thread) budget
+     * knob for the Phase 5 wiring: at most a bounded slice of chunk
+     * work runs per region tick. Returns the number of tasks executed.
+     *
+     * <p>Pass {@link Long#MAX_VALUE} to disable the deadline (matches
+     * the {@link #drainInto(RegionId, int) two-arg overload}).
+     */
+    public int drainInto(RegionId region, int max, long deadlineNanos) {
         EnumMap<ChunkTaskPriority, ConcurrentLinkedDeque<ChunkPositionedTask>> pri = perRegionPriority.get(region);
         if (pri == null) return 0;
         int run = 0;
@@ -109,6 +126,7 @@ public final class ChunkTaskScheduler implements RegionListener {
             ConcurrentLinkedDeque<ChunkPositionedTask> q = pri.get(p);
             if (q == null) continue;
             while (run < max) {
+                if (deadlineNanos != Long.MAX_VALUE && System.nanoTime() >= deadlineNanos) return run;
                 ChunkPositionedTask wrapped = q.pollFirst();
                 if (wrapped == null) break;
                 try {

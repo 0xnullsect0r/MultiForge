@@ -93,6 +93,42 @@ public final class PhasedRegionTickBody implements RegionTickBody {
             return this;
         }
 
+        /**
+         * Prepend {@code body} to whatever is currently wired at
+         * {@code phase}. If nothing is wired, this is equivalent to
+         * {@link #set(Phase, RegionTickBody)}. Used by Phase 5 M9 wiring
+         * so runtime-internal drain calls (e.g. {@code
+         * pollFullLoadUpdate}) fire <em>before</em> a user-supplied
+         * inbound-mailbox body.
+         */
+        public Builder prepend(Phase phase, RegionTickBody body) {
+            if (body == null) return this;
+            RegionTickBody existing = phases.get(phase);
+            if (existing == null) return set(phase, body);
+            return set(phase, region -> {
+                body.tickOnce(region);
+                existing.tickOnce(region);
+            });
+        }
+
+        /**
+         * Append {@code body} to whatever is currently wired at
+         * {@code phase}. If nothing is wired, this is equivalent to
+         * {@link #set(Phase, RegionTickBody)}. Used by Phase 5 M9 wiring
+         * so runtime-internal drain calls (e.g. {@code
+         * ChunkTaskScheduler.drainInto}, {@code AutoSaveRunner.runOnce})
+         * fire <em>after</em> a user-supplied body for the same phase.
+         */
+        public Builder append(Phase phase, RegionTickBody body) {
+            if (body == null) return this;
+            RegionTickBody existing = phases.get(phase);
+            if (existing == null) return set(phase, body);
+            return set(phase, region -> {
+                existing.tickOnce(region);
+                body.tickOnce(region);
+            });
+        }
+
         /** Convenience aliases for {@link #set(Phase, RegionTickBody)}. */
         public Builder inboundMailbox(RegionTickBody body) {
             return set(Phase.INBOUND_MAILBOX, body);
