@@ -10,157 +10,93 @@ import net.multiforge.api.world.WorldRef;
 import net.multiforge.runtime.chunk.ChunkHolderManager;
 import net.multiforge.runtime.chunk.ChunkLoadLevel;
 import net.multiforge.runtime.chunk.NewChunkHolder;
-import net.multiforge.runtime.region.Region;
-import net.multiforge.runtime.region.ThreadedRegionizer;
+import net.multiforge.runtime.diagnostics.ProbeRegistry;
 import net.multiforge.runtime.scheduler.MultiForgeRegionizedRuntime;
 import net.multiforge.runtime.scheduler.MultiThreadedSchedulerHost;
 
 /**
- * M9 sub-step 1 — read-only shadow bridge from Vanilla {@code ChunkMap}
- * into MultiForge's pre-built {@link ChunkHolderManager}. Called from
- * the single line patched into {@link net.minecraft.server.level.ChunkMap#updateChunkScheduling},
- * right after NeoForge's own {@code fireChunkTicketLevelUpdated} event
- * hook.
+ * <b>Deprecated observation façade (Phase 5.7).</b> Formerly the M9
+ * sub-step 1 read-only shadow bridge from Vanilla {@code ChunkMap} into
+ * MultiForge's pre-built {@link ChunkHolderManager}. Phase 5.6
+ * ({@link RegionizedChunkLifecycle}) and Phase 4.2b
+ * ({@link net.multiforge.neoforge.chunk.MultiForgeDistanceManager}) now
+ * write MultiForge tickets directly, so the shadow observation is
+ * <em>redundant</em> — nothing downstream depends on it any more.
  *
- * <p>This is deliberately non-invasive: the bridge only OBSERVES —
- * it mirrors Vanilla's ticket-level state into MultiForge's holder
- * manager so operators can query chunk state via {@code /multiforge
- * chunks}, and so future sub-steps can drive per-region chunk work
- * without also having to plumb the observation pipeline. Zero behavior
- * change to Vanilla ticket-level transitions.
+ * <p>The static entry points {@link #onTicketLevelUpdated},
+ * {@link #onChunkLoaded}, {@link #onChunkUnloaded} are preserved as
+ * no-op {@code bridge.deprecated.*} probes so unrelated compile-time
+ * callers (older patches, staged fork glue) keep linking without
+ * silently regressing Vanilla ticket behaviour. The read-only
+ * {@link #currentLevel(ServerLevel, int, int)} accessor is kept intact
+ * — {@code /multiforge chunks} and other diagnostics still call it to
+ * report the MultiForge-side load level for a chunk.
  *
- * <p><b>Scope note (session-limited M9):</b> a real M9 chunk system
- * port needs to REPLACE (not just shadow) Vanilla's ChunkMap /
- * DistanceManager / ServerChunkCache with the per-region model
- * described in {@code docs/chunks.md}. That's realistically months
- * of work (~30K lines in Folia's Moonrise). This bridge is the
- * foundational first slice: it establishes the coordinate translation
- * (Vanilla {@code long} chunk key → MultiForge {@code ChunkPos}) and
- * level mapping (Vanilla {@code ChunkLevel} → MultiForge
- * {@link ChunkLoadLevel}), and gives future work a coherent
- * observable state to drive from.
+ * <p>The bridge is scheduled for full removal once every out-of-tree
+ * caller has migrated; the no-op layer is the transitional shim.
  */
 public final class ChunkHolderManagerBridge {
     private ChunkHolderManagerBridge() {}
 
     /**
-     * Called from {@code ChunkMap.updateChunkScheduling} on every
-     * ticket-level transition. Mirrors the transition into
-     * {@link ChunkHolderManager}. No-ops if the runtime isn't
-     * installed yet or if the chunk's owning region hasn't
-     * materialized ({@link RegionizedChunkLifecycle} creates the
-     * region on {@code ChunkEvent.Load}).
+     * <b>Deprecated (Phase 5.7): no-op.</b> Was the M9 sub-step 1
+     * shadow-observation hook fired from
+     * {@code ChunkMap.updateChunkScheduling}. Real ticket writes now
+     * flow through
+     * {@link net.multiforge.neoforge.chunk.MultiForgeDistanceManager}
+     * and {@link net.multiforge.neoforge.chunk.MultiForgeChunkMap} —
+     * this method no longer touches the holder manager, and the
+     * corresponding patch hunk in
+     * {@code multiforge-patches/04-chunk-system/.../ChunkMap.java.patch}
+     * has been removed. Kept as a no-op-with-probe so a stray caller
+     * (older patches, staged glue) still links; the probe bump surfaces
+     * the residual usage in {@code /multiforge probes}.
      *
-     * @param level    the Vanilla ServerLevel the chunk belongs to
-     * @param chunkKey Vanilla chunk long key (packed x/z)
-     * @param oldLevel prior Vanilla ticket level; unused here (kept
-     *                 in the signature to match {@code EventHooks
-     *                 .fireChunkTicketLevelUpdated}'s shape)
-     * @param newLevel the new Vanilla ticket level (33 = FULL,
-     *                 32 = BLOCK_TICKING, 31 = ENTITY_TICKING, etc.)
-     * @param holder   the Vanilla ChunkHolder, possibly null when the
-     *                 chunk is being scheduled for drop
+     * @param level    unused
+     * @param chunkKey unused
+     * @param oldLevel unused
+     * @param newLevel unused
+     * @param holder   unused
      */
     public static void onTicketLevelUpdated(
             ServerLevel level, long chunkKey, int oldLevel, int newLevel, ChunkHolder holder) {
-        MultiThreadedSchedulerHost host = MultiForgeRegionizedRuntime.current();
-        if (host == null) return; // runtime not installed yet (bootstrap ordering)
-
-        WorldRef world = RegionizedTickCoordinator.asWorldRef(level);
-        // /67 round-4 (finding 1.7): Vanilla fired a real ticket-level
-        // transition for a real chunk in a real world — this is the
-        // authoritative signal that MultiForge should track the world.
-        // The prior `regionizerForOrNull → silent-return` path missed
-        // every transition that fired before ChunkEvent.Load created
-        // the regionizer, undercounting the shadow. Lazy-create here
-        // via `regionizerFor` — the world is authoritative, so unlike
-        // observability lookups this is not a "typoed WorldRef leak"
-        // vector.
-        ThreadedRegionizer regionizer = host.regionizerFor(world);
-
-        // Decode Vanilla's packed long chunk key into (x, z).
-        int chunkX = (int) chunkKey;
-        int chunkZ = (int) (chunkKey >> 32);
-
-        Region region = regionizer.regionAtChunk(chunkX, chunkZ);
-        if (region == null) return; // no region yet — ChunkEvent.Load hasn't fired
-
-        ChunkHolderManager manager = host.chunkManagerFor(world);
-        net.multiforge.api.world.ChunkPos mfPos = new net.multiforge.api.world.ChunkPos(chunkX, chunkZ);
-        ChunkLoadLevel newMfLevel = ChunkLoadLevel.forDistance(newLevel);
-
-        // /67 round-4 fix: on INACCESSIBLE transitions (level > 33) drop
-        // the holder so byChunk doesn't grow unbounded across the server's
-        // lifetime. Vanilla's own updateChunkScheduling enqueues the drop
-        // into `toDrop` on the same transition; we mirror that.
-        if (newMfLevel == ChunkLoadLevel.INACCESSIBLE) {
-            manager.dropHolder(mfPos);
-            return;
-        }
-
-        NewChunkHolder mfHolder = manager.holderAt(mfPos);
-        if (mfHolder == null) {
-            mfHolder = manager.createHolder(mfPos, region.id());
-        }
-        // Map Vanilla ticket level (0..33+) to MultiForge ChunkLoadLevel.
-        // Vanilla uses inverted numbers where lower = more loaded:
-        // 31 = ENTITY_TICKING, 32 = BLOCK_TICKING, 33 = FULL/BORDER, 34+ = INACCESSIBLE.
-        // MultiForge's ChunkLoadLevel.forDistance uses the same convention.
-        mfHolder.setLevel(newMfLevel);
+        ProbeRegistry.bump("bridge.deprecated.onTicketLevelUpdated");
     }
 
     /**
-     * Called from {@link RegionizedChunkLifecycle} on {@code
-     * ChunkEvent.Load} once the chunk's region has been created,
-     * seeding the shadow holder at the chunk's current Vanilla ticket
-     * level. Fixes the "silently drop pre-Load transitions" race
-     * caught by /67 round-4: {@link #onTicketLevelUpdated} early-returns
-     * when the chunk's region doesn't exist yet, so a chunk that reaches
-     * BORDER via Vanilla's initial {@code updateChunkScheduling} BEFORE
-     * {@code ChunkEvent.Load} fires would otherwise never appear in the
+     * <b>Deprecated (Phase 5.7): no-op.</b> Was the {@code
+     * ChunkEvent.Load}-fired shadow seed that populated a holder at
+     * BORDER. {@link RegionizedChunkLifecycle#installOnEventBus()} now
+     * writes a real {@link net.multiforge.runtime.chunk.TicketType#START}
+     * ticket instead — the holder is created and promoted through the
+     * per-region ticket map by the ticket write, not by an out-of-band
      * shadow.
      */
     public static void onChunkLoaded(ServerLevel level, int chunkX, int chunkZ, int currentVanillaLevel) {
-        MultiThreadedSchedulerHost host = MultiForgeRegionizedRuntime.current();
-        if (host == null) return;
-        WorldRef world = RegionizedTickCoordinator.asWorldRef(level);
-        ThreadedRegionizer regionizer = host.regionizerForOrNull(world);
-        if (regionizer == null) return;
-        Region region = regionizer.regionAtChunk(chunkX, chunkZ);
-        if (region == null) return;
-        ChunkLoadLevel newMfLevel = ChunkLoadLevel.forDistance(currentVanillaLevel);
-        if (newMfLevel == ChunkLoadLevel.INACCESSIBLE) return; // shouldn't happen at Load-time, defensive
-        ChunkHolderManager manager = host.chunkManagerFor(world);
-        net.multiforge.api.world.ChunkPos mfPos = new net.multiforge.api.world.ChunkPos(chunkX, chunkZ);
-        NewChunkHolder mfHolder = manager.holderAt(mfPos);
-        if (mfHolder == null) {
-            mfHolder = manager.createHolder(mfPos, region.id());
-        }
-        mfHolder.setLevel(newMfLevel);
+        ProbeRegistry.bump("bridge.deprecated.onChunkLoaded");
     }
 
     /**
-     * Called from {@link RegionizedChunkLifecycle} on {@code
-     * ChunkEvent.Unload}. Drops the shadow holder so
-     * {@link ChunkHolderManager#byChunk} does not grow unbounded.
+     * <b>Deprecated (Phase 5.7): no-op.</b> Was the {@code
+     * ChunkEvent.Unload}-fired shadow drop; the symmetric ticket
+     * release now happens inline in
+     * {@link RegionizedChunkLifecycle}. Holders are torn down by the
+     * per-region ticket map hitting effective distance
+     * {@link ChunkLoadLevel#INACCESSIBLE}.
      */
     public static void onChunkUnloaded(ServerLevel level, int chunkX, int chunkZ) {
-        MultiThreadedSchedulerHost host = MultiForgeRegionizedRuntime.current();
-        if (host == null) return;
-        WorldRef world = RegionizedTickCoordinator.asWorldRef(level);
-        ChunkHolderManager manager = host.chunkManagerForOrNull(world);
-        if (manager == null) return;
-        manager.dropHolder(new net.multiforge.api.world.ChunkPos(chunkX, chunkZ));
+        ProbeRegistry.bump("bridge.deprecated.onChunkUnloaded");
     }
 
     /**
      * Best-effort ChunkLoadLevel snapshot for a specific chunk in a
      * specific world; used by observability commands like
      * {@code /multiforge chunks}. Returns null if the runtime isn't
-     * installed, the world has no shadow yet, or the chunk isn't
-     * tracked. Uses the non-creating {@code chunkManagerForOrNull} so
-     * a typoed world lookup doesn't permanently allocate an empty
-     * shadow (finding B6 of /67 round-4).
+     * installed, the world has no manager yet, or the chunk isn't
+     * tracked. Uses the non-creating {@code chunkManagerForOrNull} so a
+     * typoed world lookup doesn't permanently allocate an empty
+     * manager. Retained through Phase 5.7 because operator diagnostics
+     * still read the MultiForge-side effective level via this accessor.
      */
     public static ChunkLoadLevel currentLevel(ServerLevel level, int chunkX, int chunkZ) {
         MultiThreadedSchedulerHost host = MultiForgeRegionizedRuntime.current();
@@ -170,26 +106,5 @@ public final class ChunkHolderManagerBridge {
         if (manager == null) return null;
         NewChunkHolder h = manager.holderAt(new net.multiforge.api.world.ChunkPos(chunkX, chunkZ));
         return h == null ? null : h.level();
-    }
-
-    /**
-     * Test-only alias for the observability path that doesn't require
-     * a real ServerLevel — takes a WorldRef directly and skips the
-     * lookup that {@link #onTicketLevelUpdated} does.
-     */
-    static void shadowChunkForTesting(WorldRef world, int chunkX, int chunkZ, int vanillaLevel) {
-        MultiThreadedSchedulerHost host = MultiForgeRegionizedRuntime.current();
-        if (host == null) return;
-        ThreadedRegionizer regionizer = host.regionizerForOrNull(world);
-        if (regionizer == null) return;
-        Region region = regionizer.regionAtChunk(chunkX, chunkZ);
-        if (region == null) return;
-        ChunkHolderManager manager = host.chunkManagerFor(world);
-        net.multiforge.api.world.ChunkPos mfPos = new net.multiforge.api.world.ChunkPos(chunkX, chunkZ);
-        NewChunkHolder mfHolder = manager.holderAt(mfPos);
-        if (mfHolder == null) {
-            mfHolder = manager.createHolder(mfPos, region.id());
-        }
-        mfHolder.setLevel(ChunkLoadLevel.forDistance(vanillaLevel));
     }
 }

@@ -161,6 +161,26 @@ public final class ChunkHolderManager implements RegionListener {
     }
 
     /**
+     * Diagnostic accessor — count of holders currently at
+     * {@link ChunkLoadLevel#BORDER} or a more-loaded level (TICKING /
+     * ENTITY_TICKING). Used by Phase 5 integration coverage and the
+     * {@code /multiforge chunks} operator surface to answer "how many
+     * chunks are keep-loaded right now?" without a full holder walk on
+     * the caller side. O(N) over the byChunk map, single pass, no
+     * allocation beyond the returned int; safe from any thread — the
+     * volatile level read on each holder observes a level published by
+     * the owning region worker's most recent {@link #addTicket} /
+     * {@link #removeTicket}.
+     */
+    public int getBorderHolderCount() {
+        int count = 0;
+        for (NewChunkHolder h : byChunk.values()) {
+            if (h.level().isAtLeast(ChunkLoadLevel.BORDER)) count++;
+        }
+        return count;
+    }
+
+    /**
      * Remove and return the holder at {@code pos}. Used by the M9 shadow
      * bridge on chunk unload / INACCESSIBLE ticket transitions to keep
      * {@link #byChunk} from growing unbounded over a server's lifetime.

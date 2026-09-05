@@ -702,14 +702,13 @@ public final class MultiForgeChunkMap extends ChunkStorage
         net.neoforged.neoforge.event.EventHooks.fireChunkTicketLevelUpdated(
                 this.level, pos, oldLevel, newLevel, holder);
 
-        // TODO(phase-5.7): once MultiForgeDistanceManager writes tickets
-        // directly through MultiForgeChunkMap this delegates to
-        // holders.addTicket/removeTicket via the resolved RegionId; the
-        // ChunkHolderManagerBridge.onTicketLevelUpdated call below is
-        // the transitional shim that keeps 4.1b compile-clean and
-        // preserves the M9 sub-step 1 shadow-mirror behaviour.
-        net.multiforge.neoforge.ChunkHolderManagerBridge.onTicketLevelUpdated(
-                this.level, pos, oldLevel, newLevel, holder);
+        // Phase 5.7: the M9 sub-step 1 shadow-mirror
+        // (ChunkHolderManagerBridge.onTicketLevelUpdated) is retired —
+        // real ticket writes now flow through MultiForgeDistanceManager
+        // and RegionizedChunkLifecycle. This method preserves Vanilla's
+        // event ordering and returns the holder; per-region ticket
+        // state is authoritative on the MultiForge side without a
+        // duplicate observation seam.
         return holder;
     }
 
