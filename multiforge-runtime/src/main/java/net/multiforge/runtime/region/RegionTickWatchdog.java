@@ -52,8 +52,24 @@ public final class RegionTickWatchdog {
     private static final long DEFAULT_WARN_MS = 500L; // 10× the 50ms tick period
 
     private static volatile Mode mode = parseMode(System.getProperty(STRICT_PROP, "off"));
-    private static volatile long warnMs =
-            Long.parseLong(System.getProperty(WARN_MS_PROP, Long.toString(DEFAULT_WARN_MS)));
+    private static volatile long warnMs = parseWarnMs(System.getProperty(WARN_MS_PROP));
+
+    /**
+     * Robust parse that never throws — an invalid sysprop value falls
+     * back to {@link #DEFAULT_WARN_MS} instead of an
+     * {@code ExceptionInInitializerError} that would kill every worker
+     * thread on the pool's first tick (workers are not replaced by
+     * {@link java.util.concurrent.Executors#newFixedThreadPool}).
+     */
+    public static long parseWarnMs(String raw) {
+        if (raw == null || raw.isBlank()) return DEFAULT_WARN_MS;
+        try {
+            long parsed = Long.parseLong(raw.trim());
+            return parsed <= 0 ? DEFAULT_WARN_MS : parsed;
+        } catch (NumberFormatException e) {
+            return DEFAULT_WARN_MS;
+        }
+    }
 
     private static final ThreadLocal<Long> TICK_START_NANOS = new ThreadLocal<>();
 

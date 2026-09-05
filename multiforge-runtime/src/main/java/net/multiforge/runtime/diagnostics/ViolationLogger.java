@@ -23,8 +23,24 @@ public final class ViolationLogger {
     private static final Logger LOG = LoggerFactory.getLogger("multiforge.violation");
     private static final long WINDOW_NANOS = 60L * 1_000_000_000L;
     private static final long DEFAULT_PER_MIN = 5L;
-    private static final long PER_MIN =
-            Long.parseLong(System.getProperty("multiforge.violations.warn-per-min", Long.toString(DEFAULT_PER_MIN)));
+    private static final long PER_MIN = parsePerMin(System.getProperty("multiforge.violations.warn-per-min"));
+
+    /**
+     * Robust parse that never throws at class-init time — an invalid
+     * sysprop falls back to {@link #DEFAULT_PER_MIN} instead of an
+     * {@code ExceptionInInitializerError} that would break every
+     * OwnershipEnforcer call site (same failure shape as
+     * {@link net.multiforge.runtime.region.RegionTickWatchdog#parseWarnMs}).
+     */
+    public static long parsePerMin(String raw) {
+        if (raw == null || raw.isBlank()) return DEFAULT_PER_MIN;
+        try {
+            long parsed = Long.parseLong(raw.trim());
+            return parsed <= 0 ? DEFAULT_PER_MIN : parsed;
+        } catch (NumberFormatException e) {
+            return DEFAULT_PER_MIN;
+        }
+    }
 
     private static final ConcurrentMap<String, Bucket> BUCKETS = new ConcurrentHashMap<>();
 

@@ -7,6 +7,7 @@ package net.multiforge.runtime.scheduler;
 import java.util.concurrent.atomic.AtomicReference;
 import net.multiforge.api.scheduler.ServerDomains;
 import net.multiforge.runtime.config.MultiForgeConfig;
+import net.multiforge.runtime.ownership.OwnershipEnforcer;
 import net.multiforge.runtime.region.RegionTickBody;
 
 /**
@@ -45,7 +46,17 @@ public final class MultiForgeRegionizedRuntime {
             host.close();
             throw new IllegalStateException("A regionized runtime is already installed; call shutdown() first");
         }
-        host.install();
+        try {
+            host.install();
+        } catch (RuntimeException e) {
+            // ServerDomains.install rejects if a stale HOST is bound (crash-recovery,
+            // ServiceLoader-picked binding, etc.). Roll back CURRENT so we don't leave
+            // a split-brain where MultiForgeRegionizedRuntime.current() returns the
+            // fresh host while ServerDomains routes to the stale one.
+            CURRENT.compareAndSet(host, null);
+            host.close();
+            throw e;
+        }
         return host;
     }
 
@@ -62,13 +73,26 @@ public final class MultiForgeRegionizedRuntime {
      * the {@link ServerDomains} host reference so a future {@link
      * #install} succeeds cleanly. Safe to call more than once; the
      * second call is a no-op.
+     *
+     * <p>Also unbinds the {@link OwnershipEnforcer} tick-thread and
+     * reroute-target bindings the fork's {@code ServerLifecycleHooks}
+     * patch attached to this server, so the OwnershipEnforcer doesn't
+     * pin a dead {@code MinecraftServer.execute} reference across the
+     * server-stop / next-server-start window (matters for the dedi
+     * GameTestServer which reuses one JVM across successive servers).
+     *
+     * <p>Uses try/finally so that unbinding still happens even if
+     * {@code host.close()} throws — otherwise a stuck worker exception
+     * during shutdown would leave both {@link ServerDomains#HOST} and
+     * the OwnershipEnforcer bindings pointing at the dead host.
      */
     public static void shutdown() {
         MultiThreadedSchedulerHost host = CURRENT.getAndSet(null);
-        if (host != null) host.close();
-        // Unbind the API-side host reference too — otherwise subsequent
-        // ServerDomains.region(...) calls route to a closed host and
-        // ServerDomains.install(...) refuses to replace it.
-        ServerDomains.uninstall();
+        try {
+            if (host != null) host.close();
+        } finally {
+            ServerDomains.uninstall();
+            OwnershipEnforcer.unbindTickThreadAndRerouteTarget();
+        }
     }
 }

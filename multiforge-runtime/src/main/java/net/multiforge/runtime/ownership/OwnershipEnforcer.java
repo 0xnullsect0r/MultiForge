@@ -101,6 +101,21 @@ public final class OwnershipEnforcer {
     }
 
     /**
+     * Called from {@link net.multiforge.runtime.scheduler.MultiForgeRegionizedRuntime#shutdown}
+     * so a reroute target bound to a specific server executor (via
+     * {@code server::execute} in {@code ServerLifecycleHooks}) does not
+     * outlive the server it captured — otherwise the next off-thread
+     * mutation between server-stop and next-server-start submits into a
+     * dead {@code MinecraftServer.execute} and throws
+     * {@code RejectedExecutionException}, or pins the dead server in
+     * memory across GameTestServer JVM restarts.
+     */
+    public static void unbindTickThreadAndRerouteTarget() {
+        tickThread = null;
+        rerouteTarget = OwnershipEnforcer::runInlineUnconfigured;
+    }
+
+    /**
      * @param site short symbolic id of the call site, e.g. {@code "Level.setBlock"}.
      * @return {@code true} if the caller may run {@code site}'s mutation body inline right now.
      *         {@code false} means the caller must instead hand its mutation to {@link #reroute}.
