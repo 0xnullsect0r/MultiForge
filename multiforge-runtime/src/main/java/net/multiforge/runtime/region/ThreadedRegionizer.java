@@ -217,7 +217,8 @@ public final class ThreadedRegionizer {
         if (remaining.size() <= 1) return; // nothing to split
 
         // Flood fill from any starting section.
-        Set<SectionPos> firstComponent = floodFill(remaining, remaining.iterator().next());
+        Set<SectionPos> firstComponent =
+                floodFill(remaining, remaining.iterator().next());
         if (firstComponent.size() == remaining.size()) return; // still connected
 
         // Stage the (section → fresh region) reassignment map fully off-map first.
