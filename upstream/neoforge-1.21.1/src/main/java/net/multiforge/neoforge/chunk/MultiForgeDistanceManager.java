@@ -27,6 +27,7 @@ import net.multiforge.runtime.chunk.NewChunkHolder;
 import net.multiforge.runtime.chunk.PerChunkTickets;
 import net.multiforge.runtime.chunk.PerRegionTicketMap;
 import net.multiforge.runtime.chunk.TicketExpiryTicker;
+import net.multiforge.runtime.diagnostics.ProbeRegistry;
 import net.multiforge.runtime.diagnostics.ViolationLogger;
 import net.multiforge.runtime.region.Region;
 import net.multiforge.runtime.region.RegionId;
@@ -104,6 +105,31 @@ public abstract class MultiForgeDistanceManager extends DistanceManager {
     private static final java.util.Set<String> SHUTDOWN_KEEP_TYPE_NAMES =
             java.util.Set.of(TicketType.UNKNOWN.toString(), TicketType.POST_TELEPORT.toString());
 
+    /**
+     * Identity-keyed registry of every live {@link MultiForgeDistanceManager}
+     * instance, keyed by the (abstract) {@link DistanceManager} reference the
+     * Vanilla source-tree observation hunks see as {@code this}. Populated in
+     * the constructor of this class; used by {@link #of(DistanceManager)} to
+     * resolve observation callbacks fired from the base-class methods
+     * {@code addPlayer}, {@code removePlayer}, {@code updateChunkForced} and
+     * {@code runAllUpdates} — see
+     * {@code multiforge-patches/04-chunk-system/net/minecraft/server/level/DistanceManager.java.patch}
+     * (Phase 4 task 4.2c).
+     *
+     * <p>{@link java.util.WeakHashMap} lets a discarded {@link DistanceManager}
+     * + {@link MultiForgeDistanceManager} pair reclaim without the registry
+     * pinning them. Wrapped through
+     * {@link java.util.Collections#synchronizedMap(java.util.Map)} because the
+     * map is written once per world (rare) and read on every observed
+     * base-class call (frequent): the synchronised wrapper adds a tiny
+     * critical section around a hash lookup — no cross-region contention
+     * (CLAUDE.md §4 stays satisfied because the section is unconditionally
+     * microscopic and never blocks the owning worker on anything the calling
+     * thread doesn't own).
+     */
+    private static final java.util.Map<DistanceManager, MultiForgeDistanceManager> INSTANCE_REGISTRY =
+            java.util.Collections.synchronizedMap(new java.util.WeakHashMap<>());
+
     protected final MultiThreadedSchedulerHost host;
     protected final WorldRef worldRef;
     protected final ChunkHolderManager holderManager;
@@ -177,6 +203,11 @@ public abstract class MultiForgeDistanceManager extends DistanceManager {
         this.worldRef = java.util.Objects.requireNonNull(worldRef, "worldRef");
         this.holderManager = host.chunkManagerFor(worldRef);
         this.expiryTicker = new TicketExpiryTicker(this.holderManager);
+        // Publish this instance to the identity-keyed registry so
+        // observation hunks in the abstract DistanceManager base
+        // (multiforge-patches/04-chunk-system/.../DistanceManager.java.patch)
+        // can resolve `this` back to a MultiForgeDistanceManager.
+        INSTANCE_REGISTRY.put(this, this);
     }
 
     // === Region resolution ===
@@ -708,5 +739,96 @@ public abstract class MultiForgeDistanceManager extends DistanceManager {
      */
     public long tickCounter() {
         return mfTickCounter;
+    }
+
+    // === §4.11 Static observers ===
+    //
+    // Called from thin observation hunks patched into the abstract
+    // net.minecraft.server.level.DistanceManager base (Phase 4 task 4.2c).
+    // Vanilla keeps owning canonical state for `tickets`, `playersPerChunk`,
+    // `ticketTracker` etc.; these hooks build a parallel MultiForge view.
+    // Contract: never throw, never block, safe from any thread. When the
+    // supplied DistanceManager isn't a MultiForge instance (bootstrap or
+    // pure-Vanilla path) each observer no-ops after bumping an ".unbound"
+    // probe so the omission is visible in /multiforge diagnostics without
+    // touching Vanilla control flow.
+
+    /**
+     * @return the {@link MultiForgeDistanceManager} previously registered
+     *     against {@code dm} in {@link #INSTANCE_REGISTRY}, or empty when
+     *     none. Never throws.
+     */
+    public static java.util.Optional<MultiForgeDistanceManager> of(@Nullable DistanceManager dm) {
+        if (dm == null) return java.util.Optional.empty();
+        return java.util.Optional.ofNullable(INSTANCE_REGISTRY.get(dm));
+    }
+
+    /**
+     * Observation hook for
+     * {@link DistanceManager#addPlayer(SectionPos, ServerPlayer)}. Called
+     * from the patched base after Vanilla has committed the player to its
+     * per-chunk set + trackers. Zero behaviour change; bumps
+     * {@code mfdistmgr.observe.playerAdded} (plus {@code .unbound} when
+     * {@code dm} has no MultiForge instance registered).
+     */
+    public static void observePlayerAdded(
+            @Nullable DistanceManager dm, @Nullable SectionPos section, @Nullable ServerPlayer player) {
+        java.util.Optional<MultiForgeDistanceManager> resolved = of(dm);
+        ProbeRegistry.bump("mfdistmgr.observe.playerAdded");
+        if (resolved.isEmpty()) {
+            ProbeRegistry.bump("mfdistmgr.observe.playerAdded.unbound");
+        }
+        // Phase 5 wiring may fan the section/player out to a per-region
+        // player-tracker; today the probe bump is the observation.
+    }
+
+    /** Symmetric of {@link #observePlayerAdded(DistanceManager, SectionPos, ServerPlayer)}. */
+    public static void observePlayerRemoved(
+            @Nullable DistanceManager dm, @Nullable SectionPos section, @Nullable ServerPlayer player) {
+        java.util.Optional<MultiForgeDistanceManager> resolved = of(dm);
+        ProbeRegistry.bump("mfdistmgr.observe.playerRemoved");
+        if (resolved.isEmpty()) {
+            ProbeRegistry.bump("mfdistmgr.observe.playerRemoved.unbound");
+        }
+    }
+
+    /**
+     * Observation hook for
+     * {@link DistanceManager#updateChunkForced(ChunkPos, boolean)}. Called
+     * from the patched base after Vanilla has added/removed the
+     * {@code FORCED} ticket. Bumps {@code mfdistmgr.observe.chunkForced}
+     * (plus {@code .add} / {@code .remove} branches for finer-grained
+     * accounting, plus {@code .unbound} when unregistered).
+     */
+    public static void observeChunkForced(@Nullable DistanceManager dm, @Nullable ChunkPos pos, boolean add) {
+        java.util.Optional<MultiForgeDistanceManager> resolved = of(dm);
+        ProbeRegistry.bump("mfdistmgr.observe.chunkForced");
+        ProbeRegistry.bump(add ? "mfdistmgr.observe.chunkForced.add" : "mfdistmgr.observe.chunkForced.remove");
+        if (resolved.isEmpty()) {
+            ProbeRegistry.bump("mfdistmgr.observe.chunkForced.unbound");
+        }
+    }
+
+    /**
+     * Observation hook for the entry of
+     * {@link DistanceManager#runAllUpdates(ChunkMap)}. Paired with
+     * {@link #observeRunAllUpdatesEnd(DistanceManager)} — the patched base
+     * only fires End on return paths reached after Start ran.
+     */
+    public static void observeRunAllUpdatesStart(@Nullable DistanceManager dm) {
+        java.util.Optional<MultiForgeDistanceManager> resolved = of(dm);
+        ProbeRegistry.bump("mfdistmgr.observe.runAllUpdatesStart");
+        if (resolved.isEmpty()) {
+            ProbeRegistry.bump("mfdistmgr.observe.runAllUpdatesStart.unbound");
+        }
+    }
+
+    /** Companion to {@link #observeRunAllUpdatesStart(DistanceManager)}. */
+    public static void observeRunAllUpdatesEnd(@Nullable DistanceManager dm) {
+        java.util.Optional<MultiForgeDistanceManager> resolved = of(dm);
+        ProbeRegistry.bump("mfdistmgr.observe.runAllUpdatesEnd");
+        if (resolved.isEmpty()) {
+            ProbeRegistry.bump("mfdistmgr.observe.runAllUpdatesEnd.unbound");
+        }
     }
 }

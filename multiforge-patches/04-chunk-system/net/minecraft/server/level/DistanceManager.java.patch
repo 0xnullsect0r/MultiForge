@@ -1,0 +1,60 @@
+--- a/net/minecraft/server/level/DistanceManager.java
++++ b/net/minecraft/server/level/DistanceManager.java
+@@ -106,6 +106,10 @@
+     protected abstract ChunkHolder updateChunkScheduling(long p_140780_, int p_140781_, @Nullable ChunkHolder p_140782_, int p_140783_);
+ 
+     public boolean runAllUpdates(ChunkMap p_140806_) {
++        // MultiForge (multiforge-patches/04-chunk-system/): pair-observer.
++        // observeRunAllUpdatesEnd is only fired on the two return paths
++        // below — the throw path stays uninstrumented. Phase 4 task 4.2c.
++        net.multiforge.neoforge.chunk.MultiForgeDistanceManager.observeRunAllUpdatesStart(this);
+         this.naturalSpawnChunkCounter.runAllUpdates();
+         this.tickingTicketsTracker.runAllUpdates();
+         this.playerTicketManager.runAllUpdates();
+@@ -118,6 +122,8 @@
+             this.chunksToUpdateFutures.forEach(p_347062_ -> p_347062_.updateHighestAllowedStatus(p_140806_));
+             this.chunksToUpdateFutures.forEach(p_183908_ -> p_183908_.updateFutures(p_140806_, this.mainThreadExecutor));
+             this.chunksToUpdateFutures.clear();
++            // MultiForge: paired End for observeRunAllUpdatesStart above.
++            net.multiforge.neoforge.chunk.MultiForgeDistanceManager.observeRunAllUpdatesEnd(this);
+             return true;
+         } else {
+             if (!this.ticketsToRelease.isEmpty()) {
+@@ -142,6 +148,8 @@
+                 this.ticketsToRelease.clear();
+             }
+ 
++            // MultiForge: paired End for observeRunAllUpdatesStart above.
++            net.multiforge.neoforge.chunk.MultiForgeDistanceManager.observeRunAllUpdatesEnd(this);
+             return flag;
+         }
+     }
+@@ -222,6 +230,10 @@
+             this.removeTicket(i, ticket);
+             this.tickingTicketsTracker.removeTicket(i, ticket);
+         }
++        // MultiForge (multiforge-patches/04-chunk-system/): observe
++        // /forceload add/remove so the per-region ticket facade builds a
++        // parallel forced-chunk view. Phase 4 task 4.2c.
++        net.multiforge.neoforge.chunk.MultiForgeDistanceManager.observeChunkForced(this, p_140800_, p_140801_);
+     }
+ 
+     public void addPlayer(SectionPos p_140803_, ServerPlayer p_140804_) {
+@@ -231,6 +243,8 @@
+         this.naturalSpawnChunkCounter.update(i, 0, true);
+         this.playerTicketManager.update(i, 0, true);
+         this.tickingTicketsTracker.addTicket(TicketType.PLAYER, chunkpos, this.getPlayerTicketLevel(), chunkpos);
++        // MultiForge: observe player-added post-commit. Phase 4 task 4.2c.
++        net.multiforge.neoforge.chunk.MultiForgeDistanceManager.observePlayerAdded(this, p_140803_, p_140804_);
+     }
+ 
+     public void removePlayer(SectionPos p_140829_, ServerPlayer p_140830_) {
+@@ -244,6 +258,8 @@
+             this.playerTicketManager.update(i, Integer.MAX_VALUE, false);
+             this.tickingTicketsTracker.removeTicket(TicketType.PLAYER, chunkpos, this.getPlayerTicketLevel(), chunkpos);
+         }
++        // MultiForge: observe player-removed post-commit. Phase 4 task 4.2c.
++        net.multiforge.neoforge.chunk.MultiForgeDistanceManager.observePlayerRemoved(this, p_140829_, p_140830_);
+     }
+ 
+     private int getPlayerTicketLevel() {
