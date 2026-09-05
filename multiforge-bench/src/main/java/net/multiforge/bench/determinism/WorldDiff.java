@@ -35,6 +35,15 @@ public final class WorldDiff {
     static final Set<String> NON_DETERMINISTIC_NAMES =
             Set.of("session.lock", "session.lock.old", "raids.dat", "raids.dat_old", "stats", "advancements");
 
+    /**
+     * Suffixes on top of the exact-name allowlist above. Vanilla writes
+     * {@code .dat_old} copies of every save file every autosave — these
+     * are stale byte-for-byte snapshots from the *previous* tick and
+     * differ across identical-seed reruns depending on when the harness
+     * captured the world dir. Matches per /67 review finding #13.
+     */
+    static final Set<String> NON_DETERMINISTIC_SUFFIXES = Set.of(".dat_old");
+
     private WorldDiff() {}
 
     public static Result compare(Path baselineRoot, Path patchedRoot) {
@@ -49,11 +58,17 @@ public final class WorldDiff {
             Files.walkFileTree(root, new SimpleFileVisitor<>() {
                 @Override
                 public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) throws IOException {
-                    if (NON_DETERMINISTIC_NAMES.contains(file.getFileName().toString())) {
+                    String name = file.getFileName().toString();
+                    if (NON_DETERMINISTIC_NAMES.contains(name)) {
                         return FileVisitResult.CONTINUE;
                     }
+                    for (String suffix : NON_DETERMINISTIC_SUFFIXES) {
+                        if (name.endsWith(suffix)) {
+                            return FileVisitResult.CONTINUE;
+                        }
+                    }
                     String rel = root.relativize(file).toString();
-                    out.put(rel, sha256(file));
+                    out.put(rel, hashFile(file, name));
                     return FileVisitResult.CONTINUE;
                 }
 
@@ -75,17 +90,53 @@ public final class WorldDiff {
         try {
             MessageDigest md = MessageDigest.getInstance("SHA-256");
             md.update(Files.readAllBytes(file));
-            byte[] digest = md.digest();
-            StringBuilder sb = new StringBuilder(digest.length * 2);
-            for (byte b : digest) {
-                sb.append(String.format("%02x", b & 0xff));
-            }
-            return sb.toString();
+            return toHex(md.digest());
         } catch (NoSuchAlgorithmException e) {
             throw new IllegalStateException("SHA-256 not available", e);
         } catch (IOException e) {
             throw new UncheckedIOException(e);
         }
+    }
+
+    /**
+     * File dispatcher: {@code .mca} region files get their per-sector
+     * timestamp headers zeroed before hashing, so an identical-seed
+     * rerun that writes the same chunk contents at a different wall
+     * time still compares equal. Every other file is hashed verbatim.
+     *
+     * <p>Per the Anvil (MCA) format: each 4 KiB sector at offset
+     * {@code 0x1000..0x1FFF} holds a big-endian {@code SecondsSinceEpoch}
+     * timestamp per chunk slot ({@code (chunkX & 31) + (chunkZ & 31) * 32})
+     * indicating when that chunk was last written. Zeroing that
+     * region only changes the reported "last write time" — chunk
+     * payload starts at sector 2 (0x2000) — so the game is not
+     * affected. /67 review finding #13.
+     */
+    static String hashFile(Path file, String name) {
+        if (!name.endsWith(".mca")) return sha256(file);
+        try {
+            byte[] bytes = Files.readAllBytes(file);
+            // If the file is shorter than the timestamp table, hash as-is.
+            if (bytes.length >= 8192) {
+                // Zero the second 4KiB sector (timestamps table).
+                java.util.Arrays.fill(bytes, 4096, 8192, (byte) 0);
+            }
+            MessageDigest md = MessageDigest.getInstance("SHA-256");
+            md.update(bytes);
+            return toHex(md.digest());
+        } catch (NoSuchAlgorithmException e) {
+            throw new IllegalStateException("SHA-256 not available", e);
+        } catch (IOException e) {
+            throw new UncheckedIOException(e);
+        }
+    }
+
+    private static String toHex(byte[] digest) {
+        StringBuilder sb = new StringBuilder(digest.length * 2);
+        for (byte b : digest) {
+            sb.append(String.format("%02x", b & 0xff));
+        }
+        return sb.toString();
     }
 
     /**

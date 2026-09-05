@@ -70,6 +70,70 @@ class WorldDiffTest {
         assertThat(r.matches()).isTrue();
     }
 
+    // /67 review finding #13: .dat_old files legitimately differ across identical-seed runs.
+    @Test
+    void datOldSuffixIsIgnored(@TempDir Path tmp) throws IOException {
+        Path a = Files.createDirectory(tmp.resolve("a"));
+        Path b = Files.createDirectory(tmp.resolve("b"));
+        writeFile(a, "level.dat", "same");
+        writeFile(b, "level.dat", "same");
+        writeFile(a, "level.dat_old", "one-content");
+        writeFile(b, "level.dat_old", "totally-different-content");
+        writeFile(a, "scoreboard.dat_old", "x");
+        writeFile(b, "scoreboard.dat_old", "y");
+
+        WorldDiff.Result r = WorldDiff.compare(a, b);
+        assertThat(r.matches()).isTrue();
+    }
+
+    // /67 review finding #13: .mca region files carry per-sector timestamps that differ across runs.
+    @Test
+    void mcaFilesIgnoreTimestampHeader(@TempDir Path tmp) throws IOException {
+        Path a = Files.createDirectory(tmp.resolve("a"));
+        Path b = Files.createDirectory(tmp.resolve("b"));
+        // Build a minimal 8 KiB MCA: 4 KiB "offsets" (all zero), 4 KiB "timestamps".
+        // Then 4 more KiB of "chunk payload" (whatever bytes) that must match between files.
+        byte[] payload = new byte[4096];
+        java.util.Arrays.fill(payload, (byte) 0x42);
+
+        byte[] regionA = new byte[12288];
+        byte[] regionB = new byte[12288];
+        // Timestamps differ across runs (bytes 4096..8191).
+        for (int i = 4096; i < 8192; i++) regionA[i] = (byte) 0x11;
+        for (int i = 4096; i < 8192; i++) regionB[i] = (byte) 0x99;
+        // Chunk payload matches (bytes 8192..12287).
+        System.arraycopy(payload, 0, regionA, 8192, 4096);
+        System.arraycopy(payload, 0, regionB, 8192, 4096);
+
+        Files.createDirectories(a.resolve("region"));
+        Files.createDirectories(b.resolve("region"));
+        Files.write(a.resolve("region/r.0.0.mca"), regionA);
+        Files.write(b.resolve("region/r.0.0.mca"), regionB);
+
+        WorldDiff.Result r = WorldDiff.compare(a, b);
+        assertThat(r.matches()).as("MCA hash must strip the timestamps table").isTrue();
+    }
+
+    // Sanity: a real chunk payload difference in an MCA still trips the diff.
+    @Test
+    void mcaPayloadDifferenceStillTripsTheDiff(@TempDir Path tmp) throws IOException {
+        Path a = Files.createDirectory(tmp.resolve("a"));
+        Path b = Files.createDirectory(tmp.resolve("b"));
+        byte[] regionA = new byte[12288];
+        byte[] regionB = new byte[12288];
+        // Same timestamps, different payload.
+        regionA[10000] = (byte) 1;
+        regionB[10000] = (byte) 2;
+        Files.createDirectories(a.resolve("region"));
+        Files.createDirectories(b.resolve("region"));
+        Files.write(a.resolve("region/r.0.0.mca"), regionA);
+        Files.write(b.resolve("region/r.0.0.mca"), regionB);
+
+        WorldDiff.Result r = WorldDiff.compare(a, b);
+        assertThat(r.matches()).isFalse();
+        assertThat(r.mismatched()).containsKey("region/r.0.0.mca");
+    }
+
     @Test
     void nondeterministicDirectoriesAreSkippedWhole(@TempDir Path tmp) throws IOException {
         Path a = Files.createDirectory(tmp.resolve("a"));
