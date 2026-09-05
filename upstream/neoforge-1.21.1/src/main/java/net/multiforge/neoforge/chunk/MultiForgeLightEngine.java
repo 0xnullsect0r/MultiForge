@@ -4,7 +4,12 @@
  */
 package net.multiforge.neoforge.chunk;
 
+import java.lang.ref.WeakReference;
+import java.util.Collections;
+import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
+import java.util.WeakHashMap;
 import java.util.concurrent.CompletableFuture;
 import javax.annotation.Nullable;
 import net.minecraft.core.BlockPos;
@@ -21,6 +26,7 @@ import net.minecraft.world.level.chunk.DataLayer;
 import net.minecraft.world.level.chunk.LevelChunkSection;
 import net.minecraft.world.level.chunk.LightChunkGetter;
 import net.multiforge.api.world.WorldRef;
+import net.multiforge.runtime.diagnostics.ProbeRegistry;
 import net.multiforge.runtime.region.RegionizedTaskQueue;
 import net.multiforge.runtime.scheduler.MultiForgeRegionizedRuntime;
 import net.multiforge.runtime.scheduler.MultiThreadedSchedulerHost;
@@ -99,6 +105,22 @@ public final class MultiForgeLightEngine extends ThreadedLevelLightEngine {
             ProcessorMailbox.create(r -> {}, "multiforge-light-noop-mailbox");
 
     /**
+     * Task 4.5c — weak identity registry that lets the Vanilla
+     * {@link ThreadedLevelLightEngine} observation hunks resolve the
+     * per-instance {@code MultiForgeLightEngine} facade without holding
+     * the facade alive past ChunkMap teardown. Keyed by the vanilla
+     * engine identity ({@link WeakHashMap} compares by {@code equals},
+     * which for the un-overriding {@code ThreadedLevelLightEngine}
+     * defaults to identity), value is a {@link WeakReference} so the
+     * value chain does not strong-hold the key (facade is-a key). Access
+     * is synchronised via {@link Collections#synchronizedMap(Map)} — the
+     * hunks call {@link #of} once per invocation and no hot path lives
+     * here.
+     */
+    private static final Map<ThreadedLevelLightEngine, WeakReference<MultiForgeLightEngine>> REGISTRY =
+            Collections.synchronizedMap(new WeakHashMap<>());
+
+    /**
      * No-op sorter handle handed to super so the inherited
      * {@code sorterMailbox} field resolves for reflective mods. Every
      * {@code tell(msg)} drops the message — this class never enqueues
@@ -129,6 +151,115 @@ public final class MultiForgeLightEngine extends ThreadedLevelLightEngine {
         super(lightChunkGetter, chunkMap, skyLight, NO_OP_TASK_MAILBOX, NO_OP_SORTER);
         this.host = host;
         this.worldRef = Objects.requireNonNull(worldRef, "worldRef");
+        // Task 4.5c — publish this facade under the vanilla engine
+        // identity so Vanilla-side observation hunks can locate it via
+        // {@link #of}.
+        REGISTRY.put(this, new WeakReference<>(this));
+    }
+
+    /**
+     * Task 4.5c — unregister on close so the identity slot is freed
+     * when a ChunkMap tears down. The registry is weak-keyed so this
+     * is belt-and-braces; the explicit remove keeps the visible-size
+     * bounded for {@code /forge probes} readouts.
+     */
+    @Override
+    public void close() {
+        REGISTRY.remove(this);
+        super.close();
+    }
+
+    /**
+     * Task 4.5c — look up the {@code MultiForgeLightEngine} facade
+     * registered against {@code engine}. Returns {@link Optional#empty()}
+     * when either {@code engine} is {@code null}, the vanilla engine
+     * is not a MultiForge facade (e.g. during bootstrap before
+     * {@code ChunkMap} rewires the construction site, or in a unit
+     * test that builds a bare {@link ThreadedLevelLightEngine}), or the
+     * facade has already been GC'd. Never throws.
+     */
+    public static Optional<MultiForgeLightEngine> of(@Nullable ThreadedLevelLightEngine engine) {
+        if (engine == null) {
+            return Optional.empty();
+        }
+        WeakReference<MultiForgeLightEngine> ref = REGISTRY.get(engine);
+        if (ref == null) {
+            return Optional.empty();
+        }
+        MultiForgeLightEngine facade = ref.get();
+        return facade == null ? Optional.empty() : Optional.of(facade);
+    }
+
+    // -----------------------------------------------------------------
+    // Task 4.5c — observation hooks driven by Vanilla
+    // ThreadedLevelLightEngine patch hunks. Each is a no-op unless the
+    // vanilla engine has a MultiForge facade registered; each bumps a
+    // probe counter and returns without throwing or blocking so the
+    // Vanilla call site is guaranteed side-effect-safe.
+    // -----------------------------------------------------------------
+
+    /** Task 4.5c observer for {@link ThreadedLevelLightEngine#checkBlock}. */
+    public static void observeCheckBlock(@Nullable ThreadedLevelLightEngine engine, BlockPos pos) {
+        if (of(engine).isEmpty()) {
+            return;
+        }
+        ProbeRegistry.bump("mflightengine.observe.checkBlock");
+    }
+
+    /** Task 4.5c observer for {@link ThreadedLevelLightEngine#updateChunkStatus}. */
+    public static void observeUpdateChunkStatus(@Nullable ThreadedLevelLightEngine engine, ChunkPos pos) {
+        if (of(engine).isEmpty()) {
+            return;
+        }
+        ProbeRegistry.bump("mflightengine.observe.updateChunkStatus");
+    }
+
+    /** Task 4.5c observer for {@link ThreadedLevelLightEngine#updateSectionStatus}. */
+    public static void observeUpdateSectionStatus(
+            @Nullable ThreadedLevelLightEngine engine, SectionPos sectionPos, boolean isEmpty) {
+        if (of(engine).isEmpty()) {
+            return;
+        }
+        ProbeRegistry.bump("mflightengine.observe.updateSectionStatus");
+    }
+
+    /** Task 4.5c observer for {@link ThreadedLevelLightEngine#retainData}. */
+    public static void observeRetainData(@Nullable ThreadedLevelLightEngine engine, ChunkPos pos, boolean retain) {
+        if (of(engine).isEmpty()) {
+            return;
+        }
+        ProbeRegistry.bump("mflightengine.observe.retainData");
+    }
+
+    /** Task 4.5c observer for {@link ThreadedLevelLightEngine#queueSectionData}. */
+    public static void observeQueueSectionData(
+            @Nullable ThreadedLevelLightEngine engine, LightLayer layer, SectionPos sectionPos) {
+        if (of(engine).isEmpty()) {
+            return;
+        }
+        ProbeRegistry.bump("mflightengine.observe.queueSectionData");
+    }
+
+    /**
+     * Task 4.5c observer for {@link ThreadedLevelLightEngine#waitForPendingTasks}
+     * — start marker fired at method entry.
+     */
+    public static void observeWaitForTasksStart(@Nullable ThreadedLevelLightEngine engine) {
+        if (of(engine).isEmpty()) {
+            return;
+        }
+        ProbeRegistry.bump("mflightengine.observe.waitForTasks.start");
+    }
+
+    /**
+     * Task 4.5c observer for {@link ThreadedLevelLightEngine#waitForPendingTasks}
+     * — end marker fired when the returned future completes.
+     */
+    public static void observeWaitForTasksEnd(@Nullable ThreadedLevelLightEngine engine) {
+        if (of(engine).isEmpty()) {
+            return;
+        }
+        ProbeRegistry.bump("mflightengine.observe.waitForTasks.end");
     }
 
     // -----------------------------------------------------------------
