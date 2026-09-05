@@ -7,11 +7,13 @@ package net.multiforge.runtime.commands;
 import java.io.IOException;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Objects;
 import java.util.function.Consumer;
 import net.multiforge.api.world.WorldRef;
 import net.multiforge.runtime.config.MultiForgeConfig;
 import net.multiforge.runtime.config.MultiForgeConfigStore;
+import net.multiforge.runtime.diagnostics.ProbeRegistry;
 import net.multiforge.runtime.region.pin.RegionPin;
 import net.multiforge.runtime.region.pin.RegionPinManager;
 
@@ -31,6 +33,8 @@ import net.multiforge.runtime.region.pin.RegionPinManager;
  *   /multiforge region pin &lt;id&gt; &lt;world&gt; &lt;fromCX&gt; &lt;fromCZ&gt; &lt;toCX&gt; &lt;toCZ&gt;
  *   /multiforge region unpin &lt;id&gt;
  *   /multiforge region list
+ *   /multiforge probes           — dump all ProbeRegistry counters (diagnostics)
+ *   /multiforge probes &lt;prefix&gt;  — dump counters whose key starts with prefix
  * </pre>
  */
 public final class MultiForgeCommandDispatcher {
@@ -55,17 +59,45 @@ public final class MultiForgeCommandDispatcher {
         Objects.requireNonNull(args, "args");
         Objects.requireNonNull(output, "output");
         if (args.length == 0) {
-            output.accept("Usage: /multiforge <config|region> ...");
+            output.accept("Usage: /multiforge <config|region|probes> ...");
             return false;
         }
         return switch (args[0]) {
             case "config" -> handleConfig(args, output);
             case "region" -> handleRegion(args, output);
+            case "probes" -> handleProbes(args, output);
             default -> {
                 output.accept("Unknown subcommand: " + args[0]);
                 yield false;
             }
         };
+    }
+
+    /**
+     * Dump {@link ProbeRegistry} counters — the diagnostic surface the
+     * ownership guards, watchdog, and future M8 subsystems bump into
+     * on race detection. Operators use this to answer "are we hitting
+     * region-tick.overrun?" or "is Level.setBlock:off-thread growing?"
+     * without needing to grep the server log.
+     *
+     * <p>{@code /multiforge probes} dumps every counter; {@code /multiforge
+     * probes &lt;prefix&gt;} filters to keys starting with the given prefix
+     * (e.g. {@code /multiforge probes region-tick} for just the watchdog
+     * counters). Snapshot is sorted for stable operator-readable output.
+     */
+    private boolean handleProbes(String[] args, Consumer<String> output) {
+        String prefix = args.length > 1 ? args[1] : "";
+        Map<String, Long> snap = ProbeRegistry.snapshot();
+        int matched = 0;
+        for (Map.Entry<String, Long> e : snap.entrySet()) {
+            if (!e.getKey().startsWith(prefix)) continue;
+            output.accept(e.getKey() + " = " + e.getValue());
+            matched++;
+        }
+        if (matched == 0) {
+            output.accept(prefix.isEmpty() ? "(no probes recorded)" : "(no probes matching prefix '" + prefix + "')");
+        }
+        return true;
     }
 
     private boolean handleConfig(String[] args, Consumer<String> output) {

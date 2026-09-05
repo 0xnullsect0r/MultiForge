@@ -562,13 +562,10 @@ a real body:
   Fix requires taking the regionizer's read lock around the enqueue.
   Attempted-and-reverted post-add-recheck approach had a
   double-execute race.
-- **`WorldGenLevel`-guard bypass** (`multiforge-patches/01-ownership/
-  LevelAccessor.java.patch`): a prior fix attempted to skip the
-  ownership guard for worldgen calls via `this instanceof WorldGenLevel`
-  — regressed the guard for ServerLevel too, because
-  `ServerLevel implements WorldGenLevel`. Reverted. Proper fix
-  discriminates on `WorldGenRegion` specifically (or the actual
-  non-server worldgen carrier), not the interface.
+- ~~**`WorldGenLevel`-guard bypass**~~ FIXED — new discriminator
+  `WorldGenLevel && !(this instanceof ServerLevel)` correctly bypasses
+  only WorldGenRegion (verified as the only non-ServerLevel
+  WorldGenLevel implementer in the vanilla source).
 - **`checkOnly` semantics for return-value patches** (attempted for
   Level.setBlock / ServerLevel.addFreshEntity): trading dishonest
   sentinel return for real concurrent corruption is not net-safer.
@@ -577,12 +574,12 @@ a real body:
   cause races), rerouted mutation runs later on the main executor.
   Proper fix requires a synchronous-round-trip mechanism that does
   not block on a region worker thread.
-- **`WorldDiff` MCA location table not stripped**: sector-0 (bytes
-  0-4095) holds per-chunk `(sectorOffset, sectorCount)` which vanilla
-  writes non-deterministically across identical-seed reruns when
-  chunks grow or defrag. Only the timestamp table (bytes 4096-8191)
-  is currently zeroed. Sub-step 8b's semantic NBT diff will supersede
-  this bespoke handling.
+- ~~**`WorldDiff` MCA location table not stripped**~~ FIXED —
+  canonical per-slot MCA hash now walks the location table, reads
+  each chunk's own declared length, and hashes payloads in fixed
+  slot-id order. Stable across timestamp + sector-reorder variation;
+  still catches payload and presence differences. Supersedes the
+  prior byte-range stripping.
 - **`OwnershipEnforcer.unbindTickThreadAndRerouteTarget` race**:
   narrows-not-closes the executor race — an off-thread mutation
   observing `tickThread` between the null-write and the reroute-target

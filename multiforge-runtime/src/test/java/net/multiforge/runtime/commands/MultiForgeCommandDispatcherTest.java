@@ -66,4 +66,52 @@ class MultiForgeCommandDispatcherTest {
         List<String> out = new ArrayList<>();
         assertThat(d.dispatch(new String[] {"nonsense"}, out::add)).isFalse();
     }
+
+    // /multiforge probes — exposes ProbeRegistry counters to operators.
+    @Test
+    void probesEmptySnapshotReportsNone(@TempDir Path tmp) throws IOException {
+        net.multiforge.runtime.diagnostics.ProbeRegistry.resetForTesting();
+        MultiForgeCommandDispatcher d = make(tmp);
+        List<String> out = new ArrayList<>();
+        assertThat(d.dispatch(new String[] {"probes"}, out::add)).isTrue();
+        assertThat(out).contains("(no probes recorded)");
+    }
+
+    @Test
+    void probesDumpsAllCountersSorted(@TempDir Path tmp) throws IOException {
+        net.multiforge.runtime.diagnostics.ProbeRegistry.resetForTesting();
+        net.multiforge.runtime.diagnostics.ProbeRegistry.bump("zeta.thing");
+        net.multiforge.runtime.diagnostics.ProbeRegistry.bump("alpha.thing");
+        net.multiforge.runtime.diagnostics.ProbeRegistry.bump("alpha.thing");
+
+        MultiForgeCommandDispatcher d = make(tmp);
+        List<String> out = new ArrayList<>();
+        assertThat(d.dispatch(new String[] {"probes"}, out::add)).isTrue();
+        // Alphabetical order because ProbeRegistry.snapshot returns a sorted TreeMap.
+        assertThat(out).containsExactly("alpha.thing = 2", "zeta.thing = 1");
+    }
+
+    @Test
+    void probesPrefixFiltersMatching(@TempDir Path tmp) throws IOException {
+        net.multiforge.runtime.diagnostics.ProbeRegistry.resetForTesting();
+        net.multiforge.runtime.diagnostics.ProbeRegistry.bump("region-tick.overrun");
+        net.multiforge.runtime.diagnostics.ProbeRegistry.bump("Level.setBlock:off-thread");
+        net.multiforge.runtime.diagnostics.ProbeRegistry.bump("Level.setBlock:off-thread");
+
+        MultiForgeCommandDispatcher d = make(tmp);
+        List<String> out = new ArrayList<>();
+        assertThat(d.dispatch(new String[] {"probes", "region-tick"}, out::add)).isTrue();
+        assertThat(out).containsExactly("region-tick.overrun = 1");
+    }
+
+    @Test
+    void probesPrefixNoMatchReportsMissing(@TempDir Path tmp) throws IOException {
+        net.multiforge.runtime.diagnostics.ProbeRegistry.resetForTesting();
+        net.multiforge.runtime.diagnostics.ProbeRegistry.bump("region-tick.overrun");
+
+        MultiForgeCommandDispatcher d = make(tmp);
+        List<String> out = new ArrayList<>();
+        assertThat(d.dispatch(new String[] {"probes", "nomatch"}, out::add)).isTrue();
+        assertThat(out).anyMatch(l -> l.contains("no probes matching prefix 'nomatch'"));
+    }
 }
