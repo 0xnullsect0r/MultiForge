@@ -172,9 +172,6 @@ public final class TickRegionScheduler implements AutoCloseable, RegionListener 
                 long elapsed = System.nanoTime() - start;
                 s.mspt.recordNanos(elapsed);
                 region.markNotTicking();
-                // Drain any actions deferred from this tick (e.g. merge folds
-                // that RegionizedData deferred because target was TICKING).
-                region.runPostTickActions();
                 // Deadline = start-of-tick + one tick period, not
                 // now + one period — so slow regions catch up rather
                 // than drift.

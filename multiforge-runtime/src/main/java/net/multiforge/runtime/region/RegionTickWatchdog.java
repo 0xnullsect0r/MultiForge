@@ -65,7 +65,11 @@ public final class RegionTickWatchdog {
         if (raw == null || raw.isBlank()) return DEFAULT_WARN_MS;
         try {
             long parsed = Long.parseLong(raw.trim());
-            return parsed <= 0 ? DEFAULT_WARN_MS : parsed;
+            // Accept 0 as a documented "always warn" idiom; only negative
+            // values (nonsensical) fall back to the default. Earlier revision
+            // rejected 0 too, which silently coerced a legitimate operator
+            // knob to the default — see /67 round-2 finding.
+            return parsed < 0 ? DEFAULT_WARN_MS : parsed;
         } catch (NumberFormatException e) {
             return DEFAULT_WARN_MS;
         }

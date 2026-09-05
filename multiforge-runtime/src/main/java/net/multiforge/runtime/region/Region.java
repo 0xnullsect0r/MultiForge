@@ -6,9 +6,7 @@ package net.multiforge.runtime.region;
 
 import java.util.Collections;
 import java.util.HashSet;
-import java.util.Queue;
 import java.util.Set;
-import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.atomic.AtomicReference;
 
 /**
@@ -27,14 +25,6 @@ public final class Region {
     private final Set<SectionPos> sections = new HashSet<>(4);
     private final AtomicReference<RegionState> state = new AtomicReference<>(RegionState.TRANSIENT);
     private volatile long currentTick;
-    /**
-     * Actions to run on the region's worker thread after its current
-     * tick completes and before the next one starts. Used by
-     * {@link RegionizedData} to defer merge folds that would otherwise
-     * race a tick body iterating a slot value; see also the /67
-     * review's merge-during-tick race finding.
-     */
-    private final Queue<Runnable> postTickActions = new ConcurrentLinkedQueue<>();
 
     Region(RegionId id, int sectionChunkShift) {
         this.id = id;
@@ -126,38 +116,6 @@ public final class Region {
     /** For testing / diagnostics only. */
     public int sectionChunkShift() {
         return sectionChunkShift;
-    }
-
-    /**
-     * Enqueue {@code action} to run after this region's current tick
-     * completes. Safe to call from any thread. Actions execute on the
-     * worker thread that just finished the tick, before it moves on
-     * to schedule the next one.
-     */
-    public void addPostTickAction(Runnable action) {
-        postTickActions.add(action);
-    }
-
-    /**
-     * Drain and run every pending post-tick action. Called by
-     * {@link TickRegionScheduler} after {@link #markNotTicking}. Uncaught
-     * exceptions from an action are routed to the current thread's
-     * uncaught handler and do not prevent later actions from running.
-     */
-    void runPostTickActions() {
-        Runnable r;
-        while ((r = postTickActions.poll()) != null) {
-            try {
-                r.run();
-            } catch (Throwable t) {
-                Thread.currentThread().getUncaughtExceptionHandler().uncaughtException(Thread.currentThread(), t);
-            }
-        }
-    }
-
-    /** Test/observability only: post-tick action count without draining. */
-    public int postTickActionCount() {
-        return postTickActions.size();
     }
 
     static Set<SectionPos> emptySections() {

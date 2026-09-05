@@ -36,7 +36,9 @@ public final class ViolationLogger {
         if (raw == null || raw.isBlank()) return DEFAULT_PER_MIN;
         try {
             long parsed = Long.parseLong(raw.trim());
-            return parsed <= 0 ? DEFAULT_PER_MIN : parsed;
+            // Accept 0 as a legitimate "silence all warnings" idiom; only
+            // negative values (nonsensical) fall back. See /67 round-2 finding.
+            return parsed < 0 ? DEFAULT_PER_MIN : parsed;
         } catch (NumberFormatException e) {
             return DEFAULT_PER_MIN;
         }

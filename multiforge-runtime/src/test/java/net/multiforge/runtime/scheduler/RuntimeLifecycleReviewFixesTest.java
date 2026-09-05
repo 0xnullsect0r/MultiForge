@@ -71,6 +71,8 @@ class RuntimeLifecycleReviewFixesTest {
     }
 
     // /67 finding #3: RegionTickWatchdog and ViolationLogger tolerate garbage sysprop values.
+    // Post round-2 revert: `0` is now a LEGITIMATE value (always-warn / silence), only
+    // negative and non-numeric fall back to the default.
     @Test
     void watchdogParseWarnMsHandlesGarbage() {
         assertThat(RegionTickWatchdog.parseWarnMs(null)).isEqualTo(500L);
@@ -78,8 +80,8 @@ class RuntimeLifecycleReviewFixesTest {
         assertThat(RegionTickWatchdog.parseWarnMs("  ")).isEqualTo(500L);
         assertThat(RegionTickWatchdog.parseWarnMs("500ms")).isEqualTo(500L); // units → NFE → fallback
         assertThat(RegionTickWatchdog.parseWarnMs("nonsense")).isEqualTo(500L);
-        assertThat(RegionTickWatchdog.parseWarnMs("0")).isEqualTo(500L); // non-positive → fallback
-        assertThat(RegionTickWatchdog.parseWarnMs("-1")).isEqualTo(500L);
+        assertThat(RegionTickWatchdog.parseWarnMs("0")).isEqualTo(0L); // always-warn, legit
+        assertThat(RegionTickWatchdog.parseWarnMs("-1")).isEqualTo(500L); // negative → fallback
         assertThat(RegionTickWatchdog.parseWarnMs("1000")).isEqualTo(1000L);
     }
 
@@ -88,7 +90,8 @@ class RuntimeLifecycleReviewFixesTest {
         assertThat(ViolationLogger.parsePerMin(null)).isEqualTo(5L);
         assertThat(ViolationLogger.parsePerMin("")).isEqualTo(5L);
         assertThat(ViolationLogger.parsePerMin("5msg")).isEqualTo(5L);
-        assertThat(ViolationLogger.parsePerMin("0")).isEqualTo(5L);
+        assertThat(ViolationLogger.parsePerMin("0")).isEqualTo(0L); // silence all warnings, legit
+        assertThat(ViolationLogger.parsePerMin("-1")).isEqualTo(5L);
         assertThat(ViolationLogger.parsePerMin("10")).isEqualTo(10L);
     }
 
