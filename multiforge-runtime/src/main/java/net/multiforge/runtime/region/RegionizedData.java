@@ -150,9 +150,20 @@ public final class RegionizedData<T> implements RegionListener {
      * with {@code op}'s return. Intended for global-thread bookkeeping
      * (e.g. autosave, shutdown drain) where a single thread iterates
      * all slots.
+     *
+     * <p>A {@code null} return from {@code op} removes the slot entirely
+     * — matching the useful "drop this slot" idiom in Guava/Streams —
+     * rather than throwing NullPointerException from
+     * {@code ConcurrentHashMap.replaceAll} and leaving the map
+     * half-updated.
      */
     public void mapInPlace(Function<T, T> op) {
-        slots.replaceAll((id, v) -> op.apply(v));
+        // Cannot use replaceAll — CHM.replaceAll disallows null return.
+        slots.forEach((id, v) -> {
+            T nv = op.apply(v);
+            if (nv == null) slots.remove(id, v);
+            else slots.replace(id, v, nv);
+        });
     }
 
     // === RegionListener ===

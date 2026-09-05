@@ -60,6 +60,11 @@ public final class RegionizedChunkLifecycle {
         if (world == null) return;
         ChunkPos pos = event.getChunk().getPos();
         host.registerChunk(world, pos.x, pos.z);
+        // Drain any tasks that were enqueued for this chunk before its region
+        // existed (e.g. mods that scheduled work in ServerAboutToStart). Without
+        // this call the orphan queue accumulates for the whole server session
+        // and no worker ever homes those tasks — see /67 review finding #9.
+        host.taskQueue().reroute();
     }
 
     private static void onChunkUnloaded(final ChunkEvent.Unload event) {

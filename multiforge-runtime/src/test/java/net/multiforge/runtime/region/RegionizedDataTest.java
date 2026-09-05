@@ -159,6 +159,27 @@ class RegionizedDataTest {
         assertThat(data.peek(b)).containsExactly("g-touch-b");
     }
 
+    // /67 review finding #12: mapInPlace must handle null returns from op without CHM NPE.
+    @Test
+    void mapInPlaceNullReturnRemovesSlot() {
+        ThreadedRegionizer regionizer = new ThreadedRegionizer(WORLD, 0);
+        RegionizedData<List<String>> data = RegionizedData.of(ArrayList::new, (t, s) -> t.addAll(s));
+        regionizer.addListener(data);
+        Region a = regionizer.addChunk(new ChunkPos(0, 0));
+        Region b = regionizer.addChunk(new ChunkPos(100, 100));
+        OwnerToken.runAs(
+                OwnerToken.forRegion(a.id().value()), () -> data.getOrCreate(a).add("keep"));
+        OwnerToken.runAs(
+                OwnerToken.forRegion(b.id().value()), () -> data.getOrCreate(b).add("drop"));
+        assertThat(data.size()).isEqualTo(2);
+
+        // op returns null for slots containing "drop" → those slots are removed cleanly.
+        data.mapInPlace(v -> v.contains("drop") ? null : v);
+        assertThat(data.size()).isEqualTo(1);
+        assertThat(data.peek(a)).containsExactly("keep");
+        assertThat(data.peek(b)).isNull();
+    }
+
     @Test
     void regionDeathDropsSlot() {
         ThreadedRegionizer regionizer = new ThreadedRegionizer(WORLD, 0);
