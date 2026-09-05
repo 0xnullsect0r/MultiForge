@@ -14,6 +14,11 @@
 - [ ] Tests added or updated; `./gradlew build` green locally.
 - [ ] No dependency additions (or PR body explains license/binary-size review).
 - [ ] Diff does **not** contain a real Ed25519 private key or license token.
+- [ ] **Chunk-system regression run** (only if this PR touches `multiforge-runtime/src/main/java/net/multiforge/runtime/chunk/`, `net/multiforge/runtime/region/`, `multiforge-patches/04-chunk-system/`, or `upstream/neoforge-1.21.1/src/main/java/net/multiforge/neoforge/chunk/`):
+  - [ ] `./gradlew :multiforge-runtime:build` green
+  - [ ] `./gradlew :multiforge-bench:determinism` byte-identical parity vs. baseline (fixed seed, single worker)
+  - [ ] `./gradlew :multiforge-bench:determinism --workers=8` semantic NBT parity vs. baseline
+  - [ ] Strict-mode watchdog (`-Dmultiforge.regiontick.strict=on`) zero warns over 5-min gameTestServer
 
 ## Test plan
 
