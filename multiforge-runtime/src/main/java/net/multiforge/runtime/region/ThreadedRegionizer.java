@@ -16,6 +16,8 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.locks.Lock;
+import java.util.concurrent.locks.ReentrantReadWriteLock;
 import java.util.function.Consumer;
 import net.multiforge.api.world.ChunkPos;
 import net.multiforge.api.world.WorldRef;
@@ -34,7 +36,11 @@ import net.multiforge.api.world.WorldRef;
  * <p>The class is safe for concurrent reads via {@link
  * #regionAtChunk(int, int)}; structural mutations ({@link
  * #addChunk(ChunkPos)} / {@link #removeChunk(ChunkPos)}) are guarded
- * by an internal write lock.
+ * by an internal {@link ReentrantReadWriteLock}. External callers that
+ * must observe a stable region ownership for the duration of some
+ * multi-step read (e.g. {@link RegionizedTaskQueue#queueChunkTask
+ * queueChunkTask}'s resolve-then-enqueue) can acquire {@link #readLock()}
+ * to block merge/split for the duration of the read.
  */
 public final class ThreadedRegionizer {
 
@@ -45,7 +51,21 @@ public final class ThreadedRegionizer {
     private final WorldRef world;
     private final int sectionChunkShift;
     private final ConcurrentMap<SectionPos, Region> sectionToRegion = new ConcurrentHashMap<>();
-    private final Object writeLock = new Object();
+
+    /**
+     * Structural mutation lock. Write side is held by {@link #addChunk} /
+     * {@link #removeChunk} (and the {@link #mergeInto} / {@link
+     * #splitIfDisconnected} helpers they call). Read side is exposed via
+     * {@link #readLock()} so external callers can pin the section→region
+     * map for the duration of a multi-step read.
+     *
+     * <p>Phase 1 task 1.2: {@link RegionizedTaskQueue#queueChunkTask}
+     * acquires this read lock around its resolve-then-enqueue pair so
+     * that a concurrent merge/death cannot silently drop the task by
+     * clearing the dying region's inbox between the two steps.
+     */
+    private final ReentrantReadWriteLock rwLock = new ReentrantReadWriteLock();
+
     private final List<RegionListener> listeners = new CopyOnWriteArrayList<>();
 
     public ThreadedRegionizer(WorldRef world, int sectionChunkShift) {
@@ -79,6 +99,17 @@ public final class ThreadedRegionizer {
         listeners.remove(listener);
     }
 
+    /**
+     * Expose the read side of the structural mutation lock. Held for the
+     * duration of a read that must observe a stable section→region
+     * mapping (see the class javadoc). Cheap to acquire (multiple readers
+     * proceed in parallel); blocks only while a merger/split is in
+     * progress.
+     */
+    public Lock readLock() {
+        return rwLock.readLock();
+    }
+
     /** @return the region currently owning {@code (chunkX, chunkZ)}, or null if unoccupied. */
     public Region regionAtChunk(int chunkX, int chunkZ) {
         return sectionToRegion.get(SectionPos.ofChunk(chunkX, chunkZ, sectionChunkShift));
@@ -107,7 +138,8 @@ public final class ThreadedRegionizer {
      */
     public Region addChunk(ChunkPos pos) {
         SectionPos section = SectionPos.ofChunk(pos.x(), pos.z(), sectionChunkShift);
-        synchronized (writeLock) {
+        rwLock.writeLock().lock();
+        try {
             Region existing = sectionToRegion.get(section);
             if (existing != null) return existing;
 
@@ -131,6 +163,8 @@ public final class ThreadedRegionizer {
                 fireRegionCreated(target);
             }
             return target;
+        } finally {
+            rwLock.writeLock().unlock();
         }
     }
 
@@ -141,7 +175,8 @@ public final class ThreadedRegionizer {
      */
     public void removeChunk(ChunkPos pos) {
         SectionPos section = SectionPos.ofChunk(pos.x(), pos.z(), sectionChunkShift);
-        synchronized (writeLock) {
+        rwLock.writeLock().lock();
+        try {
             Region region = sectionToRegion.remove(section);
             if (region == null) return;
             region.removeSection(section);
@@ -152,6 +187,8 @@ public final class ThreadedRegionizer {
             }
             // Recompute connected components; each becomes its own region.
             splitIfDisconnected(region);
+        } finally {
+            rwLock.writeLock().unlock();
         }
     }
 

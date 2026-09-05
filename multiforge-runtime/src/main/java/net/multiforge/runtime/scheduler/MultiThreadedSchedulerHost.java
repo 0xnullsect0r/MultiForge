@@ -78,14 +78,26 @@ public final class MultiThreadedSchedulerHost implements SchedulerHost, AutoClos
     public MultiThreadedSchedulerHost(MultiForgeConfig config, RegionTickBody body) {
         this.config = Objects.requireNonNull(config, "config");
         this.regionizerFactory = world -> new ThreadedRegionizer(world, config.regionSize());
-        this.taskQueue = new RegionizedTaskQueue((w, x, z) -> {
-            // Use regionizerForOrNull here (not regionizerFor): OwnerLookup's
-            // contract is "return null for unloaded/unknown chunks", and
-            // auto-creating a regionizer on lookup lets a typoed WorldRef
-            // grow the map unboundedly (finding #11 of the /67 review).
-            ThreadedRegionizer r = regionizerForOrNull(w);
-            return r == null ? null : r.regionAtChunk(x, z);
-        });
+        this.taskQueue = new RegionizedTaskQueue(
+                (w, x, z) -> {
+                    // Use regionizerForOrNull here (not regionizerFor): OwnerLookup's
+                    // contract is "return null for unloaded/unknown chunks", and
+                    // auto-creating a regionizer on lookup lets a typoed WorldRef
+                    // grow the map unboundedly (finding #11 of the /67 review).
+                    ThreadedRegionizer r = regionizerForOrNull(w);
+                    return r == null ? null : r.regionAtChunk(x, z);
+                },
+                // Phase 1 task 1.2: wire the per-world regionizer read lock
+                // so RegionizedTaskQueue.queueChunkTask pins section→region
+                // mapping across its resolve-then-enqueue. Same "null when
+                // regionizer not materialised" contract as OwnerLookup —
+                // legitimate lookups without a live regionizer degrade to
+                // the orphan-queue path with no locking (no merge race can
+                // fire before the regionizer exists).
+                w -> {
+                    ThreadedRegionizer r = regionizerForOrNull(w);
+                    return r == null ? null : r.readLock();
+                });
         this.scheduler = new TickRegionScheduler(config.tickWorkerCount(), body, taskQueue, 128);
         this.chunkTaskScheduler = new ChunkTaskScheduler(taskQueue, (w, x, z) -> {
             ThreadedRegionizer r = regionizerForOrNull(w);
