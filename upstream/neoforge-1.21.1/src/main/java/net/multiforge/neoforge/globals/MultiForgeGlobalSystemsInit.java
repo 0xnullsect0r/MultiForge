@@ -17,6 +17,7 @@ import net.multiforge.neoforge.RegionizedTickCoordinator;
 import net.multiforge.runtime.chunk.ChunkHolderManager;
 import net.multiforge.runtime.diagnostics.ViolationLogger;
 import net.multiforge.runtime.globals.BossEventSystem;
+import net.multiforge.runtime.globals.CommandDispatchSystem;
 import net.multiforge.runtime.globals.DragonFightSystem;
 import net.multiforge.runtime.globals.GlobalSystems;
 import net.multiforge.runtime.globals.RaidStateSnapshot;
@@ -108,6 +109,26 @@ public final class MultiForgeGlobalSystemsInit {
         systems.register(dragonFight);
         GlobalSystemsBridge.bindDragonFight(dragonFight);
         installDragonFightLevelLifecycleListeners(dragonFight, host);
+
+        // MultiForge M5 (Track B, B2.8): register the CommandDispatch global
+        // subsystem — the last of the eight B2.x migrations. Registered
+        // server-wide (not per-level, unlike every B2low/B2.6/B2.7 target)
+        // since Commands.performPrefixedCommand/ServerFunctionManager.execute
+        // are server-wide entry points with no per-level registration to
+        // hook, per docs/design/global-region.md §6.3's command-dispatch row
+        // and the plan's Track B2.8 task. "multiforge:global" matches the
+        // synthetic global world's WorldRef constructed by
+        // MultiThreadedSchedulerHost's own constructor (§1.1) — not
+        // re-derived from a field accessor since none is exposed; the
+        // literal is the same stable contract host.globalRegion() ticks
+        // against.
+        CommandDispatchSystem commandDispatch = new CommandDispatchSystem(
+                effects,
+                host.taskQueue()::queueChunkTask,
+                net.multiforge.api.world.WorldRef.of("multiforge:global"),
+                host.entityMigrationCoordinator());
+        systems.register(commandDispatch);
+        GlobalSystemsBridge.bindCommandDispatch(commandDispatch);
     }
 
     private static void installDragonFightLevelLifecycleListeners(

@@ -1,0 +1,30 @@
+--- a/net/minecraft/server/ServerFunctionManager.java
++++ b/net/minecraft/server/ServerFunctionManager.java
+@@ -59,6 +59,27 @@
+     }
+ 
+     public void execute(CommandFunction<CommandSourceStack> p_305881_, CommandSourceStack p_136114_) {
++        // MultiForge (multiforge-patches/08-globals/): function dispatch migrates onto
++        // region-scoped or global-region dispatch (net.multiforge.runtime.globals.CommandDispatchSystem)
++        // once the subsystem is installed — see docs/design/global-region.md §6.3 and the
++        // M4+M5+M6 landing plan's Track B2.8. Falls through to the original Vanilla body
++        // otherwise (bootstrap window, or MultiForge not installed at all).
++        if (net.multiforge.neoforge.globals.GlobalSystemsBridge.commandDispatchReady()) {
++            net.multiforge.neoforge.globals.GlobalSystemsBridge.dispatchFunction(this, p_305881_, p_136114_);
++            return;
++        }
++        this.mfExecuteBody(p_305881_, p_136114_);
++    }
++
++    /**
++     * MultiForge (multiforge-patches/08-globals/): the original, unmodified
++     * {@code execute} body — see {@code
++     * ServerLevel.mfAdvanceWeatherCycleBody}'s javadoc for the extraction
++     * rationale. Invoked directly on the MultiForge-off fallthrough, or via
++     * {@code GlobalSystemsBridge.dispatchFunction}'s routed closure once a
++     * dispatch destination has been chosen.
++     */
++    public void mfExecuteBody(CommandFunction<CommandSourceStack> p_305881_, CommandSourceStack p_136114_) {
+         ProfilerFiller profilerfiller = this.server.getProfiler();
+         profilerfiller.push(() -> "function " + p_305881_.id());
+ 
