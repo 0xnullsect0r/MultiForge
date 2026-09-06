@@ -1,0 +1,17 @@
+--- a/net/minecraft/world/level/chunk/LevelChunk.java
++++ b/net/minecraft/world/level/chunk/LevelChunk.java
+@@ -355,6 +355,14 @@
+     }
+ 
+     public void addAndRegisterBlockEntity(BlockEntity p_156391_) {
++        // MultiForge (multiforge-patches/05-entity-migration/, M4 Track A2.9): no direct
++        // block-entity list mutation off-owner — mirrors the OwnershipGuard idiom already used by
++        // multiforge-patches/01-ownership/BlockEntity.java.patch's setChanged() guard.
++        if (!net.multiforge.neoforge.OwnershipGuard.canMutate("LevelChunk.addAndRegisterBlockEntity")) {
++            net.multiforge.neoforge.OwnershipGuard.reroute(
++                    "LevelChunk.addAndRegisterBlockEntity", () -> this.addAndRegisterBlockEntity(p_156391_));
++            return;
++        }
+         this.setBlockEntity(p_156391_);
+         if (this.isInLevel()) {
+             if (this.level instanceof ServerLevel serverlevel) {

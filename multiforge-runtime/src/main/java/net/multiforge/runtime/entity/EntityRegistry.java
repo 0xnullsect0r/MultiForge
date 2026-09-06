@@ -86,6 +86,22 @@ public final class EntityRegistry implements AutoCloseable {
         return byUuid.get(uuid);
     }
 
+    /**
+     * Refresh the stored payload for an already-registered, still-live entity (M4 Track A2
+     * addition). {@link net.multiforge.runtime.entity.EntityMigrationCoordinator#beginMigration}
+     * captures whatever payload is currently sitting in this registry's {@link Entry} — for the
+     * Vanilla binding that means the fork glue must write a fresh {@code entity.saveWithoutId(tag)}
+     * capture here immediately before calling {@code beginMigration}, since a walking entity's NBT
+     * (position, health, inventory, ...) is stale the moment it was first registered. No-op
+     * (returns {@code false}) if {@code uuid} is not currently live — a caller racing a concurrent
+     * retire/migrate-away should treat that as "nothing to refresh," not an error.
+     */
+    public boolean updatePayload(UUID uuid, String payload) {
+        Entry updated =
+                byUuid.computeIfPresent(uuid, (id, prev) -> new Entry(prev.ref(), payload == null ? "" : payload));
+        return updated != null;
+    }
+
     public Entry remove(UUID uuid) {
         return byUuid.remove(uuid);
     }

@@ -39,6 +39,9 @@ import net.multiforge.runtime.chunk.TicketType;
 import net.multiforge.runtime.config.MultiForgeConfig;
 import net.multiforge.runtime.diagnostics.ProbeRegistry;
 import net.multiforge.runtime.diagnostics.ViolationLogger;
+import net.multiforge.runtime.entity.EntityMigrationCoordinator;
+import net.multiforge.runtime.entity.EntityRegistry;
+import net.multiforge.runtime.entity.PlayerJoinCoordinator;
 import net.multiforge.runtime.globals.CrossRegionEffects;
 import net.multiforge.runtime.globals.GlobalSystems;
 import net.multiforge.runtime.globals.GlobalTickContext;
@@ -147,6 +150,19 @@ public final class MultiThreadedSchedulerHost implements SchedulerHost, AutoClos
     // globalRegion/globalRegionizer per docs/design/global-region.md §2.3.
     private final GlobalSystems globalSystems = new GlobalSystems();
 
+    // M4 Track A2 wiring: per-host entity registry + migration coordinator, bound to this host's
+    // own taskQueue and chunkManagerFor lookup so a cross-region hop's BORDER-gated completion
+    // (docs/design/entity-migration.md §3) resolves against the same regionizers everything else
+    // in this host uses. One instance per host lifetime, matching chunkManagers/taskQueue/scheduler
+    // above — constructed in the constructor body (after taskQueue is assigned) and closed
+    // alongside them in close(). playerJoinCoordinator is wired against the synthetic global
+    // region's WorldRef so ServerConnectionListener's login-complete hop (fork glue) has a
+    // ready-made 2-hop (netty -> global -> spawn chunk) target without constructing its own
+    // EntityRegistry.
+    private final EntityRegistry entityRegistry = new EntityRegistry();
+    private final EntityMigrationCoordinator entityMigrationCoordinator;
+    private final PlayerJoinCoordinator playerJoinCoordinator;
+
     public MultiThreadedSchedulerHost(MultiForgeConfig config) {
         this(config, region -> {}); // no-op tick body until M2 patch supplies the vanilla body
     }
@@ -207,6 +223,22 @@ public final class MultiThreadedSchedulerHost implements SchedulerHost, AutoClos
         // handles it via the listener) — keeping the explicit call for
         // symmetry with the previous shape / test readability.
         scheduler.register(globalRegion);
+
+        // M4 Track A2: constructed here (not as a field initializer) because
+        // EntityMigrationCoordinator requires a non-null taskQueue, which this constructor only
+        // just assigned above. chunkManagerFor is the *creating* accessor (not
+        // chunkManagerForOrNull) — the coordinator's BORDER-gated completeAt needs a live
+        // ChunkHolderManager for the destination world even the first time an entity migrates
+        // there, matching docs/design/entity-migration.md §3.2.
+        this.entityMigrationCoordinator =
+                new EntityMigrationCoordinator(this.taskQueue, this.entityRegistry, this::chunkManagerFor);
+        // playerJoinCoordinator hops through the synthetic global region exactly like every other
+        // GlobalDomain dispatch (see enqueueOnGlobal below) — the "wakeup" is a no-op here because
+        // the global region already self-ticks on the scheduler's own worker loop; a dedicated
+        // wakeup signal is only needed if login hand-off must preempt the global region's normal
+        // tick cadence, which M4 does not require.
+        this.playerJoinCoordinator =
+                new PlayerJoinCoordinator(this.taskQueue, this.entityRegistry, globalWorld, () -> {});
 
         AtomicInteger dSeq = new AtomicInteger();
         this.delayedExec = Executors.newScheduledThreadPool(1, r -> {
@@ -294,6 +326,26 @@ public final class MultiThreadedSchedulerHost implements SchedulerHost, AutoClos
 
     public RegionizedTaskQueue taskQueue() {
         return taskQueue;
+    }
+
+    /**
+     * Per-host {@link EntityRegistry} (M4 Track A2). The {@code net.multiforge.neoforge.entity}
+     * fork glue binds Vanilla {@code Entity} lifecycle call sites (add/remove/move/teleport/change
+     * dimension) to this single registry so every world shares one UUID-keyed table, matching
+     * Vanilla's own per-server (not per-level) entity UUID uniqueness invariant.
+     */
+    public EntityRegistry entityRegistry() {
+        return entityRegistry;
+    }
+
+    /** Per-host {@link EntityMigrationCoordinator} (M4 Track A2) — see {@link #entityRegistry()}. */
+    public EntityMigrationCoordinator entityMigrationCoordinator() {
+        return entityMigrationCoordinator;
+    }
+
+    /** Per-host {@link PlayerJoinCoordinator} (M4 Track A2) — see {@link #entityRegistry()}. */
+    public PlayerJoinCoordinator playerJoinCoordinator() {
+        return playerJoinCoordinator;
     }
 
     public TickRegionScheduler scheduler() {
@@ -791,6 +843,7 @@ public final class MultiThreadedSchedulerHost implements SchedulerHost, AutoClos
     @Override
     public void close() {
         scheduler.close();
+        entityRegistry.close();
         delayedExec.shutdownNow();
         asyncExec.shutdownNow();
         try {

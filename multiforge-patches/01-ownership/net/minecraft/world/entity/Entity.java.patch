@@ -1,6 +1,6 @@
 --- a/net/minecraft/world/entity/Entity.java
 +++ b/net/minecraft/world/entity/Entity.java
-@@ -356,6 +356,11 @@
+@@ -356,7 +356,19 @@
      }
  
      public void remove(Entity.RemovalReason p_146834_) {
@@ -10,5 +10,13 @@
 +            return;
 +        }
          this.setRemoved(p_146834_);
++        // MultiForge (multiforge-patches/05-entity-migration/, M4 Track A2 — extends this
++        // 01-ownership hunk rather than adding a second patch on the same file/method): on the
++        // RESIDENT -> RETIRED transition, retire this entity's MigratingEntityRef so
++        // EntityRegistry's 200-tick TTL window (docs/design/entity-migration.md §4) starts now
++        // rather than whenever some other call site happens to notice. Idempotent — a second
++        // remove() on an already-retired (or never-tracked) entity is a no-op.
++        net.multiforge.neoforge.entity.EntityMigrationBridge.onRemoved(this);
      }
  
+     public void onClientRemoval() {
