@@ -56,6 +56,9 @@ class AutoSaveRunnerSerializerTest {
     void install() {
         MultiForgeConfig config = MultiForgeConfig.defaults().withCores(1).withThreadsPerCore(1);
         host = new MultiThreadedSchedulerHost(config);
+        // Shut down the scheduler worker pool up-front — see the
+        // matching comment in PhasedRegionTickBodyWiringTest.install.
+        host.scheduler().close();
     }
 
     @AfterEach

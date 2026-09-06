@@ -42,6 +42,12 @@ class PhasedRegionTickBodyWiringTest {
     void install() {
         MultiForgeConfig config = MultiForgeConfig.defaults().withCores(1).withThreadsPerCore(1);
         host = new MultiThreadedSchedulerHost(config);
+        // Shut down the scheduler worker pool up-front — TickRegionScheduler's
+        // constructor starts workers eagerly and they would race the tests'
+        // manual body.tickOnce below (observed on CI: expected size=1 but
+        // was=2, and mid-write journal reads throwing IOException). Each
+        // test drives its region's tick loop by hand.
+        host.scheduler().close();
     }
 
     @AfterEach
