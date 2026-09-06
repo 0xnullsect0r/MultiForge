@@ -25,6 +25,7 @@ import net.multiforge.api.world.BlockPos;
 import net.multiforge.api.world.ChunkPos;
 import net.multiforge.api.world.WorldRef;
 import net.multiforge.neoforge.RegionizedTickCoordinator;
+import net.multiforge.neoforge.tick.EntityTickRunnerBridge;
 import net.multiforge.runtime.chunk.ChunkHolderManager;
 import net.multiforge.runtime.diagnostics.ViolationLogger;
 import net.multiforge.runtime.globals.BossEventSystem;
@@ -150,6 +151,17 @@ public final class MultiForgeGlobalSystemsInit {
         // whole install() on a reused-JVM GameTestServer restart is safe.
         net.multiforge.neoforge.tick.ScheduledTickRunnerBridge.installOnEventBus();
         host.setBlockFluidRunner(new net.multiforge.neoforge.tick.ScheduledTickRunnerBridge());
+
+        // MultiForge M13 (B3.3): bind the per-region ENTITY_AI runner —
+        // docs/design/m13-b3-region-tick.md §5.2. Unlike the eight B2
+        // subsystems above, this isn't a GlobalSystem (it runs on every
+        // real region's own worker, not the synthetic global region), so
+        // it is bound directly onto the host rather than through
+        // `systems.register`. RegionizedTickCoordinator.regionsHandleEntityTicks
+        // starts reporting true for a world the instant its regionizer
+        // materialises, since `host.hasEntityTickRunner()` is now true
+        // host-wide from this point on.
+        host.setEntityTickRunner(new EntityTickRunnerBridge(host, server));
 
         // MultiForge M13 (Track B3, B3.4): install the per-region
         // BLOCK_ENTITIES bridge (docs/design/m13-b3-region-tick.md §5.3)

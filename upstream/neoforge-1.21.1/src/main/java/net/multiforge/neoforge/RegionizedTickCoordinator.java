@@ -263,6 +263,36 @@ public final class RegionizedTickCoordinator {
     }
 
     /**
+     * B3.3 (docs/design/m13-b3-region-tick.md §5.2): the {@code
+     * ServerLevel.tick}/{@code mfTickEntitiesAll} no-op guard —
+     * mirrors {@code GlobalSystemsBridge.weatherHandled}/{@code
+     * timeHandled}'s shape exactly (bound + has-a-target for this
+     * level), except the "target" here is host-wide (one {@link
+     * net.multiforge.runtime.region.EntityTickRunner}, not one per
+     * world) so the check is host-installed + regionizer-materialised
+     * + runner-registered rather than a per-world lookup.
+     *
+     * @return {@code true} iff (1) the MultiForge runtime is installed,
+     *     (2) a regionizer has been materialised for {@code level}'s
+     *     world, and (3) a real (non-default) {@link
+     *     net.multiforge.runtime.region.EntityTickRunner} has been
+     *     bound via {@code MultiThreadedSchedulerHost.setEntityTickRunner}
+     *     — in which case the patched {@code ServerLevel.tick}'s
+     *     Vanilla-inline entity pass must be skipped, because the
+     *     {@code ENTITY_AI} phase body ({@code phaseEntityAiTick})
+     *     already ticks every owned chunk's entities from each
+     *     region's own worker thread. {@code false} means the Vanilla-
+     *     inline fallback ({@code ServerLevel.mfTickEntitiesAll}) must
+     *     still run, exactly like the pre-B3.3 behaviour.
+     */
+    public static boolean regionsHandleEntityTicks(ServerLevel level) {
+        MultiThreadedSchedulerHost host = MultiForgeRegionizedRuntime.current();
+        if (host == null) return false;
+        if (host.regionizerForOrNull(asWorldRef(level)) == null) return false;
+        return host.hasEntityTickRunner();
+    }
+
+    /**
      * Thrown by {@link #dispatchLevelTick} only when
      * {@link RegionTickWatchdog.Mode#STRICT} is active and one or more
      * regions overran the barrier deadline. In the default
