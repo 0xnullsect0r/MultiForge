@@ -1,21 +1,40 @@
 #!/usr/bin/env bash
 #
-# MultiForge server container entrypoint. Wraps `java -jar
-# multiforge-server.jar` with:
+# MultiForge server container entrypoint.
 #
-#   - `itzg/minecraft-server`-style env-var handling (EULA, MEMORY, ...)
-#   - MultiForge-specific env-var → JVM property mapping
-#     (MULTIFORGE_LICENSE, MULTIFORGE_MODE, MULTIFORGE_CORES,
-#      MULTIFORGE_THREADS_PER_CORE)
-#   - EULA acceptance from the env var into eula.txt on first boot
+# Starts as root, fixes ownership of the mounted /data volume so the
+# unprivileged multiforge user can write to it, then drops privileges
+# via runuser to run the JVM.
 #
-# Exit codes:
-#   78  — license gate refused (see docs/license.md)
-#   0   — normal shutdown (/stop)
+# Env-var contract mirrors itzg/minecraft-server for drop-in
+# compatibility:
+#   EULA=TRUE|true         Accept the Minecraft EULA on first boot.
+#   MEMORY=4G              JVM -Xms/-Xmx.
+#   JVM_OPTS=...           Extra whitespace-separated JVM flags.
+#   MULTIFORGE_MODE=hybrid Region partitioning mode.
+#   MULTIFORGE_CORES=N     Worker-pool cores (defaults to config file).
+#   MULTIFORGE_THREADS_PER_CORE=N  Threads per core.
 
 set -euo pipefail
 
 log() { printf '[entrypoint] %s\n' "$*" >&2; }
+
+DATA_DIR="${DATA_DIR:-/data}"
+
+# ---- privilege drop -----------------------------------------------------
+# If we booted as root (the usual case — Docker's default), fix ownership
+# on the mounted /data so the multiforge user can write, then re-exec
+# ourselves as that user. If we're already unprivileged (someone set
+# `user:` in compose to a specific UID that matches the volume owner),
+# skip both steps.
+if [ "$(id -u)" = "0" ]; then
+    log "starting as root; fixing ownership on ${DATA_DIR} and dropping to multiforge"
+    mkdir -p "${DATA_DIR}"
+    chown -R multiforge:multiforge "${DATA_DIR}"
+    exec runuser -u multiforge -- "$0" "$@"
+fi
+
+# ---- everything below runs as the multiforge user ----------------------
 
 # 1. EULA acceptance (matches itzg image contract).
 if [ "${EULA:-}" = "TRUE" ] || [ "${EULA:-}" = "true" ]; then
@@ -33,12 +52,6 @@ if [ -n "${JVM_OPTS:-}" ]; then
 fi
 
 # 3. MultiForge-specific properties.
-if [ -n "${MULTIFORGE_LICENSE:-}" ]; then
-    # License is already picked up from MULTIFORGE_LICENSE by LicenseGate,
-    # but expose the value as a JVM property too so a mis-configured shell
-    # (no environ passthrough) still boots.
-    JVM_ARGS+=("-Dmultiforge.license=${MULTIFORGE_LICENSE}")
-fi
 JVM_ARGS+=("-Dmultiforge.mode=${MULTIFORGE_MODE}")
 if [ -n "${MULTIFORGE_CORES:-}" ]; then
     JVM_ARGS+=("-Dmultiforge.cores=${MULTIFORGE_CORES}")
@@ -47,24 +60,18 @@ if [ -n "${MULTIFORGE_THREADS_PER_CORE:-}" ]; then
     JVM_ARGS+=("-Dmultiforge.threadsPerCore=${MULTIFORGE_THREADS_PER_CORE}")
 fi
 
-# 4. Find the installer jar.
+# 4. Find the installer jar. The image ships one canonical installer;
+# glob so the version bump doesn't require an entrypoint edit.
 SERVER_JAR=""
-for candidate in /opt/multiforge/multiforge-installer-*.jar /opt/multiforge/multiforge-server-*.jar ; do
+for candidate in /opt/multiforge/multiforge-installer-*.jar ; do
     if [ -f "${candidate}" ]; then SERVER_JAR="${candidate}"; break; fi
 done
 
 if [ -z "${SERVER_JAR}" ]; then
-    # M0 fallback: no installer jar yet; just verify the license and exit.
-    log 'No server jar found (expected for pre-M2 builds). Running license gate only.'
-    RUNTIME_JAR=$(find /opt/multiforge/lib -maxdepth 1 -type f -name 'multiforge-runtime-*.jar' 2>/dev/null | sort | head -1)
-    LICENSE_JAR=$(find /opt/multiforge/lib -maxdepth 1 -type f -name 'multiforge-license-*.jar' 2>/dev/null | sort | head -1)
-    if [ -z "${LICENSE_JAR}" ] || [ -z "${RUNTIME_JAR}" ]; then
-        log 'No MultiForge jars found under /opt/multiforge/. Broken image.'
-        exit 2
-    fi
-    exec java "${JVM_ARGS[@]}" -cp "${LICENSE_JAR}:${RUNTIME_JAR}" \
-        net.multiforge.runtime.bootstrap.LicenseOnlyMain "$@"
+    log 'No MultiForge installer jar found under /opt/multiforge/. Broken image.'
+    exit 2
 fi
 
 log "Launching MultiForge from ${SERVER_JAR}"
+cd "${DATA_DIR}"
 exec java "${JVM_ARGS[@]}" -jar "${SERVER_JAR}" "$@"
