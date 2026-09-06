@@ -22,8 +22,27 @@ if (isPreReleaseVersion) {
     // release tags (those live on `main`, cut per CLAUDE.md's milestone
     // workflow). Rather than fabricate a git tag here, fall back to a static,
     // MultiForge-scoped version string when the lookup fails.
+    //
+    // MultiForge fork addition (M9 boot regression fix): upstream NeoForge
+    // tags start with a digit (e.g. "21.1.100"), so a jar filename like
+    // "neoforge-21.1.100-universal.jar" yields a valid automatic module
+    // name of "neoforge" out of the box — the `-<digit>` sequence is the
+    // version/name boundary Java's ModuleFinder scans for. MultiForge's
+    // own tags start with a letter (e.g. "m9-design-frozen"), so the
+    // computed version "m9-design.NN-beta-develop" gives a filename with
+    // NO `-<digit>` boundary; ModuleFinder then treats the whole filename
+    // as the module name, and a segment like "46" (or "0") fails as
+    // "not a valid Java identifier". Result: cpw's ModuleClassLoader
+    // silently loses class-visibility for the neoforge module — boot
+    // crashes with ClassNotFoundException on the first Vanilla type whose
+    // reflection walk crosses into net.neoforged.neoforge.* (in practice
+    // IHolderLookupProviderExtension). Guard by prepending the Minecraft
+    // version whenever the computed version doesn't already start with a
+    // digit, so the jar filename always carries a valid `-<digit>` version
+    // boundary.
     try {
-        project.version = gradleutils.version.toString()
+        def guVersion = gradleutils.version.toString()
+        project.version = guVersion ==~ /^\d.*/ ? guVersion : "${project.minecraft_version}-${guVersion}"
     } catch (Exception e) {
         project.version = "${project.minecraft_version}-multiforge-fork"
         logger.warn("gradleutils version calculation failed (${e.message}); using fallback version ${project.version}")
