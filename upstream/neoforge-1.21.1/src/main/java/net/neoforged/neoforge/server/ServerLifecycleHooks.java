@@ -154,6 +154,26 @@ public class ServerLifecycleHooks {
                             + foreign.getMessage());
             throw foreign;
         }
+        // M9 Phase 5 wave B: wire the real chunk-payload serializer now
+        // that install() above has either freshly installed a host or
+        // confirmed one is already installed (the AlreadyInstalledException
+        // reuse path — same JVM, successive GameTestServer instances).
+        // MultiForgeRegionizedRuntime.current() is guaranteed non-null
+        // here; the only path that leaves it null (the foreign-host
+        // IllegalStateException above) already rethrew and never reaches
+        // this line. setChunkSerializer is idempotent and volatile-backed,
+        // so re-registering on the reuse path is harmless.
+        //
+        // This closes the last functional gap in the FLUSH_OUTBOUND
+        // autosave wiring: without it, AutoSaveRunner keeps writing
+        // byte[0] payloads to the journal (durable but content-free),
+        // which is what made the Phase 7.2/7.3 determinism runs unable
+        // to validate against real world saves.
+        net.multiforge.runtime.scheduler.MultiThreadedSchedulerHost mfHost =
+                net.multiforge.runtime.scheduler.MultiForgeRegionizedRuntime.current();
+        if (mfHost != null) {
+            mfHost.setChunkSerializer(net.multiforge.neoforge.io.RegionChunkSerializer::serializeForJournal);
+        }
         // M8 sub-step 6a: install the ChunkEvent.Load/Unload listeners
         // that keep the regionizer in sync with Vanilla-loaded chunks.
         // Idempotent per JVM.

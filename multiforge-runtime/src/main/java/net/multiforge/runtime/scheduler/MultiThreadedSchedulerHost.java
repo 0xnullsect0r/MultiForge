@@ -13,6 +13,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.BiFunction;
 import java.util.function.Consumer;
 import java.util.function.Function;
 import net.multiforge.api.entity.EntityRef;
@@ -33,6 +34,7 @@ import net.multiforge.runtime.chunk.NewChunkHolder;
 import net.multiforge.runtime.chunk.Ticket;
 import net.multiforge.runtime.chunk.TicketType;
 import net.multiforge.runtime.config.MultiForgeConfig;
+import net.multiforge.runtime.diagnostics.ProbeRegistry;
 import net.multiforge.runtime.diagnostics.ViolationLogger;
 import net.multiforge.runtime.journal.AutoSaveRunner;
 import net.multiforge.runtime.journal.JournalReplayHarness;
@@ -110,6 +112,17 @@ public final class MultiThreadedSchedulerHost implements SchedulerHost, AutoClos
     private volatile RegionShutdownCoordinator shutdownCoordinator;
     private volatile RegionJournalLifecycle journalLifecycle;
     private volatile Path journalDir;
+
+    // Phase 5 wave B wiring: pluggable chunk-payload serializer for
+    // AutoSaveRunner. Defaults to the phase-6 stub (empty payload) so
+    // tests and any pre-fork-wiring boot window keep working exactly as
+    // before. The fork's ServerLifecycleHooks glue swaps this for
+    // RegionChunkSerializer.serializeForJournal once the real,
+    // MC-dependent serializer is available (see
+    // net.multiforge.neoforge.io.RegionChunkSerializer in the
+    // upstream/neoforge-1.21.1 fork module — multiforge-runtime itself
+    // must stay MC-free).
+    private volatile BiFunction<Region, NewChunkHolder, byte[]> chunkSerializer = (region, holder) -> new byte[0];
 
     private final ScheduledExecutorService delayedExec;
     private final ScheduledExecutorService asyncExec;
@@ -199,6 +212,60 @@ public final class MultiThreadedSchedulerHost implements SchedulerHost, AutoClos
     /** Install as the {@link ServerDomains} binding. */
     public void install() {
         ServerDomains.install(this);
+    }
+
+    /**
+     * Replace the chunk-payload serializer every {@link
+     * AutoSaveRunner} (existing and future) delegates to via {@link
+     * #serializeChunkSafely}. Every cached runner in {@link
+     * #autoSaveRunners} was built with {@code this::serializeChunkSafely}
+     * as its serializer, which re-reads this volatile field on every
+     * call — so swapping it here takes effect immediately for every
+     * region, not just ones whose runner is created afterwards.
+     *
+     * <p>Not part of {@link SchedulerHost}: this is a MultiForge-only
+     * escape hatch for MC-dependent glue that cannot live in this
+     * MC-free module. See {@code
+     * net.multiforge.neoforge.io.RegionChunkSerializer#serializeForJournal}
+     * in the fork module for the production implementation; the
+     * default ({@code (region, holder) -> new byte[0]}) is a
+     * deliberate no-op so tests that never call this method keep
+     * working unchanged.
+     *
+     * @param serializer must never block (CLAUDE.md rule 4). Exceptions
+     *     are swallowed by {@link #serializeChunkSafely} — a serializer
+     *     bug never reaches {@link AutoSaveRunner#runOnce} or the tick
+     *     pipeline, it just degrades that one chunk's payload to
+     *     {@code byte[0]} for that call.
+     */
+    public void setChunkSerializer(BiFunction<Region, NewChunkHolder, byte[]> serializer) {
+        this.chunkSerializer = Objects.requireNonNull(serializer, "serializer");
+    }
+
+    /**
+     * Exception-safe indirection to the current {@link
+     * #chunkSerializer}. Every {@link AutoSaveRunner} is built with a
+     * method reference to this method (not to {@link #chunkSerializer}
+     * directly) so that (a) {@link #setChunkSerializer} takes effect
+     * for already-cached runners too, and (b) a misbehaving serializer
+     * (the fork's {@code RegionChunkSerializer.serializeForJournal},
+     * or a test's spy/throwing lambda) can never propagate an
+     * exception into the FLUSH_OUTBOUND phase — CLAUDE.md rule 5's
+     * auto-reroute+warn default applies here just as much as it does
+     * to mod call sites.
+     */
+    private byte[] serializeChunkSafely(Region region, NewChunkHolder holder) {
+        try {
+            byte[] payload = chunkSerializer.apply(region, holder);
+            return payload != null ? payload : new byte[0];
+        } catch (RuntimeException e) {
+            ProbeRegistry.bump("autosave.serializer.failure");
+            ViolationLogger.warn(
+                    "MultiThreadedSchedulerHost.serializeChunkSafely",
+                    "chunk serializer threw for region " + region.id() + ": "
+                            + e.getClass().getSimpleName() + ": " + e.getMessage());
+            return new byte[0];
+        }
     }
 
     public RegionizedTaskQueue taskQueue() {
@@ -496,12 +563,13 @@ public final class MultiThreadedSchedulerHost implements SchedulerHost, AutoClos
      * or the region's journal failed to open — see {@link
      * RegionJournalLifecycle#onRegionCreated}).
      *
-     * <p>Uses a stub {@code byte[] -&gt; empty} serializer for now: the
-     * real chunk-payload serializer is wired in by a later Phase 6+7
-     * caller migration (RegionChunkSerializer). Until then autosave
-     * writes empty payloads to the journal — durable but content-free.
-     * TODO(phase-6-caller-migration): swap the stub for the real
-     * RegionChunkSerializer.
+     * <p>The runner is built with {@code this::serializeChunkSafely},
+     * an indirection to the pluggable {@link #chunkSerializer} (see
+     * {@link #setChunkSerializer}) rather than a hardcoded stub —
+     * production boot glue (the fork's {@code ServerLifecycleHooks})
+     * registers {@code RegionChunkSerializer.serializeForJournal}
+     * there; tests that never call {@link #setChunkSerializer} keep
+     * getting the {@code byte[0]} default.
      */
     private AutoSaveRunner autoSaveRunnerFor(Region region) {
         return autoSaveRunners.computeIfAbsent(region.id(), id -> {
@@ -517,10 +585,7 @@ public final class MultiThreadedSchedulerHost implements SchedulerHost, AutoClos
             return new AutoSaveRunner(
                     data,
                     journal,
-                    // Stub serializer: real payload wiring lands in
-                    // Phase 6+ caller migration when the RegionChunkSerializer
-                    // is available in the runtime.
-                    (r, holder) -> new byte[0],
+                    this::serializeChunkSafely,
                     PHASE_AUTOSAVE_MAX_CHUNKS_PER_TICK,
                     PHASE_AUTOSAVE_DEADLINE_NANOS);
         });

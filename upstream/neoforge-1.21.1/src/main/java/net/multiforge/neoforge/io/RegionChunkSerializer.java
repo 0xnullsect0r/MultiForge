@@ -13,10 +13,15 @@ import net.minecraft.nbt.NbtIo;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.entity.ai.village.poi.PoiManager;
 import net.minecraft.world.level.ChunkPos;
+import net.minecraft.world.level.Level;
 import net.minecraft.world.level.chunk.LevelChunk;
 import net.minecraft.world.level.chunk.ProtoChunk;
 import net.minecraft.world.level.chunk.storage.ChunkSerializer;
 import net.minecraft.world.level.chunk.storage.RegionStorageInfo;
+import net.multiforge.runtime.chunk.NewChunkHolder;
+import net.multiforge.runtime.diagnostics.ProbeRegistry;
+import net.multiforge.runtime.diagnostics.ViolationLogger;
+import net.multiforge.runtime.region.Region;
 
 /**
  * M9 Phase 3 task 3.5: fork-glue facade around Vanilla
@@ -83,6 +88,68 @@ public final class RegionChunkSerializer {
         ByteArrayInputStream in = new ByteArrayInputStream(bytes);
         CompoundTag tag = NbtIo.readCompressed(in, NbtAccounter.unlimitedHeap());
         return ChunkSerializer.read(level, poiManager, storageInfo, pos, tag);
+    }
+
+    /**
+     * M9 Phase 5 wave B: the production entry point registered via
+     * {@link net.multiforge.runtime.scheduler.MultiThreadedSchedulerHost#setChunkSerializer}
+     * from the fork's {@code ServerLifecycleHooks} boot glue. Bridges
+     * the MC-free {@code AutoSaveRunner} (which only knows about
+     * {@link Region} and {@link NewChunkHolder}) to the MC-dependent
+     * {@link #serialize(ServerLevel, LevelChunk)} above.
+     *
+     * <p>Runs on the owning region's worker thread inside the
+     * FLUSH_OUTBOUND phase (CLAUDE.md rule 4: no blocking, no I/O,
+     * no future.get() — {@link NbtIo#writeCompressed} is pure
+     * in-memory compression). Never throws: a missing/wrong-typed
+     * chunk or a {@link ChunkSerializer#write} failure both degrade to
+     * {@code byte[0]} (matching the pre-wiring stub's behaviour for
+     * that one chunk) with a rate-limited warn + probe bump, rather
+     * than propagating into the tick pipeline (CLAUDE.md rule 5).
+     *
+     * @param region the region the chunk's holder belongs to; used
+     *     only for diagnostics (the region id in a warn message).
+     * @param holder the chunk's shadow holder. {@link
+     *     NewChunkHolder#getCurrentChunk()} is {@code Object}-typed
+     *     because this runtime module cannot import {@code
+     *     net.minecraft.*} — this method does the cast back to
+     *     {@link LevelChunk}.
+     * @return compressed NBT bytes, or {@code byte[0]} if the chunk
+     *     isn't loaded (null / not yet a {@link LevelChunk}), isn't
+     *     attached to a {@link ServerLevel}, or serialization failed.
+     */
+    public static byte[] serializeForJournal(Region region, NewChunkHolder holder) {
+        if (holder == null) return new byte[0];
+        Object current = holder.getCurrentChunk();
+        if (!(current instanceof LevelChunk chunk)) {
+            // Not an error: BORDER-level and not-yet-promoted holders
+            // legitimately have no LevelChunk yet. Matches the old
+            // stub's behaviour for these chunks exactly.
+            return new byte[0];
+        }
+        try {
+            Level level = chunk.getLevel();
+            if (!(level instanceof ServerLevel serverLevel)) {
+                // Should not happen on a dedicated server, but a null/
+                // client-side Level is not this method's problem to
+                // throw over — degrade gracefully per CLAUDE.md rule 5.
+                ProbeRegistry.bump("autosave.serializer.non-server-level");
+                return new byte[0];
+            }
+            return serialize(serverLevel, chunk);
+        } catch (Exception e) {
+            // Broad catch is deliberate: ChunkSerializer.write can throw
+            // both checked IOException (via NbtIo) and unchecked NBT/
+            // block-entity encoding errors, and a serializer bug must
+            // never escape into the FLUSH_OUTBOUND phase on a region
+            // worker thread (CLAUDE.md rules 4 + 5).
+            ProbeRegistry.bump("autosave.serializer.failure");
+            ViolationLogger.warn(
+                    "RegionChunkSerializer.serializeForJournal",
+                    "failed to serialize chunk for region " + region.id() + ": "
+                            + e.getClass().getSimpleName() + ": " + e.getMessage());
+            return new byte[0];
+        }
     }
 
     /**
