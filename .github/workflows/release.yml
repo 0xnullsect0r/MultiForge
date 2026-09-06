@@ -46,13 +46,15 @@ jobs:
           cp multiforge-runtime/build/libs/multiforge-runtime-*.jar "$RELEASE_DIR/" \
               2>/dev/null || cp multiforge-runtime/build/libs/*.jar "$RELEASE_DIR/"
 
-          # Fresh-install jar.
+          # Pure-Java installer jar (used ONLY by the build-zip subcommand
+          # below to synthesize the drop-in replacement ZIP — never shipped
+          # as a release asset since v1.3.3 because the fork installer
+          # (built by the build-fork-installer job) is the real installer.
+          # The stable-alias multiforge-installer.jar copy that used to live
+          # here is now created by the build-fork-installer job so users
+          # who follow README's `curl` command get the working fork jar.)
           INSTALLER_JAR=$(find multiforge-installer/build/libs -maxdepth 1 -type f \
               -name 'multiforge-installer-*.jar' ! -name '*-sources.jar' | head -1)
-          if [ -n "$INSTALLER_JAR" ]; then
-              cp "$INSTALLER_JAR" "$RELEASE_DIR/"
-              cp "$INSTALLER_JAR" "$RELEASE_DIR/multiforge-installer.jar"
-          fi
 
           # Replacement zip — overlay onto an existing NeoForge server.
           if [ -n "$INSTALLER_JAR" ]; then
@@ -141,13 +143,18 @@ jobs:
               exit 1
           fi
           cp "$FORK_JAR" "release/multiforge-${VER}-installer.jar"
+          # Stable alias — the URL the README + docs point at.
+          # multiforge-installer.jar now == the fork installer (v1.3.3+).
+          cp "$FORK_JAR" "release/multiforge-installer.jar"
           ls -l release/
 
       - name: Upload fork installer artifact
         uses: actions/upload-artifact@v4
         with:
           name: fork-installer-${{ github.ref_name }}
-          path: release/multiforge-*-installer.jar
+          path: |
+            release/multiforge-*-installer.jar
+            release/multiforge-installer.jar
           retention-days: 30
 
       - name: Upload fork test/build reports on failure
@@ -199,8 +206,10 @@ jobs:
             MultiForge ${{ github.ref_name }} — GPL-3.0-only.
 
             Downloads:
-            - Fresh installer JAR: `multiforge-installer-*.jar`
+            - **Fresh installer JAR: `multiforge-*-installer.jar`**
               (stable alias: [multiforge-installer.jar](https://github.com/${{ github.repository }}/releases/latest/download/multiforge-installer.jar))
+              Run with `java -jar multiforge-installer.jar --installServer <dir>` —
+              standard NeoForge installer CLI. See [docs/install.md § Method 1](https://github.com/${{ github.repository }}/blob/main/docs/install.md#method-1--fresh-installer-jar).
             - Drop-in replacement ZIP: `multiforge-*-replacement.zip`
             - Runtime library (for mod authors): `multiforge-runtime-*.jar`
             - Pelican Panel / Pterodactyl egg: `pelican-egg.json`

@@ -1,5 +1,15 @@
 # CHANGELOG
 
+## v1.3.3 — `multiforge-installer.jar` stable alias points at the fork installer
+
+v1.3.2 shipped both the working fork installer (`multiforge-1.3.2-installer.jar`, produced by `build-fork-installer` CI job) AND the broken pure-Java installer (`multiforge-installer-1.3.2.jar` + `multiforge-installer.jar` stable alias, produced by `build-jars` job). The README's `curl` command downloaded the stable alias, which resolved to the broken pure-Java installer — every user who followed the README got `Error: Could not find or load main class net.multiforge.runtime.bootstrap.Main`.
+
+- **release.yml** — moved the `multiforge-installer.jar` stable-alias `cp` from `build-jars` (pointing at the broken pure-Java jar) into `build-fork-installer` (pointing at the working fork jar). Extended the fork installer's upload-artifact path glob to include both filenames. Reworded the release-body Downloads section to describe the fork installer's `--installServer <dir>` CLI (not the pure-Java `install --install-dir` shape).
+- **README.md** — `java -jar ../multiforge-installer.jar install --install-dir .` → `java -jar ../multiforge-installer.jar --installServer .` (NeoForge installer shape).
+- **docs/install.md Method 1** — same CLI swap; rewrote the "This drops" file-layout block to reflect the fork installer's real output (`libraries/net/neoforged/neoforge/<v>/`, top-level `run.sh` + `user_jvm_args.txt`, no `libraries/multiforge/` at top of tree); rewrote the "Installer CLI reference" block to describe NeoForge's actual `--installServer`/`--installClient`/`--extract`/`--help` args.
+
+The pure-Java `multiforge-installer/` module stays around because its `build-zip` subcommand still synthesizes the Method 2 drop-in replacement ZIP. Follow-up cleanup will delete it entirely once the drop-in-ZIP flow is either fixed or dropped.
+
 ## v1.3.2 — B2 binary-patch integration + regionizer noise + Pelican egg + CI
 
 First release where a fresh `--installServer` produces a fully-functional MultiForge server. Prior to v1.3.2 the shipped installer wrote a broken layout; v1.3.1 (the M12 boot fix) got the server past mod-loading but B2 global subsystems still failed to register.

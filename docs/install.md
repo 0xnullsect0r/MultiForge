@@ -32,21 +32,24 @@ The Fabric-installer-shaped path: run a small JAR that lays out a fresh MultiFor
 
    ```
    mkdir my-mf-server && cd my-mf-server
-   java -jar ../multiforge-installer.jar install --install-dir .
+   java -jar ../multiforge-installer.jar --installServer .
    ```
 
-   This drops:
+   The installer is standard NeoForge-format — `--installServer <dir>` writes a complete server layout. This drops (abridged):
 
    ```
    my-mf-server/
-   ├── libraries/multiforge/
-   │   └── multiforge-runtime.jar   # the runtime library the launcher classpaths
-   ├── run.sh                        # Linux/macOS launcher
-   ├── run.bat                       # Windows launcher
-   ├── config/
-   │   └── multiforge-server.toml    # default MultiForge config (edit cores/threads for your box)
-   └── eula.txt                      # eula=false — you must set eula=true before boot
+   ├── libraries/                              # Minecraft server + NeoForge + MultiForge libraries
+   │   └── net/neoforged/neoforge/<v>/
+   │       └── unix_args.txt                    # NeoForge's classpath / modulepath args
+   ├── run.sh                                   # NeoForge launcher (calls `java @user_jvm_args.txt @…/unix_args.txt "$@"`)
+   ├── run.bat                                  # Windows launcher
+   ├── user_jvm_args.txt                        # edit -Xmx here (defaults to 2G)
+   ├── eula.txt                                 # eula=false — you must set eula=true before boot
+   └── server.properties                        # created on first boot
    ```
+
+   MultiForge's own `config/multiforge-server.toml` gets written by the runtime on first boot; edit it after the initial run to tune cores/threads/region-size.
 
 3. **Accept the EULA:**
 
@@ -76,15 +79,16 @@ The Fabric-installer-shaped path: run a small JAR that lays out a fresh MultiFor
 
 ### Installer CLI reference
 
-```
-java -jar multiforge-installer.jar <command>
+MultiForge's installer is the standard NeoForge installer, patched to install the MultiForge fork. Full CLI options:
 
-Commands:
-  install [--install-dir DIR]     Lay out a fresh MultiForge server in DIR (default: cwd)
-  build-zip --out ZIP             Write the drop-in replacement archive (see Method 2)
-  version                         Print the installer version
-  help                            This screen
 ```
+java -jar multiforge-installer.jar --installServer <dir>   # write a fresh server layout into <dir>
+java -jar multiforge-installer.jar --installClient <dir>   # write a client layout (rarely used for MultiForge — server-side project)
+java -jar multiforge-installer.jar --extract <dir>         # extract raw installer resources
+java -jar multiforge-installer.jar --help                  # full CLI help
+```
+
+The `--installServer` flow needs internet on first run (downloads the Minecraft server jar + a handful of Java libraries from Mojang/NeoForge/Maven Central). Everything is cached under `libraries/`.
 
 ### Systemd unit (optional)
 
