@@ -9,6 +9,7 @@ import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Objects;
+import java.util.UUID;
 import java.util.function.Function;
 import net.multiforge.api.world.BlockPos;
 import net.multiforge.api.world.ChunkPos;
@@ -257,6 +258,61 @@ public final class EntityMigrationCoordinator {
         // passenger tree is provided out-of-band via ExtendedRegistry helper.
         return new EntitySnapshot(ref.uuid(), destWorld, destPos, encodePayload(payload), childSnapshots);
     }
+
+    // === Cross-region entity creation (docs/design/global-region.md §3.5) =========================
+
+    /**
+     * Cross-region-safe entity <em>creation</em> — as opposed to {@link #beginMigration}/{@link
+     * #beginMigrationWithTree}, which move an already-registered entity. Used by global-region
+     * code that needs to materialize a brand-new entity into a region it does not itself own —
+     * {@link net.multiforge.runtime.globals.RaidsSystem}'s raider spawn is the first production
+     * caller (docs/design/global-region.md §8.2 integration test 6); a future {@code
+     * DragonFightSystem} is expected to reuse this same entry point.
+     *
+     * <p>Never touches the destination region's entity list from the calling thread: {@code
+     * factory} is invoked only after {@link RegionizedTaskQueue#queueChunkTask} has delivered this
+     * task to the destination region's own worker. This is a creation, not a migration — there is
+     * no source-side ref to transition or roll back, so unlike {@link #beginMigration} this method
+     * cannot fail a CAS; it can only be dropped defensively (§ below) if {@code factory} throws or
+     * declines by returning {@code null}.
+     *
+     * @param destWorld world the new entity is created in.
+     * @param destPos block position the new entity is created at.
+     * @param factory invoked on the destination region's worker thread with {@code destPos} to
+     *     produce the new entity's identity and opaque payload. May return {@code null} to abort
+     *     the spawn (e.g. a Vanilla-side precondition re-checked at drain time no longer holds) —
+     *     treated as a no-op, never an error.
+     */
+    public void spawnInDestRegion(WorldRef destWorld, BlockPos destPos, Function<BlockPos, NewEntitySpec> factory) {
+        Objects.requireNonNull(destWorld, "destWorld");
+        Objects.requireNonNull(destPos, "destPos");
+        Objects.requireNonNull(factory, "factory");
+        ChunkPos destChunk = destPos.toChunkPos();
+        taskQueue.queueChunkTask(destWorld, destChunk.x(), destChunk.z(), () -> {
+            try {
+                NewEntitySpec spec = factory.apply(destPos);
+                if (spec == null) {
+                    ProbeRegistry.bump("entity-migration.spawn.aborted");
+                    return;
+                }
+                MigratingEntityRef fresh = new MigratingEntityRef(spec.uuid(), destWorld, destChunk);
+                registry.add(fresh, spec.payload() == null ? "" : spec.payload());
+                ProbeRegistry.bump("entity-migration.spawn.success");
+            } catch (Throwable t) {
+                // Auto-reroute+warn (CLAUDE.md rule 5): a bad factory must never break the
+                // destination region's mailbox drain, nor propagate back to the caller — this
+                // whole body already runs asynchronously on the destination region's own worker.
+                ProbeRegistry.bump("entity-migration.spawn.failure");
+                ViolationLogger.warn(
+                        "entity-migration.spawn",
+                        "spawnInDestRegion factory threw for " + destWorld.dimensionId() + ": "
+                                + t.getClass().getSimpleName() + ": " + t.getMessage());
+            }
+        });
+    }
+
+    /** New entity's identity + opaque payload, produced by a {@link #spawnInDestRegion} factory. */
+    public record NewEntitySpec(UUID uuid, String payload) {}
 
     /**
      * Snapshot including a caller-supplied passenger tree. Used when the source-side code knows

@@ -11,6 +11,7 @@ import net.minecraft.world.level.border.WorldBorder;
 import net.multiforge.api.world.WorldRef;
 import net.multiforge.neoforge.RegionizedTickCoordinator;
 import net.multiforge.runtime.globals.BossEventSystem;
+import net.multiforge.runtime.globals.RaidsSystem;
 import net.multiforge.runtime.globals.ScoreboardSystem;
 import net.multiforge.runtime.globals.TimeSystem;
 import net.multiforge.runtime.globals.WeatherSystem;
@@ -35,6 +36,7 @@ public final class GlobalSystemsBridge {
     private static volatile WorldBorderSystem worldBorder;
     private static volatile ScoreboardSystem scoreboard;
     private static volatile BossEventSystem bossEvents;
+    private static volatile RaidsSystem raids;
 
     /**
      * Identity set of {@link WorldBorder} instances that currently have
@@ -59,6 +61,17 @@ public final class GlobalSystemsBridge {
         bossEvents = be;
     }
 
+    /**
+     * Called once by {@link MultiForgeGlobalSystemsInit} (B2.6) when the
+     * {@link RaidsSystem} is registered on a fresh runtime install.
+     * Separate from {@link #bind} (rather than an added parameter on
+     * that method) so this addition doesn't collide with other B2.x
+     * landings extending the same {@code bind} call independently.
+     */
+    static void bindRaids(RaidsSystem r) {
+        raids = r;
+    }
+
     /** Called by {@link MultiForgeGlobalSystemsInit} when a level's border target registers/deregisters. */
     static void markBorderHandled(WorldBorder border, boolean handled) {
         if (handled) {
@@ -81,6 +94,7 @@ public final class GlobalSystemsBridge {
         worldBorder = null;
         scoreboard = null;
         bossEvents = null;
+        raids = null;
         HANDLED_BORDERS.clear();
     }
 
@@ -137,6 +151,28 @@ public final class GlobalSystemsBridge {
     public static boolean routeBossEventMutation(Runnable mutation) {
         BossEventSystem be = bossEvents;
         return be != null && be.tryRoute(mutation);
+    }
+
+    /**
+     * @return {@code true} iff MultiForge is installed <em>and</em>
+     *         {@link RaidsSystem} has been registered — the {@code
+     *         Raids.tick} patch's delegate guard
+     *         (docs/design/global-region.md §4.2/§8.2 integration test
+     *         6). Deliberately server-wide rather than per-{@code
+     *         ServerLevel} (contrast {@link #weatherHandled}/{@link
+     *         #timeHandled}) — {@code Raids} has no per-instance
+     *         identity side table the way {@code WorldBorder} does, and
+     *         a coarser check keeps the patch hunk itself a single
+     *         no-arg call, per docs/design/global-region.md's "thin
+     *         hunk" guidance for this patch.
+     */
+    public static boolean raidsReady() {
+        return raids != null;
+    }
+
+    /** @return the bound {@link RaidsSystem}, or {@code null} if not yet installed. */
+    public static RaidsSystem raids() {
+        return raids;
     }
 
     private static WorldRef worldRefOf(ServerLevel level) {

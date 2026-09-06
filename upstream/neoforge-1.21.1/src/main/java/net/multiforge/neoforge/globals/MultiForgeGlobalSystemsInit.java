@@ -11,6 +11,8 @@ import net.multiforge.neoforge.RegionizedTickCoordinator;
 import net.multiforge.runtime.diagnostics.ViolationLogger;
 import net.multiforge.runtime.globals.BossEventSystem;
 import net.multiforge.runtime.globals.GlobalSystems;
+import net.multiforge.runtime.globals.RaidStateSnapshot;
+import net.multiforge.runtime.globals.RaidsSystem;
 import net.multiforge.runtime.globals.ScoreboardSystem;
 import net.multiforge.runtime.globals.TimeSystem;
 import net.multiforge.runtime.globals.WeatherSystem;
@@ -70,6 +72,75 @@ public final class MultiForgeGlobalSystemsInit {
         GlobalSystemsBridge.bind(weather, time, worldBorder, scoreboard, bossEvents);
 
         installLevelLifecycleListeners(weather, time, worldBorder, server);
+
+        // MultiForge M5 (Track B, B2.6): register the Raids global
+        // subsystem — raid wave-scheduling/spawn-decision tick, migrated
+        // off the Vanilla-inline per-level tick (docs/design/global-region.md
+        // §4.2/§6.3). Registered after the B2low systems above per §4.3's
+        // ordering convention (B2low before B2high). Raider spawn always
+        // routes via EntityMigrationCoordinator.spawnInDestRegion — see
+        // RaidsSystem's javadoc and §8.2 integration test 6.
+        RaidsSystem raids = new RaidsSystem(effects, host.entityMigrationCoordinator()::spawnInDestRegion);
+        systems.register(raids);
+        GlobalSystemsBridge.bindRaids(raids);
+        installRaidsLevelLifecycleListeners(raids);
+
+    }
+
+    private static void installRaidsLevelLifecycleListeners(RaidsSystem raids) {
+        NeoForge.EVENT_BUS.addListener((LevelEvent.Load event) -> {
+            if (!(event.getLevel() instanceof ServerLevel level)) return;
+            registerRaidsLevel(raids, level);
+        });
+        NeoForge.EVENT_BUS.addListener((LevelEvent.Unload event) -> {
+            if (!(event.getLevel() instanceof ServerLevel level)) return;
+            unregisterRaidsLevel(raids, level);
+        });
+    }
+
+    /**
+     * Binds one {@link ServerLevel}'s {@code Raids} instance to {@link RaidsSystem}. The target
+     * invokes the extracted-verbatim Vanilla {@code Raids.mfTickBody()} the {@code
+     * 08-globals/Raids.java.patch} hunk exposed — see that patch's javadoc for the extraction
+     * rationale. Per-raid {@link RaidStateSnapshot} reporting is left empty for now: {@code
+     * Raids}/{@code Raid} expose no public per-raid state accessor beyond {@link
+     * net.minecraft.world.entity.raid.Raids#get(int)}, so wiring real snapshots is deferred to a
+     * follow-up patch that adds one; {@link RaidsSystem} already tolerates an empty/{@code null}
+     * snapshot list as "nothing to record this tick," not an error.
+     */
+    private static void registerRaidsLevel(RaidsSystem raids, ServerLevel level) {
+        try {
+            WorldRef world = RegionizedTickCoordinator.asWorldRef(level);
+            raids.registerWorld(world, () -> {
+                level.getRaids().mfTickBody();
+                return java.util.Collections.<RaidStateSnapshot>emptyList();
+            });
+        } catch (Throwable t) {
+            // Auto-reroute+warn (CLAUDE.md rule 5): a registration failure for one level must
+            // never prevent the server from finishing its boot/level-load sequence. Worst case,
+            // this level's raids stay on the Vanilla-inline fallback path (raidsReady() still
+            // reports true server-wide once any level registers, so a not-yet-registered level's
+            // Raids.tick() call would otherwise silently no-op — this catch is what prevents that
+            // by simply not letting the failure escape level-load at all) until a subsequent load
+            // succeeds.
+            ViolationLogger.warn(
+                    "global.system.registration",
+                    "failed to register RaidsSystem target for level "
+                            + level.dimension().location() + ": "
+                            + t.getClass().getSimpleName() + ": " + t.getMessage());
+        }
+    }
+
+    private static void unregisterRaidsLevel(RaidsSystem raids, ServerLevel level) {
+        try {
+            raids.unregisterWorld(RegionizedTickCoordinator.asWorldRef(level));
+        } catch (Throwable t) {
+            ViolationLogger.warn(
+                    "global.system.registration",
+                    "failed to unregister RaidsSystem target for level "
+                            + level.dimension().location() + ": "
+                            + t.getClass().getSimpleName() + ": " + t.getMessage());
+        }
     }
 
     private static void installLevelLifecycleListeners(

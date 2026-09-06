@@ -1,0 +1,29 @@
+--- a/net/minecraft/world/entity/raid/Raids.java
++++ b/net/minecraft/world/entity/raid/Raids.java
+@@ -45,6 +45,26 @@
+     }
+ 
+     public void tick() {
++        // MultiForge (multiforge-patches/08-globals/): raid wave-scheduling
++        // and spawn-decision tick migrates onto the global region's
++        // phase-4 tick slot (net.multiforge.runtime.globals.RaidsSystem)
++        // once the subsystem is installed and registered. Falls through
++        // to the original Vanilla body otherwise (bootstrap window, or
++        // MultiForge not installed at all).
++        if (net.multiforge.neoforge.globals.GlobalSystemsBridge.raidsReady()) {
++            return;
++        }
++        this.mfTickBody();
++    }
++
++    /**
++     * MultiForge (multiforge-patches/08-globals/): the original,
++     * unmodified {@code tick} body — see {@code
++     * ServerLevel.mfAdvanceWeatherCycleBody}'s javadoc for the
++     * extraction rationale. Invoked by {@code RaidsSystem}'s per-Level
++     * target on the global region's phase-4 tick slot once registered.
++     */
++    public void mfTickBody() {
+         this.tick++;
+         Iterator<Raid> iterator = this.raidMap.values().iterator();
+ 
