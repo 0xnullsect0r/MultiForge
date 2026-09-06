@@ -1,0 +1,18 @@
+{
+  "profile": "swarm",
+  "workers": 1,
+  "ticks": 200,
+  "wall_clock_ms": 27183,
+  "avg_mspt": 6.05,
+  "p50_mspt": 0.75,
+  "p95_mspt": 25.2,
+  "p99_mspt": 70.3,
+  "max_mspt": 70.3,
+  "tps_sustained_last_10min": 20.0,
+  "heap_peak_mb": 1144,
+  "boot_ok": true,
+  "clean_stop": true,
+  "players": 5,
+  "swarm_mode": "rcon-armor-stand-fallback",
+  "churn_rounds": 10
+}

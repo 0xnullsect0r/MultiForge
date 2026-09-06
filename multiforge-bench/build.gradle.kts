@@ -72,49 +72,82 @@ tasks.register<JavaExec>("determinism") {
     }
 }
 
-// Phase 7.4 bench harness — ATM10 modpack profile.
-// Stub: real implementation launches a headless MultiForge server with
-// the ATM10 modpack, drives it for N minutes, records TPS/MSPT/heap, and
-// diffs against docs/verification/m9/atm10.baseline.json. Blocked on the
-// bench-bot swarm implementation (Phase 7.4a) — see runbook.
-tasks.register("atm10") {
-    group = "verification"
-    description = "Phase 7.4 bench harness — ATM10 modpack profile (STUB — see docs/design/m9-phase7-runbook.md §4)."
-    doLast {
-        throw GradleException(
-                "TODO: implement Phase 7.4 ATM10 bench harness — see docs/design/m9-phase7-runbook.md §4.\n" +
-                "Requires: modpack fetch, headless launcher, TPS/MSPT recorder, baseline JSON.")
-    }
-}
+// -------------------------------------------------------------------------
+// Phase 7.4a bench harness — real JavaExec entries backed by
+// net.multiforge.bench.harness.* (HeadlessServerRunner + RconClient +
+// MetricsCollector + BenchResult + {Vanilla,Swarm,Atm10}Bench). See
+// docs/design/m9-phase7-runbook.md §5 and multiforge-bench/README.md for
+// the swarm profile's RCON /summon armor-stand fallback and why it isn't
+// a real Minecraft protocol client.
+// -------------------------------------------------------------------------
 
-// Phase 7.4 bench harness — vanilla baseline profile.
-// Stub: same shape as atm10 but with no mods on the classpath, so the
-// baseline captures upstream NeoForge behaviour on the same hardware.
-tasks.register("vanilla") {
-    group = "verification"
-    description = "Phase 7.4 bench harness — vanilla NeoForge baseline (STUB — see docs/design/m9-phase7-runbook.md §4)."
-    doLast {
-        throw GradleException(
-                "TODO: implement Phase 7.4 vanilla bench harness — see docs/design/m9-phase7-runbook.md §4.\n" +
-                "Same launcher/recorder as :atm10 but with no mods on the classpath.")
-    }
-}
+val neoforgeWorkspaceDir = rootProject.projectDir.resolve("upstream/neoforge-1.21.1")
+val benchVerificationDir = rootProject.projectDir.resolve("docs/verification/m9/7.4")
 
-// Phase 7.4 bench harness — headless bot swarm.
-// Stub: real implementation spawns N headless MC clients, connects them
-// to a local MultiForge server, walks each on a randomised path for N
-// minutes, records TPS/MSPT. Also the carrier for Phase 7.6 strict-mode
-// watchdog: `--player-count=100 -Dmultiforge.regiontick.strict=on`.
-tasks.register("swarm") {
+fun benchTicksProperty(): String = (project.findProperty("ticks") as String?) ?: "12000"
+
+// Phase 7.4 bench harness — ATM10 modpack profile. Takes a user-provided,
+// already-prepared ATM10-formatted server dir via -PmodpackDir=<path>;
+// without it, Atm10Bench prints setup instructions and exits 0 rather
+// than failing the build — this task never fetches the ~500 MB pack
+// itself (fragile + expensive to do inside a bench task).
+tasks.register<JavaExec>("atm10") {
     group = "verification"
     description =
-            "Phase 7.4 bench harness — headless bot swarm at 20/100/500 players " +
-            "(STUB — see docs/design/m9-phase7-runbook.md §4, §5)."
-    doLast {
-        val players = (project.findProperty("players") as String?) ?: "20"
-        throw GradleException(
-                "TODO: implement Phase 7.4 headless swarm bench — see docs/design/m9-phase7-runbook.md §4.\n" +
-                "Invoked with players=$players. Also carries Phase 7.6 strict-mode watchdog " +
-                "(add -Dmultiforge.regiontick.strict=on).")
-    }
+            "Phase 7.4 bench harness — ATM10 modpack profile. Usage: ./gradlew " +
+            ":multiforge-bench:atm10 -PmodpackDir=/path/to/atm10-server [-Pticks=<n>] [-Pworkers=<n>]. " +
+            "Without -PmodpackDir, prints setup instructions and exits 0 " +
+            "(see docs/design/m9-phase7-runbook.md §5)."
+    classpath = sourceSets["main"].runtimeClasspath
+    mainClass.set("net.multiforge.bench.harness.Atm10Bench")
+    systemProperty("bench.ticks", benchTicksProperty())
+    systemProperty("bench.workspaceDir", neoforgeWorkspaceDir.absolutePath)
+    systemProperty("bench.outputFile", benchVerificationDir.resolve("atm10/patched.json").absolutePath)
+    systemProperty("bench.bootLog", layout.buildDirectory.file("bench-logs/atm10-boot.log").get().asFile.absolutePath)
+    (project.findProperty("modpackDir") as String?)?.let { systemProperty("bench.modpackDir", it) }
+    (project.findProperty("workers") as String?)?.let { systemProperty("bench.workers", it) }
+}
+
+// Phase 7.4 bench harness — vanilla baseline profile. workers=1, no mods
+// on the classpath, so the result captures the ownership-guard overhead
+// on an otherwise-idle server (pass criteria: >=95% of the pre-M9
+// baseline TPS — see docs/design/m9-phase7-runbook.md §5).
+tasks.register<JavaExec>("vanilla") {
+    group = "verification"
+    description =
+            "Phase 7.4 bench harness — vanilla NeoForge baseline, workers=1, no mods. " +
+            "Usage: ./gradlew :multiforge-bench:vanilla [-Pticks=<n>] (default 12000 = 10 game-min)."
+    classpath = sourceSets["main"].runtimeClasspath
+    mainClass.set("net.multiforge.bench.harness.VanillaBench")
+    systemProperty("bench.ticks", benchTicksProperty())
+    systemProperty("bench.workspaceDir", neoforgeWorkspaceDir.absolutePath)
+    systemProperty("bench.outputFile", benchVerificationDir.resolve("vanilla/patched.json").absolutePath)
+    systemProperty(
+            "bench.bootLog", layout.buildDirectory.file("bench-logs/vanilla-boot.log").get().asFile.absolutePath)
+}
+
+// Phase 7.4 bench harness — headless bot swarm. Simplified fallback (see
+// multiforge-bench/README.md): RCON `/summon` armor-stand bots driven by
+// a real-time random-walk + particle-burst churn loop, not a real
+// Minecraft protocol client. Also the carrier for Phase 7.6's strict-mode
+// watchdog run: add -Dmultiforge.regiontick.strict=on via extra JVM args
+// once that carrier flag is wired through.
+tasks.register<JavaExec>("swarm") {
+    group = "verification"
+    description =
+            "Phase 7.4 bench harness — headless bot swarm at a configurable player count. " +
+            "Simplified fallback: RCON /summon armor-stand bots, not a real MC protocol client " +
+            "(see multiforge-bench/README.md). Usage: ./gradlew :multiforge-bench:swarm " +
+            "-Pplayers=<n> [-Pticks=<n>] (players default 20; ticks default 12000, " +
+            "converted to a real-time run duration of ticks/20 seconds for this profile)."
+    classpath = sourceSets["main"].runtimeClasspath
+    mainClass.set("net.multiforge.bench.harness.SwarmBench")
+    val players = (project.findProperty("players") as String?) ?: "20"
+    systemProperty("bench.players", players)
+    systemProperty("bench.ticks", benchTicksProperty())
+    systemProperty("bench.workspaceDir", neoforgeWorkspaceDir.absolutePath)
+    systemProperty("bench.outputFile", benchVerificationDir.resolve("swarm-$players/patched.json").absolutePath)
+    systemProperty(
+            "bench.bootLog",
+            layout.buildDirectory.file("bench-logs/swarm-$players-boot.log").get().asFile.absolutePath)
 }

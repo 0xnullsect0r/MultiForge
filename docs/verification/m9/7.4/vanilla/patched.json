@@ -1,0 +1,15 @@
+{
+  "profile": "vanilla",
+  "workers": 1,
+  "ticks": 12000,
+  "wall_clock_ms": 17758,
+  "avg_mspt": 0.02,
+  "p50_mspt": 0.0,
+  "p95_mspt": 0.2,
+  "p99_mspt": 0.4,
+  "max_mspt": 0.4,
+  "tps_sustained_last_10min": 20.0,
+  "heap_peak_mb": 1174,
+  "boot_ok": true,
+  "clean_stop": true
+}

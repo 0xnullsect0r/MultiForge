@@ -1,0 +1,17 @@
+{
+  "profile": "atm10",
+  "workers": 2,
+  "ticks": 1000,
+  "wall_clock_ms": 18568,
+  "avg_mspt": 0.06,
+  "p50_mspt": 0.0,
+  "p95_mspt": 0.2,
+  "p99_mspt": 0.2,
+  "max_mspt": 0.2,
+  "tps_sustained_last_10min": 20.0,
+  "heap_peak_mb": 1130,
+  "boot_ok": true,
+  "clean_stop": true,
+  "modpack_dir": "/tmp/claude-1000/-home-aric-MultiForge/0df6521e-f0b3-412c-a3d2-ac47a48550d1/scratchpad/fake-atm10",
+  "mod_jar_count": 0
+}
