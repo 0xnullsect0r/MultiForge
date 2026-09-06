@@ -27,25 +27,28 @@ import net.multiforge.runtime.scheduler.MultiThreadedSchedulerHost;
  * runtime behind it is swapped out from behind without editing any
  * patch file.
  *
- * <p><b>B3 state (post-M5 globals landing):</b> {@link #dispatchLevelTick}
- * fans out to per-region workers via
+ * <p><b>Post-M5 state (v1.2.0):</b> {@link #dispatchLevelTick} fans
+ * out to per-region workers via
  * {@link TickRegionScheduler#tickAll(Collection, long)} as the
  * synchronisation barrier for any regions currently mid-tick on the
  * worker pool. The trailing inline invocation of Vanilla's per-level
- * body has been removed on the success path: every global subsystem
- * (weather, time, world-border, scoreboard, bossbars, raids,
- * dragon-fight, command-dispatch) is ticked by {@code
- * GlobalSystems.tickAll} on the synthetic global region (see
- * {@link MultiThreadedSchedulerHost}'s {@code phaseGlobalSystemsTick}
- * slot), and each Vanilla implementation is early-return-guarded by a
- * matching {@code GlobalSystemsBridge.xxxReady()} check.
+ * body is retained: every migrated global subsystem (weather, time,
+ * world-border, scoreboard, bossbars, raids, dragon-fight, command-
+ * dispatch) has an {@code xxxReady()}-guarded early-return in its
+ * Vanilla method, so those become no-ops here — but the residual per-
+ * level work (entity tick loop, block-entity tickers, scheduled block/
+ * fluid ticks, chunk-source tick) is still executed by
+ * {@code vanillaBody} inline because the BLOCK_FLUID_TICKS + ENTITY_AI
+ * phases in {@link MultiThreadedSchedulerHost}'s wired tick body have
+ * no production wiring yet.
  *
- * <p>The three <em>fallback</em> {@code vanillaBody.run()} calls
- * (bootstrap pre-runtime, no-regionizer, dispatch-side failure) are
- * intentionally retained: they preserve CLAUDE.md rule 5's
- * "auto-reroute + warn" default, so a fresh boot, a level with no
- * materialised regions, or a dispatch-time bug still lets the server
- * tick advance rather than hanging silently.
+ * <p>Full migration of the residual entity/block-tick portion into
+ * region workers is a follow-up milestone past v1.2.0. The three
+ * fallback {@code vanillaBody.run()} calls (bootstrap pre-runtime,
+ * no-regionizer, dispatch-side failure) preserve CLAUDE.md rule 5's
+ * "auto-reroute + warn" default so a fresh boot, an uninitialised
+ * world, or a dispatch-time bug still lets the server tick advance
+ * rather than hanging silently.
  */
 public final class RegionizedTickCoordinator {
     private static final String DEADLINE_PROP = "multiforge.regiontick.dispatch-ms";
@@ -97,17 +100,14 @@ public final class RegionizedTickCoordinator {
      * region worker's own exception, which stays on the worker),
      * warn + fall through to the inline body so the server tick
      * still runs.</li>
-     * <li>On success the fan-out returns without invoking
-     * {@code vanillaBody}. The global per-level portion (weather,
-     * time, world-border, scoreboard, bossbars, raids, dragon-fight,
-     * command-dispatch) is driven by the synthetic global region's
-     * own tick body via {@code GlobalSystems.tickAll}
-     * ({@code MultiThreadedSchedulerHost.phaseGlobalSystemsTick}).
-     * Each migrated global subsystem's Vanilla method is guarded by
-     * a {@code GlobalSystemsBridge.xxxReady()} early-return, so
-     * calling {@code vanillaBody} here would be a no-op — omitting
-     * the call trims a redundant iteration over per-chunk block/
-     * fluid/entity ticks that region workers have already run.</li>
+     * <li>Finally, run {@code vanillaBody} on the caller thread. The
+     * eight migrated global subsystems (weather, time, world-border,
+     * scoreboard, bossbars, raids, dragon-fight, command-dispatch)
+     * no-op via their {@code xxxReady()} guards, so this executes
+     * only the residual per-level work: entity tick loop, block-
+     * entity tickers, scheduled block/fluid ticks, chunk-source
+     * tick. Full per-region migration of those is deferred past
+     * v1.2.0.</li>
      * </ol>
      *
      * @param level       the level being ticked; the coordinator looks up its
@@ -163,14 +163,23 @@ public final class RegionizedTickCoordinator {
             ViolationLogger.warn("region-tick.dispatch.overrun", msg);
         }
 
-        // B3: the trailing vanillaBody.run() that used to run here is
-        // removed. Every global subsystem it would have driven is now
-        // ticked by GlobalSystems.tickAll on the synthetic global region
-        // (MultiThreadedSchedulerHost.phaseGlobalSystemsTick), and each
-        // Vanilla implementation is early-return-guarded by the matching
-        // GlobalSystemsBridge.xxxReady() check — so invoking it here
-        // added a redundant O(regions) iteration over per-chunk block/
-        // fluid/entity ticks that region workers have already run.
+        // Post-B2 (all eight global subsystems migrated), the sub-calls
+        // vanillaBody triggers that ARE covered by GlobalSystemsBridge
+        // (weather, time, world-border, scoreboard, bossbars, raids,
+        // dragon-fight, command-dispatch) short-circuit via each guard's
+        // xxxReady() early-return, so vanillaBody effectively runs only
+        // the residual per-level work: `entityTickList.forEach(this::
+        // tickNonPassenger)`, `blockEntityTickers.tick()`, per-chunk
+        // scheduled block/fluid ticks in `tickChunk(...)`, and
+        // `serverChunkCache.tick()`. Region workers do NOT currently run
+        // those (the BLOCK_FLUID_TICKS + ENTITY_AI phase slots in
+        // MultiThreadedSchedulerHost#installM9WiredTickBody are the
+        // no-op default — only tests wire them). Removing this call
+        // silently disables entity/block/blockentity ticking on the
+        // MultiForge-installed path — /67 round-6 fork B F1 caught this.
+        // Full B3 (per-region entity + block-tick wiring) is deferred
+        // past v1.2.0 to a follow-up milestone that lands those phases.
+        vanillaBody.run();
     }
 
     /**
