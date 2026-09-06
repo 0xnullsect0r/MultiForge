@@ -95,16 +95,27 @@ class DispatchingEventBusTest {
     }
 
     @Test
-    void addListenerConsumerFamilyIsWrappedAsLegacySerialDefault() {
+    void addListenerConsumerFamilyIsPassedThroughUnwrapped() {
+        // See DispatchingEventBus's class Javadoc: wrapping a bare
+        // Consumer in RoutingListenerWrapper breaks NeoForge's ASM
+        // consumer-type introspection at boot. The addListener family
+        // passes the caller's Consumer through unmodified, so the
+        // listener runs with Vanilla semantics (inline on the poster's
+        // thread) and the event.dispatch.* counters do not increment.
+        // @DispatchDomain routing only applies to @SubscribeEvent
+        // methods registered via register(Object).
         RecordingDispatchExecutor executor = new RecordingDispatchExecutor();
         DispatchingEventBus bus = new DispatchingEventBus(BusBuilder.builder().build(), executor);
         AtomicInteger calls = new AtomicInteger();
+        long legacyBefore = ProbeRegistry.get("event.dispatch.legacy");
 
         bus.addListener(TestEvent.class, event -> calls.incrementAndGet());
         OwnerToken.runAs(OwnerToken.forRegion(1L), () -> bus.post(new TestEvent()));
 
         assertThat(calls.get()).isEqualTo(1);
-        assertThat(ProbeRegistry.get("event.dispatch.legacy")).isEqualTo(1);
+        // No dispatcher-side counters increment because the listener
+        // wasn't wrapped — inner bus dispatched it directly.
+        assertThat(ProbeRegistry.get("event.dispatch.legacy")).isEqualTo(legacyBefore);
     }
 
     @Test

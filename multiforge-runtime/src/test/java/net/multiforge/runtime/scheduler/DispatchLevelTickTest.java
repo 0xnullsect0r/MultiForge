@@ -14,7 +14,12 @@ package net.multiforge.runtime.scheduler;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import java.util.ArrayList;
+import java.util.List;
 import net.multiforge.runtime.diagnostics.ProbeRegistry;
+import net.multiforge.runtime.diagnostics.ViolationLogger;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 /**
@@ -39,6 +44,19 @@ import org.junit.jupiter.api.Test;
  * holds by construction, not merely by assertion.
  */
 class DispatchLevelTickTest {
+
+    @BeforeEach
+    @AfterEach
+    void resetPerWorldWarnOnceState() {
+        // LevelTickDispatchProbes.warnedNoRegionizer and ViolationLogger's
+        // rate-limit buckets / subscribers are all static, JVM-wide state —
+        // clear them so the warn-once-per-world tests below don't leak into
+        // each other (or into the probe-only tests above, which reuse some
+        // of the same world-id strings).
+        LevelTickDispatchProbes.resetForTesting();
+        ViolationLogger.resetForTesting();
+        ViolationLogger.clearSubscribersForTesting();
+    }
 
     @Test
     void bootstrapSkipBumpsItsOwnProbe() {
@@ -87,5 +105,52 @@ class DispatchLevelTickTest {
                 .isEqualTo(noRegionizerBefore);
         assertThat(ProbeRegistry.get(LevelTickDispatchProbes.DISPATCH_FAILURE_PROBE))
                 .isEqualTo(dispatchFailureBefore);
+    }
+
+    @Test
+    void noRegionizerSkipWarnsOncePerWorldThenSilent() throws Exception {
+        long before = ProbeRegistry.get(LevelTickDispatchProbes.NO_REGIONIZER_SKIP_PROBE);
+        List<ViolationLogger.ViolationEvent> received = new ArrayList<>();
+        AutoCloseable subscription = ViolationLogger.subscribe(received::add);
+        try {
+            for (int i = 0; i < 5; i++) {
+                LevelTickDispatchProbes.noRegionizerSkip("minecraft:the_end");
+            }
+        } finally {
+            subscription.close();
+        }
+
+        // Probe counter bumps unconditionally — every call is counted even
+        // though only the first one warns.
+        assertThat(ProbeRegistry.get(LevelTickDispatchProbes.NO_REGIONIZER_SKIP_PROBE) - before)
+                .isEqualTo(5L);
+
+        long warnsForTheEnd = received.stream()
+                .filter(e -> e.site().equals(LevelTickDispatchProbes.NO_REGIONIZER_SKIP_PROBE + "::minecraft:the_end"))
+                .count();
+        assertThat(warnsForTheEnd).isEqualTo(1L);
+    }
+
+    @Test
+    void noRegionizerSkipDistinctWorldsGetDistinctWarns() throws Exception {
+        long before = ProbeRegistry.get(LevelTickDispatchProbes.NO_REGIONIZER_SKIP_PROBE);
+        List<ViolationLogger.ViolationEvent> received = new ArrayList<>();
+        AutoCloseable subscription = ViolationLogger.subscribe(received::add);
+        try {
+            LevelTickDispatchProbes.noRegionizerSkip("minecraft:the_nether");
+            LevelTickDispatchProbes.noRegionizerSkip("minecraft:the_end");
+            LevelTickDispatchProbes.noRegionizerSkip("minecraft:custom_dim");
+        } finally {
+            subscription.close();
+        }
+
+        assertThat(ProbeRegistry.get(LevelTickDispatchProbes.NO_REGIONIZER_SKIP_PROBE) - before)
+                .isEqualTo(3L);
+        assertThat(received)
+                .extracting(ViolationLogger.ViolationEvent::site)
+                .containsExactlyInAnyOrder(
+                        LevelTickDispatchProbes.NO_REGIONIZER_SKIP_PROBE + "::minecraft:the_nether",
+                        LevelTickDispatchProbes.NO_REGIONIZER_SKIP_PROBE + "::minecraft:the_end",
+                        LevelTickDispatchProbes.NO_REGIONIZER_SKIP_PROBE + "::minecraft:custom_dim");
     }
 }

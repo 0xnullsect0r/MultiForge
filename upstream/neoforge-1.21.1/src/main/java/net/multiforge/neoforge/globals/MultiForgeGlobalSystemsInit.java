@@ -71,6 +71,16 @@ public final class MultiForgeGlobalSystemsInit {
      * per-world targets.
      */
     public static void install(MultiThreadedSchedulerHost host, MinecraftServer server) {
+        // MultiForge v1.3.2 (Track R, R.1): eagerly materialise a
+        // regionizer for every already-loaded ServerLevel before any of
+        // the B2 subsystem bindings below run. Without this, dimensions
+        // that never see a ChunkEvent.Load at boot (typically the_end
+        // and the_nether on a fresh server) never get a regionizer, and
+        // every subsequent RegionizedTickCoordinator.dispatchLevelTick
+        // call for them falls through to the region-tick.no-regionizer-skip
+        // fallback. See RegionizerEagerInit's javadoc.
+        net.multiforge.neoforge.RegionizerEagerInit.materialiseAll(server, host);
+
         GlobalSystems systems = host.globalSystems();
         net.multiforge.runtime.globals.CrossRegionEffects effects = systems.effects();
 

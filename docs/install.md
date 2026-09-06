@@ -1,13 +1,14 @@
 # Installing MultiForge
 
-MultiForge ships two install artifacts, each suited to a different starting point.
+MultiForge ships three install methods, each suited to a different starting point.
 
 | Method | Best for | Starts from | Migration effort |
 |---|---|---|---|
 | **[Fresh installer JAR](#method-1--fresh-installer-jar)** | New MultiForge servers on bare-metal Linux/Windows/macOS, systemd deployments | Empty directory | ~10 min |
 | **[Drop-in replacement ZIP](#method-2--drop-in-replacement-zip)** | Existing NeoForge 1.21.1 servers with an already-loved world, mods, configs | Working NeoForge server | ~5 min (overlay) + your usual restart |
+| **[Pelican Panel / Pterodactyl egg](#method-3--pelican-panel--pterodactyl-egg)** | Anyone hosting via a panel — Pelican, Pterodactyl, or any fork | Panel install + egg import | ~2 min (import) + normal panel server-create flow |
 
-Both land the same runtime + patched NeoForge fork. Post-install steps (EULA, `multiforge-server.toml`, mods, world) are the same regardless of how you installed.
+All three land the same runtime + patched NeoForge fork. Post-install steps (EULA, `multiforge-server.toml`, mods, world) are the same regardless of how you installed.
 
 **Requirements** — Java 21, 8 GB RAM per typical server (adjust via `-Xmx`), MC 1.21.1 server directory shape (`world/`, `mods/`, `config/`, `eula.txt`).
 
@@ -206,6 +207,59 @@ rm -rf libraries/multiforge/ world/multiforge/ config/multiforge-server.toml
 ```
 
 Your existing `world/` remains byte-compatible with upstream NeoForge (this is a MultiForge invariant — see [docs/design/entity-migration.md](design/entity-migration.md) and the M9 vanilla-parity verdict at [docs/verification/m9/](verification/m9/)).
+
+---
+
+## Method 3 — Pelican Panel / Pterodactyl egg
+
+If you host Minecraft servers through a panel (Pelican Panel, Pterodactyl, or any compatible fork), MultiForge ships a ready-to-import egg at [`pelican-egg.json`](https://github.com/0xnullsect0r/MultiForge/blob/main/pelican-egg.json). It's also attached to every GitHub Release as an asset.
+
+### Import steps
+
+1. **Download the egg** — grab `pelican-egg.json` from the [latest release](https://github.com/0xnullsect0r/MultiForge/releases/latest) or the repo root.
+2. **Import into your panel:**
+   - Pelican Panel: **Admin → Nests → select or create a nest → Import Egg** and upload the JSON.
+   - Pterodactyl: same flow (**Nests → Import Egg**).
+3. **Create a server** using the newly-imported MultiForge egg. On first boot the panel runs the egg's install script — which downloads the MultiForge fork installer from GitHub Releases and lays out a fresh NeoForge-with-MultiForge server directory.
+
+### Egg variables
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `MULTIFORGE_VERSION` | `latest` | Which release to install. `latest` resolves via the GitHub API to the latest published release. Otherwise substitute into `DOWNLOAD_URL`'s `{VERSION}` placeholder (e.g. `v1.3.2`). |
+| `DOWNLOAD_URL` | GitHub Releases template | Where to fetch the installer from. Only override for a mirror or a custom build. Not user-editable by default. |
+| `MC_VERSION` | `1.21.1` | Display-only; used by the panel UI to show which MC version the server targets. |
+| `SERVER_JARFILE` | `multiforge.jar` | Fallback jar name for the rare case the installer isn't detected (single runnable jar path). Normal flow doesn't use this. |
+
+The startup command mirrors NeoForge's own `run.sh`:
+
+```
+java @user_jvm_args.txt -Xms128M -Xmx{{SERVER_MEMORY}}M -Dterminal.jline=false -Dterminal.ansi=true @unix_args.txt nogui
+```
+
+`SERVER_MEMORY` is a Pelican-provided variable derived from the container's memory allocation.
+
+### What the install script does
+
+1. Downloads `multiforge-<v>-installer.jar` from the release.
+2. Runs `java -jar multiforge-installer.jar --installServer /mnt/server`.
+3. Symlinks `libraries/net/neoforged/neoforge/<v>/unix_args.txt` to `/mnt/server/unix_args.txt` (the startup command's `@unix_args.txt` expects it at top level).
+4. Writes `eula=true` to `eula.txt`.
+5. Creates `mods/` and `config/` if not present.
+
+The resulting layout is identical to Method 1's fresh-installer flow — MultiForge's own `config/multiforge-server.toml` is written by the installer, and mod installation, world backups, etc. work per your panel's normal UX.
+
+### Requirements
+
+- A panel supporting the Pelican-format egg schema (`PLCN_v1`) — Pelican Panel or Pterodactyl current versions.
+- The container running the server needs Java 21 (any of the yolks images `ghcr.io/pterodactyl/yolks:java_21|java_22|java_25`).
+- Sufficient memory allocation on the panel (default startup uses `-Xms128M -Xmx{{SERVER_MEMORY}}M` — allocate 4-8 GB for a normal MultiForge server).
+
+### Troubleshooting
+
+- **Install fails at "ERROR: DOWNLOAD_URL is not set":** the panel didn't pass the variable. Check the server's variable overrides in the panel UI.
+- **Install downloads but "downloaded file is not a jar":** likely a 404 (the release doesn't have the expected asset for the specified version). Set `MULTIFORGE_VERSION=latest` to bypass; check the release page for the actual asset name.
+- **Server boots but crashes at mod-loading:** same as any modded server — check the log for the offending mod's stack trace, remove it from `mods/`.
 
 ---
 
