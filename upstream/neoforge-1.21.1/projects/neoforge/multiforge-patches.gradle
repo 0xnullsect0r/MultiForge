@@ -157,3 +157,72 @@ tasks.matching { task -> sourceConsumers.contains(task.name) }.configureEach {
         dependsOn(':setup')
     }
 }
+
+// v1.3.2: stage MultiForge patches for NeoGradle's binarypatcher.
+//
+// Why this exists: binarypatcher (net.minecraftforge:binarypatcher:1.1.1,
+// invoked by generateServerBinaryPatches) runs in WHITELIST mode when
+// --patches is non-empty: only classes with a corresponding .patch file
+// in the patch dir get a binary diff generated. NeoGradle wires
+// --patches = upstream/neoforge-1.21.1/patches/ (NeoForge's own patch
+// tree). MultiForge's patches under ../../multiforge-patches/**/*.java.patch
+// never reach binarypatcher, so classes we seed-from-base and patch
+// (WorldBorder, Raids, LevelTicks, ServerFunctionManager, etc.) get
+// compiled correctly into the fork jar but no binary diff is generated,
+// and the shipped installer's server.lzma ships vanilla classes for
+// them. Runtime code that expects the patched methods (e.g.
+// WorldBorder.mfTickBody) hits NoSuchMethodError at boot.
+//
+// This task flattens multiforge-patches/**/*.java.patch into a single
+// staging dir whose layout mirrors net/minecraft/... (what binarypatcher
+// expects). P.2 wires this staging dir into
+// generateServerBinaryPatches.getPatches() alongside NeoForge's own
+// patches dir.
+
+def multiforgePatchesStagingDir = layout.buildDirectory.dir('multiforge-patches-staging')
+
+tasks.register('stageMultiforgePatchesForBinaryPatcher', Copy) {
+    group = 'multiforge'
+    description = 'Flattens multiforge-patches/**/*.java.patch into a single staging dir ' +
+            'keyed by target class path — the shape binarypatcher --patches expects.'
+
+    // Each patch's header carries the target file path; we relocate the
+    // .patch file into <staging>/<target-path>.patch so binarypatcher can
+    // pick it up. Parse the same "--- a/<path>" first line the applier
+    // uses at line ~50 of this file for consistency.
+
+    from(multiforgePatchesRoot) {
+        include '**/*.java.patch'
+    }
+    into(multiforgePatchesStagingDir)
+    // Rebuild the destination path from each patch's own --- a/<path> line.
+    // eachFile's `relativePath` starts at the multiforge-patches root (so
+    // e.g. `08-globals/net/minecraft/world/level/border/WorldBorder.java.patch`);
+    // we replace that with the target path from the patch header + `.patch`.
+    eachFile { fcd ->
+        def targetRel = null
+        try {
+            def firstLine = fcd.file.withReader('UTF-8') { r -> r.readLine() }
+            if (firstLine != null && (firstLine.startsWith('--- a/') || firstLine.startsWith('--- '))) {
+                targetRel = firstLine.replaceFirst(/^---\s+a?\//, '').replaceFirst(/^---\s+/, '').trim()
+                int tab = targetRel.indexOf('\t')
+                if (tab >= 0) targetRel = targetRel.substring(0, tab)
+            }
+        } catch (Exception e) {
+            // Leave targetRel null so we exclude below.
+        }
+        if (targetRel == null) {
+            fcd.exclude()
+        } else {
+            fcd.relativePath = new org.gradle.api.file.RelativePath(true, "${targetRel}.patch".split('/'))
+        }
+    }
+    // Several classes (ServerLevel, Level, Entity, MinecraftServer) are touched by more
+    // than one MultiForge patch group in sequence (e.g. 01-ownership then 02-region-tick
+    // both patch ServerLevel.java). binarypatcher only uses a patch file's *presence* at
+    // the target path as a whitelist marker — the diff itself is generated from the
+    // compiled classes, not by applying this file — so which of several patch files for
+    // the same target "wins" the copy is immaterial. EXCLUDE (keep-first) avoids a build
+    // failure on these legitimate multi-group targets without masking a genuine bug.
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+}
