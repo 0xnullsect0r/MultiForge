@@ -18,6 +18,7 @@ import net.multiforge.api.world.ChunkPos;
 import net.multiforge.api.world.WorldRef;
 import net.multiforge.neoforge.RegionizedTickCoordinator;
 import net.multiforge.runtime.diagnostics.ProbeRegistry;
+import net.multiforge.runtime.diagnostics.ViolationLogger;
 import net.multiforge.runtime.entity.EntityMigrationCoordinator;
 import net.multiforge.runtime.entity.EntityRegistry;
 import net.multiforge.runtime.entity.MigratingEntityRef;
@@ -176,8 +177,28 @@ public final class NetworkMigrationBridge {
         if (host == null) return false;
         MigratingEntityRef ref = host.entityRegistry().lookup(uuid);
         if (ref == null || ref.migrationState() != MigrationState.MIGRATING) return false;
-        ref.enqueueOutbound(new PendingPacket(packet, listener, flush));
+        PendingPacket pending = new PendingPacket(packet, listener, flush);
+        ref.enqueueOutbound(pending);
         ProbeRegistry.bump("entity-migration.network.packet-queued");
+        // Post-enqueue re-check: another thread may have won the terminal CAS and run the
+        // settled-listener's drainOutbound(connection, ref) (registered in #handleMovePlayer,
+        // fired from MigratingEntityRef#fireSettled) in the narrow window between the
+        // migrationState() check above and the enqueue just above. That drain ran before
+        // `pending` existed in the deque, so nothing will ever come back to flush it -- the
+        // classic check-then-enqueue race MigratingEntityRef#enqueueOutbound's javadoc warns
+        // about. If the ref has since left MIGRATING, race to reclaim `pending` via
+        // MigratingEntityRef#removeOutbound: identity-based deque removal is the at-most-once
+        // gate between this recovery path and a concurrently running drainOutbound() -- exactly
+        // one of the two can still find and remove this exact instance, so a `true` return here
+        // means we (and only we) must deliver it now.
+        if (ref.migrationState() != MigrationState.MIGRATING && ref.removeOutbound(pending)) {
+            ProbeRegistry.bump("entity-migration.network.packet-race-recovered");
+            ViolationLogger.warn(
+                    "entity-migration.network",
+                    "enqueueIfMigrating() lost the settle race for " + uuid
+                            + " -- packet reclaimed from pendingOutbound and sent inline instead of via the normal drain");
+            connection.send(pending.packet(), pending.listener(), pending.flush());
+        }
         return true;
     }
 

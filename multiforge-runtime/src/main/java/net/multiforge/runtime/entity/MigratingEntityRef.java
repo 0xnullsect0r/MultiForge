@@ -57,8 +57,12 @@ public final class MigratingEntityRef implements EntityRef {
      * branch of {@link #retire()}). A2/A3 fork glue uses this to know when it's safe to drain
      * {@link #pendingOutbound} and/or apply a deferred Vanilla position update. Registering a
      * listener while this ref is already past {@code MIGRATING} runs it inline immediately.
+     *
+     * <p>Element type is {@link FiredOnceListener}, not a bare {@code Runnable} — see {@link
+     * #addSettledListener} for why the at-most-once guard lives on each entry rather than being
+     * implied by "removed from the list means it already ran."
      */
-    private final List<Runnable> settledListeners = new CopyOnWriteArrayList<>();
+    private final List<FiredOnceListener> settledListeners = new CopyOnWriteArrayList<>();
 
     public MigratingEntityRef(UUID uuid, WorldRef world, ChunkPos chunkPos) {
         this.uuid = Objects.requireNonNull(uuid, "uuid");
@@ -228,12 +232,38 @@ public final class MigratingEntityRef implements EntityRef {
      * over the wire while this ref is {@code MIGRATING}. Callers are responsible for checking
      * {@link #migrationState()} themselves before calling this — this method does not itself
      * re-check the state, since the caller (e.g. {@code Connection.send}) already made that
-     * decision atomically enough for its own purposes (a false-positive enqueue during a narrow
-     * settle race is harmless: {@link #drainOutbound()} still delivers it, just very slightly
-     * late, never dropped).
+     * decision atomically enough for its own purposes.
+     *
+     * <p><b>Not harmless on its own.</b> A caller that checks {@code migrationState() ==
+     * MIGRATING} and then calls this method has a check-then-enqueue race against the terminal
+     * CAS + {@link #fireSettled()}'s drain-and-fire (which is a snapshot-and-clear, not a
+     * repeating drain): if the settle wins that race in between the caller's check and this
+     * call, nothing will ever come back to flush {@code packet}. A caller that cares about
+     * zero-drop delivery (e.g. {@code NetworkMigrationBridge.enqueueIfMigrating}) must re-check
+     * {@link #migrationState()} <em>after</em> calling this method and, if no longer {@code
+     * MIGRATING}, race to reclaim {@code packet} via {@link #removeOutbound(Object)} and deliver
+     * it directly — identity-based deque removal is the at-most-once gate against the settle
+     * path draining the same instance concurrently.
      */
     public void enqueueOutbound(Object packet) {
         pendingOutbound.addLast(Objects.requireNonNull(packet, "packet"));
+    }
+
+    /**
+     * Attempts to remove {@code packet} (by identity/equality, whichever the element's own {@code
+     * equals} uses) from {@link #pendingOutbound} before the settle path's {@link
+     * #fireSettled()}-triggered drain gets to it. Returns {@code true} iff this call actually
+     * removed it.
+     *
+     * <p>This is the at-most-once gate for the {@link #enqueueOutbound} check-then-enqueue race
+     * documented there: at most one of "a concurrent {@link #drainOutbound()} call" or this
+     * method can find and remove any given enqueued instance, so a caller that gets {@code true}
+     * back is the sole, guaranteed-once owner of delivering {@code packet} from here on. A {@code
+     * false} return means the settle path already claimed and is delivering (or has delivered) it
+     * — the caller must not resend.
+     */
+    public boolean removeOutbound(Object packet) {
+        return pendingOutbound.remove(Objects.requireNonNull(packet, "packet"));
     }
 
     /**
@@ -283,6 +313,18 @@ public final class MigratingEntityRef implements EntityRef {
      * one of those transitions is a terminal-or-stable exit from {@code MIGRATING} for that
      * instance (the state machine never re-enters {@code MIGRATING} from {@code RESIDENT}/{@code
      * RETIRED}), so there is nothing left to wait for after the first firing.
+     *
+     * <p><b>Lost-notification race and its fix.</b> The pre-existing check-then-add here (read
+     * {@link #state}, then conditionally {@code settledListeners.add}) raced against {@link
+     * #fireSettled()}: another thread could win the terminal CAS and run {@link #fireSettled()}'s
+     * snapshot-and-clear of {@link #settledListeners} in the gap between this method's state read
+     * and its {@code add} — {@code fireSettled()} never revisits {@link #settledListeners} after
+     * that snapshot, so a listener landing in it afterward would sit forever, unfired. This method
+     * now re-reads {@link #state} <em>after</em> adding, and if the ref has already left {@code
+     * MIGRATING} by then, removes the just-added entry and fires it inline itself. Each entry is
+     * wrapped in a {@link FiredOnceListener} so that if this inline path and a concurrently
+     * in-flight {@link #fireSettled()} both try to run the same entry, only one of them wins — the
+     * exactly-once contract holds either way.
      */
     public void addSettledListener(Runnable listener) {
         Objects.requireNonNull(listener, "listener");
@@ -290,15 +332,45 @@ public final class MigratingEntityRef implements EntityRef {
             listener.run();
             return;
         }
-        settledListeners.add(listener);
+        FiredOnceListener wrapped = new FiredOnceListener(listener);
+        settledListeners.add(wrapped);
+        // Re-check: fireSettled() may have snapshotted-and-cleared settledListeners between the
+        // check above and the add just above, in which case nothing will ever iterate `wrapped`
+        // again. If we're no longer MIGRATING now, reclaim and fire it ourselves.
+        if (state.get() != MigrationState.MIGRATING) {
+            settledListeners.remove(wrapped);
+            wrapped.fire();
+        }
     }
 
     private void fireSettled() {
         if (settledListeners.isEmpty()) return;
-        List<Runnable> toRun = new ArrayList<>(settledListeners);
+        List<FiredOnceListener> toRun = new ArrayList<>(settledListeners);
         settledListeners.clear();
-        for (Runnable listener : toRun) {
-            listener.run();
+        for (FiredOnceListener listener : toRun) {
+            listener.fire();
+        }
+    }
+
+    /**
+     * At-most-once wrapper around a {@link #addSettledListener} {@code Runnable}, so that the
+     * inline-fire-on-lost-race path in {@link #addSettledListener} and a concurrently in-flight
+     * {@link #fireSettled()} can both hold a reference to the same entry without risking a double
+     * fire — whichever of the two calls {@link #fire()} first wins the {@link AtomicBoolean} CAS
+     * and runs the delegate; the loser is a no-op.
+     */
+    private static final class FiredOnceListener {
+        private final Runnable delegate;
+        private final AtomicBoolean fired = new AtomicBoolean(false);
+
+        FiredOnceListener(Runnable delegate) {
+            this.delegate = delegate;
+        }
+
+        void fire() {
+            if (fired.compareAndSet(false, true)) {
+                delegate.run();
+            }
         }
     }
 

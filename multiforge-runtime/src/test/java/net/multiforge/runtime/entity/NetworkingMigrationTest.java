@@ -286,4 +286,94 @@ class NetworkingMigrationTest {
             assertThat(entry.payload()).isEqualTo("join-payload-" + playerUuid);
         }
     }
+
+    // === /67 round-6 fork A HIGH — enqueueOutbound check-then-enqueue race =========================
+
+    /**
+     * Mirrors the <em>fixed</em> {@code NetworkMigrationBridge.enqueueIfMigrating} shape: enqueue,
+     * then re-check state, and if the ref has already settled, reclaim the packet via {@link
+     * MigratingEntityRef#removeOutbound} and deliver it directly instead of trusting a drain that
+     * may already have run and missed it. The real Vanilla-typed bridge this mirrors cannot be
+     * unit-tested without a full Minecraft classpath (see the class javadoc); this exercises the
+     * exact same {@link MigratingEntityRef} public API the bridge calls into.
+     */
+    private static void sendPacketWithRaceRecovery(MigratingEntityRef ref, FakeConnection connection, String packet) {
+        if (ref.migrationState() != MigrationState.MIGRATING) {
+            connection.send(packet);
+            return;
+        }
+        ref.enqueueOutbound(packet);
+        // Post-enqueue re-check: a concurrent forceTerminalFromMigrating() may have already run
+        // fireSettled() (and thus the settled-listener's drainOutbound() below) in the gap
+        // between the check above and the enqueue just above. If so, reclaim and deliver
+        // ourselves -- removeOutbound()'s identity-based removal is the at-most-once gate against
+        // that same drain concurrently taking `packet` out from under us.
+        if (ref.migrationState() != MigrationState.MIGRATING && ref.removeOutbound(packet)) {
+            connection.send(packet);
+        }
+    }
+
+    /**
+     * N=2000 concurrent {@code enqueueOutbound}-guarded sends race a single {@code
+     * forceTerminalFromMigrating()} call. Before the fix, any packet whose enqueue landed just
+     * after the settled listener's {@code drainOutbound()} had already run would sit in {@code
+     * pendingOutbound} forever -- silently dropped, never delivered. Asserts every packet is
+     * delivered exactly once (count, not just presence) and that nothing is left stuck in the
+     * deque afterward.
+     */
+    @Test
+    void rapidEnqueueOutboundRacingForceTerminalDeliversEveryPacket() throws InterruptedException {
+        MigratingEntityRef ref = new MigratingEntityRef(UUID.randomUUID(), OW, SOURCE_CHUNK);
+        assertThat(ref.beginMigration()).isTrue();
+
+        final int packetCount = 2000;
+        FakeConnection connection = new FakeConnection();
+
+        // Mirrors NetworkMigrationBridge#handleMovePlayer registering the settle-triggered drain
+        // ahead of any packet traffic -- the real production wiring this race exercises.
+        ref.addSettledListener(() -> {
+            for (Object pending : ref.drainOutbound()) {
+                connection.send((String) pending);
+            }
+        });
+
+        ExecutorService pool = Executors.newFixedThreadPool(32);
+        CountDownLatch ready = new CountDownLatch(1);
+        try {
+            for (int i = 0; i < packetCount; i++) {
+                String packetId = "race-packet-" + i;
+                pool.submit(() -> {
+                    awaitLatch(ready);
+                    sendPacketWithRaceRecovery(ref, connection, packetId);
+                });
+            }
+            // The racer: forces MIGRATING -> RETIRED and fires the settled listener above,
+            // concurrently with the 2000 sends -- exactly the race this test guards against.
+            pool.submit(() -> {
+                awaitLatch(ready);
+                ref.forceTerminalFromMigrating();
+            });
+
+            ready.countDown();
+            pool.shutdown();
+            assertThat(pool.awaitTermination(30, TimeUnit.SECONDS))
+                    .as("pool termination")
+                    .isTrue();
+        } finally {
+            pool.shutdownNow();
+        }
+
+        assertThat(ref.drainOutbound()).isEmpty(); // nothing left stuck -- the bug this test guards against
+        assertThat(connection.delivered).hasSize(packetCount);
+        assertThat(connection.delivered).doesNotHaveDuplicates();
+    }
+
+    private static void awaitLatch(CountDownLatch latch) {
+        try {
+            latch.await();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new AssertionError(e);
+        }
+    }
 }
