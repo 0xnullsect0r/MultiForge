@@ -11,6 +11,7 @@ import net.minecraft.world.level.border.WorldBorder;
 import net.multiforge.api.world.WorldRef;
 import net.multiforge.neoforge.RegionizedTickCoordinator;
 import net.multiforge.runtime.globals.BossEventSystem;
+import net.multiforge.runtime.globals.DragonFightSystem;
 import net.multiforge.runtime.globals.RaidsSystem;
 import net.multiforge.runtime.globals.ScoreboardSystem;
 import net.multiforge.runtime.globals.TimeSystem;
@@ -36,6 +37,7 @@ public final class GlobalSystemsBridge {
     private static volatile WorldBorderSystem worldBorder;
     private static volatile ScoreboardSystem scoreboard;
     private static volatile BossEventSystem bossEvents;
+    private static volatile DragonFightSystem dragonFight;
     private static volatile RaidsSystem raids;
 
     /**
@@ -59,6 +61,16 @@ public final class GlobalSystemsBridge {
         worldBorder = b;
         scoreboard = s;
         bossEvents = be;
+    }
+
+    /**
+     * Called once by {@code MultiForgeGlobalSystemsInit} (B2.7) when the
+     * {@link DragonFightSystem} is registered — kept as a separate bind
+     * call rather than widening {@link #bind} so B2low's already-landed
+     * call site never needs to change.
+     */
+    static void bindDragonFight(DragonFightSystem d) {
+        dragonFight = d;
     }
 
     /**
@@ -95,6 +107,7 @@ public final class GlobalSystemsBridge {
         scoreboard = null;
         bossEvents = null;
         raids = null;
+        dragonFight = null;
         HANDLED_BORDERS.clear();
     }
 
@@ -173,6 +186,28 @@ public final class GlobalSystemsBridge {
     /** @return the bound {@link RaidsSystem}, or {@code null} if not yet installed. */
     public static RaidsSystem raids() {
         return raids;
+    }
+
+    /**
+     * @return {@code true} iff MultiForge is installed <em>and</em>
+     *         {@link DragonFightSystem} has been registered — the {@code
+     *         EndDragonFight.tick()} patch's delegate guard
+     *         (docs/design/global-region.md §6.3/§8.2 integration test
+     *         3). Deliberately server-wide rather than per-{@code
+     *         ServerLevel}, matching {@link #raidsReady()}'s rationale:
+     *         {@code EndDragonFight} has no natural identity side table
+     *         to key a per-instance check on without adding one just for
+     *         this guard, and per-world granularity already lives in
+     *         {@link DragonFightSystem#isHandling}, which the thin patch
+     *         hunk itself has no need to call directly.
+     */
+    public static boolean dragonFightReady() {
+        return dragonFight != null;
+    }
+
+    /** @return the bound {@link DragonFightSystem}, or {@code null} if not yet installed. */
+    public static DragonFightSystem dragonFight() {
+        return dragonFight;
     }
 
     private static WorldRef worldRefOf(ServerLevel level) {

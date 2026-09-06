@@ -4,12 +4,20 @@
  */
 package net.multiforge.neoforge.globals;
 
+import java.util.ArrayList;
+import java.util.List;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.world.level.Level;
+import net.minecraft.world.level.dimension.end.EndDragonFight;
+import net.multiforge.api.world.BlockPos;
+import net.multiforge.api.world.ChunkPos;
 import net.multiforge.api.world.WorldRef;
 import net.multiforge.neoforge.RegionizedTickCoordinator;
+import net.multiforge.runtime.chunk.ChunkHolderManager;
 import net.multiforge.runtime.diagnostics.ViolationLogger;
 import net.multiforge.runtime.globals.BossEventSystem;
+import net.multiforge.runtime.globals.DragonFightSystem;
 import net.multiforge.runtime.globals.GlobalSystems;
 import net.multiforge.runtime.globals.RaidStateSnapshot;
 import net.multiforge.runtime.globals.RaidsSystem;
@@ -17,6 +25,9 @@ import net.multiforge.runtime.globals.ScoreboardSystem;
 import net.multiforge.runtime.globals.TimeSystem;
 import net.multiforge.runtime.globals.WeatherSystem;
 import net.multiforge.runtime.globals.WorldBorderSystem;
+import net.multiforge.runtime.region.Region;
+import net.multiforge.runtime.region.RegionId;
+import net.multiforge.runtime.region.ThreadedRegionizer;
 import net.multiforge.runtime.scheduler.MultiThreadedSchedulerHost;
 import net.neoforged.neoforge.common.NeoForge;
 import net.neoforged.neoforge.event.level.LevelEvent;
@@ -85,6 +96,138 @@ public final class MultiForgeGlobalSystemsInit {
         GlobalSystemsBridge.bindRaids(raids);
         installRaidsLevelLifecycleListeners(raids);
 
+        // MultiForge M5 (Track B, B2.7): register the DragonFight global
+        // subsystem — EndDragonFight's phase state machine, migrated off
+        // the Vanilla-inline per-level tick (docs/design/global-region.md
+        // §5/§6.3). Registered last per §4.3's B2low-before-B2high
+        // ordering convention. Fresh-dragon-entity spawns (respawn
+        // completion) route via the same EntitySpawner surface RaidsSystem
+        // uses, backed by EntityMigrationCoordinator#spawnInDestRegion.
+        DragonFightSystem dragonFight =
+                new DragonFightSystem(effects, host.entityMigrationCoordinator()::spawnInDestRegion);
+        systems.register(dragonFight);
+        GlobalSystemsBridge.bindDragonFight(dragonFight);
+        installDragonFightLevelLifecycleListeners(dragonFight, host);
+    }
+
+    private static void installDragonFightLevelLifecycleListeners(
+            DragonFightSystem dragonFight, MultiThreadedSchedulerHost host) {
+        NeoForge.EVENT_BUS.addListener((LevelEvent.Load event) -> {
+            if (!(event.getLevel() instanceof ServerLevel level)) return;
+            if (level.dimension() != Level.END) return;
+            registerDragonFightLevel(dragonFight, level, host);
+        });
+        NeoForge.EVENT_BUS.addListener((LevelEvent.Unload event) -> {
+            if (!(event.getLevel() instanceof ServerLevel level)) return;
+            if (level.dimension() != Level.END) return;
+            unregisterDragonFightLevel(dragonFight, level);
+        });
+    }
+
+    /**
+     * Binds one End {@link ServerLevel}'s {@code EndDragonFight} instance to {@link
+     * DragonFightSystem}. {@code tickBody()}/{@code shouldPin()} invoke the extracted-verbatim
+     * Vanilla {@code EndDragonFight.mfTickBody()}/{@code mfHasNearbyPlayers()} the {@code
+     * 08-globals/EndDragonFight.java.patch} hunk exposed — see that patch's javadoc for the
+     * extraction rationale. {@code arenaChunks()} is computed once from the fight's origin (fixed
+     * for the life of the {@code EndDragonFight} instance) rather than every call. Respawn-triggered
+     * dragon spawning is left unwired ({@code pollPendingSpawn()} keeps {@link
+     * DragonFightSystem.DragonFightTarget}'s default {@code null}) — the natural Vanilla respawn
+     * path already runs safely: {@code mfTickBody()} itself (including any {@code
+     * createNewDragon()}/{@code addFreshEntity} it performs) is dispatched by {@link
+     * DragonFightSystem} onto the arena's owning region via {@code crossRegionEffect} before this
+     * method's {@code tickBody()} ever runs, so a respawn completing mid-body already touches only
+     * that region's own entities from that region's own worker thread.
+     */
+    private static void registerDragonFightLevel(
+            DragonFightSystem dragonFight, ServerLevel level, MultiThreadedSchedulerHost host) {
+        try {
+            EndDragonFight fight = level.getDragonFight();
+            if (fight == null) return;
+            WorldRef world = RegionizedTickCoordinator.asWorldRef(level);
+            dragonFight.registerWorld(world, new DragonFightSystem.DragonFightTarget() {
+                private volatile List<ChunkPos> arenaChunks;
+
+                @Override
+                public RegionId currentRegion() {
+                    ThreadedRegionizer regionizer = host.regionizerForOrNull(world);
+                    if (regionizer == null) return null;
+                    BlockPos origin = mfOrigin();
+                    ChunkPos originChunk = origin.toChunkPos();
+                    Region region = regionizer.regionAtChunk(originChunk.x(), originChunk.z());
+                    return region == null ? null : region.id();
+                }
+
+                @Override
+                public ChunkHolderManager chunkHolderManager() {
+                    return host.chunkManagerForOrNull(world);
+                }
+
+                @Override
+                public List<ChunkPos> arenaChunks() {
+                    List<ChunkPos> cached = arenaChunks;
+                    if (cached != null) return cached;
+                    List<ChunkPos> computed = computeArenaChunks(mfOrigin());
+                    arenaChunks = computed;
+                    return computed;
+                }
+
+                @Override
+                public boolean shouldPin() {
+                    return fight.mfHasNearbyPlayers();
+                }
+
+                @Override
+                public void tickBody() {
+                    fight.mfTickBody();
+                }
+
+                private BlockPos mfOrigin() {
+                    net.minecraft.core.BlockPos o = fight.mfOrigin();
+                    return new BlockPos(o.getX(), o.getY(), o.getZ());
+                }
+            });
+        } catch (Throwable t) {
+            // Auto-reroute+warn (CLAUDE.md rule 5): a registration failure for one level must
+            // never prevent the server from finishing its boot/level-load sequence. Worst case,
+            // this End level's dragon fight stays on the Vanilla-inline fallback path
+            // (dragonFightReady() reports true server-wide once any level registers, so a
+            // not-yet-registered level's tick() would otherwise silently no-op — this catch
+            // prevents that by simply not letting the failure escape level-load) until a
+            // subsequent load succeeds.
+            ViolationLogger.warn(
+                    "global.system.registration",
+                    "failed to register DragonFightSystem target for level "
+                            + level.dimension().location() + ": "
+                            + t.getClass().getSimpleName() + ": " + t.getMessage());
+        }
+    }
+
+    /**
+     * End arena chunk set: the vanilla {@code ARENA_SIZE_CHUNKS} (8) radius around the fight
+     * origin, matching {@code EndDragonFight.isArenaLoaded}'s own scan range.
+     */
+    private static List<ChunkPos> computeArenaChunks(BlockPos origin) {
+        ChunkPos originChunk = origin.toChunkPos();
+        List<ChunkPos> chunks = new ArrayList<>();
+        for (int dx = -8; dx <= 8; dx++) {
+            for (int dz = -8; dz <= 8; dz++) {
+                chunks.add(new ChunkPos(originChunk.x() + dx, originChunk.z() + dz));
+            }
+        }
+        return chunks;
+    }
+
+    private static void unregisterDragonFightLevel(DragonFightSystem dragonFight, ServerLevel level) {
+        try {
+            dragonFight.unregisterWorld(RegionizedTickCoordinator.asWorldRef(level));
+        } catch (Throwable t) {
+            ViolationLogger.warn(
+                    "global.system.registration",
+                    "failed to unregister DragonFightSystem target for level "
+                            + level.dimension().location() + ": "
+                            + t.getClass().getSimpleName() + ": " + t.getMessage());
+        }
     }
 
     private static void installRaidsLevelLifecycleListeners(RaidsSystem raids) {
