@@ -206,7 +206,8 @@ public final class RuleEngine {
     private static Header readHeader(ClassReader reader) {
         ContextVisitor visitor = new ContextVisitor();
         reader.accept(visitor, ClassReader.SKIP_CODE | ClassReader.SKIP_DEBUG | ClassReader.SKIP_FRAMES);
-        return new Header(visitor.className, visitor.superName, List.copyOf(visitor.interfaces), Set.copyOf(visitor.annotations));
+        return new Header(
+                visitor.className, visitor.superName, List.copyOf(visitor.interfaces), Set.copyOf(visitor.annotations));
     }
 
     private record Header(String className, String superName, List<String> interfaces, Set<String> annotations) {

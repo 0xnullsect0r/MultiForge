@@ -68,7 +68,13 @@ public final class R09SyncIoInTick extends AbstractTreeRule {
 
     private static final String FILES_OWNER = "java/nio/file/Files";
     private static final Set<String> FILES_EXACT_NAMES = Set.of(
-            "readAllBytes", "readString", "newInputStream", "lines", "readAllLines", "newBufferedReader", "newBufferedWriter");
+            "readAllBytes",
+            "readString",
+            "newInputStream",
+            "lines",
+            "readAllLines",
+            "newBufferedReader",
+            "newBufferedWriter");
 
     @Override
     public String id() {

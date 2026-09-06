@@ -27,8 +27,8 @@ class MainTest {
         // pipeline runs for `./gradlew test`), so this dev-flow test opts
         // out of the --require-signed default explicitly. Fail-closed
         // behavior itself is covered by installFailsClosedWhenSignatureRequiredButSigMissing below.
-        int code = Main.run(
-                new String[] {"install", "--install-dir", dir.toString(), "--require-signed=false"}, out, out);
+        int code =
+                Main.run(new String[] {"install", "--install-dir", dir.toString(), "--require-signed=false"}, out, out);
         assertThat(code).isZero();
 
         Path libs = dir.resolve("libraries/multiforge");
@@ -121,9 +121,7 @@ class MainTest {
         ByteArrayOutputStream err = new ByteArrayOutputStream();
 
         int code = Main.run(
-                new String[] {"install", "--install-dir", dir.toString()},
-                new PrintStream(out),
-                new PrintStream(err));
+                new String[] {"install", "--install-dir", dir.toString()}, new PrintStream(out), new PrintStream(err));
 
         assertThat(code).isEqualTo(4);
         assertThat(err.toString()).contains("signature verification FAILED");

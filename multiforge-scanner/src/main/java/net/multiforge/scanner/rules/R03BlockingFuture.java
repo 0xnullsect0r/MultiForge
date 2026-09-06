@@ -48,9 +48,7 @@ public final class R03BlockingFuture extends AbstractTreeRule {
      * blocking-wait target.
      */
     private static final Set<String> TARGET_SUPERTYPES = Set.of(
-            "java/util/concurrent/Future",
-            "java/util/concurrent/CompletionStage",
-            "java/util/concurrent/ForkJoinTask");
+            "java/util/concurrent/Future", "java/util/concurrent/CompletionStage", "java/util/concurrent/ForkJoinTask");
 
     private static final Set<String> NAMES = Set.of("get", "join", "getNow", "awaitUninterruptibly");
 
