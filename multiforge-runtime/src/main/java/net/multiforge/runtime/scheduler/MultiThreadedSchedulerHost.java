@@ -17,7 +17,9 @@ package net.multiforge.runtime.scheduler;
 
 import java.io.IOException;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
@@ -64,6 +66,7 @@ import net.multiforge.runtime.journal.RegionJournalLifecycle;
 import net.multiforge.runtime.ownership.OwnerToken;
 import net.multiforge.runtime.region.PhasedRegionTickBody;
 import net.multiforge.runtime.region.Region;
+import net.multiforge.runtime.region.RegionChunkSource;
 import net.multiforge.runtime.region.RegionId;
 import net.multiforge.runtime.region.RegionListener;
 import net.multiforge.runtime.region.RegionTickBody;
@@ -423,19 +426,37 @@ public final class MultiThreadedSchedulerHost implements SchedulerHost, AutoClos
 
     /**
      * Build a {@link RegionListener} that keeps {@link #regionToWorld}
-     * in sync with the given world's live region set. Called once per
-     * world at regionizer materialisation time.
+     * in sync with the given world's live region set, and (B3.1, docs/
+     * design/m13-b3-region-tick.md §4.3) wires every region created
+     * under {@code world} to the {@link RegionChunkSource} backing
+     * {@link Region#ownedChunkSnapshot()}. Called once per world at
+     * regionizer materialisation time.
      */
     private RegionListener newRegionWorldTracker(WorldRef world) {
+        // Captured once per world (not per region) — chunkManagerForOrNull
+        // is a non-creating lookup so a world that never shadows a chunk
+        // (e.g. the synthetic global world) never materialises a
+        // ChunkHolderManager just because a region was created; the
+        // source simply resolves to an empty snapshot in that case.
+        RegionChunkSource chunkSource = regionId -> {
+            ChunkHolderManager mgr = chunkManagerForOrNull(world);
+            if (mgr == null) return List.of();
+            List<NewChunkHolder> holders = mgr.holdersOwnedBy(regionId);
+            List<ChunkPos> out = new ArrayList<>(holders.size());
+            for (NewChunkHolder h : holders) out.add(h.position());
+            return List.copyOf(out);
+        };
         return new RegionListener() {
             @Override
             public void onRegionCreated(Region region) {
                 regionToWorld.put(region.id(), world);
+                region.withChunkSource(chunkSource);
             }
 
             @Override
             public void onRegionSplit(Region source, Region child) {
                 regionToWorld.put(child.id(), world);
+                child.withChunkSource(chunkSource);
             }
 
             @Override

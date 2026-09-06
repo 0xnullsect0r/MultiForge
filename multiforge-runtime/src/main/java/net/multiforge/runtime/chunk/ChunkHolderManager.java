@@ -15,6 +15,7 @@
  */
 package net.multiforge.runtime.chunk;
 
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
 import java.util.Objects;
@@ -359,7 +360,7 @@ public final class ChunkHolderManager implements RegionListener {
      */
     public void onRegionSplit(RegionId source, RegionId target, java.util.function.Predicate<ChunkPos> shouldLeave) {
         HolderManagerRegionData src = perRegion.get(source);
-        if (src != null) regionData(target).merge(src.split(h -> shouldLeave.test(h.position())));
+        if (src != null) regionData(target).merge(src.split(h -> shouldLeave.test(h.position()), shouldLeave));
         PerRegionTicketMap srcTickets = ticketsByRegion.get(source);
         if (srcTickets != null) ticketsFor(target).merge(srcTickets.split(shouldLeave));
         for (NewChunkHolder h : byChunk.values()) {
@@ -393,6 +394,48 @@ public final class ChunkHolderManager implements RegionListener {
             if (h.level().isAtLeast(ChunkLoadLevel.BORDER)) count++;
         }
         return count;
+    }
+
+    /**
+     * Snapshot of every holder currently owned by {@code region} — the
+     * primitive B3.1's three per-region phase bodies (BLOCK_FLUID_TICKS
+     * / ENTITY_AI / BLOCK_ENTITIES, docs/design/m13-b3-region-tick.md
+     * §4.1) use to answer "which chunks does this region own, right
+     * now?" via {@link net.multiforge.runtime.region.Region#ownedChunkSnapshot()}.
+     *
+     * <p><b>Deliberately a linear scan, not a cached/indexed
+     * structure.</b> {@link #byChunk} is a {@code ConcurrentHashMap}
+     * written from arbitrary region-worker threads (chunk load/unload,
+     * {@link #onRegionMerged}, {@link #onRegionSplit}); maintaining a
+     * second region-indexed map in lockstep with every one of those
+     * write paths is real complexity for a call that fires roughly
+     * once per phase per region per tick (~4 calls per region per
+     * tick, per the B3.1 task note) — not once per chunk, and not on
+     * any tick-hot inner loop. A full scan is O(chunks in the world);
+     * for a busy world that is a few thousand entries, comparable cost
+     * to the existing {@link #getBorderHolderCount()} call, which
+     * already runs at a similar cadence. If a future benchmark shows
+     * this dominating tick time, per-region caching (invalidated on
+     * split/merge) becomes an option, but it is out of scope here —
+     * see docs/design/m13-b3-region-tick.md §4.1.
+     *
+     * <p>Thread-safety matches every other read method on this class:
+     * {@link #byChunk} is a {@code ConcurrentHashMap}, so the scan
+     * tolerates concurrent structural writes (a chunk created or
+     * reassigned mid-scan is either included or not, never corrupting
+     * the returned list), and each holder's {@link
+     * NewChunkHolder#owningRegion()} read is a volatile-backed atomic
+     * read. The returned {@link List} is an immutable snapshot — safe
+     * to iterate without any further synchronisation, and stable even
+     * if a concurrent split/merge reassigns ownership after this call
+     * returns.
+     */
+    public List<NewChunkHolder> holdersOwnedBy(RegionId region) {
+        List<NewChunkHolder> out = new ArrayList<>();
+        for (NewChunkHolder h : byChunk.values()) {
+            if (region.equals(h.owningRegion())) out.add(h);
+        }
+        return List.copyOf(out);
     }
 
     /**
