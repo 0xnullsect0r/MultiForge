@@ -3,14 +3,16 @@
 ## Executive summary
 
 MultiForge defines a contract for pinning NeoForge event handlers to a
-specific execution domain — `@DispatchDomain` — but **dispatch-time
-enforcement of that contract has not landed yet** (blueprint M12). Today,
-every real NeoForge event fires wherever NeoForge's own event bus fires
-it. This page documents the contract as it exists in `multiforge-api`
-today, the domain each of ~30 common events is *intended* to dispatch on
-once M12 lands, and how `LEGACY_SERIAL` rerouting behaves for handlers
-that haven't opted in to anything stronger. Treat the per-event table
-below as a target, not a status report.
+specific execution domain — `@DispatchDomain` — and, as of M12.4,
+dispatch-time enforcement of that contract is wired: `NeoForge.EVENT_BUS`
+is transparently wrapped by `DispatchingEventBus`
+(`docs/design/m12-event-routing.md`), which routes each listener according
+to its method-level `@DispatchDomain`, its class-level `@DispatchDomain`,
+or — for the ~30 events in the table below — a built-in default from
+`EventTypeDomainMap`, in that order. This page documents the contract as
+it exists in `multiforge-api`, the domain each of those ~30 common events
+dispatches to by default, and how `LEGACY_SERIAL` rerouting behaves for
+handlers that haven't opted in to anything stronger.
 
 ## The @DispatchDomain contract
 
@@ -48,13 +50,17 @@ for the mod-author-facing walkthrough with a full ordering-contract
 explanation — this page focuses on the per-event mapping, not the
 annotation mechanics.
 
-## Per-event domain reference (target mapping, pending M12)
+## Per-event domain reference
 
-The table below lists ~30 real NeoForge event classes present in the
-vendored `upstream/neoforge-1.21.1` tree, with the domain each is
-*intended* to dispatch on once M12 enforcement lands. "Target domain" is
-a design decision, not a currently-observable runtime behavior — see
-the note above.
+The table below lists real NeoForge event classes present in the vendored
+`upstream/neoforge-1.21.1` tree. The rows also present in
+`EventTypeDomainMap`'s ~30-entry default map (`multiforge-runtime/src/main/
+java/net/multiforge/runtime/event/EventTypeDomainMap.java`) are the ones an
+unannotated listener actually dispatches to today; the remaining rows are
+still a target for a mod author who wants to annotate a handler
+explicitly, or for a future expansion of `EventTypeDomainMap` — an
+unannotated listener for one of those events still falls through to
+`LEGACY_SERIAL` (see below) until either happens.
 
 | Event                                        | Target domain | Why |
 |-----------------------------------------------|----------------|-----|
@@ -67,8 +73,13 @@ the note above.
 | `level.ChunkDataEvent.Load` / `.Save`          | REGION         | Chunk-scoped NBT read/write. |
 | `level.ChunkWatchEvent.Watch` / `.UnWatch`      | REGION         | Tied to a chunk position becoming visible/invisible to a player. |
 | `level.ChunkTicketLevelUpdatedEvent`           | REGION         | Ticket/level changes are per-region bookkeeping (see `docs/chunks.md`). |
+| `level.LevelEvent.Load`                        | GLOBAL         | Fires once at level lifecycle boundaries, before any region owns the level's chunks. |
+| `level.LevelEvent.Unload`                      | GLOBAL         | Same as `Load`. |
 | `level.BlockEvent.BreakEvent`                  | REGION         | Keyed to a block position. |
 | `level.BlockEvent.EntityPlaceEvent`            | REGION         | Keyed to a block position. |
+| `level.BlockEvent.PortalSpawnEvent`            | REGION         | Keyed to a block position. |
+| `level.BlockEvent.FarmlandTrampleEvent`        | REGION         | Keyed to a block position. |
+| `level.BlockEvent.NeighborNotifyEvent`         | REGION         | Keyed to a block position. |
 | `level.BlockDropsEvent`                        | REGION         | Keyed to a block position. |
 | `level.BlockGrowFeatureEvent`                  | REGION         | Keyed to a block position. |
 | `level.ExplosionEvent.Start` / `.Detonate`      | REGION         | Explosions are chunk-local; cross-region blast falls back to task-queue routing per affected chunk. |
@@ -86,8 +97,12 @@ the note above.
 | `entity.EntityStruckByLightningEvent`          | REGION         | Keyed to a block/chunk position. |
 | `entity.living.LivingHurtEvent`                | REGION         | Keyed to the entity's current chunk. |
 | `entity.living.LivingDeathEvent`                | REGION         | Keyed to the entity's current chunk. |
+| `entity.living.LivingSpawnEvent.CheckSpawn`     | REGION         | Keyed to the prospective spawn position's chunk. |
 | `entity.player.PlayerEvent.PlayerLoggedInEvent`  | GLOBAL         | Login/logout affects server-wide player-list state, not one region. |
 | `entity.player.PlayerEvent.PlayerLoggedOutEvent` | GLOBAL         | Same as above. |
+| `entity.player.PlayerInteractEvent.LeftClickBlock` | REGION       | Keyed to the clicked block's position. |
+| `entity.player.PlayerInteractEvent.RightClickBlock` | REGION      | Keyed to the clicked block's position. |
+| `entity.player.PlayerInteractEvent.RightClickItem` | REGION       | Keyed to the interacting player's current chunk. |
 | `CommandEvent`                                 | GLOBAL         | Command dispatch is global per `docs/regions.md` §The global region. |
 | `RegisterCommandsEvent`                        | GLOBAL         | Registration-time, not per-tick; no spatial owner. |
 | `ServerChatEvent`                              | GLOBAL         | Chat has no spatial owner today (proximity chat, if ever added, would move this to REGION). |
@@ -102,9 +117,8 @@ for retargeting a vanilla event that happens to feel infrequent.
 
 ## LEGACY_SERIAL rerouting for unaudited handlers
 
-Any handler without a `@DispatchDomain` annotation — which today is
-*every* handler, since enforcement hasn't landed — is treated as
-`LEGACY_SERIAL`. Once M12 enforcement exists, the intended behavior is:
+Any handler without a `@DispatchDomain` annotation, and whose event type
+has no entry in `EventTypeDomainMap`, is treated as `LEGACY_SERIAL`:
 
 - The handler runs on a per-mod serialised executor (see
   `docs/legacy-compat.md` for the executor's design and current
@@ -120,7 +134,7 @@ Any handler without a `@DispatchDomain` annotation — which today is
   starts on; it doesn't grant any mutation rights the enforcer wouldn't
   otherwise check.
 
-## Future: full M12 enforcement
+## M12 enforcement
 
 "Enforced" means: listener registration reads `@DispatchDomain` off the
 method (or its enclosing `@EventBusSubscriber` class) at
@@ -131,13 +145,9 @@ inline on whatever thread NeoForge's own event bus happens to fire on
 today. `@Ordering`/`OrderingContract` governs the ordering guarantee
 within that dispatch.
 
-Status: **in progress; see docs/design/m12-event-routing.md** (2026-09-06).
-The annotation types exist in `multiforge-api` and are documented for mod
-authors (`docs/api.md`), and the full interception/dispatch design has now
-landed as a design doc; no listener registration path in
-`multiforge-runtime` or the `multiforge-patches` tree reads the
-annotations yet — that's the implementation work the design doc scopes.
-Tracked against blueprint M12; the per-event target table above is the
-design this milestone will implement, kept here so mod authors annotating
-handlers today land on the domain the eventual enforcement will actually
-dispatch to.
+**Status:** wired as of M12.4. `@DispatchDomain` + `@Ordering` on listener
+methods are honored at post-time via the `DispatchingEventBus` wrapper
+(docs/design/m12-event-routing.md). Unannotated listeners for the ~30
+highest-value NeoForge events get sensible defaults from
+`EventTypeDomainMap`; everything else falls through to `LEGACY_SERIAL`
+with a rate-limited warn.

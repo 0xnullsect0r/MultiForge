@@ -23,6 +23,7 @@ import net.multiforge.api.event.DispatchDomainKind;
 import net.multiforge.api.event.Ordering;
 import net.multiforge.api.event.OrderingContract;
 import net.multiforge.runtime.event.AnnotationScanner.MetadataEntry;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -31,6 +32,12 @@ class AnnotationScannerTest {
     @BeforeEach
     void resetCache() {
         AnnotationScanner.resetForTesting();
+        EventTypeDomainMap.resetForTesting();
+    }
+
+    @AfterEach
+    void resetEventTypeMap() {
+        EventTypeDomainMap.resetForTesting();
     }
 
     @Test
@@ -79,6 +86,34 @@ class AnnotationScannerTest {
         assertThat(second).isSameAs(first);
     }
 
+    @Test
+    void unannotatedMethodWithKnownEventTypeUsesEventTypeDomainMapTier() throws NoSuchMethodException {
+        EventTypeDomainMap.register(FakeKnownEvent.class.getName(), DispatchDomainKind.GLOBAL);
+
+        Method method = NoAnnotationsKnownEvent.class.getDeclaredMethod("handle", FakeKnownEvent.class);
+        MetadataEntry entry = AnnotationScanner.scan(method);
+
+        assertThat(entry.domain()).isEqualTo(DispatchDomainKind.GLOBAL);
+    }
+
+    @Test
+    void unannotatedMethodWithUnknownEventTypeFallsThroughToLegacySerial() throws NoSuchMethodException {
+        Method method = NoAnnotationsUnknownEvent.class.getDeclaredMethod("handle", FakeUnknownEvent.class);
+        MetadataEntry entry = AnnotationScanner.scan(method);
+
+        assertThat(entry.domain()).isEqualTo(DispatchDomainKind.LEGACY_SERIAL);
+    }
+
+    @Test
+    void explicitMethodAnnotationOverridesEventTypeDomainMap() throws NoSuchMethodException {
+        EventTypeDomainMap.register(FakeKnownEvent.class.getName(), DispatchDomainKind.GLOBAL);
+
+        Method method = MethodAnnotationOverridesEventTypeMap.class.getDeclaredMethod("handle", FakeKnownEvent.class);
+        MetadataEntry entry = AnnotationScanner.scan(method);
+
+        assertThat(entry.domain()).isEqualTo(DispatchDomainKind.ASYNC);
+    }
+
     @DispatchDomain(DispatchDomainKind.GLOBAL)
     private static class ClassLevelOnly {
         @SuppressWarnings("unused")
@@ -113,5 +148,25 @@ class AnnotationScannerTest {
         @Ordering(OrderingContract.BEST_EFFORT)
         @SuppressWarnings("unused")
         static void handle(Object event) {}
+    }
+
+    private static class FakeKnownEvent {}
+
+    private static class FakeUnknownEvent {}
+
+    private static class NoAnnotationsKnownEvent {
+        @SuppressWarnings("unused")
+        static void handle(FakeKnownEvent event) {}
+    }
+
+    private static class NoAnnotationsUnknownEvent {
+        @SuppressWarnings("unused")
+        static void handle(FakeUnknownEvent event) {}
+    }
+
+    private static class MethodAnnotationOverridesEventTypeMap {
+        @DispatchDomain(DispatchDomainKind.ASYNC)
+        @SuppressWarnings("unused")
+        static void handle(FakeKnownEvent event) {}
     }
 }

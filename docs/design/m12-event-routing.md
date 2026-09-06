@@ -1,11 +1,12 @@
 # M12 Design — Transparent Event-Bus Routing
 
-Status: **design, not yet implemented.** This document is the definitive
-design for blueprint milestone M12 — "`IEventBus.post` honors
-`@DispatchDomain` annotations" (`docs/blueprint.md:779-784`). It supersedes
-the "Future: full M12 enforcement" section of `docs/events.md` as the
-detailed spec; `docs/events.md` remains the source of truth for the
-per-event target-domain table.
+Status: **wired as of M12.4.** This document is the definitive design for
+blueprint milestone M12 — "`IEventBus.post` honors `@DispatchDomain`
+annotations" (`docs/blueprint.md:779-784`). M12.1 (runtime dispatcher),
+M12.2 (fork bridge), and M12.4 (event-type default-domain map, §4.2) have
+all landed on `develop`. It supersedes the "M12 enforcement" section of
+`docs/events.md` as the detailed spec; `docs/events.md` remains the source
+of truth for the per-event target-domain table.
 
 ## 1. Context and status
 
@@ -327,6 +328,9 @@ instead performs an equivalent scan independently:
 
 ### 4.2 `AnnotationScanner`
 
+Domain resolution (as landed in M12.4) is a **three-tier fallback**, not
+the two-tier shape drafted in earlier revisions of this design:
+
 ```java
 final class AnnotationScanner {
     record MetadataEntry(DispatchDomainKind domain, OrderingContract ordering) {}
@@ -342,7 +346,13 @@ final class AnnotationScanner {
         if (domainAnn == null) {
             domainAnn = method.getDeclaringClass().getAnnotation(DispatchDomain.class);
         }
-        DispatchDomainKind domain = domainAnn != null ? domainAnn.value() : DispatchDomainKind.LEGACY_SERIAL;
+        DispatchDomainKind domain;
+        if (domainAnn != null) {
+            domain = domainAnn.value();
+        } else {
+            // Tier 3: fall back to the event-type default map before LEGACY_SERIAL.
+            domain = eventTypeDefault(method).orElse(DispatchDomainKind.LEGACY_SERIAL);
+        }
 
         Ordering orderingAnn = method.getAnnotation(Ordering.class);
         if (orderingAnn == null) {
@@ -352,19 +362,45 @@ final class AnnotationScanner {
 
         return new MetadataEntry(domain, ordering);
     }
+
+    private static Optional<DispatchDomainKind> eventTypeDefault(Method method) {
+        Class<?>[] params = method.getParameterTypes();
+        return params.length == 1 ? EventTypeDomainMap.lookup(params[0]) : Optional.empty();
+    }
 }
 ```
 
-- Method-level annotation wins over class-level (`@EventBusSubscriber`
-  class annotated `@DispatchDomain(GLOBAL)`, one method inside it
-  overridden to `@DispatchDomain(REGION)` — the method wins).
+- **Tier 1 — method-level `@DispatchDomain`.** Wins over everything else.
+- **Tier 2 — class-level `@DispatchDomain`.** The `@EventBusSubscriber`
+  class-level case (a class annotated `@DispatchDomain(GLOBAL)`, one method
+  inside it overridden to `@DispatchDomain(REGION)` — the method wins,
+  tier 1 over tier 2).
+- **Tier 3 — `EventTypeDomainMap` (new in M12.4).** If neither a method-
+  nor a class-level annotation is present, `AnnotationScanner` reads the
+  method's single `@SubscribeEvent`-required parameter type (`Class<?
+  extends Event>`, already validated by `DispatchingEventBus` before
+  `scan` is ever called) and looks it up in
+  `net.multiforge.runtime.event.EventTypeDomainMap#lookup(Class)` — a
+  static `String`-keyed (fully-qualified class name) registry of ~30
+  entries covering the highest-value NeoForge events from
+  `docs/events.md`'s per-event table (tick events, chunk/level lifecycle,
+  entity join/leave/death/hurt/spawn, block interactions, chat/commands,
+  server lifecycle). `lookup` walks the parameter type's class hierarchy
+  (the class itself, then its superclass, and so on), so a mod's custom
+  subclass of a mapped event picks up the ancestor's default without its
+  own entry. `EventTypeDomainMap` is intentionally MC-free — keyed by
+  `String`, not `Class<? extends net.neoforged.bus.api.Event>` — so
+  `multiforge-runtime` doesn't need a NeoForge/Minecraft dependency to
+  ship it. If tier 3 finds nothing either, resolution falls to the
+  documented default, `LEGACY_SERIAL`.
 - Cache is keyed by `Method` identity (reflective `Method` objects are
   stable/interned per-declaring-class per JVM run, so identity-keying via
   a plain `Map<Method, MetadataEntry>` — not a `WeakHashMap`, since
   `Method` objects for loaded classes live for the JVM's lifetime anyway —
   is correct and avoids a `Class`+`String` composite-key allocation on
   every scan). Scan happens once per method, at `register` time, not per
-  `post`.
+  `post` — this holds for the tier-3 lookup too, since its result is
+  folded into the same cached `MetadataEntry`.
 
 ### 4.3 Priority preservation
 
@@ -640,13 +676,21 @@ New package: `multiforge-runtime/src/test/java/net/multiforge/runtime/event/`.
   before) unless every listener on that event type is provably in the
   same domain. Flagged here so M12 implementation work does not silently
   ship a cancellation-ordering bug.
-- **Enumerating and annotating all NeoForge events.** `docs/events.md`'s
-  ~30-event table is a representative target set for M12.4 (a follow-up
-  task under this milestone, not this design doc's scope) — it is not
-  exhaustive of every NeoForge event class. Unannotated events fall
-  through to `LEGACY_SERIAL` exactly as they do today; this is by design
-  (CLAUDE.md rule 5 — never refuse, always have a safe default), not a
-  gap to close before M12 can ship.
+- ~~**Enumerating and annotating all NeoForge events.**~~ **Done, in the
+  form M12.4 actually shipped.** The original framing here assumed M12.4
+  would scatter `@DispatchDomain` annotations onto NeoForge's own event
+  *classes* — but event classes have no methods to annotate; only mod
+  listener methods do. M12.4 instead ships `EventTypeDomainMap`, a static
+  event-type → domain default map that `AnnotationScanner` consults as
+  tier 3 (see §4.2), giving the ~30 highest-value events from
+  `docs/events.md`'s table a sensible default with zero mod-author
+  annotation required. It remains true, and remains by design (CLAUDE.md
+  rule 5 — never refuse, always have a safe default), that this ~30-event
+  set is representative, not exhaustive: any event class absent from
+  `EventTypeDomainMap` and unannotated by its listener falls through to
+  `LEGACY_SERIAL` exactly as before. `EventTypeDomainMap.register(...)` is
+  an open extension point for growing the default set later without
+  touching `AnnotationScanner`.
 - **Async events with return values.** An `ASYNC`-domain listener that
   needs to hand a computed value back into game state (rather than
   firing-and-forgetting) needs a continuation/future-based API this
