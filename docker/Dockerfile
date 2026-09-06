@@ -12,7 +12,7 @@
 # GPL-3.0-only. See LICENSE at the repository root.
 
 # ---------- builder stage ------------------------------------------------
-FROM eclipse-temurin:21-jdk AS builder
+FROM eclipse-temurin:25-jdk AS builder
 
 WORKDIR /src
 COPY . /src
@@ -34,7 +34,7 @@ RUN mkdir -p /staging/root \
        cp /src/multiforge-installer/build/libs/*.jar /staging/root/
 
 # ---------- runtime stage ------------------------------------------------
-FROM eclipse-temurin:21-jre AS runtime
+FROM eclipse-temurin:25-jre AS runtime
 
 LABEL org.opencontainers.image.title="MultiForge Server"
 LABEL org.opencontainers.image.description="Multithreaded NeoForge dedicated server (GPL-3.0-only)"
