@@ -1,0 +1,15 @@
+--- a/net/minecraft/server/players/PlayerList.java
++++ b/net/minecraft/server/players/PlayerList.java
+@@ -229,6 +229,12 @@
+         this.broadcastAll(ClientboundPlayerInfoUpdatePacket.createPlayerInitializing(List.of(p_11263_)));
+         this.sendLevelInfo(p_11263_, serverlevel1);
+         serverlevel1.addNewPlayer(p_11263_);
++        // MultiForge (multiforge-patches/06-networking/, M4 Track A3.3): wire the previously
++        // scaffolded-but-unwired Netty->global->spawn-chunk-owning-region hop end to end, and bind
++        // this connection to the player's UUID for the packet-queue machinery (A3.1/A3.2). Runs
++        // after Vanilla has already placed the player in serverlevel1 above — see
++        // PlayerJoinBridge's javadoc for why the two registration paths don't race each other.
++        net.multiforge.neoforge.entity.PlayerJoinBridge.beginJoin(p_11263_, p_11262_);
+         this.server.getCustomBossEvents().onPlayerConnect(p_11263_);
+         this.sendActivePlayerEffects(p_11263_);
+         if (optional1.isPresent() && optional1.get().contains("RootVehicle", 10)) {

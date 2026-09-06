@@ -203,14 +203,14 @@ public final class EntityMigrationCoordinator {
                         + " timed out waiting for destination BORDER; restoring at source");
         for (MigratingEntityRef sourceRef : sourceRefs) {
             // §7.3: "the original ref transitions to RETIRED... since by definition it is not
-            // currently MIGRATING from the fallback-completion's perspective." abortMigration()
-            // first (MIGRATING → RESIDENT) makes that true — this specific ref object is being
-            // abandoned; the fallback below materializes an entirely new ref instance instead — so
-            // retire() then sees RESIDENT and CASes straight to RETIRED rather than deferring
+            // currently MIGRATING from the fallback-completion's perspective." This specific ref
+            // object is being abandoned — the fallback below materializes an entirely new ref
+            // instance instead — so it goes straight from MIGRATING to RETIRED in one atomic step
             // (a plain retire() on a still-MIGRATING ref defers per §1.4, which would be wrong
-            // here: nothing will ever call completeMigration on this specific object again).
-            sourceRef.abortMigration();
-            sourceRef.retire();
+            // here: nothing will ever call completeMigration on this specific object again, and a
+            // two-step abortMigration()-then-retire() would fire any registered settled listener
+            // while transiently RESIDENT instead of at the real terminal state).
+            sourceRef.forceTerminalFromMigrating();
             registry.retire(sourceRef);
         }
         if (sourceRefs.isEmpty() || srcWorld == null || srcChunk == null) {
@@ -247,7 +247,22 @@ public final class EntityMigrationCoordinator {
             // object is not the stable identity, the UUID is. Retire the old object's local state
             // only; do NOT push it into EntityRegistry.retiredRefs, since that UUID is legitimately
             // live again via `fresh`.
-            if (sourceRef != null) sourceRef.retire();
+            //
+            // sourceRef is still MIGRATING at this exact point (nothing transitions it away on the
+            // ordinary success path — completeMigration() is a same-object CAS used only by
+            // direct-call test shapes, not this fresh-object materialization flow). A plain
+            // retire() call here would hit retire()'s own §1.4 defer branch (state == MIGRATING ->
+            // sets pendingRetire, does not reach RETIRED) — correct for retire()'s intended
+            // "entity died mid-flight" caller, wrong here: this is not a death, it's an ordinary
+            // superseded-by-a-successful-hop terminal transition, and callers holding this exact
+            // object (e.g. NetworkMigrationBridge's per-hop MigratingEntityRef#addSettledListener,
+            // M4 Track A3.2) need it to actually reach a terminal state so their listener fires.
+            // rather than a two-step abortMigration()-then-retire() dance that would fire a
+            // registered settled listener while transiently RESIDENT instead of RETIRED — one
+            // atomic step, same idiom abortAndRestore uses a few lines up in this file.
+            if (sourceRef != null) {
+                sourceRef.forceTerminalFromMigrating();
+            }
         }
         for (EntitySnapshot child : snapshot.passengers()) completeRecursive(child, sourceRefs);
     }

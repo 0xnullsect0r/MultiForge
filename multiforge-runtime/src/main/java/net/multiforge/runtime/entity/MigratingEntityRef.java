@@ -5,9 +5,12 @@
 package net.multiforge.runtime.entity;
 
 import java.util.ArrayList;
+import java.util.Deque;
 import java.util.List;
 import java.util.Objects;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentLinkedDeque;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import net.multiforge.api.entity.EntityRef;
@@ -37,6 +40,25 @@ public final class MigratingEntityRef implements EntityRef {
      * #consumePendingRetire()} — docs/design/entity-migration.md §1.4.
      */
     private final AtomicBoolean pendingRetire = new AtomicBoolean(false);
+
+    /**
+     * Packets a caller attempted to send to this entity (a player, in practice) while this ref was
+     * {@link MigrationState#MIGRATING} — docs/design/entity-migration.md's networking rules (M4
+     * Track A3.2). Element type is deliberately {@code Object}: this class is Minecraft-free, so
+     * the fork glue ({@code net.multiforge.neoforge.entity.NetworkMigrationBridge}) is the one that
+     * knows the real packet/listener/flush shape and boxes it before calling {@link
+     * #enqueueOutbound(Object)}. Order-preserving (FIFO) — drained in the same order enqueued.
+     */
+    private final Deque<Object> pendingOutbound = new ConcurrentLinkedDeque<>();
+
+    /**
+     * Fired exactly once per real state transition that leaves this ref {@code MIGRATING}
+     * ({@link #completeMigration}, {@link #abortMigration}, or the immediate — non-deferred —
+     * branch of {@link #retire()}). A2/A3 fork glue uses this to know when it's safe to drain
+     * {@link #pendingOutbound} and/or apply a deferred Vanilla position update. Registering a
+     * listener while this ref is already past {@code MIGRATING} runs it inline immediately.
+     */
+    private final List<Runnable> settledListeners = new CopyOnWriteArrayList<>();
 
     public MigratingEntityRef(UUID uuid, WorldRef world, ChunkPos chunkPos) {
         this.uuid = Objects.requireNonNull(uuid, "uuid");
@@ -97,6 +119,7 @@ public final class MigratingEntityRef implements EntityRef {
         Objects.requireNonNull(newChunkPos, "newChunkPos");
         if (state.compareAndSet(MigrationState.MIGRATING, MigrationState.RESIDENT)) {
             location.set(new Location(newWorld, newChunkPos));
+            fireSettled();
             return true;
         }
         ViolationLogger.warn(
@@ -112,7 +135,9 @@ public final class MigratingEntityRef implements EntityRef {
      * it, or the ref was retired mid-flight) — intentional, per §1.3.
      */
     public void abortMigration() {
-        state.compareAndSet(MigrationState.MIGRATING, MigrationState.RESIDENT);
+        if (state.compareAndSet(MigrationState.MIGRATING, MigrationState.RESIDENT)) {
+            fireSettled();
+        }
     }
 
     /**
@@ -137,10 +162,17 @@ public final class MigratingEntityRef implements EntityRef {
         MigrationState prev = state.get();
         if (prev == MigrationState.RETIRED) return false;
         if (prev == MigrationState.MIGRATING) {
+            // Deliberately does NOT call fireSettled() here: the state is left at MIGRATING
+            // (§1.4), this specific ref object never itself settles, and any packets already
+            // queued in pendingOutbound are abandoned along with it — the destination's fresh
+            // ref (materialized RETIRED directly, per completeRecursive) is what the rest of the
+            // system observes from here on.
             pendingRetire.set(true);
             return true;
         }
-        return state.compareAndSet(prev, MigrationState.RETIRED);
+        boolean changed = state.compareAndSet(prev, MigrationState.RETIRED);
+        if (changed) fireSettled();
+        return changed;
     }
 
     /**
@@ -187,6 +219,87 @@ public final class MigratingEntityRef implements EntityRef {
             }
         }
         return true;
+    }
+
+    // === Networking hand-off (docs/design/entity-migration.md networking rules, M4 Track A3) =====
+
+    /**
+     * Queues {@code packet} (an opaque, fork-glue-boxed send request) instead of letting it go out
+     * over the wire while this ref is {@code MIGRATING}. Callers are responsible for checking
+     * {@link #migrationState()} themselves before calling this — this method does not itself
+     * re-check the state, since the caller (e.g. {@code Connection.send}) already made that
+     * decision atomically enough for its own purposes (a false-positive enqueue during a narrow
+     * settle race is harmless: {@link #drainOutbound()} still delivers it, just very slightly
+     * late, never dropped).
+     */
+    public void enqueueOutbound(Object packet) {
+        pendingOutbound.addLast(Objects.requireNonNull(packet, "packet"));
+    }
+
+    /**
+     * Drains every currently-queued outbound item in FIFO (enqueue) order. Safe to call more than
+     * once — a second call simply returns an empty list once the deque is empty.
+     */
+    public List<Object> drainOutbound() {
+        List<Object> out = new ArrayList<>();
+        Object next;
+        while ((next = pendingOutbound.pollFirst()) != null) {
+            out.add(next);
+        }
+        return out;
+    }
+
+    /**
+     * Coordinator-only: forces this ref from {@code MIGRATING} straight to {@code RETIRED} as a
+     * single atomic step, bypassing {@link #retire()}'s §1.4 defer-while-MIGRATING semantics.
+     * Fires {@link #addSettledListener} listeners exactly once, at the actual terminal state —
+     * unlike calling {@link #abortMigration()} then {@link #retire()} back to back, which would
+     * fire listeners twice, first while transiently {@code RESIDENT} (before {@link #isRetired()}
+     * is true).
+     *
+     * <p>Used only when this ref is being superseded by an already-decided outcome elsewhere — a
+     * successful migration (the fresh ref at the destination is what's live now) or a timed-out
+     * migration's fallback restore (a fresh ref at the source is what's live now) — never for an
+     * actual entity death, which must go through {@link #retire()}'s defer-until-the-destination-
+     * discovers-it path instead.
+     *
+     * @return {@code true} iff this call performed the transition (was {@code MIGRATING}); {@code
+     *     false} if some other thread already moved this ref off {@code MIGRATING} first.
+     */
+    boolean forceTerminalFromMigrating() {
+        if (!state.compareAndSet(MigrationState.MIGRATING, MigrationState.RETIRED)) {
+            return false;
+        }
+        fireSettled();
+        return true;
+    }
+
+    /**
+     * Registers {@code listener} to run once this ref next leaves {@code MIGRATING} via a real
+     * state transition ({@link #completeMigration}, {@link #abortMigration}, {@link
+     * #forceTerminalFromMigrating()}, or the immediate branch of {@link #retire()}). If this ref
+     * is not currently {@code MIGRATING}, runs {@code listener} inline immediately instead of
+     * queuing it — there is nothing left to wait for. Fires at most once per ref instance: every
+     * one of those transitions is a terminal-or-stable exit from {@code MIGRATING} for that
+     * instance (the state machine never re-enters {@code MIGRATING} from {@code RESIDENT}/{@code
+     * RETIRED}), so there is nothing left to wait for after the first firing.
+     */
+    public void addSettledListener(Runnable listener) {
+        Objects.requireNonNull(listener, "listener");
+        if (state.get() != MigrationState.MIGRATING) {
+            listener.run();
+            return;
+        }
+        settledListeners.add(listener);
+    }
+
+    private void fireSettled() {
+        if (settledListeners.isEmpty()) return;
+        List<Runnable> toRun = new ArrayList<>(settledListeners);
+        settledListeners.clear();
+        for (Runnable listener : toRun) {
+            listener.run();
+        }
     }
 
     private record Location(WorldRef world, ChunkPos chunkPos) {}
