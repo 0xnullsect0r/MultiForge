@@ -1,0 +1,9 @@
+# MultiForge installer signing public key (Ed25519, 32-byte raw, base64).
+#
+# THROWAWAY KEY — generated for C4.3 (ops hardening) wiring only. The
+# matching private key was never persisted anywhere and cannot sign real
+# release artifacts. Before the first signed release, replace this file
+# with the real release-signing public key (see multiforge-license-cli
+# for the Ed25519 keypair generation flow) and keep that private key off
+# any machine that isn't the release-signing box, per CLAUDE.md rule 2.
+OR2JVS0KxbzGfTQz6lovD72NZIDVmj64m0pqLLc5Qp4=

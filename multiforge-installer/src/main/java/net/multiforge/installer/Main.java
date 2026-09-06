@@ -8,9 +8,11 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.io.PrintStream;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
+import java.security.PublicKey;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
@@ -95,9 +97,17 @@ public final class Main {
         Path libDir = installDir.resolve("libraries").resolve("multiforge");
         Files.createDirectories(libDir);
 
-        // 1. Extract bundled jars.
+        // 1. Verify + extract bundled jars. Signature check runs before any
+        // file lands on disk (C4.3): a mismatched signature aborts the
+        // install with nothing written to libDir.
+        PublicKey signingKey = SignatureCheck.loadEmbeddedPublicKey();
         for (String jar : BUNDLED_JARS) {
-            copyResource(BUNDLED_ROOT + jar, libDir.resolve(jar));
+            byte[] jarBytes = readResource(BUNDLED_ROOT + jar);
+            if (!verifyBundledSignatureOrWarn(jar, jarBytes, signingKey, out)) {
+                err.println("[installer] signature verification FAILED for " + jar + " — install aborted.");
+                return 4;
+            }
+            Files.write(libDir.resolve(jar), jarBytes);
             out.println("[installer] wrote " + libDir.resolve(jar));
         }
 
@@ -202,6 +212,45 @@ public final class Main {
         try (InputStream in = Main.class.getResourceAsStream(resource)) {
             if (in == null) throw new IOException("bundled resource missing: " + resource);
             Files.copy(in, dest, StandardCopyOption.REPLACE_EXISTING);
+        }
+    }
+
+    private static byte[] readResource(String resource) throws IOException {
+        try (InputStream in = Main.class.getResourceAsStream(resource)) {
+            if (in == null) throw new IOException("bundled resource missing: " + resource);
+            return in.readAllBytes();
+        }
+    }
+
+    /**
+     * If a companion {@code <jar>.sig} resource is bundled alongside
+     * {@code jarName} under {@link #BUNDLED_ROOT}, verifies {@code
+     * jarBytes} against it with the embedded {@link SignatureCheck}
+     * public key and returns {@code false} on mismatch (the caller
+     * aborts the install). No release-signing pipeline produces {@code
+     * .sig} resources yet (see {@code multiforge-installer-signing.pub}),
+     * so an unsigned bundle logs an informational note and returns
+     * {@code true} — CLAUDE.md rule 5's warn-don't-refuse default,
+     * applied to infrastructure that isn't wired up yet rather than
+     * hard-failing every install until it is.
+     */
+    private static boolean verifyBundledSignatureOrWarn(
+            String jarName, byte[] jarBytes, PublicKey key, PrintStream out) {
+        String sigResource = BUNDLED_ROOT + jarName + ".sig";
+        try (InputStream in = Main.class.getResourceAsStream(sigResource)) {
+            if (in == null) {
+                out.println(
+                        "[installer] no signature bundled for " + jarName + "; skipping verification (unsigned build)");
+                return true;
+            }
+            String sigText = new String(in.readAllBytes(), StandardCharsets.UTF_8);
+            byte[] signature = SignatureCheck.decodeSignature(sigText);
+            boolean ok = SignatureCheck.verify(jarBytes, signature, key);
+            if (ok) out.println("[installer] signature OK for " + jarName);
+            return ok;
+        } catch (IOException | IllegalArgumentException e) {
+            out.println("[installer] malformed signature for " + jarName + ": " + e.getMessage());
+            return false;
         }
     }
 

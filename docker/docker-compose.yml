@@ -19,7 +19,11 @@ services:
     volumes:
       - ./data:/data
     healthcheck:
-      test: ["CMD", "sh", "-c", "printf 'GET / HTTP/1.0\\r\\n\\r\\n' | nc -w2 127.0.0.1 25565 > /dev/null 2>&1 || exit 0"]
+      # Real Minecraft server-list-ping probe (mcstatus is installed in the
+      # image, see docker/Dockerfile). Exit code reflects whether the
+      # server actually answered the ping — no `|| exit 0` fallback, so a
+      # down server is correctly reported unhealthy.
+      test: ["CMD", "mcstatus", "127.0.0.1:25565", "ping"]
       interval: 30s
       timeout: 5s
       retries: 3

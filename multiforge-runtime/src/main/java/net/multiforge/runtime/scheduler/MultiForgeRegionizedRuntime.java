@@ -9,6 +9,7 @@ import net.multiforge.api.scheduler.ServerDomains;
 import net.multiforge.runtime.config.MultiForgeConfig;
 import net.multiforge.runtime.ownership.OwnershipEnforcer;
 import net.multiforge.runtime.region.RegionTickBody;
+import net.multiforge.runtime.telemetry.OtelExporter;
 
 /**
  * Process-wide singleton holder for the live {@link
@@ -89,6 +90,9 @@ public final class MultiForgeRegionizedRuntime {
             host.close();
             throw e;
         }
+        // Opt-in only: a no-op unless -Dmultiforge.otel.endpoint is set (see
+        // docs/operator-handbook.md and OtelExporter's class doc).
+        OtelExporter.startFromSystemProperty();
         return host;
     }
 
@@ -125,6 +129,7 @@ public final class MultiForgeRegionizedRuntime {
         } finally {
             ServerDomains.uninstall();
             OwnershipEnforcer.unbindTickThreadAndRerouteTarget();
+            OtelExporter.stop();
         }
     }
 }

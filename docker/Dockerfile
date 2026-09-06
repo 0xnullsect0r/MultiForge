@@ -59,6 +59,18 @@ RUN useradd --system --create-home --home-dir /home/multiforge --shell /usr/sbin
     && mkdir -p ${DATA_DIR} \
     && chown -R multiforge:multiforge ${DATA_DIR} /home/multiforge
 
+# mcstatus backs the compose healthcheck (docker/docker-compose.yml) with a
+# real Minecraft server-list-ping probe instead of a bare TCP connect.
+# `--break-system-packages` is only accepted by pip >= 23.0 (PEP 668,
+# Debian bookworm+); older pip3 on this base rejects the flag outright, so
+# try the plain install first and fall back to it rather than failing the
+# build on either pip vintage.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends python3 python3-pip \
+    && rm -rf /var/lib/apt/lists/* \
+    && (pip3 install --no-cache-dir mcstatus \
+        || pip3 install --no-cache-dir --break-system-packages mcstatus)
+
 # Pull the staged jars in one go. The builder stage guarantees these
 # directories exist regardless of the MC=true|false build arg, so this
 # COPY never trips on an empty glob.
