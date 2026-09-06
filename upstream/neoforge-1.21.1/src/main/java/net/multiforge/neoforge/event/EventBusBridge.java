@@ -1,15 +1,12 @@
 /*
  * MultiForge — Copyright (c) 2026 MultiForge authors.
- *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation, version 3.
- *
  * This program is distributed in the hope that it will be useful, but
  * WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
  * General Public License for more details.
- *
  * You should have received a copy of the GNU General Public License
  * along with this program. If not, see <https://www.gnu.org/licenses/>.
  */
@@ -28,20 +25,20 @@ import net.neoforged.bus.api.IEventBus;
  * <p>Two entry points, for two different moments in the boot sequence:
  *
  * <ul>
- *   <li>{@link #wrap(IEventBus, MultiThreadedSchedulerHost)} — eagerly
- *       constructs a {@link DispatchingEventBus} around any bus, given a
- *       host that already exists. Not used by the static {@code
+ * <li>{@link #wrap(IEventBus, MultiThreadedSchedulerHost)} — eagerly
+ * constructs a {@link DispatchingEventBus} around any bus, given a
+ * host that already exists. Not used by the static {@code
  *       NeoForge.EVENT_BUS} initializer (a {@code
  *       MultiThreadedSchedulerHost} does not exist yet at class-load
- *       time), but available for tests and any other bus instance that
- *       does have a host in hand up front.
- *   <li>{@link #attach(IEventBus, MultiThreadedSchedulerHost)} — the
- *       production path. {@code NeoForge.EVENT_BUS} is initialized (by
- *       the {@code 09-events/NeoForge.java.patch} hunk) as a {@link
- *       LazyDispatchingEventBus} directly, with no executor attached yet.
- *       {@code MultiForgeGlobalSystemsInit.install(...)} calls {@code
+ * time), but available for tests and any other bus instance that
+ * does have a host in hand up front.
+ * <li>{@link #attach(IEventBus, MultiThreadedSchedulerHost)} — the
+ * production path. {@code NeoForge.EVENT_BUS} is initialized (by
+ * the {@code 09-events/NeoForge.java.patch} hunk) as a {@link
+ * LazyDispatchingEventBus} directly, with no executor attached yet.
+ * {@code MultiForgeGlobalSystemsInit.install(...)} calls {@code
  *       attach} once a real host exists (at {@code ServerAboutToStart}),
- *       swapping in the real {@link SchedulerBackedDispatchExecutor}.
+ * swapping in the real {@link SchedulerBackedDispatchExecutor}.
  * </ul>
  *
  * <p>Both respect the {@code -Dmultiforge.event-dispatch=off} safety
@@ -50,7 +47,6 @@ import net.neoforged.bus.api.IEventBus;
  * for instance).
  */
 public final class EventBusBridge {
-
     private EventBusBridge() {}
 
     /**
@@ -76,17 +72,17 @@ public final class EventBusBridge {
      * no executor attached yet. Never throws (CLAUDE.md rule 5):
      *
      * <ul>
-     *   <li>Safety valve set — no-op, returns {@code true} (this is the
-     *       intended, operator-requested state, not a failure).
-     *   <li>{@code bus} is not a {@link LazyDispatchingEventBus} (the
-     *       09-events patch was not applied, or something else replaced
-     *       {@code NeoForge.EVENT_BUS}) — returns {@code false} so the
-     *       caller can warn; every listener still dispatches inline via
-     *       the real bus's own semantics, so nothing crashes.
-     *   <li>{@code host} is {@code null} — same as above.
-     *   <li>Otherwise — attaches (idempotently; a second call after a
-     *       successful first attach is a harmless no-op) and returns
-     *       {@code true}.
+     * <li>Safety valve set — no-op, returns {@code true} (this is the
+     * intended, operator-requested state, not a failure).
+     * <li>{@code bus} is not a {@link LazyDispatchingEventBus} (the
+     * 09-events patch was not applied, or something else replaced
+     * {@code NeoForge.EVENT_BUS}) — returns {@code false} so the
+     * caller can warn; every listener still dispatches inline via
+     * the real bus's own semantics, so nothing crashes.
+     * <li>{@code host} is {@code null} — same as above.
+     * <li>Otherwise — attaches (idempotently; a second call after a
+     * successful first attach is a harmless no-op) and returns
+     * {@code true}.
      * </ul>
      */
     public static boolean attach(IEventBus bus, MultiThreadedSchedulerHost host) {

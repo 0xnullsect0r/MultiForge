@@ -1,15 +1,12 @@
 /*
  * MultiForge — Copyright (c) 2026 MultiForge authors.
- *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation, version 3.
- *
  * This program is distributed in the hope that it will be useful, but
  * WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
  * General Public License for more details.
- *
  * You should have received a copy of the GNU General Public License
  * along with this program. If not, see <https://www.gnu.org/licenses/>.
  */
@@ -236,16 +233,16 @@ public final class RegionizedTickCoordinator {
      * hunks:
      *
      * <ul>
-     *   <li>{@code Level.addBlockEntityTicker} — a newly added ticker is
-     *       routed into its owning region's {@code
+     * <li>{@code Level.addBlockEntityTicker} — a newly added ticker is
+     * routed into its owning region's {@code
      *       HolderManagerRegionData.blockEntityTickers} slice only when
-     *       this returns {@code true}; otherwise it stays purely on the
-     *       Vanilla-inline list (the ordinary pre-B3.4 behaviour).</li>
-     *   <li>{@code Level.tickBlockEntities()} — the entire inline
-     *       iteration is skipped when this returns {@code true}, because
-     *       {@code MultiThreadedSchedulerHost}'s per-region {@code
+     * this returns {@code true}; otherwise it stays purely on the
+     * Vanilla-inline list (the ordinary pre-B3.4 behaviour).</li>
+     * <li>{@code Level.tickBlockEntities()} — the entire inline
+     * iteration is skipped when this returns {@code true}, because
+     * {@code MultiThreadedSchedulerHost}'s per-region {@code
      *       BLOCK_ENTITIES} phase body does that work instead. Ticking
-     *       both would double-tick every block entity in the world.</li>
+     * both would double-tick every block entity in the world.</li>
      * </ul>
      *
      * <p>Both call sites reading the same flag is what keeps them
@@ -282,17 +279,17 @@ public final class RegionizedTickCoordinator {
      * + runner-registered rather than a per-world lookup.
      *
      * @return {@code true} iff (1) the MultiForge runtime is installed,
-     *     (2) a regionizer has been materialised for {@code level}'s
-     *     world, and (3) a real (non-default) {@link
-     *     net.multiforge.runtime.region.EntityTickRunner} has been
-     *     bound via {@code MultiThreadedSchedulerHost.setEntityTickRunner}
-     *     — in which case the patched {@code ServerLevel.tick}'s
-     *     Vanilla-inline entity pass must be skipped, because the
-     *     {@code ENTITY_AI} phase body ({@code phaseEntityAiTick})
-     *     already ticks every owned chunk's entities from each
-     *     region's own worker thread. {@code false} means the Vanilla-
-     *     inline fallback ({@code ServerLevel.mfTickEntitiesAll}) must
-     *     still run, exactly like the pre-B3.3 behaviour.
+     *         (2) a regionizer has been materialised for {@code level}'s
+     *         world, and (3) a real (non-default) {@link
+     *         net.multiforge.runtime.region.EntityTickRunner} has been
+     *         bound via {@code MultiThreadedSchedulerHost.setEntityTickRunner}
+     *         — in which case the patched {@code ServerLevel.tick}'s
+     *         Vanilla-inline entity pass must be skipped, because the
+     *         {@code ENTITY_AI} phase body ({@code phaseEntityAiTick})
+     *         already ticks every owned chunk's entities from each
+     *         region's own worker thread. {@code false} means the Vanilla-
+     *         inline fallback ({@code ServerLevel.mfTickEntitiesAll}) must
+     *         still run, exactly like the pre-B3.3 behaviour.
      */
     public static boolean regionsHandleEntityTicks(ServerLevel level) {
         MultiThreadedSchedulerHost host = MultiForgeRegionizedRuntime.current();

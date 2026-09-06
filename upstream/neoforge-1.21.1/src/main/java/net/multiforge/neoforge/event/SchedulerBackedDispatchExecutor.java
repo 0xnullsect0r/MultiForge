@@ -1,15 +1,12 @@
 /*
  * MultiForge — Copyright (c) 2026 MultiForge authors.
- *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation, version 3.
- *
  * This program is distributed in the hope that it will be useful, but
  * WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
  * General Public License for more details.
- *
  * You should have received a copy of the GNU General Public License
  * along with this program. If not, see <https://www.gnu.org/licenses/>.
  */
@@ -54,9 +51,10 @@ import net.neoforged.neoforge.event.level.ExplosionEvent;
  * non-blocking.
  */
 public final class SchedulerBackedDispatchExecutor implements DispatchExecutor {
-
-    /** Matches the synthetic global world every other global-region call site uses (see
-     *  {@code MultiForgeGlobalSystemsInit.install}'s {@code CommandDispatchSystem} wiring). */
+    /**
+     * Matches the synthetic global world every other global-region call site uses (see
+     * {@code MultiForgeGlobalSystemsInit.install}'s {@code CommandDispatchSystem} wiring).
+     */
     private static final WorldRef GLOBAL_WORLD = WorldRef.of("multiforge:global");
 
     /** One shared pool per JVM — reused across every {@code DispatchingEventBus} instance. */
@@ -129,23 +127,23 @@ public final class SchedulerBackedDispatchExecutor implements DispatchExecutor {
      * resolves identically:
      *
      * <ul>
-     *   <li>{@link BlockEvent} — covers {@code BreakEvent}, {@code
+     * <li>{@link BlockEvent} — covers {@code BreakEvent}, {@code
      *       EntityPlaceEvent}, {@code PistonEvent.Pre}/{@code .Post} ({@code
      *       PistonEvent} extends {@code BlockEvent}), and every other
-     *       block-position-keyed {@code BlockEvent} subtype. Location:
-     *       {@code getPos()}.
-     *   <li>{@link ChunkWatchEvent} — covers {@code Watch}/{@code UnWatch}/
-     *       {@code Sent}. Location: {@code getPos()}, level already typed
-     *       {@code ServerLevel}.
-     *   <li>{@link ChunkEvent} — covers {@code ChunkEvent.Load}/{@code
+     * block-position-keyed {@code BlockEvent} subtype. Location:
+     * {@code getPos()}.
+     * <li>{@link ChunkWatchEvent} — covers {@code Watch}/{@code UnWatch}/
+     * {@code Sent}. Location: {@code getPos()}, level already typed
+     * {@code ServerLevel}.
+     * <li>{@link ChunkEvent} — covers {@code ChunkEvent.Load}/{@code
      *       Unload} and {@code ChunkDataEvent.Load}/{@code Save} ({@code
      *       ChunkDataEvent} extends {@code ChunkEvent}). Location: {@code
      *       getChunk().getPos()}.
-     *   <li>{@link ExplosionEvent} — covers {@code Start}/{@code Detonate}.
-     *       Location: the explosion's origin, {@code
+     * <li>{@link ExplosionEvent} — covers {@code Start}/{@code Detonate}.
+     * Location: the explosion's origin, {@code
      *       getExplosion().center()}.
-     *   <li>{@link EntityEvent} — covers {@code EntityJoinLevelEvent},
-     *       {@code EntityLeaveLevelEvent}, {@code EntityMountEvent}, {@code
+     * <li>{@link EntityEvent} — covers {@code EntityJoinLevelEvent},
+     * {@code EntityLeaveLevelEvent}, {@code EntityMountEvent}, {@code
      *       EntityStruckByLightningEvent}, and (via {@code LivingEvent
      *       extends EntityEvent}) {@code LivingHurtEvent}/{@code
      *       LivingDeathEvent}. Location: {@code

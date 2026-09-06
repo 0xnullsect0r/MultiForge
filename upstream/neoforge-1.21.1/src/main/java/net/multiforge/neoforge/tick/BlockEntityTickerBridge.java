@@ -1,15 +1,12 @@
 /*
  * MultiForge — Copyright (c) 2026 MultiForge authors.
- *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation, version 3.
- *
  * This program is distributed in the hope that it will be useful, but
  * WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
  * General Public License for more details.
- *
  * You should have received a copy of the GNU General Public License
  * along with this program. If not, see <https://www.gnu.org/licenses/>.
  */
@@ -78,7 +75,6 @@ import net.multiforge.runtime.scheduler.MultiThreadedSchedulerHost;
  * ticker's <em>initial</em> owning region, at add/backfill time.
  */
 public final class BlockEntityTickerBridge {
-
     /** Worlds this bridge has installed on — see the class javadoc's readiness note. */
     private static final Set<WorldRef> INSTALLED = ConcurrentHashMap.newKeySet();
 
@@ -86,9 +82,9 @@ public final class BlockEntityTickerBridge {
 
     /**
      * @return {@code true} if {@link #installOnLevel} has run for
-     *     {@code level}'s world — the {@code tickBlockEntities()} patch
-     *     hunk's per-tick skip-guard, via {@link
-     *     RegionizedTickCoordinator#regionsHandleBlockEntities}.
+     *         {@code level}'s world — the {@code tickBlockEntities()} patch
+     *         hunk's per-tick skip-guard, via {@link
+     *         RegionizedTickCoordinator#regionsHandleBlockEntities}.
      */
     public static boolean isInstalled(ServerLevel level) {
         return INSTALLED.contains(RegionizedTickCoordinator.asWorldRef(level));

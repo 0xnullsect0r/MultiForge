@@ -1,15 +1,12 @@
 /*
  * MultiForge — Copyright (c) 2026 MultiForge authors.
- *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation, version 3.
- *
  * This program is distributed in the hope that it will be useful, but
  * WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
  * General Public License for more details.
- *
  * You should have received a copy of the GNU General Public License
  * along with this program. If not, see <https://www.gnu.org/licenses/>.
  */
@@ -30,7 +27,6 @@ import net.multiforge.api.world.WorldRef;
 import net.multiforge.neoforge.RegionizedTickCoordinator;
 import net.multiforge.runtime.diagnostics.ProbeRegistry;
 import net.multiforge.runtime.diagnostics.ViolationLogger;
-import net.multiforge.runtime.entity.EntityMigrationCoordinator;
 import net.multiforge.runtime.entity.EntityRegistry;
 import net.multiforge.runtime.entity.MigratingEntityRef;
 import net.multiforge.runtime.entity.MigrationState;
@@ -58,16 +54,15 @@ import net.multiforge.runtime.scheduler.MultiThreadedSchedulerHost;
  * make that safe:
  *
  * <ul>
- *   <li>Never let Vanilla's own movement math (ultimately {@code Entity.absMoveTo} /
- *       {@code setPosRaw}) run for a move packet while the player's ref is {@code MIGRATING} —
- *       {@link #handleMovePlayer}.
- *   <li>Never let a clientbound packet reach the wire while the player's ref is {@code MIGRATING}
- *       — queue it on the ref's {@code pendingOutbound} deque instead, drained once the ref
- *       settles — {@link #enqueueIfMigrating}.
+ * <li>Never let Vanilla's own movement math (ultimately {@code Entity.absMoveTo} /
+ * {@code setPosRaw}) run for a move packet while the player's ref is {@code MIGRATING} —
+ * {@link #handleMovePlayer}.
+ * <li>Never let a clientbound packet reach the wire while the player's ref is {@code MIGRATING}
+ * — queue it on the ref's {@code pendingOutbound} deque instead, drained once the ref
+ * settles — {@link #enqueueIfMigrating}.
  * </ul>
  */
 public final class NetworkMigrationBridge {
-
     private NetworkMigrationBridge() {}
 
     /**
@@ -92,12 +87,12 @@ public final class NetworkMigrationBridge {
      * absMoveTo} runs.
      *
      * @return {@code true} iff the caller must return immediately without running any further
-     *     Vanilla movement handling for this packet — either because a migration for this player
-     *     is already in flight (packet deferred entirely, never touches Vanilla position state) or
-     *     because this call just detected a region crossing and began one (the eventual settle
-     *     applies the deferred move on the destination region's own worker thread). {@code false}
-     *     means: not tracked, same-region, or MultiForge isn't booted — Vanilla proceeds exactly as
-     *     it always has.
+     *         Vanilla movement handling for this packet — either because a migration for this player
+     *         is already in flight (packet deferred entirely, never touches Vanilla position state) or
+     *         because this call just detected a region crossing and began one (the eventual settle
+     *         applies the deferred move on the destination region's own worker thread). {@code false}
+     *         means: not tracked, same-region, or MultiForge isn't booted — Vanilla proceeds exactly as
+     *         it always has.
      */
     public static boolean handleMovePlayer(ServerPlayer player, double x, double y, double z, float yRot, float xRot) {
         MultiThreadedSchedulerHost host = MultiForgeRegionizedRuntime.current();
@@ -178,8 +173,8 @@ public final class NetworkMigrationBridge {
      * any of Vanilla's own send logic runs.
      *
      * @return {@code true} iff {@code packet} was queued instead of sent — caller must return
-     *     immediately. {@code false} means: this connection isn't a tracked player, or the
-     *     player's ref isn't {@code MIGRATING} — Vanilla's normal send path runs unmodified.
+     *         immediately. {@code false} means: this connection isn't a tracked player, or the
+     *         player's ref isn't {@code MIGRATING} — Vanilla's normal send path runs unmodified.
      */
     public static boolean enqueueIfMigrating(Connection connection, Packet<?> packet, PacketSendListener listener, boolean flush) {
         UUID uuid = CONNECTION_PLAYER.get(connection);
@@ -220,5 +215,4 @@ public final class NetworkMigrationBridge {
             connection.send(pp.packet(), pp.listener(), pp.flush());
         }
     }
-
 }
