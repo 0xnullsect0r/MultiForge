@@ -181,10 +181,15 @@ tasks.matching { task -> sourceConsumers.contains(task.name) }.configureEach {
 
 def multiforgePatchesStagingDir = layout.buildDirectory.dir('multiforge-patches-staging')
 
-tasks.register('stageMultiforgePatchesForBinaryPatcher', Copy) {
+tasks.register('stageMultiforgePatchesForBinaryPatcher', Sync) {
     group = 'multiforge'
     description = 'Flattens multiforge-patches/**/*.java.patch into a single staging dir ' +
             'keyed by target class path — the shape binarypatcher --patches expects.'
+    // Sync (not Copy): a plain Copy task never removes stale destination files across
+    // runs, so a patch excluded by a later change to the eachFile filter below (e.g. the
+    // net/minecraft/-only gate added in v1.3.2 P.2) would linger in the staging dir
+    // forever from an earlier build. Sync deletes anything in the destination that this
+    // execution didn't (re)produce.
 
     // Each patch's header carries the target file path; we relocate the
     // .patch file into <staging>/<target-path>.patch so binarypatcher can
@@ -211,7 +216,17 @@ tasks.register('stageMultiforgePatchesForBinaryPatcher', Copy) {
         } catch (Exception e) {
             // Leave targetRel null so we exclude below.
         }
-        if (targetRel == null) {
+        // binarypatcher diffs against the vanilla "clean" SRG server/client jar, which
+        // only ever contains net/minecraft/** classes. A patch targeting NeoForge's own
+        // hand-written source (net/neoforged/**, e.g. the 09-events NeoForge.java.patch)
+        // or MultiForge's own committed source (net/multiforge/**) has no corresponding
+        // class in that clean jar — staging it anyway makes binarypatcher's "Adding new
+        // files" step inject the compiled class into the *server jar itself*, duplicating
+        // a class that's already legitimately shipped via the universal/neoforge jar and
+        // producing a JPMS split-package failure ("Modules neoforge and minecraft export
+        // package ... to module ...") at boot. Mirror applyTargetDirFor's net/minecraft/
+        // gate above so only genuine vanilla-class patches ever reach the staging dir.
+        if (targetRel == null || !targetRel.startsWith('net/minecraft/')) {
             fcd.exclude()
         } else {
             fcd.relativePath = new org.gradle.api.file.RelativePath(true, "${targetRel}.patch".split('/'))
@@ -225,4 +240,17 @@ tasks.register('stageMultiforgePatchesForBinaryPatcher', Copy) {
     // the same target "wins" the copy is immaterial. EXCLUDE (keep-first) avoids a build
     // failure on these legitimate multi-group targets without masking a genuine bug.
     duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+}
+
+// v1.3.2 P.2: wire the staging dir into all three binary-patch tasks.
+// GenerateBinaryPatches.getPatches() is a ConfigurableFileCollection —
+// .from() appends without replacing NeoForge's own patches/ dir. Order
+// doesn't matter for binarypatcher: it's a "union set of classes to
+// diff" whitelist. Adding a dependsOn ensures the staging task runs
+// before binarypatcher reads its inputs.
+['generateServerBinaryPatches', 'generateClientBinaryPatches', 'generateJoinedBinaryPatches'].each { taskName ->
+    tasks.matching { it.name == taskName }.configureEach {
+        dependsOn('stageMultiforgePatchesForBinaryPatcher')
+        getPatches().from(layout.buildDirectory.dir('multiforge-patches-staging'))
+    }
 }
