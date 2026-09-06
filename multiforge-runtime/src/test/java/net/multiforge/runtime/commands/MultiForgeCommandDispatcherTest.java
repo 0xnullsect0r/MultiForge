@@ -7,21 +7,36 @@ package net.multiforge.runtime.commands;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import java.io.IOException;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import net.multiforge.runtime.config.MultiForgeConfig;
 import net.multiforge.runtime.config.MultiForgeConfigStore;
+import net.multiforge.runtime.diagnostics.ViolationLogger;
 import net.multiforge.runtime.region.pin.RegionPinManager;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 class MultiForgeCommandDispatcherTest {
 
+    @AfterEach
+    void resetViolationLogger() {
+        ViolationLogger.resetForTesting();
+    }
+
     private MultiForgeCommandDispatcher make(Path tmp) throws IOException {
         MultiForgeConfigStore store = new MultiForgeConfigStore(tmp.resolve("mf.toml"), MultiForgeConfig.defaults());
         RegionPinManager pins = new RegionPinManager(tmp.resolve("pins.toml"));
         return new MultiForgeCommandDispatcher(store, pins);
+    }
+
+    private MultiForgeCommandDispatcher makeWithScanner(
+            Path tmp, Path modsDir, MultiForgeCommandDispatcher.ScannerRunner scannerRunner) throws IOException {
+        MultiForgeConfigStore store = new MultiForgeConfigStore(tmp.resolve("mf.toml"), MultiForgeConfig.defaults());
+        RegionPinManager pins = new RegionPinManager(tmp.resolve("pins.toml"));
+        return new MultiForgeCommandDispatcher(store, pins, null, modsDir, scannerRunner);
     }
 
     @Test
@@ -177,6 +192,115 @@ class MultiForgeCommandDispatcherTest {
         assertThat(d.dispatch(new String[] {"chunks", "minecraft:bogus"}, out::add))
                 .isTrue();
         assertThat(out).anyMatch(l -> l.contains("No chunk manager"));
+    }
+
+    // /multiforge warn — operator view over ViolationLogger's recent-violation history.
+    @Test
+    void warnListEmptyReportsNone(@TempDir Path tmp) throws IOException {
+        MultiForgeCommandDispatcher d = make(tmp);
+        List<String> out = new ArrayList<>();
+        assertThat(d.dispatch(new String[] {"warn", "list"}, out::add)).isTrue();
+        assertThat(out).containsExactly("(no recent violations)");
+    }
+
+    @Test
+    void warnListShowsFiredViolations(@TempDir Path tmp) throws IOException {
+        ViolationLogger.warn("examplemod", "Level.setBlock:off-thread", "called from wrong thread");
+        MultiForgeCommandDispatcher d = make(tmp);
+        List<String> out = new ArrayList<>();
+        assertThat(d.dispatch(new String[] {"warn", "list"}, out::add)).isTrue();
+        assertThat(out).anyMatch(l -> l.contains("examplemod") && l.contains("Level.setBlock:off-thread"));
+    }
+
+    @Test
+    void warnClearEmptiesHistory(@TempDir Path tmp) throws IOException {
+        ViolationLogger.warn("examplemod", "some-site", "detail");
+        MultiForgeCommandDispatcher d = make(tmp);
+        List<String> out = new ArrayList<>();
+        assertThat(d.dispatch(new String[] {"warn", "clear"}, out::add)).isTrue();
+        assertThat(out).anyMatch(l -> l.contains("Cleared 1"));
+
+        out.clear();
+        assertThat(d.dispatch(new String[] {"warn", "list"}, out::add)).isTrue();
+        assertThat(out).containsExactly("(no recent violations)");
+    }
+
+    @Test
+    void warnUnknownSubcommandFails(@TempDir Path tmp) throws IOException {
+        MultiForgeCommandDispatcher d = make(tmp);
+        List<String> out = new ArrayList<>();
+        assertThat(d.dispatch(new String[] {"warn", "nonsense"}, out::add)).isFalse();
+    }
+
+    // /multiforge certify — thin wrapper over the scanner CLI (ScannerRunner injected for tests).
+    @Test
+    void certifyMissingArgFails(@TempDir Path tmp) throws IOException {
+        MultiForgeCommandDispatcher d = make(tmp);
+        List<String> out = new ArrayList<>();
+        assertThat(d.dispatch(new String[] {"certify"}, out::add)).isFalse();
+    }
+
+    @Test
+    void certifyNoModsDirReportsNone(@TempDir Path tmp) throws IOException {
+        MultiForgeCommandDispatcher d = makeWithScanner(
+                tmp, tmp.resolve("mods"), jar -> new MultiForgeCommandDispatcher.ScanResult(0, "{}", ""));
+        List<String> out = new ArrayList<>();
+        assertThat(d.dispatch(new String[] {"certify", "all"}, out::add)).isFalse();
+        assertThat(out).anyMatch(l -> l.contains("No mod jars found"));
+    }
+
+    @Test
+    void certifyAllPassesWhenScannerFindsNothing(@TempDir Path tmp) throws IOException {
+        Path modsDir = tmp.resolve("mods");
+        Files.createDirectories(modsDir);
+        Files.createFile(modsDir.resolve("examplemod-1.0.0.jar"));
+
+        MultiForgeCommandDispatcher d = makeWithScanner(
+                tmp,
+                modsDir,
+                jar -> new MultiForgeCommandDispatcher.ScanResult(
+                        0, "{\"summary\":{\"errors\":0,\"warnings\":0},\"findings\":[]}", ""));
+        List<String> out = new ArrayList<>();
+        assertThat(d.dispatch(new String[] {"certify", "examplemod"}, out::add)).isTrue();
+        assertThat(out).anyMatch(l -> l.contains("R01: PASS"));
+        assertThat(out).anyMatch(l -> l.contains("CERTIFIED: examplemod-1.0.0.jar"));
+        assertThat(out).noneMatch(l -> l.startsWith("NOT CERTIFIED"));
+    }
+
+    @Test
+    void certifyFailsOnErrorFinding(@TempDir Path tmp) throws IOException {
+        Path modsDir = tmp.resolve("mods");
+        Files.createDirectories(modsDir);
+        Files.createFile(modsDir.resolve("badmod-1.0.0.jar"));
+
+        MultiForgeCommandDispatcher d = makeWithScanner(
+                tmp,
+                modsDir,
+                jar -> new MultiForgeCommandDispatcher.ScanResult(
+                        1,
+                        "{\"summary\":{\"errors\":1,\"warnings\":0},\"findings\":"
+                                + "[{\"ruleId\":\"R03\",\"severity\":\"ERROR\",\"message\":\"blocking .get()\"}]}",
+                        ""));
+        List<String> out = new ArrayList<>();
+        assertThat(d.dispatch(new String[] {"certify", "badmod"}, out::add)).isFalse();
+        assertThat(out).anyMatch(l -> l.contains("R03: FAIL (ERROR)"));
+        assertThat(out).anyMatch(l -> l.contains("NOT CERTIFIED: badmod-1.0.0.jar"));
+    }
+
+    @Test
+    void certifyReportsScannerInternalFailure(@TempDir Path tmp) throws IOException {
+        Path modsDir = tmp.resolve("mods");
+        Files.createDirectories(modsDir);
+        Files.createFile(modsDir.resolve("brokenmod-1.0.0.jar"));
+
+        MultiForgeCommandDispatcher d = makeWithScanner(
+                tmp,
+                modsDir,
+                jar -> new MultiForgeCommandDispatcher.ScanResult(2, "", "scanner jar not found or unreadable"));
+        List<String> out = new ArrayList<>();
+        assertThat(d.dispatch(new String[] {"certify", "brokenmod"}, out::add)).isFalse();
+        assertThat(out).anyMatch(l -> l.contains("scanner internal failure"));
+        assertThat(out).anyMatch(l -> l.contains("NOT CERTIFIED"));
     }
 
     private MultiForgeCommandDispatcher makeWithChunks(
