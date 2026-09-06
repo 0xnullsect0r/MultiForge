@@ -27,3 +27,18 @@
   guide: config, commands, debug client, shutdown, crash recovery.
 - [`website-install-copy.md`](website-install-copy.md) — drop-in copy
   for the purchase site's Installation page.
+
+## Concurrency + Ops
+
+- [`concurrency-contract.md`](concurrency-contract.md) — Domain enum,
+  OwnerToken semantics, DomainAssertions (dev/CI), OwnershipEnforcer
+  modes (OFF/REROUTE/STRICT), per-domain read/write rules.
+- [`scheduler-api.md`](scheduler-api.md) — runtime-internal scheduler
+  guide: MultiForgeRegionizedRuntime, RegionizedTaskQueue.queueChunkTask,
+  ChunkHolderManager, the four SchedulerHost domains, do's/don'ts,
+  cross-region recipes.
+- [`events.md`](events.md) — @DispatchDomain contract + a ~30-event
+  domain reference table (target mapping pending M12 enforcement).
+- [`legacy-compat.md`](legacy-compat.md) — what the LEGACY_SERIAL lane
+  does today vs. what the blueprint designs, mod-pattern compatibility
+  table, migration path for mods hitting REROUTE warnings.
