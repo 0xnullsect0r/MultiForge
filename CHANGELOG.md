@@ -1,5 +1,52 @@
 # CHANGELOG
 
+## v1.3.2 — B2 binary-patch integration + regionizer noise + Pelican egg + CI
+
+First release where a fresh `--installServer` produces a fully-functional MultiForge server. Prior to v1.3.2 the shipped installer wrote a broken layout; v1.3.1 (the M12 boot fix) got the server past mod-loading but B2 global subsystems still failed to register.
+
+### P — B2 binary-patch integration (the real bug fix)
+
+`binarypatcher` (net.minecraftforge:binarypatcher:1.1.1, invoked by NeoGradle's `generateServerBinaryPatches`) runs in **whitelist mode** when `--patches` is non-empty: only classes with a matching `.patch` file in the patch dir get a binary diff generated. NeoGradle wires `--patches` = `upstream/neoforge-1.21.1/patches/` (NeoForge's own tree only), so our `multiforge-patches/**/*.java.patch` never reached binarypatcher. Classes we seed-from-base and patch (WorldBorder, Raids, LevelTicks, ServerFunctionManager, ServerScoreboard, CustomBossEvents, ChunkGenerationTask, ChunkHolder, ThreadedLevelLightEngine, ProcessorMailbox, LevelAccessor) compiled correctly into the fork jar but the shipped installer's `server.lzma` had no binary diff for them. Runtime code hit `NoSuchMethodError: 'void net.minecraft.world.level.border.WorldBorder.mfTickBody()'` at boot.
+
+- **P.1** — New `stageMultiforgePatchesForBinaryPatcher` Sync task in `multiforge-patches.gradle` flattens `multiforge-patches/**/net/minecraft/**/*.java.patch` into `build/multiforge-patches-staging/<target-path>.patch` (the layout binarypatcher expects). `net/neoforged/**` patches excluded — they target NeoForge's own hand-written source, not vanilla, and staging them causes JPMS split-package errors. Uses `Sync` (not `Copy`) so stale destination files get cleaned.
+- **P.2** — Wires the staging dir into `generateServerBinaryPatches`/`generateClientBinaryPatches`/`generateJoinedBinaryPatches` via `.getPatches().from(...)` + `dependsOn`. Live verification: `mfTickBody` string count in `output.lzma` went from 0 → 3; fresh install + boot completes with `Done (2.803s)`, zero `NoSuchMethodError`, zero `failed to register B2low`, all 8 global subsystems bind cleanly.
+
+### R — Regionizer noise (dimensions that never load chunks)
+
+- **R.1** — New `RegionizerEagerInit.materialiseAll(server, host)` in the fork bridge iterates `server.getAllLevels()` on `ServerAboutToStartEvent` and calls `host.regionizerFor(...)` for each. Ensures dimensions like `the_end` and `the_nether` that never see `ChunkEvent.Load` at boot get a regionizer up front. `regionizerFor` is idempotent (`computeIfAbsent`), so lazily-loaded worlds remain safe.
+- **R.2** — `LevelTickDispatchProbes.noRegionizerSkip` gains a per-world `ConcurrentHashMap` sentinel: probe counter still bumps unconditionally, but `ViolationLogger.warn` fires exactly once per world (site = `"region-tick.no-regionizer-skip::" + worldId`). Removes the pre-fix log spam where every unloaded dim warned every tick, competing for a single rate-limit bucket.
+
+### E — Pelican Panel / Pterodactyl egg
+
+- **E.1** — New `pelican-egg.json` at repo root. PLCN_v1 schema. Startup command mirrors NeoForge's own `run.sh` (`java @user_jvm_args.txt @unix_args.txt nogui`). Install script downloads the MultiForge fork installer JAR from the latest release, runs `--installServer`, and symlinks the generated `libraries/net/neoforged/neoforge/<v>/unix_args.txt` to `/mnt/server/unix_args.txt`. 4 variables: `MULTIFORGE_VERSION` (default `latest`, resolves via GitHub API), `DOWNLOAD_URL` (template with `{VERSION}` substitution), `MC_VERSION` (display only, default `1.21.1`), `SERVER_JARFILE` (fallback name). No `LICENSE_KEY` — GPL-3, no gating.
+- **E.2** — `docs/install.md` gains "Method 3 — Pelican Panel / Pterodactyl egg" section; `README.md` gains third install bullet.
+- **E.3** — Release workflow attaches `pelican-egg.json` as a release asset; release-body template mentions it with a Method 3 link.
+
+### C — Release CI + fallback
+
+- **C.1** — New `build-fork-installer` job in `.github/workflows/release.yml` runs `./gradlew :setup :neoforge:applyMultiforgePatches :neoforge:signInstallerJar` and stages the output as `release/multiforge-<v>-installer.jar`. `continue-on-error: true` (fork build has been GHA-preempted historically); `gh-release` still publishes from `build-jars` alone if the fork job fails, via `if: always() && needs.build-jars.result == 'success'`.
+- **C.2** — New `RELEASING.md` at repo root documents the maintainer's release flow: standard (tag → CI → verify), fallback if `build-fork-installer` failed (local `./gradlew :setup :neoforge:signInstallerJar` + `gh release upload --clobber`), post-release verification (`curl` the download URL, install into a temp dir, grep boot log), version bumping (gradle.properties in both outer + fork), and rollback.
+
+### Also
+
+- Version bump: `gradle.properties` and `upstream/neoforge-1.21.1/gradle.properties` both from 1.3.0 → 1.3.2 (v1.3.1's tag was cut without a version bump; catching up in the same commit).
+- Install docs and README's "two ways" language corrected to "three ways" now that the Pelican egg is a documented method.
+
+### Deferred past v1.3.2
+
+- MC 1.21.2+ / Fabric support
+- Top-20 mod compat matrix + 24h ATM10 soak
+- `multiforge-client` gradle wiring via NeoForge `moddev` plugin
+- Fork-compile CI stability if GHA still preempts even on ubuntu-24.04-large
+- v1.3.0 GHCR package deletion (still user's UI action)
+
+## v1.3.1 — M12 live-boot fix + Docker/GHCR removal
+
+- **fix(m12):** `DispatchingEventBus.addListener(Consumer)` family broke NeoForge's ASM consumer-type introspection ("Failed to resolve consumer event type: RoutingListenerWrapper@…") because a plain wrapper class doesn't carry the invokedynamic lambda bootstrap NeoForge inspects. Fix: pass the raw Consumer through unwrapped for the addListener family; `@DispatchDomain` routing still applies to `@SubscribeEvent` methods registered via `register(Object)`. Unit tests couldn't catch this — surfaced only in live server boot.
+- **chore:** removed Docker + GHCR support entirely. The published image was never wired to actually boot a server (bundled the installer but no server main class). Users install via Method 1 (fresh installer JAR) or Method 2 (drop-in replacement ZIP).
+- **docs(install):** new `docs/install.md` guide covering both install methods with EULA, config, systemd, rollback, troubleshooting.
+- **chore:** removed the `sync-downloads-repo` workflow (obsolete post-GPL-3).
+
 ## v1.3.0 — Full B3 (per-region entity/block-tick) + M12 (event routing)
 
 The final two blueprint milestones needed for a completely working product: the entity-AI hot loop finally runs on region workers (the whole point of parallelization), and event dispatch honors `@DispatchDomain` transparently for every listener.

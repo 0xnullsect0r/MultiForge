@@ -1,6 +1,6 @@
 # Installing MultiForge
 
-MultiForge ships two install artifacts, each suited to a different starting point.
+MultiForge ships three install methods, each suited to a different starting point.
 
 | Method | Best for | Starts from | Migration effort |
 |---|---|---|---|
@@ -8,7 +8,7 @@ MultiForge ships two install artifacts, each suited to a different starting poin
 | **[Drop-in replacement ZIP](#method-2--drop-in-replacement-zip)** | Existing NeoForge 1.21.1 servers with an already-loved world, mods, configs | Working NeoForge server | ~5 min (overlay) + your usual restart |
 | **[Pelican Panel / Pterodactyl egg](#method-3--pelican-panel--pterodactyl-egg)** | Anyone hosting via a panel — Pelican, Pterodactyl, or any fork | Panel install + egg import | ~2 min (import) + normal panel server-create flow |
 
-Both land the same runtime + patched NeoForge fork. Post-install steps (EULA, `multiforge-server.toml`, mods, world) are the same regardless of how you installed.
+All three land the same runtime + patched NeoForge fork. Post-install steps (EULA, `multiforge-server.toml`, mods, world) are the same regardless of how you installed.
 
 **Requirements** — Java 21, 8 GB RAM per typical server (adjust via `-Xmx`), MC 1.21.1 server directory shape (`world/`, `mods/`, `config/`, `eula.txt`).
 

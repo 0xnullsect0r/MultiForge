@@ -14,7 +14,7 @@ Pre-alpha. In active development. See [`docs/blueprint.md`](docs/blueprint.md) f
 
 ## Install
 
-Two ways to install, both under GPL-3 — no token, no activation, no phone-home. Full details in [docs/install.md](docs/install.md).
+Three ways to install, all under GPL-3 — no token, no activation, no phone-home. Full details in [docs/install.md](docs/install.md).
 
 ### 1. Fresh installer JAR (bare-metal / systemd)
 
