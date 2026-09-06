@@ -1,15 +1,12 @@
 /*
  * MultiForge — Copyright (c) 2026 MultiForge authors.
- *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation, version 3.
- *
  * This program is distributed in the hope that it will be useful, but
  * WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
  * General Public License for more details.
- *
  * You should have received a copy of the GNU General Public License
  * along with this program. If not, see <https://www.gnu.org/licenses/>.
  */
@@ -25,6 +22,7 @@ import net.multiforge.api.world.BlockPos;
 import net.multiforge.api.world.ChunkPos;
 import net.multiforge.api.world.WorldRef;
 import net.multiforge.neoforge.RegionizedTickCoordinator;
+import net.multiforge.neoforge.tick.EntityTickRunnerBridge;
 import net.multiforge.runtime.chunk.ChunkHolderManager;
 import net.multiforge.runtime.diagnostics.ViolationLogger;
 import net.multiforge.runtime.globals.BossEventSystem;
@@ -115,8 +113,7 @@ public final class MultiForgeGlobalSystemsInit {
         // ordering convention. Fresh-dragon-entity spawns (respawn
         // completion) route via the same EntitySpawner surface RaidsSystem
         // uses, backed by EntityMigrationCoordinator#spawnInDestRegion.
-        DragonFightSystem dragonFight =
-                new DragonFightSystem(effects, host.entityMigrationCoordinator()::spawnInDestRegion);
+        DragonFightSystem dragonFight = new DragonFightSystem(effects, host.entityMigrationCoordinator()::spawnInDestRegion);
         systems.register(dragonFight);
         GlobalSystemsBridge.bindDragonFight(dragonFight);
         installDragonFightLevelLifecycleListeners(dragonFight, host);
@@ -140,6 +137,77 @@ public final class MultiForgeGlobalSystemsInit {
                 host.entityMigrationCoordinator());
         systems.register(commandDispatch);
         GlobalSystemsBridge.bindCommandDispatch(commandDispatch);
+
+        // MultiForge M13 (Track B3, B3.2): register the Vanilla-backed
+        // ScheduledTickRunner so the BLOCK_FLUID_TICKS phase slot
+        // (docs/design/m13-b3-region-tick.md §5.1) actually drains each
+        // region's owned chunks' scheduled block/fluid ticks instead of
+        // defaulting to the runtime's no-op. installOnEventBus is
+        // idempotent (guards its own INSTALLED flag) so re-running this
+        // whole install() on a reused-JVM GameTestServer restart is safe.
+        net.multiforge.neoforge.tick.ScheduledTickRunnerBridge.installOnEventBus();
+        host.setBlockFluidRunner(new net.multiforge.neoforge.tick.ScheduledTickRunnerBridge());
+
+        // MultiForge M13 (B3.3): bind the per-region ENTITY_AI runner —
+        // docs/design/m13-b3-region-tick.md §5.2. Unlike the eight B2
+        // subsystems above, this isn't a GlobalSystem (it runs on every
+        // real region's own worker, not the synthetic global region), so
+        // it is bound directly onto the host rather than through
+        // `systems.register`. RegionizedTickCoordinator.regionsHandleEntityTicks
+        // starts reporting true for a world the instant its regionizer
+        // materialises, since `host.hasEntityTickRunner()` is now true
+        // host-wide from this point on.
+        host.setEntityTickRunner(new EntityTickRunnerBridge(host, server));
+
+        // MultiForge M13 (Track B3, B3.4): install the per-region
+        // BLOCK_ENTITIES bridge (docs/design/m13-b3-region-tick.md §5.3)
+        // — every server ServerLevel that loads from here on has its
+        // Vanilla-added block-entity tickers routed into the owning
+        // region's HolderManagerRegionData.blockEntityTickers slice, and
+        // the Level.tickBlockEntities() inline iteration skipped in
+        // favour of MultiThreadedSchedulerHost's own per-region phase
+        // body. Installed last, after every B2.x global subsystem, per
+        // this method's own registration-order convention — B3.4 has no
+        // tick-order dependency on any of them, so "last" simply keeps
+        // this diff at the bottom of an already-long method.
+        installBlockEntityTickerBridgeListeners();
+
+        // MultiForge M12 (Task 4.2, M12.2, docs/design/m12-event-routing.md
+        // §2.1/§12): attach the scheduler-backed dispatch executor onto
+        // NeoForge.EVENT_BUS's LazyDispatchingEventBus (installed at
+        // class-load time by the 09-events/NeoForge.java.patch hunk).
+        // Until this runs, every listener — regardless of its declared
+        // @DispatchDomain — dispatches inline (pre-M12 Vanilla-equivalent
+        // behavior; see LazyDispatchingEventBus's javadoc). Idempotent
+        // (EventBusBridge.attach → LazyDispatchingEventBus.attachExecutor
+        // is a CAS), so a GameTestServer restart on a reused JVM re-running
+        // install() is safe. Registered last, after every other
+        // B2.x/B3.x subsystem, since it has no tick-order dependency on
+        // any of them.
+        boolean eventBusAttached = net.multiforge.neoforge.event.EventBusBridge.attach(NeoForge.EVENT_BUS, host);
+        if (!eventBusAttached) {
+            // Auto-reroute+warn (CLAUDE.md rule 5): NeoForge.EVENT_BUS is not a
+            // LazyDispatchingEventBus — the 09-events patch was not applied, or
+            // something else replaced the bus. This must never prevent the
+            // server from finishing boot: every listener still dispatches via
+            // the real bus's own (un-routed) semantics, exactly as it did
+            // before M12.
+            ViolationLogger.warn(
+                    "global.system.registration",
+                    "failed to attach SchedulerBackedDispatchExecutor onto NeoForge.EVENT_BUS "
+                            + "(not a LazyDispatchingEventBus); events will dispatch without M12 domain routing");
+        }
+    }
+
+    private static void installBlockEntityTickerBridgeListeners() {
+        NeoForge.EVENT_BUS.addListener((LevelEvent.Load event) -> {
+            if (!(event.getLevel() instanceof ServerLevel level)) return;
+            net.multiforge.neoforge.tick.BlockEntityTickerBridge.installOnLevel(level);
+        });
+        NeoForge.EVENT_BUS.addListener((LevelEvent.Unload event) -> {
+            if (!(event.getLevel() instanceof ServerLevel level)) return;
+            net.multiforge.neoforge.tick.BlockEntityTickerBridge.uninstallLevel(level);
+        });
     }
 
     private static void installDragonFightLevelLifecycleListeners(

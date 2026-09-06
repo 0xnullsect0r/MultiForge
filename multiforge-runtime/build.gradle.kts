@@ -14,6 +14,14 @@ dependencies {
     // TOML parser for multiforge-server.toml.
     implementation("org.tomlj:tomlj:1.1.1")
 
+    // net.neoforged:bus — the standalone event-bus library NeoForge itself uses
+    // (net.neoforged.bus.api.*), not a Minecraft dependency. M12's DispatchingEventBus
+    // implements IEventBus directly so the fork bridge (multiforge-patches/09-events/,
+    // M12.2) can swap it in for NeoForge.EVENT_BUS. Version pinned to match
+    // upstream/neoforge-1.21.1/gradle.properties:eventbus_version so the wrapped
+    // instance is binary-compatible with what the vendored NeoForge tree ships.
+    implementation("net.neoforged:bus:8.0.1")
+
     // JetBrains annotations for @ApiStatus.Internal etc.
     compileOnly("org.jetbrains:annotations:24.1.0")
 

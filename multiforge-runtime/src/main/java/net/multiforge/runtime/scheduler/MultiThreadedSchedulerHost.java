@@ -1,15 +1,12 @@
 /*
  * MultiForge — Copyright (c) 2026 MultiForge authors.
- *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation, version 3.
- *
  * This program is distributed in the hope that it will be useful, but
  * WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
  * General Public License for more details.
- *
  * You should have received a copy of the GNU General Public License
  * along with this program. If not, see <https://www.gnu.org/licenses/>.
  */
@@ -17,7 +14,9 @@ package net.multiforge.runtime.scheduler;
 
 import java.io.IOException;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
@@ -61,13 +60,18 @@ import net.multiforge.runtime.journal.AutoSaveRunner;
 import net.multiforge.runtime.journal.JournalReplayHarness;
 import net.multiforge.runtime.journal.RegionJournal;
 import net.multiforge.runtime.journal.RegionJournalLifecycle;
+import net.multiforge.runtime.ownership.Domain;
 import net.multiforge.runtime.ownership.OwnerToken;
+import net.multiforge.runtime.region.BlockEntityTickRunner;
+import net.multiforge.runtime.region.EntityTickRunner;
 import net.multiforge.runtime.region.PhasedRegionTickBody;
 import net.multiforge.runtime.region.Region;
+import net.multiforge.runtime.region.RegionChunkSource;
 import net.multiforge.runtime.region.RegionId;
 import net.multiforge.runtime.region.RegionListener;
 import net.multiforge.runtime.region.RegionTickBody;
 import net.multiforge.runtime.region.RegionizedTaskQueue;
+import net.multiforge.runtime.region.ScheduledTickRunner;
 import net.multiforge.runtime.region.SectionPos;
 import net.multiforge.runtime.region.ThreadedRegionizer;
 import net.multiforge.runtime.region.TickRegionScheduler;
@@ -146,6 +150,38 @@ public final class MultiThreadedSchedulerHost implements SchedulerHost, AutoClos
     // must stay MC-free).
     private volatile BiFunction<Region, NewChunkHolder, byte[]> chunkSerializer = (region, holder) -> new byte[0];
 
+    // B3.2 wiring (docs/design/m13-b3-region-tick.md §5.1): pluggable
+    // per-region BLOCK_FLUID_TICKS runner. Defaults to a no-op so tests
+    // and any pre-fork-wiring boot window keep working exactly as
+    // before — the fork's ScheduledTickRunnerBridge (net.multiforge.
+    // neoforge.tick) swaps this for the real Vanilla-backed
+    // implementation via setBlockFluidRunner, registered from
+    // MultiForgeGlobalSystemsInit on ServerAboutToStart. Until a real
+    // runner is registered, Vanilla's own inline blockTicks/fluidTicks
+    // drain (guarded by RegionizedTickCoordinator.regionsHandleBlockFluidTicks)
+    // stays the fallback, so this default never silently drops ticks
+    // (CLAUDE.md rule 5).
+    // Identity sentinel for the no-op default above — hasBlockFluidRunner()
+    // compares against this constant (not merely "non-null", since the
+    // field is never null) to answer "has a real runner been registered?".
+    private static final ScheduledTickRunner NOOP_BLOCK_FLUID_RUNNER = region -> {};
+    private volatile ScheduledTickRunner blockFluidRunner = NOOP_BLOCK_FLUID_RUNNER;
+
+    // B3.3 (docs/design/m13-b3-region-tick.md §5.2): the Vanilla-backed
+    // per-region ENTITY_AI implementation, bound by the fork's
+    // MultiForgeGlobalSystemsInit.install on a fresh runtime install
+    // (net.multiforge.neoforge.tick.EntityTickRunnerBridge). Defaults
+    // to a no-op so tests and any pre-fork-wiring boot window keep
+    // working exactly as before install — matches the {@link
+    // #chunkSerializer} default-stub convention above.
+    // entityTickRunnerRegistered tracks whether a *real* (non-default)
+    // runner has ever been set, since the default itself is a
+    // non-null no-op — RegionizedTickCoordinator.regionsHandleEntityTicks
+    // needs to distinguish the two to decide whether the Vanilla-inline
+    // fallback should still run.
+    private volatile EntityTickRunner entityTickRunner = region -> {};
+    private volatile boolean entityTickRunnerRegistered = false;
+
     private final ScheduledExecutorService delayedExec;
     private final ScheduledExecutorService asyncExec;
     private final ConcurrentMap<ModIdentifier, ConcurrentMap<SchedulerTaskImpl, Boolean>> asyncByMod =
@@ -161,6 +197,14 @@ public final class MultiThreadedSchedulerHost implements SchedulerHost, AutoClos
     // globalRegion (see phaseGlobalSystemsTick). Constructed alongside
     // globalRegion/globalRegionizer per docs/design/global-region.md §2.3.
     private final GlobalSystems globalSystems = new GlobalSystems();
+
+    // B3.4 (docs/design/m13-b3-region-tick.md §5.3): per-region BLOCK_ENTITIES
+    // phase body. Built once against this host's own worldForRegion/
+    // chunkManagerForOrNull lookups so a fresh call always sees the
+    // freshest regionToWorld/chunkManagers state (both mutate after
+    // construction as worlds/regions materialise).
+    private final BlockEntityTickRunner blockEntityTickRunner =
+            BlockEntityTickRunner.standard(this::worldForRegion, this::chunkManagerForOrNull);
 
     // M4 Track A2 wiring: per-host entity registry + migration coordinator, bound to this host's
     // own taskQueue and chunkManagerFor lookup so a cross-region hop's BORDER-gated completion
@@ -311,6 +355,76 @@ public final class MultiThreadedSchedulerHost implements SchedulerHost, AutoClos
     }
 
     /**
+     * Replace the {@link ScheduledTickRunner} the {@code
+     * BLOCK_FLUID_TICKS} phase body ({@link #phaseBlockFluidTicksTick})
+     * invokes (docs/design/m13-b3-region-tick.md §5.1). Idempotent —
+     * safe to call more than once (e.g. a server restart re-registering
+     * from {@code MultiForgeGlobalSystemsInit}); the last-registered
+     * runner wins and every already-wired {@code phaseBlockFluidTicksTick}
+     * body re-reads this volatile field on every invocation, so a
+     * mid-life swap takes effect immediately.
+     *
+     * <p>Not part of {@link SchedulerHost}: this is a MultiForge-only
+     * escape hatch for MC-dependent glue that cannot live in this
+     * MC-free module. See {@code
+     * net.multiforge.neoforge.tick.ScheduledTickRunnerBridge} in the
+     * fork module for the production implementation; the default (a
+     * no-op) is deliberate so tests and any pre-fork-wiring boot window
+     * keep working unchanged.
+     *
+     * @param runner must never block (CLAUDE.md rule 4)
+     */
+    public void setBlockFluidRunner(ScheduledTickRunner runner) {
+        this.blockFluidRunner = Objects.requireNonNull(runner, "runner");
+    }
+
+    /**
+     * @return {@code true} iff a real {@link ScheduledTickRunner} has been
+     *     registered via {@link #setBlockFluidRunner} — i.e. {@link
+     *     #blockFluidRunner} is no longer the constructor-time no-op
+     *     default. Read by {@code
+     *     net.multiforge.neoforge.RegionizedTickCoordinator.regionsHandleBlockFluidTicks}
+     *     to decide whether the {@code BLOCK_FLUID_TICKS} phase is
+     *     actually handling a level's scheduled block/fluid ticks, or
+     *     whether Vanilla's inline fallback should still run
+     *     (docs/design/m13-b3-region-tick.md §5.1).
+     */
+    public boolean hasBlockFluidRunner() {
+        return this.blockFluidRunner != NOOP_BLOCK_FLUID_RUNNER;
+    }
+
+    /**
+     * Replace the {@link EntityTickRunner} the {@code ENTITY_AI} phase
+     * body ({@link #phaseEntityAiTick}) invokes. Bound once by the
+     * fork's {@code MultiForgeGlobalSystemsInit.install} on a fresh
+     * runtime install ({@code net.multiforge.neoforge.tick.
+     * EntityTickRunnerBridge}) — see docs/design/m13-b3-region-tick.md
+     * §5.2. Before this is called (or in any test that never calls it),
+     * the ENTITY_AI phase's runner is the default no-op, and {@link
+     * net.multiforge.neoforge.RegionizedTickCoordinator#regionsHandleEntityTicks}
+     * reports {@code false} so the Vanilla-inline fallback
+     * ({@code ServerLevel.mfTickEntitiesAll}) stays live.
+     *
+     * @param runner must never block (CLAUDE.md rule 4).
+     */
+    public void setEntityTickRunner(EntityTickRunner runner) {
+        this.entityTickRunner = Objects.requireNonNull(runner, "runner");
+        this.entityTickRunnerRegistered = true;
+    }
+
+    /**
+     * @return {@code true} iff {@link #setEntityTickRunner} has been
+     *     called at least once on this host — distinguishes "a real
+     *     runner is bound" from "the default no-op is still active",
+     *     which {@link #entityTickRunner} alone cannot (the default is
+     *     itself non-null). Consulted by {@code
+     *     RegionizedTickCoordinator.regionsHandleEntityTicks}.
+     */
+    public boolean hasEntityTickRunner() {
+        return entityTickRunnerRegistered;
+    }
+
+    /**
      * Exception-safe indirection to the current {@link
      * #chunkSerializer}. Every {@link AutoSaveRunner} is built with a
      * method reference to this method (not to {@link #chunkSerializer}
@@ -423,19 +537,37 @@ public final class MultiThreadedSchedulerHost implements SchedulerHost, AutoClos
 
     /**
      * Build a {@link RegionListener} that keeps {@link #regionToWorld}
-     * in sync with the given world's live region set. Called once per
-     * world at regionizer materialisation time.
+     * in sync with the given world's live region set, and (B3.1, docs/
+     * design/m13-b3-region-tick.md §4.3) wires every region created
+     * under {@code world} to the {@link RegionChunkSource} backing
+     * {@link Region#ownedChunkSnapshot()}. Called once per world at
+     * regionizer materialisation time.
      */
     private RegionListener newRegionWorldTracker(WorldRef world) {
+        // Captured once per world (not per region) — chunkManagerForOrNull
+        // is a non-creating lookup so a world that never shadows a chunk
+        // (e.g. the synthetic global world) never materialises a
+        // ChunkHolderManager just because a region was created; the
+        // source simply resolves to an empty snapshot in that case.
+        RegionChunkSource chunkSource = regionId -> {
+            ChunkHolderManager mgr = chunkManagerForOrNull(world);
+            if (mgr == null) return List.of();
+            List<NewChunkHolder> holders = mgr.holdersOwnedBy(regionId);
+            List<ChunkPos> out = new ArrayList<>(holders.size());
+            for (NewChunkHolder h : holders) out.add(h.position());
+            return List.copyOf(out);
+        };
         return new RegionListener() {
             @Override
             public void onRegionCreated(Region region) {
                 regionToWorld.put(region.id(), world);
+                region.withChunkSource(chunkSource);
             }
 
             @Override
             public void onRegionSplit(Region source, Region child) {
                 regionToWorld.put(child.id(), world);
+                child.withChunkSource(chunkSource);
             }
 
             @Override
@@ -524,6 +656,12 @@ public final class MultiThreadedSchedulerHost implements SchedulerHost, AutoClos
      *       prepends {@link HolderManagerRegionData#pollFullLoadUpdate()}
      *       drain (task 5.1) so downstream phases see the freshest
      *       load-level updates.</li>
+     *   <li><b>{@link PhasedRegionTickBody.Phase#BLOCK_FLUID_TICKS}</b> —
+     *       appends {@link #phaseBlockFluidTicksTick} (B3.2, docs/design/
+     *       m13-b3-region-tick.md §5.1), which invokes the registered
+     *       {@link ScheduledTickRunner} for this region's owned chunks'
+     *       scheduled block/fluid ticks. No-op until a real runner is
+     *       registered via {@link #setBlockFluidRunner}.</li>
      *   <li><b>{@link PhasedRegionTickBody.Phase#REGION_EVENTS}</b> —
      *       appends {@link ChunkTaskScheduler#drainInto(RegionId, int, long)}
      *       (task 5.2), draining BLOCKING→IDLE priority chunk work up
@@ -585,22 +723,118 @@ public final class MultiThreadedSchedulerHost implements SchedulerHost, AutoClos
 
         // Build the wired body and swap it into the scheduler.
         //
-        // BLOCK_ENTITIES is repurposed for the global-subsystem tick slot
-        // (B1.1, docs/design/global-region.md §2.2/§2.3): it is
-        // semantically vacant for every real region as of this freeze (no
-        // M8 patch wires block-entity ticking into it yet), and
-        // phaseGlobalSystemsTick itself no-ops for every non-global
-        // region. Appended (not `.set`) so any caller-supplied
-        // BLOCK_ENTITIES body — e.g. a test probe — still runs; production
-        // behavior is identical either way since nothing else is wired
-        // into this phase, but `.append` avoids silently discarding a
-        // caller's body the way `.set` would.
+        // BLOCK_ENTITIES carries two layered bodies as of B3.4
+        // (docs/design/m13-b3-region-tick.md §5.3):
+        //
+        //   1. phaseGlobalSystemsTick (B1.1, docs/design/global-region.md
+        //      §2.2/§2.3) — ticks the eight global subsystems once, but
+        //      only for globalRegion; early-returns for every other
+        //      region.
+        //   2. phaseBlockEntitiesTickPerRegion (B3.4) — ticks this
+        //      region's own block-entity tickers; a no-op for
+        //      globalRegion (its synthetic single chunk never has
+        //      ordinary block entities registered against it) and for
+        //      any region with an empty blockEntityTickers slice.
+        //
+        // Both run, in order, for every region every tick — they are
+        // naturally mutually-exclusive in practice, and the order itself
+        // matters for one reason: a global-subsystem mutation a region's
+        // block entities might observe this same tick (unlikely, but not
+        // structurally ruled out) is applied first. Appended (not
+        // `.set`) so any caller-supplied BLOCK_ENTITIES body — e.g. a
+        // test probe — still runs, and so B3.4's body layers on top of
+        // B1.1's rather than replacing it.
         PhasedRegionTickBody.Builder wired = userBuilder
                 .prepend(PhasedRegionTickBody.Phase.INBOUND_MAILBOX, this::phasePollFullLoadUpdate)
+                .append(PhasedRegionTickBody.Phase.BLOCK_FLUID_TICKS, this::phaseBlockFluidTicksTick)
+                .append(PhasedRegionTickBody.Phase.ENTITY_AI, this::phaseEntityAiTick)
                 .append(PhasedRegionTickBody.Phase.BLOCK_ENTITIES, this::phaseGlobalSystemsTick)
+                .append(PhasedRegionTickBody.Phase.BLOCK_ENTITIES, this::phaseBlockEntitiesTickPerRegion)
                 .append(PhasedRegionTickBody.Phase.REGION_EVENTS, this::phaseDrainChunkTasks)
                 .append(PhasedRegionTickBody.Phase.FLUSH_OUTBOUND, this::phaseAutoSave);
         scheduler.setBody(wired.build());
+    }
+
+    /**
+     * {@code BLOCK_FLUID_TICKS} phase body (B3.2, docs/design/
+     * m13-b3-region-tick.md §5.1) — invokes the currently-registered
+     * {@link #blockFluidRunner} for {@code region}. Runs before {@link
+     * #phaseGlobalSystemsTick} in phase order (phases are ticked in
+     * {@link PhasedRegionTickBody.Phase} enum-declaration order, and
+     * {@code BLOCK_FLUID_TICKS} is declared before {@code
+     * BLOCK_ENTITIES}), so a redstone/crop/liquid update this phase
+     * applies is visible to this same tick's block-entity pass.
+     *
+     * <p>Defensive try/catch (CLAUDE.md rule 5, auto-reroute+warn): a
+     * runner that throws — a fork-bridge bug, or a mod-triggered
+     * exception surfaced through Vanilla's block/fluid tick callbacks —
+     * is caught here so it cannot strand the {@code ENTITY_AI} /
+     * {@code BLOCK_ENTITIES} / {@code REGION_EVENTS} / {@code
+     * FLUSH_OUTBOUND} phases still queued for this same region tick
+     * (redundant with {@link PhasedRegionTickBody#tickOnce}'s own
+     * per-phase try/catch, but the design doc calls for an explicit
+     * guard here so the failure is attributed to this phase
+     * specifically rather than surfacing as a generic uncaught-phase
+     * warning).
+     */
+    private void phaseBlockFluidTicksTick(Region region) {
+        try {
+            blockFluidRunner.runBlockFluidTicks(region);
+        } catch (RuntimeException e) {
+            ProbeRegistry.bump("region-tick.block-fluid.failure");
+            ViolationLogger.warn(
+                    "MultiThreadedSchedulerHost.phaseBlockFluidTicksTick",
+                    "blockFluidRunner threw for region " + region.id() + ": "
+                            + e.getClass().getSimpleName() + ": " + e.getMessage());
+        }
+    }
+
+    /**
+     * {@code ENTITY_AI} phase body (B3.3, docs/design/
+     * m13-b3-region-tick.md §5.2) — invokes the bound {@link
+     * #entityTickRunner} for {@code region}, after first asserting the
+     * call is actually running on {@code region}'s own worker thread.
+     *
+     * <p><b>Correctness guard.</b> Per §5's part 4 and §6 invariant 2
+     * ("no entity is ticked on a thread that isn't its owning region's
+     * worker"), this method reads {@link OwnerToken#current()} and
+     * refuses to invoke {@link #entityTickRunner} unless the calling
+     * thread's token is {@link Domain#REGION} for exactly this {@code
+     * region}'s id. A mismatch — a stale snapshot racing a split/merge,
+     * a test driving the body directly without setting a token, or a
+     * genuine bug — auto-reroutes to "skip, don't tick" rather than
+     * proceeding (CLAUDE.md rule 5): it bumps a probe, logs a rate-
+     * limited warning, and returns without calling the runner.
+     *
+     * <p>The runner invocation itself is wrapped in a second, defensive
+     * try/catch so a throwing {@link EntityTickRunner} (the fork
+     * bridge, or a test double) can never strand a later phase in the
+     * same tick — {@link PhasedRegionTickBody#tickOnce} already
+     * isolates each phase this way, but the per-entity iteration this
+     * phase delegates to is exactly the kind of large, mod-influenced
+     * body CLAUDE.md rule 5 asks call sites to defend individually too
+     * (matching {@link #phaseAutoSave}'s own IOException catch just
+     * below).
+     */
+    private void phaseEntityAiTick(Region region) {
+        OwnerToken tok = OwnerToken.current();
+        if (tok.domain() != Domain.REGION || tok.regionId() != region.id().value()) {
+            ProbeRegistry.bump("entity-ai.wrong-owner");
+            ViolationLogger.warn(
+                    "entity-ai.wrong-owner",
+                    "phaseEntityAiTick(" + region.id() + ") invoked from a thread whose OwnerToken is domain="
+                            + tok.domain() + " regionId=" + tok.regionId()
+                            + " — skipping this tick rather than ticking foreign entity state");
+            return;
+        }
+        try {
+            entityTickRunner.tickEntitiesForRegion(region);
+        } catch (Throwable t) {
+            ViolationLogger.warn(
+                    "entity-ai.tick-failure",
+                    "entityTickRunner threw for " + region.id() + ": "
+                            + t.getClass().getSimpleName() + ": " + t.getMessage());
+        }
     }
 
     /**
@@ -633,6 +867,46 @@ public final class MultiThreadedSchedulerHost implements SchedulerHost, AutoClos
             globalSystems.tickAll(ctx);
             return null;
         });
+    }
+
+    /**
+     * {@code BLOCK_ENTITIES} phase body (B3.4, docs/design/
+     * m13-b3-region-tick.md §5.3) — the per-region counterpart of
+     * {@link #phaseGlobalSystemsTick}, layered immediately after it in
+     * the same phase slot (see {@link #installM9WiredTickBody}). Ticks
+     * {@code region}'s own slice of {@code HolderManagerRegionData
+     * .blockEntityTickers} via {@link #blockEntityTickRunner}.
+     *
+     * <p>OwnerToken correctness guard: mirrors {@code
+     * RegionizedData.assertOwnedOrIgnore}'s shape (same file's package,
+     * {@code net.multiforge.runtime.region.RegionizedData}) — {@link
+     * Domain#UNKNOWN} and {@link Domain#GLOBAL} pass through untouched
+     * (tests driving {@code tickOnce} by hand off any worker thread, and
+     * the global region's own worker, both need to reach this body
+     * normally); a {@link Domain#REGION} token whose {@code regionId}
+     * does not match {@code region.id()} is a foreign-thread call — per
+     * CLAUDE.md rule 5 this warns + bumps a probe and skips ticking
+     * rather than touching another region's chunk-owned state.
+     */
+    private void phaseBlockEntitiesTickPerRegion(Region region) {
+        OwnerToken tok = OwnerToken.current();
+        if (tok.domain() == Domain.REGION && tok.regionId() != region.id().value()) {
+            ProbeRegistry.bump("block-entities.phase.wrong-owner");
+            ViolationLogger.warn(
+                    "MultiThreadedSchedulerHost.phaseBlockEntitiesTickPerRegion",
+                    "region=" + region.id() + " token=" + tok
+                            + " — skipping per-region block-entity tick (foreign-thread guard)");
+            return;
+        }
+        try {
+            blockEntityTickRunner.tickBlockEntitiesForRegion(region);
+        } catch (Throwable t) {
+            ProbeRegistry.bump("block-entities.phase.failure");
+            ViolationLogger.warn(
+                    "MultiThreadedSchedulerHost.phaseBlockEntitiesTickPerRegion",
+                    "block-entity phase failed for region " + region.id() + ": "
+                            + t.getClass().getSimpleName() + ": " + t.getMessage());
+        }
     }
 
     /**

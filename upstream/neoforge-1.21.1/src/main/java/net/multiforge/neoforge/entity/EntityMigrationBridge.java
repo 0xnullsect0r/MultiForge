@@ -1,15 +1,12 @@
 /*
  * MultiForge — Copyright (c) 2026 MultiForge authors.
- *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation, version 3.
- *
  * This program is distributed in the hope that it will be useful, but
  * WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
  * General Public License for more details.
- *
  * You should have received a copy of the GNU General Public License
  * along with this program. If not, see <https://www.gnu.org/licenses/>.
  */
@@ -57,35 +54,34 @@ import net.multiforge.runtime.scheduler.MultiThreadedSchedulerHost;
  * <h2>Design notes</h2>
  *
  * <ul>
- *   <li>{@code multiforge-runtime}'s {@link EntityMigrationCoordinator} is deliberately
- *       Minecraft-free (docs/design/entity-migration.md §6.1) — its {@code completeAt} only
- *       updates {@link EntityRegistry} bookkeeping (a fresh {@link MigratingEntityRef} at {@code
+ * <li>{@code multiforge-runtime}'s {@link EntityMigrationCoordinator} is deliberately
+ * Minecraft-free (docs/design/entity-migration.md §6.1) — its {@code completeAt} only
+ * updates {@link EntityRegistry} bookkeeping (a fresh {@link MigratingEntityRef} at {@code
  *       RESIDENT}), it never touches a Vanilla {@code Entity} object. This bridge is therefore
- *       responsible for the actual Vanilla-side materialization at the destination: it enqueues
- *       its own follow-up {@link net.multiforge.runtime.region.RegionizedTaskQueue#queueChunkTask}
- *       for the same destination chunk immediately after calling {@code beginMigration} /
- *       {@code beginMigrationWithTree}. Because both enqueues happen back-to-back on the calling
- *       (source) thread against the same per-region inbox ({@link
- *       net.multiforge.runtime.region.RegionizedTaskQueue} is a FIFO queue per region), the
- *       coordinator's own bookkeeping completion always runs before this bridge's materialization
- *       task on the destination region's worker.
- *   <li>The materialize task re-reads the <em>current</em> {@link MigratingEntityRef} from the
- *       registry rather than trusting its originally-captured destination — this is what makes
- *       {@code abortAndRestore} (docs/design/entity-migration.md §3.3/§7.3) degrade safely: if the
- *       destination chunk never reached BORDER in time, the coordinator's fallback re-completes at
- *       the <em>source</em> location instead, and the materialize task detects the mismatch and
- *       re-enqueues itself against the ref's actual final location before creating the Vanilla
- *       object. A ref that ends up {@code RETIRED} (retired mid-flight, §1.4/§7.2) is not
- *       materialized at all.
- *   <li>Region-crossing detection recomputes the owning region for both the entity's last-known
- *       chunk (per its {@link MigratingEntityRef#chunkPos()}) and its live current chunk on every
- *       call — two {@code ConcurrentHashMap} lookups, no allocation on the non-crossing fast path.
- *       In-region micro-movement (walking) never touches {@link EntityMigrationCoordinator} at
- *       all: this is what keeps the hot path (every entity, every tick) cheap.
+ * responsible for the actual Vanilla-side materialization at the destination: it enqueues
+ * its own follow-up {@link net.multiforge.runtime.region.RegionizedTaskQueue#queueChunkTask}
+ * for the same destination chunk immediately after calling {@code beginMigration} /
+ * {@code beginMigrationWithTree}. Because both enqueues happen back-to-back on the calling
+ * (source) thread against the same per-region inbox ({@link
+ * net.multiforge.runtime.region.RegionizedTaskQueue} is a FIFO queue per region), the
+ * coordinator's own bookkeeping completion always runs before this bridge's materialization
+ * task on the destination region's worker.
+ * <li>The materialize task re-reads the <em>current</em> {@link MigratingEntityRef} from the
+ * registry rather than trusting its originally-captured destination — this is what makes
+ * {@code abortAndRestore} (docs/design/entity-migration.md §3.3/§7.3) degrade safely: if the
+ * destination chunk never reached BORDER in time, the coordinator's fallback re-completes at
+ * the <em>source</em> location instead, and the materialize task detects the mismatch and
+ * re-enqueues itself against the ref's actual final location before creating the Vanilla
+ * object. A ref that ends up {@code RETIRED} (retired mid-flight, §1.4/§7.2) is not
+ * materialized at all.
+ * <li>Region-crossing detection recomputes the owning region for both the entity's last-known
+ * chunk (per its {@link MigratingEntityRef#chunkPos()}) and its live current chunk on every
+ * call — two {@code ConcurrentHashMap} lookups, no allocation on the non-crossing fast path.
+ * In-region micro-movement (walking) never touches {@link EntityMigrationCoordinator} at
+ * all: this is what keeps the hot path (every entity, every tick) cheap.
  * </ul>
  */
 public final class EntityMigrationBridge {
-
     private EntityMigrationBridge() {}
 
     /** {@code WorldRef.dimensionId() -> ServerLevel}, populated opportunistically by every entry point. */
@@ -288,8 +284,8 @@ public final class EntityMigrationBridge {
      * (CLAUDE.md rule 4) — this method never blocks the calling (source region) thread.
      *
      * @param original the entity as it was in the source dimension (may be {@code result} itself,
-     *     when {@code changeDimension} moves within the same dimension's y-axis-only variant)
-     * @param result the entity now live in {@code destLevel}
+     *                 when {@code changeDimension} moves within the same dimension's y-axis-only variant)
+     * @param result   the entity now live in {@code destLevel}
      */
     public static void onChangeDimension(Entity original, Entity result, ServerLevel destLevel) {
         MultiThreadedSchedulerHost host = MultiForgeRegionizedRuntime.current();
@@ -311,22 +307,21 @@ public final class EntityMigrationBridge {
 
         // Hop 1: source thread -> global region (mirrors PlayerJoinCoordinator.onPlayerLoginCompleted).
         host.taskQueue().queueChunkTask(globalWorld, 0, 0, () ->
-                // Hop 2: global -> destination chunk region.
-                host.taskQueue().queueChunkTask(destWorld, destChunkX, destChunkZ, () -> {
-                    EntityRegistry registry = host.entityRegistry();
-                    MigratingEntityRef stale = registry.lookup(uuid);
-                    if (stale != null && !stale.isRetired()) {
-                        stale.retire();
-                        registry.retire(stale);
-                    }
-                    if (registry.get(uuid) == null) {
-                        MigratingEntityRef fresh =
-                                new MigratingEntityRef(uuid, destWorld, new ChunkPos(destChunkX, destChunkZ));
-                        registry.add(fresh, payload);
-                    } else {
-                        registry.updatePayload(uuid, payload);
-                    }
-                }));
+        // Hop 2: global -> destination chunk region.
+        host.taskQueue().queueChunkTask(destWorld, destChunkX, destChunkZ, () -> {
+            EntityRegistry registry = host.entityRegistry();
+            MigratingEntityRef stale = registry.lookup(uuid);
+            if (stale != null && !stale.isRetired()) {
+                stale.retire();
+                registry.retire(stale);
+            }
+            if (registry.get(uuid) == null) {
+                MigratingEntityRef fresh = new MigratingEntityRef(uuid, destWorld, new ChunkPos(destChunkX, destChunkZ));
+                registry.add(fresh, payload);
+            } else {
+                registry.updatePayload(uuid, payload);
+            }
+        }));
     }
 
     // === A2.6 — PersistentEntitySectionManager.addEntity: funnel through EntityRegistry.register ==
@@ -392,8 +387,8 @@ public final class EntityMigrationBridge {
 
     /**
      * @param rerouted {@code true} once this call has already been re-enqueued once against the
-     *     ref's actual final chunk — bounds the reroute to a single hop even if the registry keeps
-     *     changing under us, rather than looping forever.
+     *                 ref's actual final chunk — bounds the reroute to a single hop even if the registry keeps
+     *                 changing under us, rather than looping forever.
      */
     private static void materialize(
             MultiThreadedSchedulerHost host,

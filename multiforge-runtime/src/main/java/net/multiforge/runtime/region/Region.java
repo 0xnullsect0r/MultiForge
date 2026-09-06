@@ -1,15 +1,12 @@
 /*
  * MultiForge — Copyright (c) 2026 MultiForge authors.
- *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation, version 3.
- *
  * This program is distributed in the hope that it will be useful, but
  * WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
  * General Public License for more details.
- *
  * You should have received a copy of the GNU General Public License
  * along with this program. If not, see <https://www.gnu.org/licenses/>.
  */
@@ -17,8 +14,10 @@ package net.multiforge.runtime.region;
 
 import java.util.Collections;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicReference;
+import net.multiforge.api.world.ChunkPos;
 
 /**
  * A spatial simulation unit that owns some set of {@link SectionPos
@@ -35,6 +34,7 @@ public final class Region {
     private final int sectionChunkShift;
     private final Set<SectionPos> sections = new HashSet<>(4);
     private final AtomicReference<RegionState> state = new AtomicReference<>(RegionState.TRANSIENT);
+    private final AtomicReference<RegionChunkSource> chunkSource = new AtomicReference<>();
     private volatile long currentTick;
 
     Region(RegionId id, int sectionChunkShift) {
@@ -65,6 +65,51 @@ public final class Region {
         synchronized (sections) {
             return sections.size();
         }
+    }
+
+    // === B3.1 — owned-chunk accessor (docs/design/m13-b3-region-tick.md §4.3) =========
+
+    /**
+     * Wire this region to the {@link RegionChunkSource} that resolves
+     * which chunks it currently owns. Called once by {@code
+     * MultiThreadedSchedulerHost}'s region→world wiring listener at
+     * region-creation time (both fresh regions and split children —
+     * see {@code ThreadedRegionizer.fireRegionCreated}), so {@link
+     * #ownedChunkSnapshot()}/{@link #ownedChunkCount()} have something
+     * to delegate to. Not part of this package's own region-creation
+     * path — {@link ThreadedRegionizer} itself has no reference to a
+     * chunk-holder manager (see the chicken-and-egg note on {@code
+     * MultiThreadedSchedulerHost.chunkManagerFor}), and this package
+     * deliberately carries no dependency on the {@code chunk} package
+     * (see {@link RegionChunkSource}'s javadoc). Public because the
+     * wiring call happens from the {@code scheduler} package, which
+     * composes {@code region} + {@code chunk} state; unset (never
+     * called) regions — e.g. in tests that construct a bare {@link
+     * ThreadedRegionizer} — degrade {@link #ownedChunkSnapshot()} to
+     * an empty list rather than throwing.
+     */
+    public void withChunkSource(RegionChunkSource source) {
+        chunkSource.set(source);
+    }
+
+    /**
+     * Snapshot of the chunks this region currently owns, per the wired
+     * {@link RegionChunkSource} (production: {@code
+     * ChunkHolderManager.holdersOwnedBy(id())}). Empty (never {@code
+     * null}) if no source has been wired. This is the single entry
+     * point the three B3 phase bodies (BLOCK_FLUID_TICKS / ENTITY_AI /
+     * BLOCK_ENTITIES) use to answer "which chunks does this region own,
+     * right now, on this worker thread?" (docs/design/m13-b3-region-tick.md
+     * §4.3).
+     */
+    public List<ChunkPos> ownedChunkSnapshot() {
+        RegionChunkSource source = chunkSource.get();
+        return source == null ? List.of() : source.ownedChunkSnapshot(id);
+    }
+
+    /** {@code ownedChunkSnapshot().size()}, without materialising the list twice at call sites that only need the count. */
+    public int ownedChunkCount() {
+        return ownedChunkSnapshot().size();
     }
 
     boolean owns(SectionPos section) {

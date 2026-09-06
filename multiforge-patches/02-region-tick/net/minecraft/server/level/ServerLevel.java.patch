@@ -1,0 +1,240 @@
+--- a/net/minecraft/server/level/ServerLevel.java
++++ b/net/minecraft/server/level/ServerLevel.java
+@@ -362,11 +362,17 @@
+
+         profilerfiller.popPush("tickPending");
+         if (!this.isDebug() && flag) {
+-            long k = this.getGameTime();
+             profilerfiller.push("blockTicks");
+-            this.blockTicks.tick(k, 65536, this::tickBlock);
+-            profilerfiller.popPush("fluidTicks");
+-            this.fluidTicks.tick(k, 65536, this::tickFluid);
++            // MultiForge (multiforge-patches/02-region-tick/): block/fluid ticks migrate onto
++            // each chunk's owning region's BLOCK_FLUID_TICKS phase slot
++            // (docs/design/m13-b3-region-tick.md §5.1) once
++            // RegionizedTickCoordinator.regionsHandleBlockFluidTicks reports true for this
++            // level. Falls through to the original Vanilla inline drain otherwise (bootstrap,
++            // no regionizer, or runner not registered — auto-reroute+warn default, CLAUDE.md
++            // rule 5).
++            if (!net.multiforge.neoforge.RegionizedTickCoordinator.regionsHandleBlockFluidTicks(this)) {
++                this.mfTickBlockFluidTicksAll();
++            }
+             profilerfiller.pop();
+         }
+
+@@ -397,33 +403,18 @@
+                 profilerfiller.pop();
+             }
+
+-            this.entityTickList.forEach(p_308566_ -> {
+-                if (!p_308566_.isRemoved()) {
+-                    if (this.shouldDiscardEntity(p_308566_)) {
+-                        p_308566_.discard();
+-                    } else if (!tickratemanager.isEntityFrozen(p_308566_)) {
+-                        profilerfiller.push("checkDespawn");
+-                        p_308566_.checkDespawn();
+-                        profilerfiller.pop();
+-                        if (this.chunkSource.chunkMap.getDistanceManager().inEntityTickingRange(p_308566_.chunkPosition().toLong())) {
+-                            Entity entity = p_308566_.getVehicle();
+-                            if (entity != null) {
+-                                if (!entity.isRemoved() && entity.hasPassenger(p_308566_)) {
+-                                    return;
+-                                }
+-
+-                                p_308566_.stopRiding();
+-                            }
+-
+-                            profilerfiller.push("tick");
+-                            if (!p_308566_.isRemoved() && !(p_308566_ instanceof net.neoforged.neoforge.entity.PartEntity)) {
+-                                this.guardEntityTick(this::tickNonPassenger, p_308566_);
+-                            }
+-                            profilerfiller.pop();
+-                        }
+-                    }
+-                }
+-            });
++            // MultiForge (multiforge-patches/02-region-tick/, docs/design/
++            // m13-b3-region-tick.md §5.2): the entity despawn-check +
++            // guarded tickNonPassenger pass migrates onto the ENTITY_AI
++            // phase slot (MultiThreadedSchedulerHost.phaseEntityAiTick,
++            // via the bound EntityTickRunner) once this world's regions
++            // are handling entity ticks. mfTickEntitiesAll() is the
++            // original, unmodified pass — see its javadoc below — kept
++            // live as the fallback for bootstrap / no-regionizer / no-
++            // runner-bound windows, exactly like every other B2/B3 guard.
++            if (!net.multiforge.neoforge.RegionizedTickCoordinator.regionsHandleEntityTicks(this)) {
++                this.mfTickEntitiesAll();
++            }
+             profilerfiller.pop();
+             this.tickBlockEntities();
+         }
+@@ -433,6 +424,107 @@
+         profilerfiller.pop();
+     }
+
++    /**
++     * MultiForge (multiforge-patches/02-region-tick/, docs/design/
++     * m13-b3-region-tick.md §5.2): the original, unmodified {@code
++     * entityTickList.forEach(...)} despawn-check + guarded {@code
++     * tickNonPassenger} pass, extracted verbatim so both this Vanilla-
++     * inline fallback and {@link #mfTickEntitiesForChunk} (the per-
++     * region path used once {@link
++     * net.multiforge.neoforge.RegionizedTickCoordinator#regionsHandleEntityTicks}
++     * reports the runtime is handling entity ticks for this world)
++     * share the exact same per-entity computation via {@link
++     * #mfTickOneEntity}. Only the call site (here, on the caller
++     * thread, vs. a region worker) and the iteration source (the full
++     * {@code entityTickList} vs. one chunk's AABB) differ.
++     */
++    public void mfTickEntitiesAll() {
++        ProfilerFiller profilerfiller = this.getProfiler();
++        TickRateManager tickratemanager = this.tickRateManager();
++        this.entityTickList.forEach(p_308566_ -> this.mfTickOneEntity(p_308566_, profilerfiller, tickratemanager));
++    }
++
++    /**
++     * MultiForge (multiforge-patches/02-region-tick/, docs/design/
++     * m13-b3-region-tick.md §5.2): per-region counterpart of {@link
++     * #mfTickEntitiesAll()} — ticks only the entities whose bounding
++     * box intersects {@code holder}'s chunk column (all Y), via the
++     * same {@link #mfTickOneEntity} per-entity computation Vanilla's
++     * inline pass used. Called from {@code
++     * net.multiforge.neoforge.tick.EntityTickRunnerBridge}, once per
++     * chunk holder this region owns, from that region's own worker
++     * thread — never from the main server thread once the per-region
++     * path is active for this world.
++     */
++    public void mfTickEntitiesForChunk(net.multiforge.runtime.chunk.NewChunkHolder holder) {
++        ProfilerFiller profilerfiller = this.getProfiler();
++        TickRateManager tickratemanager = this.tickRateManager();
++        net.multiforge.api.world.ChunkPos apiPos = holder.position();
++        ChunkPos pos = new ChunkPos(apiPos.x(), apiPos.z());
++        AABB bounds = new AABB(
++                pos.getMinBlockX(), this.getMinBuildHeight(), pos.getMinBlockZ(),
++                pos.getMaxBlockX() + 1, this.getMaxBuildHeight(), pos.getMaxBlockZ() + 1);
++        this.getEntities().get(bounds, p_308566_ -> this.mfTickOneEntity(p_308566_, profilerfiller, tickratemanager));
++    }
++
++    /**
++     * MultiForge (multiforge-patches/02-region-tick/, docs/design/
++     * m13-b3-region-tick.md §5.2): the exact per-entity body Vanilla's
++     * {@code entityTickList.forEach} lambda ran inline — despawn
++     * check, the {@code DistanceManager.inEntityTickingRange} gate,
++     * vehicle/passenger resolution, and the guarded {@code
++     * tickNonPassenger} call — unchanged, modulo the {@code return;}
++     * inside the vehicle check now returning from this method instead
++     * of skipping to the lambda's next iteration, which is exactly
++     * equivalent since this method is itself invoked once per entity.
++     *
++     * <p>The one real addition is the leading migration guard: an
++     * entity whose {@code MigratingEntityRef} is currently {@code
++     * MIGRATING} is mid-handoff to another region and must not be
++     * ticked by either the source or a racing destination worker
++     * (docs/design/m13-b3-region-tick.md §9.2 — an M4 concern this
++     * method defers to rather than resolves itself; §5.2's "does not
++     * itself move an entity... assumes an entity's owning region is
++     * authoritative" framing applies here too).
++     */
++    private void mfTickOneEntity(Entity p_308566_, ProfilerFiller profilerfiller, TickRateManager tickratemanager) {
++        if (p_308566_.isRemoved()) {
++            return;
++        }
++        net.multiforge.runtime.scheduler.MultiThreadedSchedulerHost mfHost =
++                net.multiforge.runtime.scheduler.MultiForgeRegionizedRuntime.current();
++        if (mfHost != null) {
++            net.multiforge.runtime.entity.MigratingEntityRef mfRef =
++                    mfHost.entityRegistry().lookup(p_308566_.getUUID());
++            if (mfRef != null && mfRef.migrationState() == net.multiforge.runtime.entity.MigrationState.MIGRATING) {
++                return;
++            }
++        }
++        if (this.shouldDiscardEntity(p_308566_)) {
++            p_308566_.discard();
++        } else if (!tickratemanager.isEntityFrozen(p_308566_)) {
++            profilerfiller.push("checkDespawn");
++            p_308566_.checkDespawn();
++            profilerfiller.pop();
++            if (this.chunkSource.chunkMap.getDistanceManager().inEntityTickingRange(p_308566_.chunkPosition().toLong())) {
++                Entity entity = p_308566_.getVehicle();
++                if (entity != null) {
++                    if (!entity.isRemoved() && entity.hasPassenger(p_308566_)) {
++                        return;
++                    }
++
++                    p_308566_.stopRiding();
++                }
++
++                profilerfiller.push("tick");
++                if (!p_308566_.isRemoved() && !(p_308566_ instanceof net.neoforged.neoforge.entity.PartEntity)) {
++                    this.guardEntityTick(this::tickNonPassenger, p_308566_);
++                }
++                profilerfiller.pop();
++            }
++        }
++    }
++
+     @Override
+     public boolean shouldTickBlocksAt(long p_184059_) {
+         return this.chunkSource.chunkMap.getDistanceManager().inBlockTickingRange(p_184059_);
+@@ -1279,6 +1371,61 @@
+         return this.fluidTicks;
+     }
+
++    /**
++     * MultiForge (multiforge-patches/02-region-tick/): the original, unmodified
++     * blockTicks/fluidTicks drain pair from {@link #tick(BooleanSupplier)}, extracted
++     * verbatim so both the Vanilla-inline call site above and the {@code
++     * RegionizedTickCoordinator.regionsHandleBlockFluidTicks} fallback path invoke exactly
++     * the same computation — only the call site's guard moved
++     * (docs/design/m13-b3-region-tick.md §5.1).
++     */
++    public void mfTickBlockFluidTicksAll() {
++        long k = this.getGameTime();
++        this.blockTicks.tick(k, 65536, this::tickBlock);
++        this.fluidTicks.tick(k, 65536, this::tickFluid);
++    }
++
++    /**
++     * MultiForge (multiforge-patches/02-region-tick/): per-region variant of {@link
++     * #mfTickBlockFluidTicksAll()} — drains only the scheduled block/fluid ticks whose
++     * position falls inside {@code holder}'s chunk, respecting the same 65536-per-call cap
++     * as Vanilla's level-wide drain, but scoped per region rather than per level
++     * (docs/design/m13-b3-region-tick.md §5.1). Called from {@code
++     * net.multiforge.neoforge.tick.ScheduledTickRunnerBridge} once per owned chunk, on the
++     * owning region's own worker thread.
++     */
++    public void mfTickBlockFluidTicksForChunk(net.multiforge.runtime.chunk.NewChunkHolder holder) {
++        long gameTime = this.getGameTime();
++        net.multiforge.api.world.ChunkPos mfPos = holder.position();
++        net.minecraft.world.level.ChunkPos pos = new net.minecraft.world.level.ChunkPos(mfPos.x(), mfPos.z());
++        mfDrainChunkContainer(this.blockTicks, pos, gameTime, this::tickBlock);
++        mfDrainChunkContainer(this.fluidTicks, pos, gameTime, this::tickFluid);
++    }
++
++    /**
++     * MultiForge (multiforge-patches/02-region-tick/): drains one chunk's {@link
++     * net.minecraft.world.ticks.LevelChunkTicks} container directly (via {@link
++     * net.minecraft.world.ticks.LevelTicks#mfContainerForChunk}) rather than Vanilla's
++     * cross-chunk priority-ordered {@link net.minecraft.world.ticks.LevelTicks#tick} drain —
++     * the per-region caller only ever wants this one chunk's entries, never a neighbor's.
++     */
++    private static <T> void mfDrainChunkContainer(
++            net.minecraft.world.ticks.LevelTicks<T> ticks,
++            net.minecraft.world.level.ChunkPos pos,
++            long gameTime,
++            java.util.function.BiConsumer<net.minecraft.core.BlockPos, T> consumer) {
++        net.minecraft.world.ticks.LevelChunkTicks<T> container = ticks.mfContainerForChunk(pos);
++        if (container == null) return;
++        int drained = 0;
++        while (drained < 65536) {
++            net.minecraft.world.ticks.ScheduledTick<T> next = container.peek();
++            if (next == null || next.triggerTick() > gameTime) break;
++            container.poll();
++            consumer.accept(next.pos(), next.type());
++            drained++;
++        }
++    }
++
+     @Nonnull
+     @Override
+     public MinecraftServer getServer() {

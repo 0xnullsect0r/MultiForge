@@ -17,10 +17,30 @@
 // `:base`'s `src/main/java/`. Since some MultiForge patches target files NeoForge doesn't
 // touch (e.g. ChunkHolder.java, ProcessorMailbox.java), the applier below copies the file
 // from `:base` into `:neoforge` on first touch so the patch's target path exists.
-
+//
+// MultiForge fork addition (M12.2): `net/neoforged/**` (NeoForge's own hand-written mod
+// source, e.g. NeoForge.java) and `net/multiforge/**` are NOT part of the NeoGradle
+// decompile/patch pipeline at all — they live only in this outer repo's committed,
+// hand-maintained tree at rootProject's `src/main/java` (see this project's `sourceSets`
+// block a few lines below `apply from: 'multiforge-patches.gradle'`, which points
+// `sourceSets.main.java.srcDirs` there instead of the NeoGradle-conventional
+// `projects/neoforge/src/main/java`). A patch targeting one of those paths (the first
+// being `09-events/net/neoforged/neoforge/common/NeoForge.java.patch`) must therefore
+// apply against that committed tree, not the freshly-regenerated-by-:setup one — the
+// target file simply does not exist under `neoforgeSrcMainJava` for anything outside
+// `net/minecraft/**`. See `applyTargetDirFor` below.
 def multiforgePatchesRoot = rootProject.layout.projectDirectory.dir('../../multiforge-patches').asFile
 def neoforgeSrcMainJava = project.file('src/main/java')
 def baseSrcMainJava = rootProject.layout.projectDirectory.dir('projects/base/src/main/java').asFile
+def mfCommittedSrcMainJava = rootProject.file('src/main/java')
+
+// Picks which of the two real source roots a given patch target lives under. Only
+// `net/minecraft/**` paths are part of the NeoGradle-regenerated tree (and thus eligible
+// for the :base seeding fallback below) — everything else (`net/neoforged/**`,
+// `net/multiforge/**`) is hand-maintained source committed directly in this outer repo.
+def applyTargetDirFor = { String targetRel ->
+    targetRel != null && targetRel.startsWith('net/minecraft/') ? neoforgeSrcMainJava : mfCommittedSrcMainJava
+}
 
 def applyMultiforgePatches = tasks.register('applyMultiforgePatches') {
     group = 'multiforge'
@@ -55,7 +75,8 @@ def applyMultiforgePatches = tasks.register('applyMultiforgePatches') {
                     int tab = targetRel.indexOf('\t')
                     if (tab >= 0) targetRel = targetRel.substring(0, tab)
                 }
-                if (targetRel != null) {
+                def targetDir = applyTargetDirFor(targetRel)
+                if (targetRel != null && targetDir == neoforgeSrcMainJava) {
                     def neoforgeTarget = new File(neoforgeSrcMainJava, targetRel)
                     def baseTarget = new File(baseSrcMainJava, targetRel)
                     if (!neoforgeTarget.exists() && baseTarget.exists()) {
@@ -69,7 +90,7 @@ def applyMultiforgePatches = tasks.register('applyMultiforgePatches') {
                 }
 
                 def checkResult = exec {
-                    workingDir = neoforgeSrcMainJava
+                    workingDir = targetDir
                     commandLine = ['git', 'apply', '--check', '--recount', patchFile.absolutePath]
                     ignoreExitValue = true
                     standardOutput = new ByteArrayOutputStream()
@@ -77,7 +98,7 @@ def applyMultiforgePatches = tasks.register('applyMultiforgePatches') {
                 }
                 if (checkResult.exitValue == 0) {
                     exec {
-                        workingDir = neoforgeSrcMainJava
+                        workingDir = targetDir
                         commandLine = ['git', 'apply', '--recount', patchFile.absolutePath]
                     }
                     logger.lifecycle("MultiForge: applied ${group.name}/${patchFile.name}")
@@ -85,7 +106,7 @@ def applyMultiforgePatches = tasks.register('applyMultiforgePatches') {
                     return
                 }
                 def reverseCheck = exec {
-                    workingDir = neoforgeSrcMainJava
+                    workingDir = targetDir
                     commandLine = ['git', 'apply', '--reverse', '--check', patchFile.absolutePath]
                     ignoreExitValue = true
                     standardOutput = new ByteArrayOutputStream()
@@ -99,7 +120,7 @@ def applyMultiforgePatches = tasks.register('applyMultiforgePatches') {
                 throw new GradleException(
                     "MultiForge: patch ${group.name}/${patchFile.name} does not apply cleanly and is not " +
                     "already applied. Run 'git apply --check ${patchFile.absolutePath}' from " +
-                    "${neoforgeSrcMainJava} for details.")
+                    "${targetDir} for details.")
             }
         }
         logger.lifecycle("MultiForge: ${applied} patch(es) applied, ${skipped} already up to date, ${seeded} file(s) seeded from :base.")

@@ -509,11 +509,23 @@ Broken into 8 landable sub-steps, sized similarly to M7's sub-steps:
   6b/c wire real per-region tick work. GameTest fixture at
   `RegionizedRuntimeTests.loadedChunksHaveRegions` asserts a region
   exists for the GameTest's own structure chunk.
-- **Sub-step 6b (DONE — M9 Phase 1.5, `ab5c185`):** swapped
-  `RegionizedTickCoordinator.dispatchLevelTick` from pass-through to real
-  per-region dispatch, decomposing `ServerLevel.tick`'s per-chunk work
-  (block/fluid ticks, entity iteration, block-entity iteration) so each
-  region owns its slice.
+- **Sub-step 6b (PARTIAL — see docs/design/m13-b3-region-tick.md — M9
+  Phase 1.5, `ab5c185`):** swapped `RegionizedTickCoordinator.
+  dispatchLevelTick` from pass-through to real per-region dispatch of
+  the *scheduling* barrier — `TickRegionScheduler.tickAll(...)` fans
+  out to every live region and synchronises against the worker pool
+  before the per-level tick proceeds. It did **not** decompose
+  `ServerLevel.tick`'s per-chunk work itself: block/fluid ticks,
+  entity iteration, and block-entity iteration all still run inline
+  on the main thread via the trailing `vanillaBody.run()` call
+  (`RegionizedTickCoordinator.java:193`), because
+  `MultiThreadedSchedulerHost#installM9WiredTickBody`'s
+  `BLOCK_FLUID_TICKS` and `ENTITY_AI` phase slots have no production
+  wiring, and `BLOCK_ENTITIES` is wired only for the synthetic global
+  region. Completing the actual per-chunk decomposition — per-region
+  `BLOCK_FLUID_TICKS`, `ENTITY_AI`, and per-region `BLOCK_ENTITIES` —
+  is tracked as "Full B3" and specified in
+  `docs/design/m13-b3-region-tick.md`.
 - Sub-step 7 (pending, `multiforge-patches/03-world-data/`): convert
   per-world mutable `ServerLevel` fields (block-tick list, fluid-tick
   list, block-event queue, entity iterator caches) to `RegionizedData<T>`

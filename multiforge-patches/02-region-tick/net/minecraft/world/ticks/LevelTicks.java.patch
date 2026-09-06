@@ -1,0 +1,21 @@
+--- a/net/minecraft/world/ticks/LevelTicks.java
++++ b/net/minecraft/world/ticks/LevelTicks.java
+@@ -70,6 +70,18 @@
+         }
+     }
+ 
++    /**
++     * MultiForge (multiforge-patches/02-region-tick/): expose a single chunk's tick
++     * container so a per-region drain ({@code ServerLevel.mfTickBlockFluidTicksForChunk})
++     * can drain exactly that chunk's scheduled ticks without touching any other chunk's
++     * container or Vanilla's own cross-chunk priority-ordered drain in {@link #tick}
++     * (docs/design/m13-b3-region-tick.md §5.1). Returns {@code null} if no container is
++     * registered for {@code pos} (chunk not loaded / not yet added via {@link #addContainer}).
++     */
++    public LevelChunkTicks<T> mfContainerForChunk(ChunkPos pos) {
++        return this.allContainers.get(pos.toLong());
++    }
++
+     @Override
+     public void schedule(ScheduledTick<T> p_193252_) {
+         long i = ChunkPos.asLong(p_193252_.pos());

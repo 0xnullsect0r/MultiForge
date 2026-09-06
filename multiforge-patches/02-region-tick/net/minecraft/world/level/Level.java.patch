@@ -1,0 +1,60 @@
+--- a/net/minecraft/world/level/Level.java
++++ b/net/minecraft/world/level/Level.java
+@@ -532,10 +532,37 @@
+     public float getSunAngle(float p_46491_) {
+         float f = this.getTimeOfDay(p_46491_);
+         return f * (float) (Math.PI * 2);
+     }
+ 
+     public void addBlockEntityTicker(TickingBlockEntity p_151526_) {
+         (this.tickingBlockEntities ? this.pendingBlockEntityTickers : this.blockEntityTickers).add(p_151526_);
++        // MultiForge (multiforge-patches/02-region-tick/): route the newly
++        // added ticker into the owning region's HolderManagerRegionData
++        // slice (docs/design/m13-b3-region-tick.md section 4.2/5.3) so the
++        // per-region BLOCK_ENTITIES phase body
++        // (net.multiforge.runtime.region.BlockEntityTickRunner, B3.4) can
++        // tick it. Guarded on RegionizedTickCoordinator
++        // .regionsHandleBlockEntities so a fresh boot, a not-yet-installed
++        // runtime, or a non-server Level (client side) is a safe no-op --
++        // the vanilla-inline tickBlockEntities() body below still ticks
++        // this.blockEntityTickers directly until B3.5 removes that
++        // fallback.
++        if (net.multiforge.neoforge.RegionizedTickCoordinator.regionsHandleBlockEntities(this)) {
++            net.multiforge.neoforge.tick.BlockEntityTickerBridge.onTickerAdded(this, p_151526_);
++        }
++    }
++
++    // MultiForge (multiforge-patches/02-region-tick/): read-only snapshot
++    // accessor for BlockEntityTickerBridge.installOnLevel's one-time
++    // backfill pass (docs/design/m13-b3-region-tick.md section 5.3) --
++    // tickers already registered before this level's per-region wiring
++    // came up (e.g. chunks loaded during an early boot window) still need
++    // to be routed into their owning region's HolderManagerRegionData
++    // once wiring is ready, or they would silently stop ticking forever
++    // once tickBlockEntities() starts skipping this level's inline
++    // iteration.
++    public java.util.List<TickingBlockEntity> mfBlockEntityTickersSnapshot() {
++        return java.util.List.copyOf(this.blockEntityTickers);
+     }
+ 
+     public void addFreshBlockEntities(java.util.Collection<BlockEntity> beList) {
+@@ -576,4 +576,19 @@
+     protected void tickBlockEntities() {
++        // MultiForge (multiforge-patches/02-region-tick/): once the
++        // per-region BLOCK_ENTITIES phase body
++        // (net.multiforge.runtime.region.BlockEntityTickRunner, B3.4) has
++        // claimed this world's block entities, skip the inline
++        // per-level iteration entirely -- ticking it here too would
++        // double-tick every block entity in the world. See
++        // RegionizedTickCoordinator.regionsHandleBlockEntities's javadoc
++        // for the exact readiness conditions. Falls through to the
++        // original body below (unchanged) whenever the runtime hasn't
++        // claimed this world yet -- bootstrap, no regionizer, or the
++        // M9 wiring not installed -- preserving Vanilla single-threaded
++        // parity exactly as before this patch.
++        if (net.multiforge.neoforge.RegionizedTickCoordinator.regionsHandleBlockEntities(this)) {
++            return;
++        }
+         ProfilerFiller profilerfiller = this.getProfiler();
+         profilerfiller.push("blockEntities");
+         if (!this.pendingFreshBlockEntities.isEmpty()) {
