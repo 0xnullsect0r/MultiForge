@@ -69,10 +69,101 @@ jobs:
           path: release/
           retention-days: 30
 
+  build-fork-installer:
+    name: build fork installer (MultiForge-patched NeoForge)
+    runs-on: ubuntu-latest
+    # 40 minutes: :setup ~5 min, apply patches ~5s, fork installer build ~10 min,
+    # + Gradle warm-up + cache miss slack. Longer than ci.yml's fork-compile
+    # (30min) because we also run generateServerBinaryPatches + signInstallerJar.
+    timeout-minutes: 40
+    # Fork build has historically been GHA-preempted on ubuntu-latest during
+    # neoFormDecompile (see ci.yml fork-compile comments). This job is retained
+    # as best-effort — the release still ships from build-jars alone if this
+    # job fails. Operator falls back to the local-build procedure in
+    # RELEASING.md if this happens.
+    continue-on-error: true
+    needs: build-jars
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v3
+
+      - name: Set fork-build heap
+        run: echo "GRADLE_OPTS=-Xmx6G" >> "$GITHUB_ENV"
+
+      - name: Publish multiforge-api + runtime to mavenLocal
+        run: |
+          ./gradlew \
+            :multiforge-api:publishToMavenLocal \
+            :multiforge-runtime:publishToMavenLocal \
+            --no-daemon --stacktrace
+
+      - name: Setup + apply MultiForge patches + build fork installer
+        working-directory: upstream/neoforge-1.21.1
+        # Two invocations for the pre-existing Gradle task-graph quirk
+        # (combined invocation wipes patches back to pristine before
+        # compileJava runs — see B3.2 flag).
+        run: |
+          ./gradlew --no-configuration-cache --no-daemon --stacktrace --parallel --build-cache \
+            setup \
+            :neoforge:applyMultiforgePatches
+          ./gradlew --no-configuration-cache --no-daemon --stacktrace --parallel --build-cache \
+            :neoforge:signInstallerJar
+
+      - name: Stage fork installer with release-friendly name
+        run: |
+          set -euo pipefail
+          VER="${GITHUB_REF_NAME#v}"
+          mkdir -p release
+          # Fork installer output path (from gradleutils version-derivation):
+          # projects/neoforge/build/distributions/neoforge-<version>-installer[-unsigned].jar
+          # Prefer the signed one if present.
+          FORK_JAR=$(find upstream/neoforge-1.21.1/projects/neoforge/build/distributions \
+              -maxdepth 1 -name 'neoforge-*-installer.jar' ! -name '*-unsigned.jar' 2>/dev/null | head -1)
+          if [ -z "$FORK_JAR" ]; then
+              FORK_JAR=$(find upstream/neoforge-1.21.1/projects/neoforge/build/distributions \
+                  -maxdepth 1 -name 'neoforge-*-installer-unsigned.jar' 2>/dev/null | head -1)
+          fi
+          if [ -z "$FORK_JAR" ]; then
+              echo "::error::No fork installer jar found under upstream/neoforge-1.21.1/projects/neoforge/build/distributions"
+              exit 1
+          fi
+          cp "$FORK_JAR" "release/multiforge-${VER}-installer.jar"
+          ls -l release/
+
+      - name: Upload fork installer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: fork-installer-${{ github.ref_name }}
+          path: release/multiforge-*-installer.jar
+          retention-days: 30
+
+      - name: Upload fork test/build reports on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fork-installer-reports-${{ github.sha }}
+          path: |
+            upstream/neoforge-1.21.1/**/build/reports/
+            upstream/neoforge-1.21.1/**/build/patch-rejects/
+          retention-days: 7
+
   gh-release:
     name: create GitHub release
     runs-on: ubuntu-latest
-    needs: build-jars
+    needs: [build-jars, build-fork-installer]
+    # Explicit `needs: build-fork-installer` here would block gh-release
+    # if the advisory fork build fails. Split into a conditional:
+    # gh-release runs after build-jars regardless; if build-fork-installer
+    # succeeded, its artifact is also downloaded.
+    if: always() && needs.build-jars.result == 'success'
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
@@ -82,6 +173,13 @@ jobs:
         with:
           name: jars-${{ github.ref_name }}
           path: release/
+
+      - name: Download fork installer (optional)
+        uses: actions/download-artifact@v4
+        with:
+          name: fork-installer-${{ github.ref_name }}
+          path: release/
+        continue-on-error: true
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
