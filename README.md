@@ -12,35 +12,66 @@ Pre-alpha. In active development. See [`docs/blueprint.md`](docs/blueprint.md) f
 
 ---
 
-## Quick start
+## Install
+
+Three ways to install, all under GPL-3 — no token, no activation, no phone-home. Full details in [docs/install.md](docs/install.md).
+
+### 1. Docker (recommended for new servers)
 
 ```yaml
 # docker-compose.yml
 services:
-  minecraft:
-    image: ghcr.io/multiforge/multiforge-server:latest
+  multiforge:
+    image: ghcr.io/0xnullsect0r/multiforge-server:1.3.0    # or :latest
+    ports: ["25565:25565/tcp", "25565:25565/udp"]
     environment:
       EULA: "TRUE"
-      MEMORY: 8G
-    ports:
-      - "25565:25565"
-    volumes:
-      - ./data:/data
+      MEMORY: "8G"
+      MULTIFORGE_CORES: "8"
+      MULTIFORGE_THREADS_PER_CORE: "2"
+    volumes: [ "./data:/data" ]
+    restart: unless-stopped
 ```
 
 ```
 docker compose up -d
 ```
 
-In-game commands (op only):
+### 2. Fresh installer JAR (bare-metal / systemd)
 
 ```
-/multiforge config cores 8
-/multiforge config threads 2
-/multiforge region mode player-only
-/multiforge region size 16
-/multiforge region pin -128 -128 128 128
-/multiforge region list
+curl -LO https://github.com/0xnullsect0r/MultiForge/releases/latest/download/multiforge-installer.jar
+mkdir my-server && cd my-server
+java -jar ../multiforge-installer.jar install --install-dir .
+sed -i 's/eula=false/eula=true/' eula.txt
+./run.sh
+```
+
+### 3. Drop-in replacement ZIP (overlay an existing NeoForge 1.21.1 server)
+
+Your world, mods, configs, and `server.properties` stay in place. Requires Minecraft NeoForge 1.21.1.
+
+```
+# Stop your existing server; back up world/ + mods/ + config/ first.
+curl -LO https://github.com/0xnullsect0r/MultiForge/releases/latest/download/multiforge-replacement.zip
+cd /path/to/your/server
+unzip /path/to/multiforge-replacement.zip
+mv run.sh run.neoforge.sh.bak
+mv run.multiforge.sh run.sh && chmod +x run.sh
+mv config/multiforge-server.toml.example config/multiforge-server.toml
+./run.sh
+```
+
+Rollback is documented in [docs/install.md § Rolling back](docs/install.md#rolling-back) — MultiForge's world data is a purely additive `world/multiforge/` subdirectory; your Vanilla world stays byte-compatible with upstream NeoForge.
+
+### In-game commands (op-only, once running)
+
+```
+/multiforge config cores 8               # change worker-pool sizing
+/multiforge region mode player-only      # switch region partitioning
+/multiforge region list                  # see live regions
+/multiforge probe tps                    # TPS/MSPT histogram
+/multiforge probe event.dispatch         # event-routing counters (M12)
 ```
 
 ---
