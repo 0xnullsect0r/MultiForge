@@ -43,6 +43,10 @@ mv config/multiforge-server.toml.example config/multiforge-server.toml
 
 Rollback is documented in [docs/install.md § Rolling back](docs/install.md#rolling-back) — MultiForge's world data is a purely additive `world/multiforge/` subdirectory; your Vanilla world stays byte-compatible with upstream NeoForge.
 
+### 3. Pelican Panel / Pterodactyl egg
+
+Panel hosts (Pelican Panel, Pterodactyl, forks) import `pelican-egg.json` from the [latest release](https://github.com/0xnullsect0r/MultiForge/releases/latest) and create servers via their normal UI. See [docs/install.md § Method 3](docs/install.md#method-3--pelican-panel--pterodactyl-egg).
+
 ### In-game commands (op-only, once running)
 
 ```
