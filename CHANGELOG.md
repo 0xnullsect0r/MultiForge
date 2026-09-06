@@ -1,5 +1,51 @@
 # CHANGELOG
 
+## v1.3.0 — Full B3 (per-region entity/block-tick) + M12 (event routing)
+
+The final two blueprint milestones needed for a completely working product: the entity-AI hot loop finally runs on region workers (the whole point of parallelization), and event dispatch honors `@DispatchDomain` transparently for every listener.
+
+### B3 (M13) — Per-region entity, block-entity, and scheduled block/fluid tick wiring
+
+Prior state: v1.2.0's `RegionizedTickCoordinator.dispatchLevelTick` ran the residual per-level tick body (`entityTickList.forEach(::tickNonPassenger)`, `blockEntityTickers.tick()`, `blockTicks.tick` / `fluidTicks.tick`, `chunkSource.tick`) on the main server thread via a trailing `vanillaBody.run()`. Region workers only handled chunk loading + globals. Full B3 pulls the residual work into per-region phase bodies and removes the trailing call.
+
+- **B3.0** — Design doc `docs/design/m13-b3-region-tick.md` (819 lines) + correction to `docs/blueprint.md:512-516` (§M8 sub-step 6b was incorrectly marked DONE — 6b landed only the fan-out barrier, not the actual per-chunk decomposition).
+- **B3.1** — Runtime foundation: `ChunkHolderManager.holdersOwnedBy(RegionId)`, `HolderManagerRegionData.blockEntityTickers` per-region slice, `TickingBlockEntityRef` MC-free abstraction, `Region.ownedChunkSnapshot()` via `RegionChunkSource` functional interface (avoids region↔chunk package cycle), split/merge redistribution invariance.
+- **B3.2** — `BLOCK_FLUID_TICKS` phase wired: `ScheduledTickRunner` interface + `ScheduledTickRunnerBridge`; thin patches for `ServerLevel.mfTickBlockFluidTicksForChunk` + `LevelTicks.mfContainerForChunk` (per-chunk drain never touches neighbor's entries).
+- **B3.3** — `ENTITY_AI` phase wired: `EntityTickRunner` + `EntityTickRunnerBridge`; `ServerLevel.mfTickEntitiesForChunk` extracts the `entityTickList.forEach` iteration; `OwnerToken` correctness guard warns + skips on wrong-owner; `MIGRATING`-state entities skipped.
+- **B3.4** — `BLOCK_ENTITIES` per-region phase wired **layered after** the existing global-only `phaseGlobalSystemsTick`: `BlockEntityTickRunner` + `VanillaTickingBlockEntityAdapter` + `BlockEntityTickerBridge`; `Level.updateBlockEntityTicker` routes into the owning region's slice; `Level.tickBlockEntities` guarded to skip when regions handle it.
+- **B3.5** — Removed trailing `vanillaBody.run()`. `dispatchLevelTick` refactored to the frozen target shape from `docs/design/global-region.md:773-793`. Three fallbacks (bootstrap-skip, no-regionizer-skip, dispatch-failure) now `ProbeRegistry.bump` + `ViolationLogger.warn` — visible, not silent (v1.2.0's naive removal `a4c6bd9` was reverted precisely because it was silent). `git grep vanillaBody upstream/neoforge-1.21.1/src/main/java/net/multiforge/` returns zero.
+
+### M12 — Transparent event-bus routing
+
+Prior state: `@DispatchDomain` + `@Ordering` annotations existed in `multiforge-api/` but `IEventBus.post` ignored them.
+
+- **M12.0** — Design doc `docs/design/m12-event-routing.md` (697 lines). Discovered via `javap` decompile of `net.neoforged:bus:8.0.1` that `EventBus.registerListener` is private — so `DispatchingEventBus` does its own `@SubscribeEvent` reflection scan + `addListener` rather than intercepting the internal path.
+- **M12.1** — Runtime dispatcher: `AnnotationScanner` (3-tier: method → class → EventTypeDomainMap → LEGACY_SERIAL), `DomainDispatcher` (full decision tree), `DispatchExecutor` (MC-free interface), `RoutingListenerWrapper`, `DispatchingEventBus` (implements `IEventBus`), `AsyncEventPool` (bounded, `-Dmultiforge.event-async-pool.size` configurable). Added `net.neoforged:bus:8.0.1` as explicit runtime dep.
+- **M12.2** — Fork bridge: `LazyDispatchingEventBus` (extends dispatcher, lazy `attachExecutor` via CAS) so `NeoForge.EVENT_BUS` can be initialized at class-load before MultiForge is installed; `SchedulerBackedDispatchExecutor` implements `DispatchExecutor` over `MultiThreadedSchedulerHost` (`enqueueRegion` via `RegionizedTaskQueue.queueChunkTask`, `enqueueGlobal` mirrors host's own pattern, `enqueueAsync` forwards to `AsyncEventPool`, `resolveEventLocation` pattern-matches ~14 event base classes). Patch: `multiforge-patches/09-events/net/neoforged/neoforge/common/NeoForge.java.patch` (first patch targeting NeoForge's own hand-written source; small `multiforge-patches.gradle` infra fix to resolve per-patch apply-target directory). `-Dmultiforge.event-dispatch=off` safety valve. `MultiForgeGlobalSystemsInit.install()` attaches the executor at `ServerAboutToStart`.
+- **M12.4** — `EventTypeDomainMap` — 32 default entries covering the highest-value NeoForge events (tick/lifecycle/spawn/death/interaction/chat/command/server-lifecycle). Class-hierarchy walk in `lookup()` handles subclasses without explicit entries.
+
+### /67 round-6 findings from v1.2.0 — all already fixed
+
+CRITICAL F1 (silent tick disable from initial B3 attempt) reverted as `7b68c27`. Six HIGH findings (add-then-check races in `addSettledListener` + `enqueueOutbound`, `BossEvent`/`Scoreboard` global-worker reentry, installer fail-open, scanner R03/R09 gaps, `Entity.onPositionChanged` double-fire) all fixed inline before v1.2.0 shipped.
+
+### v1.2.0 addendum — the license flip
+
+The v1.2.0 shape shipped a re-license from proprietary to GPL-3.0-only (`f91b732`) — omitted from the v1.2.0 changelog entry below. Full removal of `multiforge-license/`, `multiforge-license-cli/`, Ed25519 signing infrastructure, and every `MULTIFORGE_LICENSE` env/token reference. `CLAUDE.md` rule #1 flipped. `README.md` rewritten. Repo public on GitHub.
+
+### Deferred past v1.3.0
+
+- **X.4** client HUD manual smoke on live NeoForge client (needs live client)
+- **X.1/X.2/X.3/X.8** actual bench evidence collection — scripts landed under `docs/verification/m456/`, operator runs the benches
+- B3 + M12 live smoke on the operator's workstation (unit tests + fork compile green; live server run recommended before production use)
+- `multiforge-client` gradle wiring via NeoForge `moddev` plugin
+- Fork-compile CI GHA-preemption (advisory, needs beefier runner)
+- Scanner CI empty-SARIF-on-exit-1 anomaly triage
+- Top-20 mod compatibility matrix
+- 24-hour ATM10 soak test
+- MC 1.21.2+ / Fabric support
+- Publish first Docker image to GHCR
+- OSS onboarding polish (CONTRIBUTING.md, CODE_OF_CONDUCT.md, SECURITY.md)
+
 ## v1.2.0 — M4 + M5 + M6 landing
 
 ### M4 — Entity migration (`multiforge-patches/05-entity-migration/`, `06-networking/`)
