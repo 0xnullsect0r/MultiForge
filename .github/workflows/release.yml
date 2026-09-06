@@ -60,6 +60,11 @@ jobs:
                   --out "$RELEASE_DIR/multiforge-${VER}-replacement.zip"
           fi
 
+          # Pelican Panel / Pterodactyl egg (v1.3.2 E.3). Kept at repo
+          # root but attached to every release so panel users can grab
+          # it from the release download page.
+          cp pelican-egg.json "$RELEASE_DIR/pelican-egg.json"
+
           ls -l "$RELEASE_DIR/"
 
       - name: Upload jars artifact
@@ -198,5 +203,8 @@ jobs:
               (stable alias: [multiforge-installer.jar](https://github.com/${{ github.repository }}/releases/latest/download/multiforge-installer.jar))
             - Drop-in replacement ZIP: `multiforge-*-replacement.zip`
             - Runtime library (for mod authors): `multiforge-runtime-*.jar`
+            - Pelican Panel / Pterodactyl egg: `pelican-egg.json`
+              (import via panel: Nests → Import Egg — see
+              [docs/install.md § Method 3](https://github.com/${{ github.repository }}/blob/main/docs/install.md#method-3--pelican-panel--pterodactyl-egg))
 
             See [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/main/CHANGELOG.md) for what changed.
