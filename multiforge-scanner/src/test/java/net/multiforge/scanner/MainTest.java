@@ -67,6 +67,60 @@ class MainTest {
     }
 
     @Test
+    void ignoreFileSuppressesAMatchingFindingAndDropsExitCodeToZero() throws IOException {
+        Path jar = writeJarWithBadR05Class();
+        Path ignoreFile = tempDir.resolve("my.multiforgeignore");
+        // First run un-suppressed to discover the exact fingerprint the fixture produces —
+        // mirrors the real workflow of "run once, paste the reported fingerprint to suppress it."
+        ByteArrayOutputStream discover = new ByteArrayOutputStream();
+        Main.run(
+                new String[] {jar.toString()},
+                new PrintStream(discover),
+                new PrintStream(new ByteArrayOutputStream()),
+                List.of(new R05EntitySetPosOffCoord()));
+        String fingerprint = extractFingerprint(discover.toString());
+        Files.writeString(ignoreFile, fingerprint + "\n");
+
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        ByteArrayOutputStream err = new ByteArrayOutputStream();
+        int code = Main.run(
+                new String[] {"--ignore-file", ignoreFile.toString(), jar.toString()},
+                new PrintStream(out),
+                new PrintStream(err),
+                List.of(new R05EntitySetPosOffCoord()));
+
+        assertThat(code).isEqualTo(0);
+        assertThat(out.toString()).doesNotContain("\"ruleId\": \"R05\"");
+        assertThat(out.toString()).contains("\"suppressed\": 1");
+    }
+
+    @Test
+    void staleIgnoreEntryStillReportsTheFindingAndKeepsExitCodeNonZero() throws IOException {
+        Path jar = writeJarWithBadR05Class();
+        Path ignoreFile = tempDir.resolve("stale.multiforgeignore");
+        Files.writeString(ignoreFile, "R05:com.example.mod.BadR05#teleportToBase(Ljava/lang/Object;)V#000000000000\n");
+
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        ByteArrayOutputStream err = new ByteArrayOutputStream();
+        int code = Main.run(
+                new String[] {"--ignore-file", ignoreFile.toString(), jar.toString()},
+                new PrintStream(out),
+                new PrintStream(err),
+                List.of(new R05EntitySetPosOffCoord()));
+
+        assertThat(code).isEqualTo(1);
+        assertThat(out.toString()).contains("\"ruleId\": \"R05\"");
+        assertThat(out.toString()).contains("\"staleSuppressions\": 1");
+    }
+
+    private static String extractFingerprint(String json) {
+        int idx = json.indexOf("\"fingerprint\": \"");
+        int start = idx + "\"fingerprint\": \"".length();
+        int end = json.indexOf('"', start);
+        return json.substring(start, end);
+    }
+
+    @Test
     void emitsSarifWhenRequested() throws IOException {
         Path jar = writeJarWithBadR05Class();
         ByteArrayOutputStream out = new ByteArrayOutputStream();

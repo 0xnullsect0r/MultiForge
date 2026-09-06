@@ -4,65 +4,69 @@
  */
 package net.multiforge.scanner.rules;
 
-import java.util.Set;
 import java.util.function.Consumer;
 import net.multiforge.scanner.BytecodeUtil;
 import net.multiforge.scanner.ClassContext;
 import net.multiforge.scanner.Finding;
 import net.multiforge.scanner.Fingerprint;
 import net.multiforge.scanner.Severity;
+import net.multiforge.scanner.TickReachability;
 import org.objectweb.asm.Opcodes;
 import org.objectweb.asm.tree.ClassNode;
 import org.objectweb.asm.tree.MethodInsnNode;
 import org.objectweb.asm.tree.MethodNode;
 
 /**
- * R05 — {@code entity-setpos-off-coord}. See {@code docs/design/scanner-rules.md} &sect;4 (R05).
+ * R08 — {@code off-thread-BlockEntity-setChanged}. See {@code docs/design/scanner-rules.md}
+ * &sect;4 (R08).
  *
- * <p>ERROR: a direct call to {@code Entity.setPos}/{@code setPosRaw} from mod code, not made
- * from within {@code net.multiforge.runtime.entity.EntityMigrationCoordinator} itself.
+ * <p>WARN: a call to {@code BlockEntity.setChanged()} from a method not classified
+ * tick-reachable (same heuristic family as R02) — not {@code @RegionThread}, not itself a
+ * tick-event handler.
  */
-public final class R05EntitySetPosOffCoord extends AbstractTreeRule {
+public final class R08OffThreadBlockEntitySetChanged extends AbstractTreeRule {
 
-    private static final String OWNER = "net/minecraft/world/entity/Entity";
-    private static final Set<String> TARGET_NAMES = Set.of("setPos", "setPosRaw");
-    private static final String COORDINATOR_PACKAGE = "net/multiforge/runtime/entity/";
+    private static final String OWNER = "net/minecraft/world/level/block/entity/BlockEntity";
+    private static final String TARGET_NAME = "setChanged";
+    private static final String TARGET_DESC = "()V";
 
     @Override
     public String id() {
-        return "R05";
+        return "R08";
     }
 
     @Override
     public String name() {
-        return "entity-setpos-off-coord";
+        return "off-thread-BlockEntity-setChanged";
     }
 
     @Override
     public String description() {
-        return "Entity.setPos/setPosRaw called directly instead of through EntityMigrationCoordinator.";
+        return "BlockEntity.setChanged() called from a method not reachable on the region-tick thread.";
     }
 
     @Override
     public Severity severity() {
-        return Severity.ERROR;
+        return Severity.WARN;
     }
 
     @Override
     protected void scanClass(ClassContext ctx, ClassNode cn, Consumer<Finding> emit) {
-        if (ctx.className().startsWith(COORDINATOR_PACKAGE)) {
-            return;
-        }
         String classFqn = ctx.className().replace('/', '.');
+        var tickReachable = TickReachability.compute(cn);
         for (MethodNode mn : cn.methods) {
             String methodKey = BytecodeUtil.methodKey(mn);
+            if (tickReachable.contains(mn.name + mn.desc)) {
+                continue;
+            }
             for (var insn : mn.instructions) {
                 if (!(insn instanceof MethodInsnNode call)) {
                     continue;
                 }
                 if (call.getOpcode() != Opcodes.INVOKEVIRTUAL
                         || !call.owner.equals(OWNER)
-                        || !TARGET_NAMES.contains(call.name)) {
+                        || !call.name.equals(TARGET_NAME)
+                        || !call.desc.equals(TARGET_DESC)) {
                     continue;
                 }
                 emit.accept(new Finding(
@@ -71,8 +75,10 @@ public final class R05EntitySetPosOffCoord extends AbstractTreeRule {
                         classFqn,
                         methodKey,
                         BytecodeUtil.lineOf(mn, call),
-                        "Entity." + call.name + call.desc + " called directly from " + mn.name
-                                + " — cross-region entity movement must go through EntityMigrationCoordinator.",
+                        "BlockEntity.setChanged() called from " + mn.name
+                                + ", which is not tick-reachable and not annotated @RegionThread — races the"
+                                + " owning region worker's dirty-flag writes; wrap in"
+                                + " RegionizedTaskQueue.queueChunkTask(...).",
                         Fingerprint.compute(id(), classFqn, methodKey, mn, call)));
             }
         }

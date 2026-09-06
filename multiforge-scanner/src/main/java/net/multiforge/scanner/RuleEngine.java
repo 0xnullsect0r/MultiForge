@@ -45,6 +45,55 @@ public final class RuleEngine {
         return findings;
     }
 
+    /**
+     * Scans {@code jarOrDir} exactly as {@link #scan(File)}, then partitions the results against
+     * {@code ignoreFile} per {@code docs/design/scanner-rules.md} &sect;5.4:
+     *
+     * <ul>
+     *   <li>{@link IgnoreFile.MatchResult#SUPPRESSED} findings are dropped from {@link
+     *       ScanOutcome#reported()} and counted in {@link ScanOutcome#suppressedCount()}.
+     *   <li>{@link IgnoreFile.MatchResult#STALE} findings stay in {@link ScanOutcome#reported()}
+     *       (a stale suppression is not silently un-suppressed away, nor silently suppressed) and
+     *       are additionally listed in {@link ScanOutcome#staleSuppressions()}.
+     *   <li>{@link IgnoreFile.MatchResult#NOT_MATCHED} findings stay in {@link
+     *       ScanOutcome#reported()} unchanged.
+     * </ul>
+     *
+     * {@link ScanOutcome#all()} always carries every computed finding, suppressed or not — report
+     * summary counts (doc §6.1's {@code errors}/{@code warnings}) are computed from the full set,
+     * matching the existing {@link Main} JSON summary behavior.
+     */
+    public ScanOutcome scan(File jarOrDir, IgnoreFile ignoreFile) throws IOException {
+        List<Finding> all = scan(jarOrDir);
+        List<Finding> reported = new ArrayList<>();
+        List<Finding> stale = new ArrayList<>();
+        int suppressed = 0;
+        for (Finding f : all) {
+            IgnoreFile.MatchResult result = ignoreFile.match(f);
+            switch (result) {
+                case SUPPRESSED -> suppressed++;
+                case STALE -> {
+                    stale.add(f);
+                    reported.add(f);
+                }
+                case NOT_MATCHED -> reported.add(f);
+            }
+        }
+        return new ScanOutcome(all, List.copyOf(reported), suppressed, List.copyOf(stale));
+    }
+
+    /**
+     * Result of {@link #scan(File, IgnoreFile)}.
+     *
+     * @param all every computed finding, suppressed or not
+     * @param reported {@code all} minus suppressed findings (stale suppressions still included)
+     * @param suppressedCount count of findings matched and suppressed by the ignore file
+     * @param staleSuppressions findings whose rule-id/class/method matched an ignore-file entry
+     *     but whose line-hash did not (doc §5.4's "visible stale suppression note")
+     */
+    public record ScanOutcome(
+            List<Finding> all, List<Finding> reported, int suppressedCount, List<Finding> staleSuppressions) {}
+
     private static List<File> collectJars(File jarOrDir) throws IOException {
         if (jarOrDir.isFile()) {
             return List.of(jarOrDir);
@@ -92,7 +141,15 @@ public final class RuleEngine {
         ClassContext ctx = extractContext(reader, sourceJarName);
         List<Finding> findings = new ArrayList<>();
         for (Rule rule : rules) {
-            rule.visit(ctx, reader, findings::add);
+            try {
+                rule.visit(ctx, reader, findings::add);
+            } catch (RuntimeException e) {
+                // A single misbehaving rule must never take the other 11 down with it for this
+                // class, and must never abort the whole-jar scan (doc §2 / CLAUDE.md rule 5
+                // spirit: reroute + warn, never refuse). AbstractTreeRule already guards its own
+                // reader.accept(...), but this catch is the last line of defense for any rule
+                // that throws from its own pattern-matching logic instead.
+            }
         }
         return findings;
     }

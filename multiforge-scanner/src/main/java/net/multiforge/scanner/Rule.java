@@ -24,6 +24,12 @@ public interface Rule {
     /** "R01".."R12". */
     String id();
 
+    /** One-word-ish kebab name, e.g. {@code "direct-ChunkMap-invoke"} (doc §2's {@code Rule.name()}). */
+    String name();
+
+    /** One-sentence description for report metadata (SARIF {@code driver.rules[].shortDescription}). */
+    String description();
+
     /** Fixed severity for every finding this rule produces (doc §2.2). */
     Severity severity();
 

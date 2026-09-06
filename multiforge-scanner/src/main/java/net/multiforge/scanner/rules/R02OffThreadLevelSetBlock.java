@@ -34,6 +34,16 @@ public final class R02OffThreadLevelSetBlock extends AbstractTreeRule {
     }
 
     @Override
+    public String name() {
+        return "off-thread-Level.setBlock";
+    }
+
+    @Override
+    public String description() {
+        return "Level.setBlock called from a method not reachable on the region-tick thread.";
+    }
+
+    @Override
     public Severity severity() {
         return Severity.ERROR;
     }

@@ -39,6 +39,16 @@ public final class R04UnsyncStaticMutation extends AbstractTreeRule {
     }
 
     @Override
+    public String name() {
+        return "unsync-static-mutation";
+    }
+
+    @Override
+    public String description() {
+        return "Non-final static field of a @Mod class written from tick-reachable code.";
+    }
+
+    @Override
     public Severity severity() {
         return Severity.WARN;
     }

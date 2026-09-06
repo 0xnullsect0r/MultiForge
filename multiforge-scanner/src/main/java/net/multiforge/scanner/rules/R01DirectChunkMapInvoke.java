@@ -34,6 +34,16 @@ public final class R01DirectChunkMapInvoke extends AbstractTreeRule {
     }
 
     @Override
+    public String name() {
+        return "direct-ChunkMap-invoke";
+    }
+
+    @Override
+    public String description() {
+        return "Direct call into ChunkMap internals bypassing the MultiForgeChunkMap facade.";
+    }
+
+    @Override
     public Severity severity() {
         return Severity.WARN;
     }

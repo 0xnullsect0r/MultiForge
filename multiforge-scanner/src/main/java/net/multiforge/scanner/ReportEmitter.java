@@ -16,8 +16,15 @@ import java.util.List;
  * "adding a new dependency" gate). The report shapes are small and fixed, so a tiny
  * hand-written writer is simpler than justifying a new dependency for this slice.
  *
- * <p>{@code .multiforgeignore} suppression (C2.16) is not wired up yet, so {@code suppressed} and
- * {@code staleSuppressions} are always {@code 0} / empty for now.
+ * <p>Both formats are projections of the same {@link Finding} list (doc §6.1: "SARIF is a
+ * projection of the same Finding list, not a parallel computation") plus, for SARIF's {@code
+ * driver.rules[]}, the same {@link Rule} metadata every rule already exposes via {@code id()} /
+ * {@code name()} / {@code description()} / {@code severity()} — so the two formats can never
+ * disagree about what was found or what a rule means.
+ *
+ * <p>{@code .multiforgeignore} suppression (Track C2.16) is wired up via {@link
+ * RuleEngine#scan(java.io.File, IgnoreFile)}; {@link #toJson} takes the resulting suppressed
+ * count and stale-suppression list directly rather than recomputing them.
  */
 final class ReportEmitter {
 
@@ -26,7 +33,12 @@ final class ReportEmitter {
 
     private ReportEmitter() {}
 
-    static String toJson(List<String> inputs, List<Finding> allFindings, List<Finding> reported) {
+    static String toJson(
+            List<String> inputs,
+            List<Finding> allFindings,
+            List<Finding> reported,
+            int suppressedCount,
+            List<Finding> staleSuppressions) {
         long errors =
                 allFindings.stream().filter(f -> f.severity() == Severity.ERROR).count();
         long warnings =
@@ -43,14 +55,23 @@ final class ReportEmitter {
                 .append(errors)
                 .append(", \"warnings\": ")
                 .append(warnings)
-                .append(", \"suppressed\": 0, \"staleSuppressions\": 0 },\n");
+                .append(", \"suppressed\": ")
+                .append(suppressedCount)
+                .append(", \"staleSuppressions\": ")
+                .append(staleSuppressions.size())
+                .append(" },\n");
         sb.append("  \"findings\": [\n");
         for (int i = 0; i < reported.size(); i++) {
             sb.append(findingJson(reported.get(i)));
             sb.append(i == reported.size() - 1 ? "\n" : ",\n");
         }
         sb.append("  ],\n");
-        sb.append("  \"staleSuppressions\": []\n");
+        sb.append("  \"staleSuppressions\": [\n");
+        for (int i = 0; i < staleSuppressions.size(); i++) {
+            sb.append(staleSuppressionJson(staleSuppressions.get(i)));
+            sb.append(i == staleSuppressions.size() - 1 ? "\n" : ",\n");
+        }
+        sb.append("  ]\n");
         sb.append("}");
         return sb.toString();
     }
@@ -66,7 +87,20 @@ final class ReportEmitter {
                 + q(f.fingerprint()) + "\n" + "    }";
     }
 
-    static String toSarif(List<Finding> reported) {
+    /**
+     * Same shape as a finding, plus the rule-id/class/method key a reviewer needs to re-copy a
+     * fresh {@code .multiforgeignore} line for (doc §5.4: a stale suppression is drift to
+     * surface, not an error to auto-fix).
+     */
+    private static String staleSuppressionJson(Finding f) {
+        return "    {\n" + "      \"ruleId\": "
+                + q(f.ruleId()) + ",\n" + "      \"className\": "
+                + q(f.className()) + ",\n" + "      \"method\": "
+                + q(f.methodName()) + ",\n" + "      \"currentFingerprint\": "
+                + q(f.fingerprint()) + "\n" + "    }";
+    }
+
+    static String toSarif(List<Rule> rules, List<Finding> reported) {
         StringBuilder sb = new StringBuilder();
         sb.append("{\n");
         sb.append(
@@ -74,9 +108,16 @@ final class ReportEmitter {
         sb.append("  \"version\": \"2.1.0\",\n");
         sb.append("  \"runs\": [\n");
         sb.append("    {\n");
-        sb.append("      \"tool\": { \"driver\": { \"name\": \"multiforge-scanner\", \"version\": ")
-                .append(q(SCANNER_VERSION))
-                .append(" } },\n");
+        sb.append("      \"tool\": { \"driver\": {\n");
+        sb.append("        \"name\": \"multiforge-scanner\",\n");
+        sb.append("        \"version\": ").append(q(SCANNER_VERSION)).append(",\n");
+        sb.append("        \"rules\": [\n");
+        for (int i = 0; i < rules.size(); i++) {
+            sb.append(ruleSarif(rules.get(i)));
+            sb.append(i == rules.size() - 1 ? "\n" : ",\n");
+        }
+        sb.append("        ]\n");
+        sb.append("      } },\n");
         sb.append("      \"results\": [\n");
         for (int i = 0; i < reported.size(); i++) {
             sb.append(resultSarif(reported.get(i)));
@@ -87,6 +128,16 @@ final class ReportEmitter {
         sb.append("  ]\n");
         sb.append("}");
         return sb.toString();
+    }
+
+    private static String ruleSarif(Rule rule) {
+        String level = rule.severity() == Severity.ERROR ? "error" : "warning";
+        return "          {\n" + "            \"id\": "
+                + q(rule.id()) + ",\n" + "            \"name\": "
+                + q(rule.name()) + ",\n" + "            \"shortDescription\": { \"text\": "
+                + q(rule.description()) + " },\n"
+                + "            \"defaultConfiguration\": { \"level\": "
+                + q(level) + " }\n" + "          }";
     }
 
     private static String resultSarif(Finding f) {
