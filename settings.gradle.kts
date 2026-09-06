@@ -22,8 +22,6 @@ rootProject.name = "multiforge"
 // model; the NeoForge-flavored bits are added by the M6 patch bundle
 // under `-Pmc=true`.
 include(
-    "multiforge-license",
-    "multiforge-license-cli",
     "multiforge-api",
     "multiforge-runtime",
     "multiforge-client",

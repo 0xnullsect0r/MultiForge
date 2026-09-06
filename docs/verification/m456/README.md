@@ -34,11 +34,9 @@ correctly — see "Dry-run smoke" below.
    `scratchpad/capture.sh`'s precedent, lives at
    `/home/aric/.local/jdk/jdk-21.0.12.1+1` on the reference workstation).
 2. `./gradlew :setup` — vendors NeoForge 1.21.1 into `upstream/`.
-3. A valid MultiForge license token at `~/.multiforge/license.key` (never
-   committed — see the repo's ground rules on license tokens).
-4. RCON port `25575` free on `127.0.0.1`; `python3` on `PATH` (used by
+3. RCON port `25575` free on `127.0.0.1`; `python3` on `PATH` (used by
    `multiforge-bench/verification/m456/lib/rcon.py`).
-5. Free disk/wall-clock: X.1/X.2/X.3 are ~15 min each (two 6000-tick
+4. Free disk/wall-clock: X.1/X.2/X.3 are ~15 min each (two 6000-tick
    sprint captures + a SEMANTIC diff); X.8 is ~65 min (a real-time
    60-minute swarm run, not sprinted — see
    `multiforge-bench/README.md` "Why sprint for vanilla/atm10 but

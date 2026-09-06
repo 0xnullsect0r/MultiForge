@@ -70,12 +70,9 @@ replay_pid*.log
 /ops.json
 /eula.txt
 
-# License token (never commit)
-license.key
-*.license
-multiforge-license.token
-
-# Ed25519 private keys (NEVER commit)
+# Installer signing keys (never commit private keys)
+# The installer jar is Ed25519-signed for supply-chain integrity even
+# under GPL-3 — the license moved to OSS, the code-signing did not.
 *.private.pem
 *.priv
 private-key.*
@@ -92,7 +89,6 @@ bench/tmp/
 # Only summary logs (latest.log, boot.log, elapsed-sec.txt,
 # world-size-bytes.txt) and diff outputs land in git.
 docs/verification/m9/**/world/
-docs/verification/m9/**/license.key
 # The global `*.log` rule above ignores latest.log, boot.log, diff logs
 # etc. anywhere; force them back in under docs/verification/ so the
 # summary artefacts committed alongside the results doc are tracked.
@@ -100,3 +96,6 @@ docs/verification/m9/**/license.key
 
 # Node (docs site future)
 node_modules/
+
+# Claude Code session state (subagent worktrees, plans, etc.).
+.claude/

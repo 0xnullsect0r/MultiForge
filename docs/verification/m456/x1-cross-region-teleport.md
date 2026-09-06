@@ -78,12 +78,12 @@ elided.
 ```
 [04:42:03] x1-cross-region-teleport: seed=1234567890 ticks/capture=6000 tp-count=100
 [04:42:03] x1: capturing baseline (1 worker, no migration possible — single region)
-DRY-RUN would run (cwd=<repo-root>/upstream/neoforge-1.21.1): MULTIFORGE_LICENSE=<license> <repo-root>/gradlew :neoforge:runServer -Dmultiforge.workers=1 > <repo-root>/docs/verification/m456/evidence/x1/boot-baseline-1w.log 2>&1
+DRY-RUN would run (cwd=<repo-root>/upstream/neoforge-1.21.1): <repo-root>/gradlew :neoforge:runServer -Dmultiforge.workers=1 > <repo-root>/docs/verification/m456/evidence/x1/boot-baseline-1w.log 2>&1
 DRY-RUN would: poll boot log for RCON, then rcon "tick freeze"
 DRY-RUN would: rcon "tick sprint 6000"
 DRY-RUN would: rcon "save-all flush" + rcon "stop"; copy world/ + logs/latest.log + boot log into <repo-root>/docs/verification/m456/evidence/x1/baseline-1w
 [04:42:03] x1: capturing patched (4 workers, teleport callback drives cross-region migration)
-DRY-RUN would run (cwd=<repo-root>/upstream/neoforge-1.21.1): MULTIFORGE_LICENSE=<license> <repo-root>/gradlew :neoforge:runServer -Dmultiforge.workers=4 > <repo-root>/docs/verification/m456/evidence/x1/boot-patched-4w.log 2>&1
+DRY-RUN would run (cwd=<repo-root>/upstream/neoforge-1.21.1): <repo-root>/gradlew :neoforge:runServer -Dmultiforge.workers=4 > <repo-root>/docs/verification/m456/evidence/x1/boot-patched-4w.log 2>&1
 DRY-RUN would: poll boot log for RCON, then rcon "tick freeze"
 DRY-RUN would: invoke mid-run callback function: x1_teleport_callback
 DRY-RUN would: rcon "tick sprint 6000"

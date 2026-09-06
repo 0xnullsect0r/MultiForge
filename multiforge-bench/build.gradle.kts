@@ -172,9 +172,9 @@ tasks.register<JavaExec>("swarm") {
 // region-teleport.sh --dry-run`). Every script accepts --dry-run and ends
 // with a machine-parseable "PASS"/"FAIL" as its last stdout line.
 //
-// Real runs need a real headless-server-capable workstation (vendored
-// upstream/neoforge-1.21.1 + a valid ~/.multiforge/license.key) — nothing
-// CI can do — so by default these tasks pass --dry-run themselves; add
+// Real runs need a real headless-server-capable workstation with
+// vendored upstream/neoforge-1.21.1 — nothing CI can do — so by default
+// these tasks pass --dry-run themselves; add
 // -PrealRun to actually launch a server (see docs/verification/m456/
 // README.md "How to run" for the full prerequisites and expected wall
 // clock per task).

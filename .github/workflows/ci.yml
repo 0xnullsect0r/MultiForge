@@ -47,8 +47,6 @@ jobs:
         # direct javac against the fork's built classes.
         run: |
           ./gradlew \
-            :multiforge-license:build \
-            :multiforge-license-cli:build \
             :multiforge-api:build \
             :multiforge-runtime:build \
             :multiforge-scanner:build \
@@ -123,7 +121,7 @@ jobs:
       - name: Set fork-build heap
         run: echo "GRADLE_OPTS=-Xmx6G" >> "$GITHUB_ENV"
 
-      - name: Publish multiforge-runtime + api + license to mavenLocal
+      - name: Publish multiforge-runtime + api to mavenLocal
         # Fork's projects/neoforge/build.gradle depends on these via mavenLocal
         # — without publishing first, `:neoforge:compileJava` fails at the
         # dependency resolution step. Also catches finding #14 of the /67
@@ -131,7 +129,6 @@ jobs:
         # the pure-Java `build` job would still report green.
         run: |
           ./gradlew \
-            :multiforge-license:publishToMavenLocal \
             :multiforge-api:publishToMavenLocal \
             :multiforge-runtime:publishToMavenLocal \
             --no-daemon --stacktrace

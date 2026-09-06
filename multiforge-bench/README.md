@@ -105,10 +105,8 @@ the Phase 7.4a task brief intact.
 ```
 
 All three accept `-Pticks=<n>` (default 12000 = 10 game-minutes). Every
-run needs a MultiForge license key at `~/.multiforge/license.key` — same
-requirement as the vendored NeoForge workspace's own `runServer` task —
-and `./gradlew :setup` to have vendored `upstream/neoforge-1.21.1/` at
-least once.
+run needs `./gradlew :setup` to have vendored `upstream/neoforge-1.21.1/`
+at least once.
 
 Results land at `docs/verification/m9/7.4/<profile>/patched.json`. See
 `docs/design/m9-phase7-runbook.md` §5 for pass criteria (sustained TPS

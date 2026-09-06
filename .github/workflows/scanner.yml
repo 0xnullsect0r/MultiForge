@@ -97,7 +97,6 @@ jobs:
         # mavenLocal — same dependency ci.yml's fork-build job has.
         run: |
           ./gradlew \
-            :multiforge-license:publishToMavenLocal \
             :multiforge-api:publishToMavenLocal \
             :multiforge-runtime:publishToMavenLocal \
             --no-daemon --stacktrace

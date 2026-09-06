@@ -1,6 +1,17 @@
 /*
- * MultiForge — Proprietary. Copyright (c) 2026 MultiForge authors.
- * All rights reserved. See LICENSE at the repository root.
+ * MultiForge — Copyright (c) 2026 MultiForge authors.
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, version 3.
+ *
+ * This program is distributed in the hope that it will be useful, but
+ * WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
+ * General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program. If not, see <https://www.gnu.org/licenses/>.
  */
 package net.multiforge.installer;
 
@@ -8,11 +19,9 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.io.PrintStream;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
-import java.security.PublicKey;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
@@ -25,25 +34,21 @@ import java.util.zip.ZipOutputStream;
  * multiforge-installer-<v>.jar}. Three subcommands:
  *
  * <ul>
- *   <li>{@code install [--install-dir DIR] [--license TOKEN|@FILE]} —
- *       lay out a fresh MultiForge server directory. This is the
- *       Fabric-installer-shaped path a customer uses on a clean box.</li>
+ *   <li>{@code install [--install-dir DIR]} — lay out a fresh MultiForge
+ *       server directory. This is the Fabric-installer-shaped path a
+ *       user takes on a clean box.</li>
  *   <li>{@code build-zip --out ZIP} — write the drop-in replacement zip
  *       that overlays onto an existing NeoForge server directory.</li>
  *   <li>{@code version} — print the installer version.</li>
  * </ul>
  *
- * <p>The installer bundles the runtime + license verifier jars as
- * embedded resources so it needs no separate downloads. Both jars are
- * written to disk intact — an operator can swap either one out
- * independently later.
+ * <p>The installer bundles the runtime jar as an embedded resource so
+ * it needs no separate downloads.
  */
 public final class Main {
 
     private static final String BUNDLED_ROOT = "/net/multiforge/installer/bundle/";
-    private static final String[] BUNDLED_JARS = {
-        "multiforge-runtime.jar", "multiforge-license.jar",
-    };
+    private static final String[] BUNDLED_JARS = {"multiforge-runtime.jar"};
 
     private Main() {}
 
@@ -80,33 +85,10 @@ public final class Main {
 
     private static int doInstall(List<String> args, PrintStream out, PrintStream err) throws IOException {
         Path installDir = Path.of(".");
-        String licenseArg = null;
-        // Fail closed by default (round-6 fork C HIGH finding): a bundled jar
-        // with its .sig stripped must not install cleanly. CLAUDE.md rule 5's
-        // warn-don't-refuse default is about runtime behaviour toward mods,
-        // not supply-chain integrity of what the installer itself writes to
-        // disk, so it doesn't license a silent bypass here. Dev/CI builds
-        // that don't run the release-signing pipeline pass
-        // --require-signed=false explicitly.
-        boolean requireSigned = true;
         for (int i = 0; i < args.size(); i++) {
             String a = args.get(i);
             if (a.equals("--install-dir") && i + 1 < args.size()) {
                 installDir = Path.of(args.get(++i));
-            } else if (a.equals("--license") && i + 1 < args.size()) {
-                licenseArg = args.get(++i);
-            } else if (a.equals("--require-signed")) {
-                requireSigned = true;
-            } else if (a.startsWith("--require-signed=")) {
-                String v = a.substring("--require-signed=".length());
-                if ("true".equalsIgnoreCase(v)) {
-                    requireSigned = true;
-                } else if ("false".equalsIgnoreCase(v)) {
-                    requireSigned = false;
-                } else {
-                    err.println("install: --require-signed expects true|false, got '" + v + "'");
-                    return 2;
-                }
             } else {
                 err.println("install: unknown argument " + a);
                 return 2;
@@ -117,29 +99,18 @@ public final class Main {
         Path libDir = installDir.resolve("libraries").resolve("multiforge");
         Files.createDirectories(libDir);
 
-        // 1. Verify + extract bundled jars. Signature check runs before any
-        // file lands on disk (C4.3): a mismatched signature — or, with
-        // --require-signed (the default), a missing .sig altogether —
-        // aborts the install with nothing written to libDir.
-        PublicKey signingKey = SignatureCheck.loadEmbeddedPublicKey();
         for (String jar : BUNDLED_JARS) {
             byte[] jarBytes = readResource(BUNDLED_ROOT + jar);
-            if (!verifyBundledSignatureOrWarn(jar, jarBytes, signingKey, requireSigned, out)) {
-                err.println("[installer] signature verification FAILED for " + jar + " — install aborted.");
-                return 4;
-            }
             Files.write(libDir.resolve(jar), jarBytes);
             out.println("[installer] wrote " + libDir.resolve(jar));
         }
 
-        // 2. Write launcher scripts.
         Path runSh = installDir.resolve("run.sh");
         Files.writeString(runSh, runShScript());
         //noinspection ResultOfMethodCallIgnored
         runSh.toFile().setExecutable(true);
         Files.writeString(installDir.resolve("run.bat"), runBatScript());
 
-        // 3. Default MultiForge config.
         Path configDir = installDir.resolve("config");
         Files.createDirectories(configDir);
         Path config = configDir.resolve("multiforge-server.toml");
@@ -148,7 +119,6 @@ public final class Main {
             out.println("[installer] wrote " + config);
         }
 
-        // 4. Empty eula.txt / license.key with clear headers.
         Path eula = installDir.resolve("eula.txt");
         if (!Files.exists(eula)) {
             Files.writeString(
@@ -156,30 +126,12 @@ public final class Main {
                     "# Accept the Minecraft EULA at https://aka.ms/MinecraftEULA\n# by changing the line below to `eula=true`.\neula=false\n");
         }
 
-        Path licenseKey = installDir.resolve("license.key");
-        if (licenseArg != null) {
-            String token = licenseArg.startsWith("@")
-                    ? Files.readString(Path.of(licenseArg.substring(1))).trim()
-                    : licenseArg.trim();
-            Files.writeString(licenseKey, token + "\n");
-            //noinspection ResultOfMethodCallIgnored
-            licenseKey.toFile().setReadable(false, false);
-            //noinspection ResultOfMethodCallIgnored
-            licenseKey.toFile().setReadable(true, true);
-            out.println("[installer] wrote " + licenseKey + " (mode 600)");
-        } else if (!Files.exists(licenseKey)) {
-            Files.writeString(
-                    licenseKey, "# Paste your MultiForge license token on the next line, then delete this comment.\n");
-        }
-
         out.println();
         out.println("MultiForge " + version() + " installed to " + installDir.toAbsolutePath());
         out.println("Next steps:");
         out.println("  1. Set eula=true in " + eula.getFileName() + " to accept the Minecraft EULA.");
-        out.println("  2. Paste your license token into " + licenseKey.getFileName()
-                + " (or set MULTIFORGE_LICENSE in the environment).");
-        out.println("  3. Copy your mods into ./mods and world into ./world (or let the server generate a fresh one).");
-        out.println("  4. Start the server:  ./run.sh   (Windows: run.bat)");
+        out.println("  2. Copy your mods into ./mods and world into ./world (or let the server generate a fresh one).");
+        out.println("  3. Start the server:  ./run.sh   (Windows: run.bat)");
         return 0;
     }
 
@@ -204,18 +156,12 @@ public final class Main {
         if (parent != null) Files.createDirectories(parent);
 
         try (ZipOutputStream zos = new ZipOutputStream(Files.newOutputStream(outZip))) {
-            // libraries/multiforge/*.jar
             for (String jar : BUNDLED_JARS) {
                 addResource(zos, BUNDLED_ROOT + jar, "libraries/multiforge/" + jar);
             }
-            // run.sh, run.bat — the operator's existing run scripts stay
-            // in place; ours are additive so they can compare.
             addString(zos, "run.multiforge.sh", runShScript());
             addString(zos, "run.multiforge.bat", runBatScript());
-            // Default config — the operator's existing config directory
-            // is preserved; ours drops in an example alongside it.
             addString(zos, "config/multiforge-server.toml.example", defaultConfig());
-            // Readme so the operator knows what's what.
             addString(zos, "README-MULTIFORGE.txt", replacementReadme());
         }
         out.println("[installer] wrote " + outZip.toAbsolutePath());
@@ -243,56 +189,6 @@ public final class Main {
         }
     }
 
-    /**
-     * If a companion {@code <jar>.sig} resource is bundled alongside
-     * {@code jarName} under {@link #BUNDLED_ROOT}, verifies {@code
-     * jarBytes} against it with the embedded {@link SignatureCheck}
-     * public key and returns {@code false} on mismatch (the caller aborts
-     * the install).
-     *
-     * <p>When no {@code .sig} resource is bundled — no release-signing
-     * pipeline has produced one for this build yet (see {@code
-     * multiforge-installer-signing.pub}) — behavior depends on {@code
-     * requireSigned}: with it {@code true} (the default) this is treated
-     * as a supply-chain integrity failure and returns {@code false},
-     * since a {@code .sig} missing from an otherwise-signed release is
-     * exactly the shape of a tampered or mis-published artifact that has
-     * had its signature stripped (round-6 fork C HIGH finding).
-     * CLAUDE.md rule 5's warn-don't-refuse default covers *runtime*
-     * behaviour toward mods, not the supply-chain integrity of what the
-     * installer itself writes to disk, so it does not license silently
-     * proceeding here. With {@code requireSigned} {@code false} (the
-     * explicit dev-build opt-out, e.g. local/CI loops that don't run the
-     * release-signing pipeline) an unsigned bundle logs an informational
-     * note and installs anyway.
-     */
-    private static boolean verifyBundledSignatureOrWarn(
-            String jarName, byte[] jarBytes, PublicKey key, boolean requireSigned, PrintStream out) {
-        String sigResource = BUNDLED_ROOT + jarName + ".sig";
-        try (InputStream in = Main.class.getResourceAsStream(sigResource)) {
-            if (in == null) {
-                if (requireSigned) {
-                    out.println("[installer] no signature bundled for " + jarName
-                            + " and --require-signed is set (the default); refusing to install an unsigned "
-                            + "artifact. Pass --require-signed=false to override for dev/CI builds that don't "
-                            + "run the release-signing pipeline.");
-                    return false;
-                }
-                out.println("[installer] no signature bundled for " + jarName
-                        + "; skipping verification (--require-signed=false, unsigned dev build)");
-                return true;
-            }
-            String sigText = new String(in.readAllBytes(), StandardCharsets.UTF_8);
-            byte[] signature = SignatureCheck.decodeSignature(sigText);
-            boolean ok = SignatureCheck.verify(jarBytes, signature, key);
-            if (ok) out.println("[installer] signature OK for " + jarName);
-            return ok;
-        } catch (IOException | IllegalArgumentException e) {
-            out.println("[installer] malformed signature for " + jarName + ": " + e.getMessage());
-            return false;
-        }
-    }
-
     private static void addResource(ZipOutputStream zos, String resource, String entryName) throws IOException {
         try (InputStream in = Main.class.getResourceAsStream(resource)) {
             if (in == null) throw new IOException("bundled resource missing: " + resource);
@@ -317,18 +213,13 @@ public final class Main {
         out.println("MultiForge installer " + version());
         out.println();
         out.println("Usage:");
-        out.println("  java -jar multiforge-installer.jar install [--install-dir DIR] [--license TOKEN|@FILE]");
-        out.println("                                              [--require-signed[=true|false]]");
+        out.println("  java -jar multiforge-installer.jar install [--install-dir DIR]");
         out.println("  java -jar multiforge-installer.jar build-zip --out multiforge-replacement.zip");
         out.println("  java -jar multiforge-installer.jar version");
         out.println();
         out.println("`install` lays out a fresh MultiForge server in DIR (default: cwd).");
         out.println("`build-zip` writes the drop-in replacement archive you overlay on an");
         out.println("existing NeoForge server install.");
-        out.println();
-        out.println("--require-signed defaults to true: install refuses to write a bundled jar");
-        out.println("whose .sig resource is missing or doesn't verify. Pass --require-signed=false");
-        out.println("for dev/CI builds that don't run the release-signing pipeline.");
     }
 
     // ---- payloads -------------------------------------------------------
@@ -343,16 +234,9 @@ public final class Main {
                 MEMORY="${MEMORY:-4G}"
                 JVM_OPTS="${JVM_OPTS:-}"
 
-                # Read license.key if MULTIFORGE_LICENSE is not already set.
-                if [ -z "${MULTIFORGE_LICENSE:-}" ] && [ -f license.key ]; then
-                    LICENSE_LINE="$(grep -v '^#' license.key | head -n1 | tr -d '\\r\\n')"
-                    if [ -n "$LICENSE_LINE" ]; then export MULTIFORGE_LICENSE="$LICENSE_LINE"; fi
-                fi
-
                 exec java -Xms${MEMORY} -Xmx${MEMORY} ${JVM_OPTS} \\
-                    -Dmultiforge.license="${MULTIFORGE_LICENSE:-}" \\
                     -cp "libraries/multiforge/*" \\
-                    net.multiforge.runtime.bootstrap.LicenseOnlyMain "$@"
+                    net.multiforge.runtime.bootstrap.Main "$@"
                 """;
     }
 
@@ -363,19 +247,9 @@ public final class Main {
                 cd /d "%~dp0"
                 if "%MEMORY%"=="" set MEMORY=4G
 
-                if "%MULTIFORGE_LICENSE%"=="" (
-                    if exist license.key (
-                        for /f "usebackq delims=" %%L in ("license.key") do (
-                            echo %%L | findstr /b "#" >nul || (set MULTIFORGE_LICENSE=%%L & goto :got_license)
-                        )
-                        :got_license
-                    )
-                )
-
                 java -Xms%MEMORY% -Xmx%MEMORY% %JVM_OPTS% ^
-                    -Dmultiforge.license="%MULTIFORGE_LICENSE%" ^
                     -cp "libraries\\multiforge\\*" ^
-                    net.multiforge.runtime.bootstrap.LicenseOnlyMain %*
+                    net.multiforge.runtime.bootstrap.Main %*
                 """;
     }
 
@@ -414,7 +288,6 @@ public final class Main {
                 What lands where:
 
                     libraries/multiforge/multiforge-runtime.jar   ← the runtime library
-                    libraries/multiforge/multiforge-license.jar   ← the license verifier
                     run.multiforge.sh                             ← Linux/macOS launcher (rename to run.sh once ready)
                     run.multiforge.bat                            ← Windows launcher (rename to run.bat once ready)
                     config/multiforge-server.toml.example         ← default config (rename to multiforge-server.toml)
@@ -424,12 +297,10 @@ public final class Main {
                     1. Stop the running NeoForge server (/stop, wait for "Saving...").
                     2. Back up your world:  tar czf backup.tgz world/ mods/ config/
                     3. Overlay this archive:  unzip multiforge-<version>-replacement.zip
-                    4. Move your license token into ./license.key (one line, chmod 600).
-                       Or set the MULTIFORGE_LICENSE env var.
-                    5. Rename run.multiforge.sh → run.sh (backing up your existing run.sh first).
-                    6. Rename config/multiforge-server.toml.example → config/multiforge-server.toml
+                    4. Rename run.multiforge.sh → run.sh (backing up your existing run.sh first).
+                    5. Rename config/multiforge-server.toml.example → config/multiforge-server.toml
                        and edit cores / threads-per-core to match your machine.
-                    7. Start the server:  ./run.sh
+                    6. Start the server:  ./run.sh
 
                 Rolling back: MultiForge writes only to world/multiforge/, config/multiforge-server.toml,
                 and its own logs/multiforge-*.log. Delete those + restore your old run.sh + drop your

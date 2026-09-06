@@ -40,10 +40,9 @@ dependency on `upstream/neoforge-1.21.1/`** and no dependency on
   license-compat review per CLAUDE.md's "adding a new dependency" gate).
 - No Minecraft, no NeoForge, no MultiForge runtime classes. The scanner
   must run against a mod jar built for vanilla NeoForge with zero
-  MultiForge awareness, and must build/test standalone the same way
-  `multiforge-license` does — CLAUDE.md build section, "sub-projects that
-  do not depend on Minecraft ... build standalone without the `:setup`
-  step".
+  MultiForge awareness, and must build/test standalone — the same
+  "sub-projects that do not depend on Minecraft build standalone without
+  the `:setup` step" contract CLAUDE.md's build section spells out.
 
 ### 1.2 Walk strategy
 
@@ -1000,6 +999,6 @@ against a minimal stub classpath (stub `Level`, `ChunkMap`,
 stubs; they live alongside the fixtures, not in `multiforge-runtime` or
 `upstream/`, preserving the "no Minecraft dependency" property from
 §1.1) rather than compiled against the real NeoForge jar, so the test
-suite builds and runs standalone and fast, matching the
-`multiforge-license`-style "no `:setup` step" build path CLAUDE.md calls
-out for non-Minecraft-dependent modules.
+suite builds and runs standalone and fast — matching the "no `:setup`
+step" build path CLAUDE.md calls out for non-Minecraft-dependent
+modules.

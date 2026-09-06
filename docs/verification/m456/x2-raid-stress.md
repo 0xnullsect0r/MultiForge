@@ -106,7 +106,7 @@ summon+wave pair, cycling 4 quadrants); nothing else is elided.
 ```
 [04:42:09] x2-raid-stress: seed=1234567890 ticks=6000 raid-seeds=20
 [04:42:09] x2: capturing 4-worker raid stress run
-DRY-RUN would run (cwd=<repo-root>/upstream/neoforge-1.21.1): MULTIFORGE_LICENSE=<license> <repo-root>/gradlew :neoforge:runServer -Dmultiforge.workers=4 > <repo-root>/docs/verification/m456/evidence/x2/boot-patched-4w.log 2>&1
+DRY-RUN would run (cwd=<repo-root>/upstream/neoforge-1.21.1): <repo-root>/gradlew :neoforge:runServer -Dmultiforge.workers=4 > <repo-root>/docs/verification/m456/evidence/x2/boot-patched-4w.log 2>&1
 DRY-RUN would: poll boot log for RCON, then rcon "tick freeze"
 DRY-RUN would: invoke mid-run callback function: x2_raid_callback
 DRY-RUN would: rcon "tick sprint 6000"
