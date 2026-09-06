@@ -43,6 +43,7 @@ import net.multiforge.runtime.entity.EntityMigrationCoordinator;
 import net.multiforge.runtime.entity.EntityRegistry;
 import net.multiforge.runtime.entity.PlayerJoinCoordinator;
 import net.multiforge.runtime.globals.CrossRegionEffects;
+import net.multiforge.runtime.globals.GlobalRegionThreadMarker;
 import net.multiforge.runtime.globals.GlobalSystems;
 import net.multiforge.runtime.globals.GlobalTickContext;
 import net.multiforge.runtime.journal.AutoSaveRunner;
@@ -602,11 +603,25 @@ public final class MultiThreadedSchedulerHost implements SchedulerHost, AutoClos
      * add/remove made by a global subsystem is visible to
      * {@code REGION_EVENTS} handlers the same tick (docs/design/global-
      * region.md §2.2 point 2).
+     *
+     * <p>The whole body runs inside {@link
+     * net.multiforge.runtime.globals.GlobalRegionThreadMarker#runMarked(Runnable)}
+     * (round-6 fork B F2): this is the one call site that actually
+     * executes on the global region's worker thread, so marking here —
+     * try/finally, cleared on every exit path including a thrown
+     * exception — is what lets {@code BossEventSystem.tryRoute} and
+     * {@code ScoreboardSystem.tryRoute} detect same-thread reentry (a
+     * command function or event handler mutating boss-bar/scoreboard
+     * state from within this very tick) and run that mutation inline
+     * instead of deferring it to next tick's mailbox drain.
      */
     private void phaseGlobalSystemsTick(Region region) {
         if (!region.id().equals(globalRegion.id())) return;
-        GlobalTickContext ctx = new GlobalTickContext(globalSystems.currentTick() + 1, region.id());
-        globalSystems.tickAll(ctx);
+        GlobalRegionThreadMarker.runMarked(() -> {
+            GlobalTickContext ctx = new GlobalTickContext(globalSystems.currentTick() + 1, region.id());
+            globalSystems.tickAll(ctx);
+            return null;
+        });
     }
 
     /**

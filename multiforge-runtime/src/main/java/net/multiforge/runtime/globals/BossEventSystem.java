@@ -41,11 +41,20 @@ public final class BossEventSystem extends AbstractGlobalSystem {
     /**
      * Routes {@code mutation} (the original {@code CustomBossEvents}
      * {@code create}/{@code remove} body) onto the global region's
-     * mailbox.
+     * mailbox — unless the caller is <em>already</em> running on the
+     * global region worker (see {@link GlobalRegionThreadMarker}), in
+     * which case {@code mutation} runs inline, synchronously, before
+     * this method returns. That reentrant fast path matches Vanilla's
+     * own return-after-mutate contract for a command function or event
+     * handler that is itself running as part of the global region's
+     * tick (docs/design/global-region.md §7.3 / round-6 fork B F2) — the
+     * off-thread mailbox hop below is still correct, and still used,
+     * for every other caller.
      *
-     * @return {@code true} if accepted for routing, {@code false} if not
-     *         ready yet (see {@link #isReady()}) — the caller must run
-     *         {@code mutation} itself in that case.
+     * @return {@code true} if the mutation ran (inline or was accepted
+     *         for routing), {@code false} if not ready yet (see {@link
+     *         #isReady()}) — the caller must run {@code mutation}
+     *         itself in that case.
      */
     public boolean tryRoute(Runnable mutation) {
         java.util.Objects.requireNonNull(mutation, "mutation");
@@ -53,17 +62,23 @@ public final class BossEventSystem extends AbstractGlobalSystem {
         if (dest == null) {
             return false;
         }
-        crossRegionEffect(dest, () -> {
-            try {
-                mutation.run();
-            } catch (Throwable t) {
-                ProbeRegistry.bump("global.system.boss_events.mutation-failure");
-                ViolationLogger.warn(
-                        "global.system.boss_events",
-                        "routed mutation threw: " + t.getClass().getSimpleName() + ": " + t.getMessage());
-            }
-        });
+        if (GlobalRegionThreadMarker.isCurrent()) {
+            runInline(mutation);
+            return true;
+        }
+        crossRegionEffect(dest, () -> runInline(mutation));
         return true;
+    }
+
+    private void runInline(Runnable mutation) {
+        try {
+            mutation.run();
+        } catch (Throwable t) {
+            ProbeRegistry.bump("global.system.boss_events.mutation-failure");
+            ViolationLogger.warn(
+                    "global.system.boss_events",
+                    "routed mutation threw: " + t.getClass().getSimpleName() + ": " + t.getMessage());
+        }
     }
 
     /**
