@@ -1,0 +1,61 @@
+--- a/net/minecraft/server/level/ServerLevel.java
++++ b/net/minecraft/server/level/ServerLevel.java
+@@ -439,6 +439,25 @@
+     }
+ 
+     protected void tickTime() {
++        // MultiForge (multiforge-patches/08-globals/): game-time advance
++        // migrates onto the global region's phase-4 tick slot
++        // (net.multiforge.runtime.globals.TimeSystem) once this world has
++        // a registered target — see mfAdvanceWeatherCycleBody's javadoc
++        // above for the identical rationale, applied here to time instead
++        // of weather.
++        if (net.multiforge.neoforge.globals.GlobalSystemsBridge.timeHandled(this)) {
++            return;
++        }
++        this.mfTickTimeBody();
++    }
++
++    /**
++     * MultiForge (multiforge-patches/08-globals/): the original,
++     * unmodified {@code tickTime} body — see {@link
++     * #mfAdvanceWeatherCycleBody()}'s javadoc for the extraction
++     * rationale.
++     */
++    public void mfTickTimeBody() {
+         if (this.tickTime) {
+             long i = this.levelData.getGameTime() + 1L;
+             this.serverLevelData.setGameTime(i);
+@@ -648,6 +667,32 @@
+     }
+ 
+     private void advanceWeatherCycle() {
++        // MultiForge (multiforge-patches/08-globals/): weather advance is
++        // migrated onto the synthetic global region's phase-4 tick slot
++        // (net.multiforge.runtime.globals.WeatherSystem) once this world
++        // has a registered target. When handled, the inline call becomes
++        // a no-op — MultiForge invokes mfAdvanceWeatherCycleBody() itself,
++        // once per global tick, via the WeatherSystem.WeatherTarget bound
++        // for this level at LevelEvent.Load time. Before that
++        // registration exists (bootstrap, or MultiForge not installed),
++        // this falls through to the original Vanilla body so weather
++        // still advances during the startup window.
++        if (net.multiforge.neoforge.globals.GlobalSystemsBridge.weatherHandled(this)) {
++            return;
++        }
++        this.mfAdvanceWeatherCycleBody();
++    }
++
++    /**
++     * MultiForge (multiforge-patches/08-globals/): the original,
++     * unmodified {@code advanceWeatherCycle} body, extracted verbatim so
++     * both the Vanilla-inline call site above and {@code
++     * net.multiforge.runtime.globals.WeatherSystem} (via the {@code
++     * WeatherTarget} bound in {@code net.multiforge.neoforge.globals})
++     * can invoke the exact same computation — only the call site moved,
++     * per docs/design/global-region.md §6.3/§8.2 test 5.
++     */
++    public void mfAdvanceWeatherCycleBody() {
+         boolean flag = this.isRaining();
+         if (this.dimensionType().hasSkyLight()) {
+             if (this.getGameRules().getBoolean(GameRules.RULE_WEATHER_CYCLE)) {

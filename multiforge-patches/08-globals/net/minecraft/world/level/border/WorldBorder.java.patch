@@ -1,0 +1,29 @@
+--- a/net/minecraft/world/level/border/WorldBorder.java
++++ b/net/minecraft/world/level/border/WorldBorder.java
+@@ -240,6 +240,26 @@
+     }
+ 
+     public void tick() {
++        // MultiForge (multiforge-patches/08-globals/): border-size lerp
++        // interpolation advance migrates onto the global region's
++        // phase-4 tick slot (net.multiforge.runtime.globals.WorldBorderSystem)
++        // once this level's border has a registered target. Falls
++        // through to the original Vanilla body otherwise (bootstrap
++        // window, or a WorldBorder instance not associated with any
++        // registered ServerLevel — e.g. a throwaway test instance).
++        if (net.multiforge.neoforge.globals.GlobalSystemsBridge.worldBorderHandled(this)) {
++            return;
++        }
++        this.mfTickBody();
++    }
++
++    /**
++     * MultiForge (multiforge-patches/08-globals/): the original,
++     * unmodified {@code tick} body — see {@code
++     * ServerLevel.mfAdvanceWeatherCycleBody}'s javadoc for the
++     * extraction rationale.
++     */
++    public void mfTickBody() {
+         this.extent = this.extent.update();
+     }
+ 
