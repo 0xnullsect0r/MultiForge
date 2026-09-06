@@ -109,22 +109,46 @@ public final class RuleEngine {
     }
 
     private List<Finding> scanJar(File jar) throws IOException {
-        List<Finding> findings = new ArrayList<>();
+        List<byte[]> classEntries = new ArrayList<>();
         try (ZipInputStream zis = new ZipInputStream(Files.newInputStream(jar.toPath()))) {
             ZipEntry entry;
             while ((entry = zis.getNextEntry()) != null) {
                 if (entry.isDirectory() || !entry.getName().endsWith(".class")) {
                     continue;
                 }
-                byte[] bytes = readAllBytes(zis);
-                try {
-                    findings.addAll(scanClassBytes(bytes, jar.getName()));
-                } catch (RuntimeException e) {
-                    // One unparseable class entry never aborts the whole-jar scan (doc §2).
-                }
+                classEntries.add(readAllBytes(zis));
+            }
+        }
+
+        // First pass (round-6 fork C HIGH finding, R03): index every class's direct
+        // superclass/interfaces before running any rule, so a rule can resolve whether an
+        // instruction's owner is a mod-defined subtype of some target type — not just a
+        // literal match against the type itself. Cheap: SKIP_CODE, one ClassReader.accept
+        // per class, same cost class as the existing ClassContext extraction pass.
+        TypeHierarchy hierarchy = buildTypeHierarchy(classEntries);
+
+        List<Finding> findings = new ArrayList<>();
+        for (byte[] bytes : classEntries) {
+            try {
+                findings.addAll(scanClassBytes(bytes, jar.getName(), hierarchy));
+            } catch (RuntimeException e) {
+                // One unparseable class entry never aborts the whole-jar scan (doc §2).
             }
         }
         return findings;
+    }
+
+    private static TypeHierarchy buildTypeHierarchy(List<byte[]> classEntries) {
+        List<TypeHierarchy.ClassInfo> infos = new ArrayList<>();
+        for (byte[] bytes : classEntries) {
+            try {
+                infos.add(readHeader(new ClassReader(bytes)).toTypeInfo());
+            } catch (RuntimeException e) {
+                // A class unparseable for hierarchy purposes is also unparseable for rule
+                // scanning below, where it's already tolerated the same way (doc §2).
+            }
+        }
+        return TypeHierarchy.index(infos);
     }
 
     private static byte[] readAllBytes(InputStream in) throws IOException {
@@ -132,13 +156,24 @@ public final class RuleEngine {
     }
 
     /**
-     * Scans a single class's raw bytecode against the configured rules. Public and independent of
+     * Scans a single class's raw bytecode against the configured rules, with no jar-wide {@link
+     * TypeHierarchy} available (equivalent to {@link TypeHierarchy#EMPTY} — resolves pure-JDK
+     * hierarchies via classpath reflection, not mod-defined subtypes). Public and independent of
      * jar-walking so tests can build fixture classes in memory (via {@code ClassWriter}) without a
      * jar on disk.
      */
     public List<Finding> scanClassBytes(byte[] classBytes, String sourceJarName) {
+        return scanClassBytes(classBytes, sourceJarName, TypeHierarchy.EMPTY);
+    }
+
+    /**
+     * Scans a single class's raw bytecode against the configured rules, with {@code hierarchy}
+     * (built by {@link #scanJar} from every class in the same jar) available to rules that need
+     * to resolve polymorphic receivers.
+     */
+    public List<Finding> scanClassBytes(byte[] classBytes, String sourceJarName, TypeHierarchy hierarchy) {
         ClassReader reader = new ClassReader(classBytes);
-        ClassContext ctx = extractContext(reader, sourceJarName);
+        ClassContext ctx = extractContext(reader, sourceJarName, hierarchy);
         List<Finding> findings = new ArrayList<>();
         for (Rule rule : rules) {
             try {
@@ -154,17 +189,30 @@ public final class RuleEngine {
         return findings;
     }
 
-    private static ClassContext extractContext(ClassReader reader, String sourceJarName) {
+    private static ClassContext extractContext(ClassReader reader, String sourceJarName, TypeHierarchy hierarchy) {
+        Header header = readHeader(reader);
+        boolean isModEntry = header.annotations.contains(ClassContext.MOD_ANNOTATION_DESC);
+        return new ClassContext(
+                header.className,
+                header.superName,
+                List.copyOf(header.interfaces),
+                Set.copyOf(header.annotations),
+                sourceJarName,
+                isModEntry,
+                hierarchy);
+    }
+
+    /** Class-file header info shared by {@link #extractContext} and the {@link TypeHierarchy} first pass. */
+    private static Header readHeader(ClassReader reader) {
         ContextVisitor visitor = new ContextVisitor();
         reader.accept(visitor, ClassReader.SKIP_CODE | ClassReader.SKIP_DEBUG | ClassReader.SKIP_FRAMES);
-        boolean isModEntry = visitor.annotations.contains(ClassContext.MOD_ANNOTATION_DESC);
-        return new ClassContext(
-                visitor.className,
-                visitor.superName,
-                List.copyOf(visitor.interfaces),
-                Set.copyOf(visitor.annotations),
-                sourceJarName,
-                isModEntry);
+        return new Header(visitor.className, visitor.superName, List.copyOf(visitor.interfaces), Set.copyOf(visitor.annotations));
+    }
+
+    private record Header(String className, String superName, List<String> interfaces, Set<String> annotations) {
+        TypeHierarchy.ClassInfo toTypeInfo() {
+            return new TypeHierarchy.ClassInfo(className, superName, interfaces);
+        }
     }
 
     private static final class ContextVisitor extends ClassVisitor {

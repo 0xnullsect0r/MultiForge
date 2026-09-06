@@ -134,12 +134,30 @@ For bare-metal, Windows Server, or systemd deployments.
 
     ```bash
     mkdir multiforge-server && cd multiforge-server
-    java -jar multiforge-installer-1.0.0.jar --install-dir .
+    java -jar multiforge-installer-1.0.0.jar install --install-dir .
     ```
 
     The installer writes a `run.sh` (or `run.bat` on Windows), an empty
     `server.properties`, and a `config/multiforge-server.toml` with
     sensible defaults.
+
+    By default the installer **refuses to install a bundled jar whose
+    signature it can't verify** (`--require-signed` defaults to `true`):
+    a release installer jar that's had its `.sig` stripped, or that
+    fails Ed25519 verification against the embedded signing key, aborts
+    with nothing written to `libraries/multiforge/`. Official release
+    installer jars are always signed, so this should never trigger on a
+    genuine download from the releases page — if it does, don't rerun
+    with the override below; treat the jar as tampered and re-download
+    from the official source.
+
+    Local/CI builds you compiled yourself (`./gradlew build`) don't run
+    the release-signing pipeline, so their bundled jars are unsigned.
+    For those — **never** for a downloaded release artifact — pass:
+
+    ```bash
+    java -jar multiforge-installer-1.0.0.jar install --install-dir . --require-signed=false
+    ```
 
 3. Accept the EULA:
 

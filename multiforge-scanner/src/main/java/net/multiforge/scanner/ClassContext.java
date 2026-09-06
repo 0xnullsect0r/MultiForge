@@ -21,6 +21,9 @@ import java.util.Set;
  * @param sourceJarName the jar (or directory root) this class was read from, for report grouping
  *     / {@code .multiforgeignore} scoping
  * @param isModEntryClass true iff {@code @Mod} is present — cached so rules don't re-scan
+ * @param typeHierarchy the current scan's {@link TypeHierarchy} index — lets a rule resolve
+ *     whether an {@code INVOKEVIRTUAL}/{@code INVOKEINTERFACE} owner is a subtype of some target
+ *     type even when the owner is a mod-defined subclass (round-6 fork C HIGH finding, R03).
  */
 public record ClassContext(
         String className,
@@ -28,8 +31,24 @@ public record ClassContext(
         List<String> interfaces,
         Set<String> classAnnotations,
         String sourceJarName,
-        boolean isModEntryClass) {
+        boolean isModEntryClass,
+        TypeHierarchy typeHierarchy) {
 
     /** Internal descriptor of NeoForge's {@code @Mod} annotation, per scanner-rules.md §1.3. */
     public static final String MOD_ANNOTATION_DESC = "Lnet/neoforged/fml/common/Mod;";
+
+    /**
+     * Convenience constructor for callers (mainly tests) that don't have a jar-wide {@link
+     * TypeHierarchy} to hand — defaults to {@link TypeHierarchy#EMPTY}, which still resolves
+     * pure-JDK hierarchies via classpath reflection, just not mod-defined subtypes.
+     */
+    public ClassContext(
+            String className,
+            String superName,
+            List<String> interfaces,
+            Set<String> classAnnotations,
+            String sourceJarName,
+            boolean isModEntryClass) {
+        this(className, superName, interfaces, classAnnotations, sourceJarName, isModEntryClass, TypeHierarchy.EMPTY);
+    }
 }

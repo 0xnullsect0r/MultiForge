@@ -13,6 +13,7 @@ import net.multiforge.scanner.Finding;
 import net.multiforge.scanner.Fingerprint;
 import net.multiforge.scanner.Severity;
 import net.multiforge.scanner.TickReachability;
+import net.multiforge.scanner.TypeHierarchy;
 import org.objectweb.asm.Opcodes;
 import org.objectweb.asm.tree.AnnotationNode;
 import org.objectweb.asm.tree.ClassNode;
@@ -22,15 +23,36 @@ import org.objectweb.asm.tree.MethodNode;
 /**
  * R03 — {@code blocking-future}. See {@code docs/design/scanner-rules.md} &sect;4 (R03).
  *
- * <p>ERROR: {@code .get()}, {@code .get(long, TimeUnit)}, or {@code .join()} invoked on a {@code
- * CompletableFuture}/{@code Future} receiver, lexically inside a method annotated {@code
- * @RegionThread}. Direct bytecode expression of CLAUDE.md rule 4.
+ * <p>ERROR: a blocking wait method ({@code .get()}, {@code .get(long, TimeUnit)}, {@code
+ * .join()}, {@code .getNow(Object)}, {@code .awaitUninterruptibly()}) invoked on a receiver whose
+ * static type is, or is a subtype of, {@code java.util.concurrent.Future}, {@code
+ * java.util.concurrent.CompletionStage}, or {@code java.util.concurrent.ForkJoinTask} — lexically
+ * inside a method annotated {@code @RegionThread}. Direct bytecode expression of CLAUDE.md rule
+ * 4.
+ *
+ * <p>Subtype resolution walks a per-scan {@link TypeHierarchy} (round-6 fork C HIGH finding: a
+ * literal two-name owner check misses a mod-defined receiver like {@code class MyFuture extends
+ * CompletableFuture<T>} — the bytecode owner for {@code myFuture.join()} is {@code MyFuture}
+ * itself, not {@code CompletableFuture}). {@code TypeHierarchy} resolves such subtypes against
+ * the in-jar class index {@code RuleEngine} builds in its first pass, falling back to real
+ * classpath reflection for JDK-only ancestors (e.g. {@code CompletableFuture} itself implementing
+ * {@code Future} and {@code CompletionStage}). A chained idiom like {@code
+ * future.orTimeout(...).join()} is caught because the trailing {@code .join()} is its own {@code
+ * INVOKEVIRTUAL} against the (still Future-typed) result — {@code orTimeout} itself doesn't block
+ * and is not flagged.
  */
 public final class R03BlockingFuture extends AbstractTreeRule {
 
-    private static final Set<String> OWNERS =
-            Set.of("java/util/concurrent/CompletableFuture", "java/util/concurrent/Future");
-    private static final Set<String> NAMES = Set.of("get", "join");
+    /**
+     * Any receiver whose static type is, or transitively extends/implements, one of these is a
+     * blocking-wait target.
+     */
+    private static final Set<String> TARGET_SUPERTYPES = Set.of(
+            "java/util/concurrent/Future",
+            "java/util/concurrent/CompletionStage",
+            "java/util/concurrent/ForkJoinTask");
+
+    private static final Set<String> NAMES = Set.of("get", "join", "getNow", "awaitUninterruptibly");
 
     @Override
     public String id() {
@@ -44,7 +66,8 @@ public final class R03BlockingFuture extends AbstractTreeRule {
 
     @Override
     public String description() {
-        return "CompletableFuture/Future.get() or .join() called from a @RegionThread method.";
+        return "Future/CompletionStage/ForkJoinTask blocking wait (get/join/getNow/"
+                + "awaitUninterruptibly) called from a @RegionThread method.";
     }
 
     @Override
@@ -55,6 +78,7 @@ public final class R03BlockingFuture extends AbstractTreeRule {
     @Override
     protected void scanClass(ClassContext ctx, ClassNode cn, Consumer<Finding> emit) {
         String classFqn = ctx.className().replace('/', '.');
+        TypeHierarchy hierarchy = ctx.typeHierarchy();
         for (MethodNode mn : cn.methods) {
             if (!isRegionThread(mn)) {
                 continue;
@@ -66,7 +90,9 @@ public final class R03BlockingFuture extends AbstractTreeRule {
                 }
                 boolean invokable =
                         call.getOpcode() == Opcodes.INVOKEVIRTUAL || call.getOpcode() == Opcodes.INVOKEINTERFACE;
-                if (!invokable || !OWNERS.contains(call.owner) || !NAMES.contains(call.name)) {
+                if (!invokable
+                        || !NAMES.contains(call.name)
+                        || !hierarchy.isSubtypeOfAny(call.owner, TARGET_SUPERTYPES)) {
                     continue;
                 }
                 emit.accept(new Finding(

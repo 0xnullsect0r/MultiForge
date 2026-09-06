@@ -81,12 +81,32 @@ public final class Main {
     private static int doInstall(List<String> args, PrintStream out, PrintStream err) throws IOException {
         Path installDir = Path.of(".");
         String licenseArg = null;
+        // Fail closed by default (round-6 fork C HIGH finding): a bundled jar
+        // with its .sig stripped must not install cleanly. CLAUDE.md rule 5's
+        // warn-don't-refuse default is about runtime behaviour toward mods,
+        // not supply-chain integrity of what the installer itself writes to
+        // disk, so it doesn't license a silent bypass here. Dev/CI builds
+        // that don't run the release-signing pipeline pass
+        // --require-signed=false explicitly.
+        boolean requireSigned = true;
         for (int i = 0; i < args.size(); i++) {
             String a = args.get(i);
             if (a.equals("--install-dir") && i + 1 < args.size()) {
                 installDir = Path.of(args.get(++i));
             } else if (a.equals("--license") && i + 1 < args.size()) {
                 licenseArg = args.get(++i);
+            } else if (a.equals("--require-signed")) {
+                requireSigned = true;
+            } else if (a.startsWith("--require-signed=")) {
+                String v = a.substring("--require-signed=".length());
+                if ("true".equalsIgnoreCase(v)) {
+                    requireSigned = true;
+                } else if ("false".equalsIgnoreCase(v)) {
+                    requireSigned = false;
+                } else {
+                    err.println("install: --require-signed expects true|false, got '" + v + "'");
+                    return 2;
+                }
             } else {
                 err.println("install: unknown argument " + a);
                 return 2;
@@ -98,12 +118,13 @@ public final class Main {
         Files.createDirectories(libDir);
 
         // 1. Verify + extract bundled jars. Signature check runs before any
-        // file lands on disk (C4.3): a mismatched signature aborts the
-        // install with nothing written to libDir.
+        // file lands on disk (C4.3): a mismatched signature — or, with
+        // --require-signed (the default), a missing .sig altogether —
+        // aborts the install with nothing written to libDir.
         PublicKey signingKey = SignatureCheck.loadEmbeddedPublicKey();
         for (String jar : BUNDLED_JARS) {
             byte[] jarBytes = readResource(BUNDLED_ROOT + jar);
-            if (!verifyBundledSignatureOrWarn(jar, jarBytes, signingKey, out)) {
+            if (!verifyBundledSignatureOrWarn(jar, jarBytes, signingKey, requireSigned, out)) {
                 err.println("[installer] signature verification FAILED for " + jar + " — install aborted.");
                 return 4;
             }
@@ -226,21 +247,39 @@ public final class Main {
      * If a companion {@code <jar>.sig} resource is bundled alongside
      * {@code jarName} under {@link #BUNDLED_ROOT}, verifies {@code
      * jarBytes} against it with the embedded {@link SignatureCheck}
-     * public key and returns {@code false} on mismatch (the caller
-     * aborts the install). No release-signing pipeline produces {@code
-     * .sig} resources yet (see {@code multiforge-installer-signing.pub}),
-     * so an unsigned bundle logs an informational note and returns
-     * {@code true} — CLAUDE.md rule 5's warn-don't-refuse default,
-     * applied to infrastructure that isn't wired up yet rather than
-     * hard-failing every install until it is.
+     * public key and returns {@code false} on mismatch (the caller aborts
+     * the install).
+     *
+     * <p>When no {@code .sig} resource is bundled — no release-signing
+     * pipeline has produced one for this build yet (see {@code
+     * multiforge-installer-signing.pub}) — behavior depends on {@code
+     * requireSigned}: with it {@code true} (the default) this is treated
+     * as a supply-chain integrity failure and returns {@code false},
+     * since a {@code .sig} missing from an otherwise-signed release is
+     * exactly the shape of a tampered or mis-published artifact that has
+     * had its signature stripped (round-6 fork C HIGH finding).
+     * CLAUDE.md rule 5's warn-don't-refuse default covers *runtime*
+     * behaviour toward mods, not the supply-chain integrity of what the
+     * installer itself writes to disk, so it does not license silently
+     * proceeding here. With {@code requireSigned} {@code false} (the
+     * explicit dev-build opt-out, e.g. local/CI loops that don't run the
+     * release-signing pipeline) an unsigned bundle logs an informational
+     * note and installs anyway.
      */
     private static boolean verifyBundledSignatureOrWarn(
-            String jarName, byte[] jarBytes, PublicKey key, PrintStream out) {
+            String jarName, byte[] jarBytes, PublicKey key, boolean requireSigned, PrintStream out) {
         String sigResource = BUNDLED_ROOT + jarName + ".sig";
         try (InputStream in = Main.class.getResourceAsStream(sigResource)) {
             if (in == null) {
-                out.println(
-                        "[installer] no signature bundled for " + jarName + "; skipping verification (unsigned build)");
+                if (requireSigned) {
+                    out.println("[installer] no signature bundled for " + jarName
+                            + " and --require-signed is set (the default); refusing to install an unsigned "
+                            + "artifact. Pass --require-signed=false to override for dev/CI builds that don't "
+                            + "run the release-signing pipeline.");
+                    return false;
+                }
+                out.println("[installer] no signature bundled for " + jarName
+                        + "; skipping verification (--require-signed=false, unsigned dev build)");
                 return true;
             }
             String sigText = new String(in.readAllBytes(), StandardCharsets.UTF_8);
@@ -279,12 +318,17 @@ public final class Main {
         out.println();
         out.println("Usage:");
         out.println("  java -jar multiforge-installer.jar install [--install-dir DIR] [--license TOKEN|@FILE]");
+        out.println("                                              [--require-signed[=true|false]]");
         out.println("  java -jar multiforge-installer.jar build-zip --out multiforge-replacement.zip");
         out.println("  java -jar multiforge-installer.jar version");
         out.println();
         out.println("`install` lays out a fresh MultiForge server in DIR (default: cwd).");
         out.println("`build-zip` writes the drop-in replacement archive you overlay on an");
         out.println("existing NeoForge server install.");
+        out.println();
+        out.println("--require-signed defaults to true: install refuses to write a bundled jar");
+        out.println("whose .sig resource is missing or doesn't verify. Pass --require-signed=false");
+        out.println("for dev/CI builds that don't run the release-signing pipeline.");
     }
 
     // ---- payloads -------------------------------------------------------

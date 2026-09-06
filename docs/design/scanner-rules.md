@@ -308,20 +308,36 @@ public void onDownloadComplete(WorldRef world, BlockPos pos, BlockState result) 
 
 ### R03 — `blocking-future`
 
-**Severity:** ERROR. **Detects:** `.get()`, `.get(long, TimeUnit)`, or
-`.join()` invoked on a `CompletableFuture`/`Future` receiver, lexically
-inside a method annotated `@RegionThread`.
+**Severity:** ERROR. **Detects:** `.get()`, `.get(long, TimeUnit)`,
+`.join()`, `.getNow(Object)`, or `.awaitUninterruptibly()` invoked on a
+receiver whose static type is, or is a subtype of,
+`java.util.concurrent.Future`, `java.util.concurrent.CompletionStage`,
+or `java.util.concurrent.ForkJoinTask`, lexically inside a method
+annotated `@RegionThread`.
 
-**Bytecode pattern (tree API — needs local dataflow):**
+**Bytecode pattern (tree API — needs local dataflow + a per-scan `TypeHierarchy`):**
 ```
 for each MethodNode m with @RegionThread:
     for each MethodInsnNode insn in m.instructions:
-        if insn.name in {"get", "join"}
-           and insn.owner in {"java/util/concurrent/CompletableFuture", "java/util/concurrent/Future"}
+        if insn.name in {"get", "join", "getNow", "awaitUninterruptibly"}
+           and TypeHierarchy.isSubtypeOfAny(insn.owner,
+                 {"java/util/concurrent/Future", "java/util/concurrent/CompletionStage",
+                  "java/util/concurrent/ForkJoinTask"})
         -> Finding(line = source line map lookup for insn)
 ```
 The receiver's static type comes straight from the invoke instruction's
-`owner` operand, so this works fine under `SKIP_FRAMES` (§1.2).
+`owner` operand, so this works fine under `SKIP_FRAMES` (§1.2). `owner`
+is not matched against a literal two-name set, though: `RuleEngine`
+first-passes every class in the jar being scanned (header-only,
+`SKIP_CODE`) into a `TypeHierarchy` index, so a mod-defined subtype
+(`class MyFuture extends CompletableFuture<T>`) is still caught even
+though its bytecode owner is `MyFuture`, not `CompletableFuture` —
+`TypeHierarchy` walks the in-jar superclass/interface edges and falls
+back to real classpath reflection once it reaches a JDK-only ancestor
+(round-6 fork C HIGH finding). A chained idiom like
+`future.orTimeout(...).join()` fires because the trailing `.join()` is
+its own `INVOKEVIRTUAL`; `orTimeout` itself doesn't block and isn't in
+the name set.
 
 **Rationale:** Direct bytecode expression of CLAUDE.md rule 4: "No
 blocking calls on a region worker thread. Ever." A `.get()`/`.join()` on
@@ -559,11 +575,29 @@ void onGuiSlotChanged(WorldRef world, BlockPos pos, BlockEntity be) {
 
 ### R09 — `sync-io-in-tick`
 
-**Severity:** ERROR. **Detects:** a call to any of
-`FileInputStream.read*`, `RandomAccessFile.read*`,
-`Files.readAllBytes`, `Files.readString`, or `Files.newInputStream` (a
-fixed, extendable allowlist) inside a method the tick-reachability
-heuristic (§1.4) classifies as region-tick-reachable.
+**Severity:** ERROR. **Detects:** a call to a fixed, extendable
+synchronous-disk-I/O allowlist (round-6 fork C HIGH finding extended
+this from the original two-owner, three-exact-name list) inside a
+method the tick-reachability heuristic (§1.4) classifies as
+region-tick-reachable:
+
+- any `read*`/`write*`/`transferTo` call on `InputStream`,
+  `OutputStream`, `FileInputStream`, `FileOutputStream`,
+  `DataInputStream`, `DataOutputStream`, `BufferedInputStream`, or
+  `BufferedOutputStream` (owner matched by exact type, not
+  hierarchy — this covers a wrapped stream like `new
+  BufferedInputStream(fileInputStream)` since `read`/`write` are
+  called directly on the wrapper);
+- any `read*`/`write*` call on `FileChannel` or
+  `AsynchronousFileChannel`;
+- every method on `RandomAccessFile` (opening or operating on one is
+  inherently synchronous disk I/O, not just its `read*` methods);
+- `Files.readAllBytes`, `Files.readString`, `Files.newInputStream`,
+  `Files.lines`, `Files.readAllLines`, `Files.newBufferedReader`,
+  `Files.newBufferedWriter` — matched by method name only, so every
+  overload (e.g. `Files.readString(Path, Charset)`) is covered without
+  enumerating descriptors. `Files.write`/`Files.newOutputStream` are
+  deliberately not on this list (see `R09SyncIoInTickTest`).
 
 **Bytecode pattern (tree API — same shape as R03):**
 ```

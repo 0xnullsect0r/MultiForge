@@ -45,6 +45,65 @@ class R09SyncIoInTickTest {
     }
 
     @Test
+    void firesOnFileChannelReadInRegionThreadMethod() {
+        ClassWriter cw = Bytecode.newClass("com/example/mod/BadR09d", false);
+        MethodVisitor mv = Bytecode.beginMethod(cw, "onChunkLoad", true);
+        Bytecode.invokeInterface(mv, "java/nio/channels/FileChannel", "read", "()I");
+        Bytecode.endVoid(mv);
+        assertFires(Bytecode.finish(cw));
+    }
+
+    @Test
+    void firesOnFilesLinesInRegionThreadMethod() {
+        ClassWriter cw = Bytecode.newClass("com/example/mod/BadR09e", false);
+        MethodVisitor mv = Bytecode.beginMethod(cw, "onChunkLoad", true);
+        Bytecode.invokeStatic(mv, "java/nio/file/Files", "lines", "()Ljava/util/stream/Stream;");
+        Bytecode.endVoid(mv);
+        assertFires(Bytecode.finish(cw));
+    }
+
+    @Test
+    void firesOnFilesReadStringTwoArgOverloadInRegionThreadMethod() {
+        ClassWriter cw = Bytecode.newClass("com/example/mod/BadR09f", false);
+        MethodVisitor mv = Bytecode.beginMethod(cw, "onChunkLoad", true);
+        Bytecode.invokeStatic(
+                mv,
+                "java/nio/file/Files",
+                "readString",
+                "(Ljava/nio/file/Path;Ljava/nio/charset/Charset;)Ljava/lang/String;");
+        Bytecode.endVoid(mv);
+        assertFires(Bytecode.finish(cw));
+    }
+
+    @Test
+    void firesOnBufferedInputStreamReadWrappingAFileInputStream() {
+        ClassWriter cw = Bytecode.newClass("com/example/mod/BadR09g", false);
+        MethodVisitor mv = Bytecode.beginMethod(cw, "onChunkLoad", true);
+        Bytecode.invokeVirtual(mv, "java/io/BufferedInputStream", "read", "()I");
+        Bytecode.endVoid(mv);
+        assertFires(Bytecode.finish(cw));
+    }
+
+    @Test
+    void firesOnRandomAccessFileWriteInRegionThreadMethod() {
+        // Not read-prefixed — exercises the "RandomAccessFile.*" wildcard, not the read* prefix.
+        ClassWriter cw = Bytecode.newClass("com/example/mod/BadR09h", false);
+        MethodVisitor mv = Bytecode.beginMethod(cw, "onChunkLoad", true);
+        Bytecode.invokeVirtual(mv, "java/io/RandomAccessFile", "seek", "(J)V");
+        Bytecode.endVoid(mv);
+        assertFires(Bytecode.finish(cw));
+    }
+
+    @Test
+    void firesOnInputStreamTransferToInRegionThreadMethod() {
+        ClassWriter cw = Bytecode.newClass("com/example/mod/BadR09i", false);
+        MethodVisitor mv = Bytecode.beginMethod(cw, "onChunkLoad", true);
+        Bytecode.invokeVirtual(mv, "java/io/InputStream", "transferTo", "(Ljava/io/OutputStream;)J");
+        Bytecode.endVoid(mv);
+        assertFires(Bytecode.finish(cw));
+    }
+
+    @Test
     void doesNotFireWhenNotTickReachable() {
         ClassWriter cw = Bytecode.newClass("com/example/mod/GoodR09a", false);
         MethodVisitor mv = Bytecode.beginMethod(cw, "onChunkLoad", false);
