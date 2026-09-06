@@ -194,6 +194,29 @@ public final class RegionizedTickCoordinator {
     }
 
     /**
+     * B3.2 (docs/design/m13-b3-region-tick.md §5.1): {@code true} iff the
+     * {@code BLOCK_FLUID_TICKS} phase slot is actually handling {@code
+     * level}'s scheduled block/fluid ticks this tick — i.e. the MultiForge
+     * runtime is installed, {@code level}'s world has a materialised
+     * regionizer, and a real {@link
+     * net.multiforge.runtime.region.ScheduledTickRunner} has been
+     * registered (see {@code MultiForgeGlobalSystemsInit.install} /
+     * {@code net.multiforge.neoforge.tick.ScheduledTickRunnerBridge}).
+     * Read by the {@code ServerLevel.tick(BooleanSupplier)} patch hunk to
+     * decide whether to skip Vanilla's inline {@code
+     * blockTicks.tick}/{@code fluidTicks.tick} pair — when this returns
+     * {@code false} (bootstrap, no regionizer yet, or no runner
+     * registered), the Vanilla-inline path stays live so ticks are never
+     * silently dropped (CLAUDE.md rule 5).
+     */
+    public static boolean regionsHandleBlockFluidTicks(ServerLevel level) {
+        MultiThreadedSchedulerHost host = MultiForgeRegionizedRuntime.current();
+        if (host == null) return false;
+        if (host.regionizerForOrNull(asWorldRef(level)) == null) return false;
+        return host.hasBlockFluidRunner();
+    }
+
+    /**
      * Convert a vanilla {@link ServerLevel} to a {@link WorldRef} — the
      * public API's dimension identifier. Kept here rather than in
      * {@link WorldRef} itself because {@code WorldRef} is in

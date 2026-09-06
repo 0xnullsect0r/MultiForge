@@ -140,6 +140,16 @@ public final class MultiForgeGlobalSystemsInit {
                 host.entityMigrationCoordinator());
         systems.register(commandDispatch);
         GlobalSystemsBridge.bindCommandDispatch(commandDispatch);
+
+        // MultiForge M13 (Track B3, B3.2): register the Vanilla-backed
+        // ScheduledTickRunner so the BLOCK_FLUID_TICKS phase slot
+        // (docs/design/m13-b3-region-tick.md §5.1) actually drains each
+        // region's owned chunks' scheduled block/fluid ticks instead of
+        // defaulting to the runtime's no-op. installOnEventBus is
+        // idempotent (guards its own INSTALLED flag) so re-running this
+        // whole install() on a reused-JVM GameTestServer restart is safe.
+        net.multiforge.neoforge.tick.ScheduledTickRunnerBridge.installOnEventBus();
+        host.setBlockFluidRunner(new net.multiforge.neoforge.tick.ScheduledTickRunnerBridge());
     }
 
     private static void installDragonFightLevelLifecycleListeners(

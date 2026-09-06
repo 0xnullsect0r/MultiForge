@@ -1,0 +1,86 @@
+--- a/net/minecraft/server/level/ServerLevel.java
++++ b/net/minecraft/server/level/ServerLevel.java
+@@ -362,11 +362,17 @@
+ 
+         profilerfiller.popPush("tickPending");
+         if (!this.isDebug() && flag) {
+-            long k = this.getGameTime();
+             profilerfiller.push("blockTicks");
+-            this.blockTicks.tick(k, 65536, this::tickBlock);
+-            profilerfiller.popPush("fluidTicks");
+-            this.fluidTicks.tick(k, 65536, this::tickFluid);
++            // MultiForge (multiforge-patches/02-region-tick/): block/fluid ticks migrate onto
++            // each chunk's owning region's BLOCK_FLUID_TICKS phase slot
++            // (docs/design/m13-b3-region-tick.md §5.1) once
++            // RegionizedTickCoordinator.regionsHandleBlockFluidTicks reports true for this
++            // level. Falls through to the original Vanilla inline drain otherwise (bootstrap,
++            // no regionizer, or runner not registered — auto-reroute+warn default, CLAUDE.md
++            // rule 5).
++            if (!net.multiforge.neoforge.RegionizedTickCoordinator.regionsHandleBlockFluidTicks(this)) {
++                this.mfTickBlockFluidTicksAll();
++            }
+             profilerfiller.pop();
+         }
+ 
+@@ -1220,6 +1226,61 @@
+         return this.fluidTicks;
+     }
+ 
++    /**
++     * MultiForge (multiforge-patches/02-region-tick/): the original, unmodified
++     * blockTicks/fluidTicks drain pair from {@link #tick(BooleanSupplier)}, extracted
++     * verbatim so both the Vanilla-inline call site above and the {@code
++     * RegionizedTickCoordinator.regionsHandleBlockFluidTicks} fallback path invoke exactly
++     * the same computation — only the call site's guard moved
++     * (docs/design/m13-b3-region-tick.md §5.1).
++     */
++    public void mfTickBlockFluidTicksAll() {
++        long k = this.getGameTime();
++        this.blockTicks.tick(k, 65536, this::tickBlock);
++        this.fluidTicks.tick(k, 65536, this::tickFluid);
++    }
++
++    /**
++     * MultiForge (multiforge-patches/02-region-tick/): per-region variant of {@link
++     * #mfTickBlockFluidTicksAll()} — drains only the scheduled block/fluid ticks whose
++     * position falls inside {@code holder}'s chunk, respecting the same 65536-per-call cap
++     * as Vanilla's level-wide drain, but scoped per region rather than per level
++     * (docs/design/m13-b3-region-tick.md §5.1). Called from {@code
++     * net.multiforge.neoforge.tick.ScheduledTickRunnerBridge} once per owned chunk, on the
++     * owning region's own worker thread.
++     */
++    public void mfTickBlockFluidTicksForChunk(net.multiforge.runtime.chunk.NewChunkHolder holder) {
++        long gameTime = this.getGameTime();
++        net.multiforge.api.world.ChunkPos mfPos = holder.position();
++        net.minecraft.world.level.ChunkPos pos = new net.minecraft.world.level.ChunkPos(mfPos.x(), mfPos.z());
++        mfDrainChunkContainer(this.blockTicks, pos, gameTime, this::tickBlock);
++        mfDrainChunkContainer(this.fluidTicks, pos, gameTime, this::tickFluid);
++    }
++
++    /**
++     * MultiForge (multiforge-patches/02-region-tick/): drains one chunk's {@link
++     * net.minecraft.world.ticks.LevelChunkTicks} container directly (via {@link
++     * net.minecraft.world.ticks.LevelTicks#mfContainerForChunk}) rather than Vanilla's
++     * cross-chunk priority-ordered {@link net.minecraft.world.ticks.LevelTicks#tick} drain —
++     * the per-region caller only ever wants this one chunk's entries, never a neighbor's.
++     */
++    private static <T> void mfDrainChunkContainer(
++            net.minecraft.world.ticks.LevelTicks<T> ticks,
++            net.minecraft.world.level.ChunkPos pos,
++            long gameTime,
++            java.util.function.BiConsumer<net.minecraft.core.BlockPos, T> consumer) {
++        net.minecraft.world.ticks.LevelChunkTicks<T> container = ticks.mfContainerForChunk(pos);
++        if (container == null) return;
++        int drained = 0;
++        while (drained < 65536) {
++            net.minecraft.world.ticks.ScheduledTick<T> next = container.peek();
++            if (next == null || next.triggerTick() > gameTime) break;
++            container.poll();
++            consumer.accept(next.pos(), next.type());
++            drained++;
++        }
++    }
++
+     @Nonnull
+     @Override
+     public MinecraftServer getServer() {
