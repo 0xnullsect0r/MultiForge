@@ -131,10 +131,13 @@ inline on whatever thread NeoForge's own event bus happens to fire on
 today. `@Ordering`/`OrderingContract` governs the ordering guarantee
 within that dispatch.
 
-Status: **not started.** The annotation types exist in `multiforge-api`
-and are documented for mod authors (`docs/api.md`), but no listener
-registration path in `multiforge-runtime` or the `multiforge-patches`
-tree reads them yet. Tracked against blueprint M12; the per-event target
-table above is the design this milestone will implement, kept here so
-mod authors annotating handlers today land on the domain the eventual
-enforcement will actually dispatch to.
+Status: **in progress; see docs/design/m12-event-routing.md** (2026-09-06).
+The annotation types exist in `multiforge-api` and are documented for mod
+authors (`docs/api.md`), and the full interception/dispatch design has now
+landed as a design doc; no listener registration path in
+`multiforge-runtime` or the `multiforge-patches` tree reads the
+annotations yet — that's the implementation work the design doc scopes.
+Tracked against blueprint M12; the per-event target table above is the
+design this milestone will implement, kept here so mod authors annotating
+handlers today land on the domain the eventual enforcement will actually
+dispatch to.
