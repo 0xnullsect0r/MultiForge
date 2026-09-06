@@ -32,15 +32,23 @@ dependencies {
 }
 
 // Templated version file baked into the runtime jar.
+//
+// NOTE: `name = ...` on the FileCopyDetails inside filesMatching, NOT
+// the outer AbstractCopyTask.rename(Closure) — the latter runs the
+// closure against *every* file in the copy, which in v1.3.3 renamed
+// META-INF/services/net.multiforge.api.spi.SchedulerHost to
+// META-INF/services/multiforge-runtime.properties, breaking the SPI
+// AND crashing securejarhandler on boot with "Invalid service type
+// name" because "multiforge-runtime" is not a valid Java identifier.
 tasks.processResources {
     val tokens = mapOf(
         "version" to project.version.toString(),
         "buildTime" to System.currentTimeMillis().toString(),
     )
     inputs.properties(tokens)
-    filesMatching("multiforge-runtime.properties.in") {
+    filesMatching("**/multiforge-runtime.properties.in") {
         expand(tokens)
-        rename { "multiforge-runtime.properties" }
+        name = "multiforge-runtime.properties"
     }
 }
 

@@ -22,7 +22,7 @@ Three ways to install, all under GPL-3 — no token, no activation, no phone-hom
 curl -LO https://github.com/0xnullsect0r/MultiForge/releases/latest/download/multiforge-installer.jar
 mkdir my-server && cd my-server
 java -jar ../multiforge-installer.jar --installServer .
-sed -i 's/eula=false/eula=true/' eula.txt
+echo "eula=true" > eula.txt
 ./run.sh
 ```
 

@@ -45,16 +45,15 @@ The Fabric-installer-shaped path: run a small JAR that lays out a fresh MultiFor
    ├── run.sh                                   # NeoForge launcher (calls `java @user_jvm_args.txt @…/unix_args.txt "$@"`)
    ├── run.bat                                  # Windows launcher
    ├── user_jvm_args.txt                        # edit -Xmx here (defaults to 2G)
-   ├── eula.txt                                 # eula=false — you must set eula=true before boot
    └── server.properties                        # created on first boot
    ```
 
    MultiForge's own `config/multiforge-server.toml` gets written by the runtime on first boot; edit it after the initial run to tune cores/threads/region-size.
 
-3. **Accept the EULA:**
+3. **Accept the EULA** (the fork installer doesn't seed `eula.txt` — write it fresh):
 
    ```
-   sed -i 's/eula=false/eula=true/' eula.txt
+   echo "eula=true" > eula.txt
    ```
 
 4. **Configure** (optional — defaults work):
