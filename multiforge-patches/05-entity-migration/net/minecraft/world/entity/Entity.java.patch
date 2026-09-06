@@ -1,19 +1,6 @@
 --- a/net/minecraft/world/entity/Entity.java
 +++ b/net/minecraft/world/entity/Entity.java
-@@ -650,6 +650,12 @@
-                 }
- 
-                 this.setPos(this.getX() + vec3.x, this.getY() + vec3.y, this.getZ() + vec3.z);
-+                // MultiForge (multiforge-patches/05-entity-migration/, M4 Track A2.2): defense in
-+                // depth — the setPos() call above already routed through Entity.setPosRaw's own
-+                // region-crossing check (see that hunk below); this is a cheap, idempotent no-op
-+                // unless a future Vanilla change bypasses setPos here. See
-+                // EntityMigrationBridge's class javadoc for why a redundant call is safe.
-+                net.multiforge.neoforge.entity.EntityMigrationBridge.onPositionChanged(this);
-             }
- 
-             this.level().getProfiler().pop();
-@@ -2620,6 +2626,13 @@
+@@ -2620,6 +2620,13 @@
                  serverlevel.resetEmptyTime();
                  serverlevel1.resetEmptyTime();
                  p_350951_.postDimensionTransition().onTransition(entity2);
@@ -27,7 +14,7 @@
              }
  
              serverlevel.getProfiler().pop();
-@@ -2784,6 +2797,12 @@
+@@ -2784,6 +2791,12 @@
          if (this.level() instanceof ServerLevel) {
              this.moveTo(p_19887_, p_19888_, p_19889_, this.getYRot(), this.getXRot());
              this.teleportPassengers();
@@ -40,7 +27,7 @@
          }
      }
  
-@@ -3392,6 +3411,12 @@
+@@ -3392,6 +3405,12 @@
              }
  
              this.levelCallback.onMove();
