@@ -106,13 +106,22 @@ jobs:
             :multiforge-runtime:publishToMavenLocal \
             --no-daemon --stacktrace
 
-      - name: NeoForge :setup (decompile + apply upstream patches)
+      - name: NeoForge :setup + apply MultiForge patches + compile fork
         working-directory: upstream/neoforge-1.21.1
-        run: ./gradlew --no-configuration-cache --no-daemon --stacktrace setup
-
-      - name: Apply MultiForge patches + compile fork
-        working-directory: upstream/neoforge-1.21.1
-        run: ./gradlew :neoforge:applyMultiforgePatches :neoforge:compileJava spotlessCheck licenseCheck --no-daemon --stacktrace
+        # One combined gradle invocation so the daemon stays warm and the
+        # neoform decompile cache carries into the compileJava step. Split
+        # invocations were burning ~40s per re-warm on top of the ~90s
+        # decompile, and the runner sometimes gets preempted mid-decompile.
+        # --parallel is safe here — neoform tasks are already sequential
+        # per their dependency graph. --build-cache lets subsequent runs
+        # on the same commit reuse decompile output when the gradle-actions
+        # cache restore hits.
+        run: |
+          ./gradlew --no-configuration-cache --no-daemon --stacktrace --parallel --build-cache \
+            :neoforge:applyMultiforgePatches \
+            :neoforge:compileJava \
+            spotlessCheck \
+            licenseCheck
 
       - name: Upload fork test/build reports on failure
         if: failure()
