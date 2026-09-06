@@ -7,11 +7,17 @@ package net.multiforge.runtime.commands;
 import java.io.IOException;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Objects;
 import java.util.function.Consumer;
+import java.util.function.Function;
 import net.multiforge.api.world.WorldRef;
+import net.multiforge.runtime.chunk.ChunkHolderManager;
+import net.multiforge.runtime.chunk.ChunkLoadLevel;
+import net.multiforge.runtime.chunk.NewChunkHolder;
 import net.multiforge.runtime.config.MultiForgeConfig;
 import net.multiforge.runtime.config.MultiForgeConfigStore;
+import net.multiforge.runtime.diagnostics.ProbeRegistry;
 import net.multiforge.runtime.region.pin.RegionPin;
 import net.multiforge.runtime.region.pin.RegionPinManager;
 
@@ -31,16 +37,37 @@ import net.multiforge.runtime.region.pin.RegionPinManager;
  *   /multiforge region pin &lt;id&gt; &lt;world&gt; &lt;fromCX&gt; &lt;fromCZ&gt; &lt;toCX&gt; &lt;toCZ&gt;
  *   /multiforge region unpin &lt;id&gt;
  *   /multiforge region list
+ *   /multiforge probes           — dump all ProbeRegistry counters (diagnostics)
+ *   /multiforge probes &lt;prefix&gt;  — dump counters whose key starts with prefix
+ *   /multiforge chunks &lt;world&gt;   — summarize the M9-bridge chunk shadow
+ *                                  (counts by ChunkLoadLevel; requires the fork
+ *                                  ChunkMap bridge to be installed)
  * </pre>
  */
 public final class MultiForgeCommandDispatcher {
 
     private final MultiForgeConfigStore configStore;
     private final RegionPinManager pins;
+    private final Function<WorldRef, ChunkHolderManager> chunkManagers;
 
     public MultiForgeCommandDispatcher(MultiForgeConfigStore configStore, RegionPinManager pins) {
+        this(configStore, pins, null);
+    }
+
+    /**
+     * Full constructor for the production fork wiring: {@code
+     * chunkManagers} looks up a world's {@link ChunkHolderManager} for
+     * the {@code /multiforge chunks} command. Pass {@code null} if the
+     * chunk-system bridge (M9 sub-step 1) is not yet installed; the
+     * chunks subcommand then reports "not installed" instead of NPE'ing.
+     */
+    public MultiForgeCommandDispatcher(
+            MultiForgeConfigStore configStore,
+            RegionPinManager pins,
+            Function<WorldRef, ChunkHolderManager> chunkManagers) {
         this.configStore = Objects.requireNonNull(configStore, "configStore");
         this.pins = Objects.requireNonNull(pins, "pins");
+        this.chunkManagers = chunkManagers;
     }
 
     /**
@@ -55,17 +82,84 @@ public final class MultiForgeCommandDispatcher {
         Objects.requireNonNull(args, "args");
         Objects.requireNonNull(output, "output");
         if (args.length == 0) {
-            output.accept("Usage: /multiforge <config|region> ...");
+            output.accept("Usage: /multiforge <config|region|probes> ...");
             return false;
         }
         return switch (args[0]) {
             case "config" -> handleConfig(args, output);
             case "region" -> handleRegion(args, output);
+            case "probes" -> handleProbes(args, output);
+            case "chunks" -> handleChunks(args, output);
             default -> {
                 output.accept("Unknown subcommand: " + args[0]);
                 yield false;
             }
         };
+    }
+
+    /**
+     * Summarize the M9-bridge chunk shadow for one world: counts by
+     * {@link ChunkLoadLevel}. Requires the fork bridge
+     * ({@code net.multiforge.neoforge.ChunkHolderManagerBridge}) to be
+     * installed so that Vanilla ticket-level updates propagate into
+     * {@link ChunkHolderManager}.
+     *
+     * <p>Usage: {@code /multiforge chunks <world>} where {@code <world>}
+     * is a namespaced dimension id like {@code minecraft:overworld}.
+     */
+    private boolean handleChunks(String[] args, Consumer<String> output) {
+        if (chunkManagers == null) {
+            output.accept("Chunk-system bridge not installed. Ensure ChunkHolderManagerBridge is wired.");
+            return false;
+        }
+        if (args.length < 2) {
+            output.accept("Usage: /multiforge chunks <world>");
+            return false;
+        }
+        WorldRef world = WorldRef.of(args[1]);
+        ChunkHolderManager manager = chunkManagers.apply(world);
+        if (manager == null) {
+            output.accept("No chunk manager for world '" + args[1] + "' (never touched by the bridge).");
+            return true;
+        }
+        java.util.EnumMap<ChunkLoadLevel, Integer> counts = new java.util.EnumMap<>(ChunkLoadLevel.class);
+        for (ChunkLoadLevel l : ChunkLoadLevel.values()) counts.put(l, 0);
+        for (NewChunkHolder h : manager.holders()) {
+            counts.merge(h.level(), 1, Integer::sum);
+        }
+        int total = manager.holderCount();
+        output.accept("world=" + args[1] + " holders=" + total);
+        for (ChunkLoadLevel l : ChunkLoadLevel.values()) {
+            output.accept("  " + l.name() + " (distance=" + l.distance() + "): " + counts.get(l));
+        }
+        return true;
+    }
+
+    /**
+     * Dump {@link ProbeRegistry} counters — the diagnostic surface the
+     * ownership guards, watchdog, and future M8 subsystems bump into
+     * on race detection. Operators use this to answer "are we hitting
+     * region-tick.overrun?" or "is Level.setBlock:off-thread growing?"
+     * without needing to grep the server log.
+     *
+     * <p>{@code /multiforge probes} dumps every counter; {@code /multiforge
+     * probes &lt;prefix&gt;} filters to keys starting with the given prefix
+     * (e.g. {@code /multiforge probes region-tick} for just the watchdog
+     * counters). Snapshot is sorted for stable operator-readable output.
+     */
+    private boolean handleProbes(String[] args, Consumer<String> output) {
+        String prefix = args.length > 1 ? args[1] : "";
+        Map<String, Long> snap = ProbeRegistry.snapshot();
+        int matched = 0;
+        for (Map.Entry<String, Long> e : snap.entrySet()) {
+            if (!e.getKey().startsWith(prefix)) continue;
+            output.accept(e.getKey() + " = " + e.getValue());
+            matched++;
+        }
+        if (matched == 0) {
+            output.accept(prefix.isEmpty() ? "(no probes recorded)" : "(no probes matching prefix '" + prefix + "')");
+        }
+        return true;
     }
 
     private boolean handleConfig(String[] args, Consumer<String> output) {

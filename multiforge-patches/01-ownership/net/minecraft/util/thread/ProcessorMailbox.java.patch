@@ -1,0 +1,24 @@
+--- a/net/minecraft/util/thread/ProcessorMailbox.java
++++ b/net/minecraft/util/thread/ProcessorMailbox.java
+@@ -78,7 +78,20 @@
+             if (runnable == null) {
+                 return false;
+             } else {
+-                Util.wrapThreadWithTaskName(this.name, runnable).run();
++                // MultiForge (multiforge-patches/01-ownership/): Vanilla worldgen /
++                // light-engine mailboxes are single-writer per chunk; without an
++                // owner token their BlockEntity.setChanged (etc.) writes trip
++                // OwnershipEnforcer.canMutate and reroute onto the main-server
++                // executor, where drain order depends on scheduler timing and
++                // breaks byte-identical worldgen determinism. Wrap the mailbox's
++                // synchronous task in OwnerToken.GLOBAL so canMutate returns true
++                // and setChanged runs inline in the mailbox's own deterministic
++                // pop() order. GLOBAL is the correct domain here — mailbox tasks
++                // are authoritative on whatever thread the underlying dispatcher
++                // picks (mailbox itself serialises via setAsScheduled CAS).
++                net.multiforge.runtime.ownership.OwnerToken.runAs(
++                    net.multiforge.runtime.ownership.OwnerToken.GLOBAL,
++                    Util.wrapThreadWithTaskName(this.name, runnable));
+                 return true;
+             }
+         }

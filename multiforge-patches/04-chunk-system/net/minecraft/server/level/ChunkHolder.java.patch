@@ -1,0 +1,86 @@
+--- a/net/minecraft/server/level/ChunkHolder.java
++++ b/net/minecraft/server/level/ChunkHolder.java
+@@ -50,6 +50,23 @@
+     private CompletableFuture<?> pendingFullStateConfirmation = CompletableFuture.completedFuture(null);
+     private CompletableFuture<?> sendSync = CompletableFuture.completedFuture(null);
+     private CompletableFuture<?> saveSync = CompletableFuture.completedFuture(null);
++    /**
++     * MultiForge M9 sub-step 4: reference to the MultiForge-owned
++     * NewChunkHolder that shadows this Vanilla ChunkHolder. Populated
++     * lazily by the constructor tail below, or by {@link #attachMfShadow}
++     * when {@code MultiForgeChunkMap} finishes creating the holder after
++     * Vanilla constructed this one. Shadow authoritative post-Phase-5-
++     * migration; today it mirrors.
++     *
++     * <p>Package-private (m9 round-5 review fix): {@code
++     * net.multiforge.runtime.chunk.NewChunkHolder} is an
++     * {@code @ApiStatus.Internal} type and must not appear on the public
++     * surface of a Vanilla-facing class. Reads inside this class use
++     * {@code this.mfShadow} directly; cross-package callers must go
++     * through {@code MultiForgeChunkMap.getVisibleChunkIfPresent(long)}
++     * and the {@code ChunkHolderShim.shadowOrNull(ChunkHolder)} helper.
++     */
++    volatile net.multiforge.runtime.chunk.NewChunkHolder mfShadow;
+ 
+     public ChunkHolder(
+         ChunkPos p_142986_,
+@@ -69,6 +86,44 @@
+         this.queueLevel = this.oldTicketLevel;
+         this.setTicketLevel(p_142987_);
+         this.changedBlocksPerSection = new ShortSet[p_142988_.getSectionsCount()];
++        // MultiForge M9 (Phase 4 sub-step 4): lazy-attach the shadow
++        // holder if the runtime is installed and this ChunkHolder
++        // belongs to a real ServerLevel with a materialised chunk
++        // manager. When the manager hasn't yet seen this position,
++        // {@link #mfShadow} stays null and MultiForgeChunkMap may
++        // call {@link #attachMfShadow} later.
++        if (p_142988_ instanceof net.minecraft.server.level.ServerLevel mfSl) {
++            net.multiforge.runtime.scheduler.MultiThreadedSchedulerHost mfHost =
++                    net.multiforge.runtime.scheduler.MultiForgeRegionizedRuntime.current();
++            if (mfHost != null) {
++                net.multiforge.api.world.WorldRef mfWorld =
++                        net.multiforge.neoforge.RegionizedTickCoordinator.asWorldRef(mfSl);
++                net.multiforge.runtime.chunk.ChunkHolderManager mfMgr =
++                        mfHost.chunkManagerForOrNull(mfWorld);
++                if (mfMgr != null) {
++                    this.mfShadow = mfMgr.holderAt(
++                            new net.multiforge.api.world.ChunkPos(p_142986_.x, p_142986_.z));
++                }
++            }
++        }
++    }
++
++    /**
++     * MultiForge-internal setter used by {@code MultiForgeChunkMap} and
++     * the {@code ChunkHolderShim} subclass to bind the shadow holder
++     * after construction when the manager hadn't created the holder
++     * yet at the time Vanilla constructed this {@code ChunkHolder}.
++     * {@code protected} to accommodate the cross-package subclass call
++     * from {@code net.multiforge.neoforge.chunk.ChunkHolderShim} while
++     * still keeping the setter out of the mod-facing API surface.
++     * Idempotent — a duplicate bind is safe.
++     *
++     * <p>The parameter type is an {@code @ApiStatus.Internal} runtime
++     * type; this method is {@code protected} rather than {@code public}
++     * so it does not appear as a mod-callable entry point.
++     */
++    protected void attachMfShadow(net.multiforge.runtime.chunk.NewChunkHolder holder) {
++        this.mfShadow = holder;
+     }
+ 
+     public CompletableFuture<ChunkResult<LevelChunk>> getTickingChunkFuture() {
+@@ -240,6 +295,14 @@
+ 
+     public void setTicketLevel(int p_140028_) {
+         this.ticketLevel = p_140028_;
++        // MultiForge M9 (Phase 4 sub-step 4): forward the level change
++        // to the shadow so post-Phase-5 flipping the authority
++        // direction is a one-line change. Vanilla-side state
++        // (this.ticketLevel) remains authoritative today.
++        net.multiforge.runtime.chunk.NewChunkHolder mfS = this.mfShadow;
++        if (mfS != null) {
++            mfS.setLevel(net.multiforge.runtime.chunk.ChunkLoadLevel.forDistance(p_140028_));
++        }
+     }
+ 
+     private void scheduleFullChunkPromotion(

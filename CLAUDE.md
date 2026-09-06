@@ -35,6 +35,39 @@ in `docs/blueprint.md`.
    thin and grouped into `01-ownership/` .. `09-events/` so rebasing onto
    newer NeoForge tags is scoped per group.
 
+## M9 chunk-system conventions
+
+The M9 chunk-system port replaces Vanilla's `ChunkMap`, `DistanceManager`,
+`ThreadedLevelLightEngine`, and `RegionFile` layer with per-region forks.
+New code that reads or writes chunk state must go through the fork surfaces,
+not the Vanilla ones.
+
+1. **Chunk work always goes through `ChunkHolderManager` (via the facade
+   at `net.multiforge.neoforge.chunk.MultiForgeChunkMap`), never Vanilla
+   `ChunkMap` directly.** Resolve a `NewChunkHolder` via
+   `ChunkHolderManager.holderAt(...)` and mutate through that. Do not
+   reach into `ServerLevel.getChunkSource().chunkMap`.
+2. **Tickets flow through `MultiForgeDistanceManager.addTicket/removeTicket`**,
+   which routes to per-region `PerRegionTicketMap` via
+   `ChunkHolderManager`. `ServerLevel.getChunkSource().addRegionTicket(...)`
+   still works for source compat, but bypasses per-region locality — do
+   not use it in new code.
+3. **Light updates flow through `MultiForgeLightEngine`** — the facade
+   routes `checkBlock` / `updateChunkStatus` / `updateSectionStatus` to
+   the region-owning worker via `RegionizedTaskQueue.queueChunkTask`.
+4. **MCA I/O is `net.multiforge.runtime.io.RegionFileReader` /
+   `RegionFileWriter` / `RegionFileCache`.** Do not call Vanilla
+   `net.minecraft.world.level.chunk.storage.RegionFile` directly. Round-trip
+   through the fork's `RegionChunkSerializer` if you need
+   `CompoundTag` ↔ `LevelChunk` conversion.
+5. **Every region worker has its own journal.** Chunk mutations queued
+   for save land in `RegionJournal` (WAL), flushed by `AutoSaveRunner` in
+   the `FLUSH_OUTBOUND` tick phase. Do not autosave synchronously from a
+   mod hook — enqueue via `AutoSaveRunner.markDirty(region, chunkPos)`.
+6. **`InstanceRegistry<K, V>`** (in `net.multiforge.runtime.chunk`) is the
+   standard `ServerLevel → facade` lookup used by the M9 fork facades.
+   Use it — not a raw `WeakHashMap` — when adding another facade.
+
 ## Repository layout
 
 See top-level `README.md`. Key directories:

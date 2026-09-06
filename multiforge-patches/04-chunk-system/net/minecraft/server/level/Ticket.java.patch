@@ -1,0 +1,21 @@
+--- a/net/minecraft/server/level/Ticket.java
++++ b/net/minecraft/server/level/Ticket.java
+@@ -61,6 +61,17 @@
+     protected void setCreatedTick(long p_9430_) {
+         this.createdTick = p_9430_;
+     }
+
++    // MultiForge (multiforge-patches/04-chunk-system/): public accessor
++    // for the Vanilla-set creation tick. Read by
++    // net.multiforge.neoforge.DistanceManagerBridge#toMultiForgeTicket so
++    // the shadow ticket carries the same expiry-clock origin as Vanilla,
++    // letting MultiForge's TicketExpiryTicker (multiforge-runtime) sweep
++    // expiring tickets under the same clock as Vanilla's own
++    // DistanceManager.purgeStaleTickets. Field layout unchanged.
++    public long getCreatedTick() {
++        return this.createdTick;
++    }
++
+     protected boolean timedOut(long p_9435_) {
+         long i = this.type.timeout();
+         return i != 0L && p_9435_ - this.createdTick > i;

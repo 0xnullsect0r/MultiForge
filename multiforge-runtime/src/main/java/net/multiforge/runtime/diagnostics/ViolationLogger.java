@@ -23,8 +23,26 @@ public final class ViolationLogger {
     private static final Logger LOG = LoggerFactory.getLogger("multiforge.violation");
     private static final long WINDOW_NANOS = 60L * 1_000_000_000L;
     private static final long DEFAULT_PER_MIN = 5L;
-    private static final long PER_MIN =
-            Long.parseLong(System.getProperty("multiforge.violations.warn-per-min", Long.toString(DEFAULT_PER_MIN)));
+    private static final long PER_MIN = parsePerMin(System.getProperty("multiforge.violations.warn-per-min"));
+
+    /**
+     * Robust parse that never throws at class-init time — an invalid
+     * sysprop falls back to {@link #DEFAULT_PER_MIN} instead of an
+     * {@code ExceptionInInitializerError} that would break every
+     * OwnershipEnforcer call site (same failure shape as
+     * {@link net.multiforge.runtime.region.RegionTickWatchdog#parseWarnMs}).
+     */
+    public static long parsePerMin(String raw) {
+        if (raw == null || raw.isBlank()) return DEFAULT_PER_MIN;
+        try {
+            long parsed = Long.parseLong(raw.trim());
+            // Accept 0 as a legitimate "silence all warnings" idiom; only
+            // negative values (nonsensical) fall back. See /67 round-2 finding.
+            return parsed < 0 ? DEFAULT_PER_MIN : parsed;
+        } catch (NumberFormatException e) {
+            return DEFAULT_PER_MIN;
+        }
+    }
 
     private static final ConcurrentMap<String, Bucket> BUCKETS = new ConcurrentHashMap<>();
 
@@ -76,6 +94,13 @@ public final class ViolationLogger {
          * @return 0 = fire, 1 = fire the "suppressing" note, >1 = drop silently.
          */
         long tryConsume() {
+            // Capacity 0 = documented "silence all warnings" idiom
+            // (-Dmultiforge.violations.warn-per-min=0). Skip the
+            // "further suppressed" note branch entirely — the old
+            // capacity-plus-one path emitted one WARN per site per
+            // window, which contradicted the documented contract.
+            // /67 round-3 finding.
+            if (capacity == 0L) return 2L;
             long now = System.nanoTime();
             long start = windowStart;
             if (now - start >= windowNanos) {

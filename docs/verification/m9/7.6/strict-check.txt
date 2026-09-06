@@ -1,0 +1,4 @@
+MultiForge Phase 7.6 strict-mode grep — target patterns:
+  grep -E 'RegionTickOverrunException|OwnershipEnforcer.*REROUTE|region-tick\.overrun' latest.log
+
+Result: 0 hits (PASS)

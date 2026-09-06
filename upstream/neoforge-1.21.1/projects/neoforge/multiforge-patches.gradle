@@ -1,0 +1,118 @@
+// MultiForge fork addition (not part of upstream NeoForge).
+//
+// Applies MultiForge's own patches (../../../multiforge-patches/<NN-group>/**/*.patch,
+// relative to this file) on top of the already NeoForge-patched vanilla source that
+// NeoGradle's platform plugin materializes into src/main/java. Patch groups are applied
+// in directory-name order (01-ownership, 02-region-tick, ...) so later groups can assume
+// earlier ones already landed.
+//
+// Anchor point: this task must run after the real NeoGradle task that writes the final
+// patched vanilla source to disk, empirically confirmed (via a real `:setup` run's task
+// log, not guessed) to be
+// "platformJoined${minecraft_version}-${neoform_version}SourceFromAppliedPatches", and
+// before compileJava.
+//
+// Source-location note: NeoGradle's `:neoforge` project's `src/main/java/` only receives
+// files that NeoForge itself patches; unpatched-by-NeoForge Vanilla classes stay in
+// `:base`'s `src/main/java/`. Since some MultiForge patches target files NeoForge doesn't
+// touch (e.g. ChunkHolder.java, ProcessorMailbox.java), the applier below copies the file
+// from `:base` into `:neoforge` on first touch so the patch's target path exists.
+
+def multiforgePatchesRoot = rootProject.layout.projectDirectory.dir('../../multiforge-patches').asFile
+def neoforgeSrcMainJava = project.file('src/main/java')
+def baseSrcMainJava = rootProject.layout.projectDirectory.dir('projects/base/src/main/java').asFile
+
+def applyMultiforgePatches = tasks.register('applyMultiforgePatches') {
+    group = 'multiforge'
+    description = 'Applies multiforge-patches/<NN-group>/**/*.patch on top of the patched vanilla source.'
+
+    doLast {
+        if (!multiforgePatchesRoot.exists()) {
+            logger.lifecycle("MultiForge: no multiforge-patches directory at ${multiforgePatchesRoot} — nothing to apply.")
+            return
+        }
+        if (!neoforgeSrcMainJava.exists()) {
+            throw new GradleException(
+                "MultiForge: ${neoforgeSrcMainJava} does not exist yet — run the NeoForge 'setup' task first " +
+                "(cd upstream/neoforge-1.21.1 && ./gradlew --no-configuration-cache setup).")
+        }
+
+        def groups = multiforgePatchesRoot.listFiles({ f -> f.isDirectory() } as FileFilter)?.sort { it.name } ?: []
+        int applied = 0
+        int skipped = 0
+        int seeded = 0
+        groups.each { group ->
+            def patchFiles = fileTree(dir: group, include: '**/*.patch').files.sort { it.path }
+            patchFiles.each { patchFile ->
+                // Parse the patch header to find the target file path (e.g.
+                // 'net/minecraft/server/level/ChunkHolder.java'). The first
+                // line is `--- a/<path>` (git apply -p1 semantics).
+                def firstLine = patchFile.readLines().find { it.startsWith('--- a/') || it.startsWith('--- ') }
+                String targetRel = null
+                if (firstLine != null) {
+                    targetRel = firstLine.replaceFirst(/^---\s+a?\//, '').replaceFirst(/^---\s+/, '').trim()
+                    // Strip anything after a tab (git patches include timestamps sometimes).
+                    int tab = targetRel.indexOf('\t')
+                    if (tab >= 0) targetRel = targetRel.substring(0, tab)
+                }
+                if (targetRel != null) {
+                    def neoforgeTarget = new File(neoforgeSrcMainJava, targetRel)
+                    def baseTarget = new File(baseSrcMainJava, targetRel)
+                    if (!neoforgeTarget.exists() && baseTarget.exists()) {
+                        // Seed :neoforge's copy from :base — see source-location note above.
+                        // Do this BEFORE the git apply check so both check + apply see the file.
+                        neoforgeTarget.parentFile.mkdirs()
+                        neoforgeTarget.bytes = baseTarget.bytes
+                        logger.lifecycle("MultiForge: seeded ${targetRel} from :base for ${group.name}/${patchFile.name}")
+                        seeded++
+                    }
+                }
+
+                def checkResult = exec {
+                    workingDir = neoforgeSrcMainJava
+                    commandLine = ['git', 'apply', '--check', '--recount', patchFile.absolutePath]
+                    ignoreExitValue = true
+                    standardOutput = new ByteArrayOutputStream()
+                    errorOutput = new ByteArrayOutputStream()
+                }
+                if (checkResult.exitValue == 0) {
+                    exec {
+                        workingDir = neoforgeSrcMainJava
+                        commandLine = ['git', 'apply', '--recount', patchFile.absolutePath]
+                    }
+                    logger.lifecycle("MultiForge: applied ${group.name}/${patchFile.name}")
+                    applied++
+                    return
+                }
+                def reverseCheck = exec {
+                    workingDir = neoforgeSrcMainJava
+                    commandLine = ['git', 'apply', '--reverse', '--check', patchFile.absolutePath]
+                    ignoreExitValue = true
+                    standardOutput = new ByteArrayOutputStream()
+                    errorOutput = new ByteArrayOutputStream()
+                }
+                if (reverseCheck.exitValue == 0) {
+                    logger.lifecycle("MultiForge: ${group.name}/${patchFile.name} already applied — skipping")
+                    skipped++
+                    return
+                }
+                throw new GradleException(
+                    "MultiForge: patch ${group.name}/${patchFile.name} does not apply cleanly and is not " +
+                    "already applied. Run 'git apply --check ${patchFile.absolutePath}' from " +
+                    "${neoforgeSrcMainJava} for details.")
+            }
+        }
+        logger.lifecycle("MultiForge: ${applied} patch(es) applied, ${skipped} already up to date, ${seeded} file(s) seeded from :base.")
+    }
+}
+
+def sourceFromPatchesTaskName =
+        "platformJoined${project.minecraft_version}-${project.neoform_version}SourceFromAppliedPatches"
+
+tasks.named('applyMultiforgePatches').configure {
+    dependsOn(sourceFromPatchesTaskName)
+}
+
+tasks.named('compileJava').configure {
+    dependsOn(applyMultiforgePatches)
+}

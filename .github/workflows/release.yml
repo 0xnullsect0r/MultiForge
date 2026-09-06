@@ -13,6 +13,11 @@ permissions:
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository_owner }}/multiforge-server
+  # Public sibling repo that hosts release assets. This repo is private
+  # so GitHub Release assets attached here are gated behind auth; the
+  # downloads repo is a plain public repo whose only purpose is holding
+  # binaries. See docs/install.md and the release-repo setup notes.
+  RELEASES_REPO: ${{ vars.RELEASES_REPO || '0xnullsect0r/multiforge-releases' }}
 
 jobs:
   build-jars:
@@ -170,10 +175,33 @@ jobs:
           name: jars-${{ github.ref_name }}
           path: release/
 
-      - name: Create Release
+      - name: Create Release (public downloads repo)
         uses: softprops/action-gh-release@v2
         with:
+          repository: ${{ env.RELEASES_REPO }}
+          # RELEASES_REPO_TOKEN is a PAT (or GitHub App token) with
+          # `contents: write` on the downloads repo. Fine-grained PAT
+          # scoped to that one repo is the safest shape.
+          token: ${{ secrets.RELEASES_REPO_TOKEN }}
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
           files: release/*
           draft: false
           prerelease: ${{ contains(github.ref_name, '-') }}
-          generate_release_notes: true
+          # `generate_release_notes: true` needs read access to this
+          # (private) source repo; the downloads-repo token can't see
+          # commits here, so we build a minimal body instead.
+          body: |
+            MultiForge ${{ github.ref_name }}.
+
+            Downloads:
+            - Fresh installer JAR: `multiforge-installer-*.jar`
+              (stable alias: [multiforge-installer.jar](https://github.com/${{ env.RELEASES_REPO }}/releases/latest/download/multiforge-installer.jar))
+            - Drop-in replacement ZIP: `multiforge-*-replacement.zip`
+              (stable alias: [multiforge-replacement.zip](https://github.com/${{ env.RELEASES_REPO }}/releases/latest/download/multiforge-replacement.zip))
+            - Docker image: `docker pull ghcr.io/${{ github.repository_owner }}/multiforge-server:${{ github.ref_name }}`
+            - Operator install bundle: `multiforge-*-install.tar.gz` (docs + docker-compose + install helper)
+            - Runtime library (for mod authors): `multiforge-runtime-*.jar`
+            - License CLI: `multiforge-license-cli-*.tar`
+
+            See install docs at https://github.com/${{ env.RELEASES_REPO }}#install.

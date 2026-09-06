@@ -123,7 +123,7 @@ For bare-metal, Windows Server, or systemd deployments.
 ### Fresh install
 
 1. Download the release artifacts from
-   <https://github.com/0xnullsect0r/multiforge/releases/tag/v1.0.0>:
+   <https://github.com/0xnullsect0r/multiforge-releases/releases/tag/v1.0.0>:
    - `multiforge-installer-1.0.0.jar` — one-shot installer.
    - `multiforge-1.0.0-server.jar` — the server jar (drop-in for
      `neoforge-1.21.1-server.jar`).

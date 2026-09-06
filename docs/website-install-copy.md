@@ -25,9 +25,9 @@ can hard-code without churn:
 
 | Artifact | Version-pinned | Always-latest |
 |----------|----------------|---------------|
-| Fresh installer JAR | `https://github.com/0xnullsect0r/multiforge/releases/download/v1.0.0/multiforge-installer-1.0.0.jar` | `https://github.com/0xnullsect0r/multiforge/releases/latest/download/multiforge-installer.jar` |
-| Replacement ZIP | `https://github.com/0xnullsect0r/multiforge/releases/download/v1.0.0/multiforge-1.0.0-replacement.zip` | `https://github.com/0xnullsect0r/multiforge/releases/latest/download/multiforge-replacement.zip` |
-| Operator install bundle (docs + compose + install.sh) | `https://github.com/0xnullsect0r/multiforge/releases/download/v1.0.0/multiforge-1.0.0-install.tar.gz` | — |
+| Fresh installer JAR | `https://github.com/0xnullsect0r/multiforge-releases/releases/download/v1.0.0/multiforge-installer-1.0.0.jar` | `https://github.com/0xnullsect0r/multiforge-releases/releases/latest/download/multiforge-installer.jar` |
+| Replacement ZIP | `https://github.com/0xnullsect0r/multiforge-releases/releases/download/v1.0.0/multiforge-1.0.0-replacement.zip` | `https://github.com/0xnullsect0r/multiforge-releases/releases/latest/download/multiforge-replacement.zip` |
+| Operator install bundle (docs + compose + install.sh) | `https://github.com/0xnullsect0r/multiforge-releases/releases/download/v1.0.0/multiforge-1.0.0-install.tar.gz` | — |
 | Docker image (GHCR) | `docker pull ghcr.io/0xnullsect0r/multiforge-server:1.0.0` | `docker pull ghcr.io/0xnullsect0r/multiforge-server:latest` |
 
 > **First-time GHCR setup** (one-time, has to be done by the
@@ -44,7 +44,7 @@ can hard-code without churn:
 
 ### Download
 
-<https://github.com/0xnullsect0r/multiforge/releases/latest/download/multiforge-installer.jar>
+<https://github.com/0xnullsect0r/multiforge-releases/releases/latest/download/multiforge-installer.jar>
 
 ### Prerequisites
 
@@ -201,7 +201,7 @@ in place. Just overlay the MultiForge jars on top.
 
 ### Download
 
-<https://github.com/0xnullsect0r/multiforge/releases/latest/download/multiforge-replacement.zip>
+<https://github.com/0xnullsect0r/multiforge-releases/releases/latest/download/multiforge-replacement.zip>
 
 Contents:
 

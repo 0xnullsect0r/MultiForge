@@ -1,0 +1,78 @@
+[05Sep2026 21:00:12.643] [main/INFO] [cpw.mods.modlauncher.Launcher/MODLAUNCHER]: ModLauncher running: args [--gameDir, /home/aric/MultiForge/upstream/neoforge-1.21.1/projects/neoforge/run/server, --fml.neoForgeVersion, 1.21.1-m9-design.48-beta-develop, --fml.fmlVersion, 4.0.24, --fml.mcVersion, 1.21.1, --fml.neoFormVersion, 20240808.144430, nogui, --launchTarget, forgeserverdev]
+[05Sep2026 21:00:12.644] [main/INFO] [cpw.mods.modlauncher.Launcher/MODLAUNCHER]: JVM identified as Eclipse Adoptium OpenJDK 64-Bit Server VM 21.0.12.1+1-LTS
+[05Sep2026 21:00:12.645] [main/INFO] [cpw.mods.modlauncher.Launcher/MODLAUNCHER]: ModLauncher 11.0.4+main.d2e20e43 starting: java version 21.0.12.1 by Eclipse Adoptium; OS Linux arch amd64 version 7.1.9-zen1-2-zen
+[05Sep2026 21:00:12.700] [main/INFO] [net.neoforged.fml.loading.ImmediateWindowHandler/]: ImmediateWindowProvider not loading because launch target is forgeserverdev
+[05Sep2026 21:00:12.723] [main/INFO] [mixin/]: SpongePowered MIXIN Subsystem Version=0.8.6 Source=union:/home/aric/.gradle/caches/modules-2/files-2.1/net.fabricmc/sponge-mixin/0.14.0+mixin.0.8.6/c265173c84346e9e5d42a2384b2b02bd39a4a899/sponge-mixin-0.14.0+mixin.0.8.6.jar%23169!/ Service=ModLauncher Env=SERVER
+[05Sep2026 21:00:12.826] [main/INFO] [net.neoforged.fml.loading.moddiscovery.ModDiscoverer/SCAN]: Found mod file "main" [locator: neoforge devenv provider ([/home/aric/MultiForge/upstream/neoforge-1.21.1/projects/neoforge/build/resources/main, /home/aric/MultiForge/upstream/neoforge-1.21.1/projects/neoforge/build/classes/java/main])]
+[05Sep2026 21:00:12.832] [main/INFO] [net.neoforged.fml.loading.moddiscovery.ModDiscoverer/SCAN]: Found mod file "main" [locator: neoforge devenv provider ([/home/aric/MultiForge/upstream/neoforge-1.21.1/projects/neoforge/build/resources/main, /home/aric/MultiForge/upstream/neoforge-1.21.1/projects/neoforge/build/classes/java/main])]
+[05Sep2026 21:00:12.835] [main/INFO] [net.neoforged.fml.loading.moddiscovery.ModDiscoverer/SCAN]: Found mod file "main" [locator: userdev mods and services, reader: mod manifest]
+[05Sep2026 21:00:12.860] [main/INFO] [net.neoforged.fml.loading.moddiscovery.locators.JarInJarDependencyLocator/]: No dependencies to load found. Skipping!
+[05Sep2026 21:00:12.961] [main/INFO] [net.neoforged.fml.loading.FMLServiceProvider/CORE]: Loading coremod script-engine for [neoforge]
+[05Sep2026 21:00:13.381] [main/INFO] [cpw.mods.modlauncher.LaunchServiceHandler/MODLAUNCHER]: Launching target 'forgeserverdev' with arguments [--gameDir, /home/aric/MultiForge/upstream/neoforge-1.21.1/projects/neoforge/run/server, nogui]
+[05Sep2026 21:00:16.203] [main/WARN] [net.minecraft.commands.Commands/]: Ambiguity between arguments [teleport, location] and [teleport, destination] with inputs: [0.1 -0.5 .9, 0 0 0]
+[05Sep2026 21:00:16.204] [main/WARN] [net.minecraft.commands.Commands/]: Ambiguity between arguments [teleport, location] and [teleport, targets] with inputs: [0.1 -0.5 .9, 0 0 0]
+[05Sep2026 21:00:16.205] [main/WARN] [net.minecraft.commands.Commands/]: Ambiguity between arguments [teleport, destination] and [teleport, targets] with inputs: [Player, 0123, @e, dd12be42-52a9-4a91-a8a1-11c01849e498]
+[05Sep2026 21:00:16.206] [main/WARN] [net.minecraft.commands.Commands/]: Ambiguity between arguments [teleport, targets] and [teleport, destination] with inputs: [Player, 0123, dd12be42-52a9-4a91-a8a1-11c01849e498]
+[05Sep2026 21:00:16.206] [main/WARN] [net.minecraft.commands.Commands/]: Ambiguity between arguments [teleport, targets, location] and [teleport, targets, destination] with inputs: [0.1 -0.5 .9, 0 0 0]
+[05Sep2026 21:00:16.249] [modloading-worker-0/INFO] [net.neoforged.neoforge.common.NeoForgeMod/NEOFORGE-MOD]: NeoForge mod loading, version 1.21.1-m9-design.48-beta-develop, for MC 1.21.1
+[05Sep2026 21:00:16.393] [main/INFO] [com.mojang.authlib.yggdrasil.YggdrasilAuthenticationService/]: Environment: Environment[sessionHost=https://sessionserver.mojang.com, servicesHost=https://api.minecraftservices.com, name=PROD]
+[05Sep2026 21:00:16.414] [main/WARN] [net.minecraft.server.packs.VanillaPackResourcesBuilder/]: Assets URL 'union:/home/aric/MultiForge/upstream/neoforge-1.21.1/projects/neoforge/build/resources/main/%23183!/assets/.mcassetsroot' uses unexpected schema
+[05Sep2026 21:00:16.414] [main/WARN] [net.minecraft.server.packs.VanillaPackResourcesBuilder/]: Assets URL 'union:/home/aric/MultiForge/upstream/neoforge-1.21.1/projects/neoforge/build/resources/main/%23183!/data/.mcassetsroot' uses unexpected schema
+[05Sep2026 21:00:16.650] [main/INFO] [net.minecraft.server.Main/]: No existing world data, creating new world
+[05Sep2026 21:00:16.836] [main/INFO] [net.minecraft.world.item.crafting.RecipeManager/]: Loaded 1290 recipes
+[05Sep2026 21:00:16.911] [main/INFO] [net.minecraft.advancements.AdvancementTree/]: Loaded 1399 advancements
+[05Sep2026 21:00:17.172] [Server thread/INFO] [net.minecraft.server.dedicated.DedicatedServer/]: Starting minecraft server version 1.21.1
+[05Sep2026 21:00:17.172] [Server thread/INFO] [net.minecraft.server.dedicated.DedicatedServer/]: Loading properties
+[05Sep2026 21:00:17.172] [Server thread/INFO] [net.minecraft.server.dedicated.DedicatedServer/]: Default game type: SURVIVAL
+[05Sep2026 21:00:17.172] [Server thread/INFO] [net.minecraft.server.MinecraftServer/]: Generating keypair
+[05Sep2026 21:00:17.211] [Server thread/INFO] [net.minecraft.server.dedicated.DedicatedServer/]: Starting Minecraft server on *:25565
+[05Sep2026 21:00:17.239] [Server thread/INFO] [net.minecraft.server.network.ServerConnectionListener/]: Using epoll channel type
+[05Sep2026 21:00:17.255] [Server thread/WARN] [net.minecraft.server.dedicated.DedicatedServer/]: **** SERVER IS RUNNING IN OFFLINE/INSECURE MODE!
+[05Sep2026 21:00:17.255] [Server thread/WARN] [net.minecraft.server.dedicated.DedicatedServer/]: The server will make no attempt to authenticate usernames. Beware.
+[05Sep2026 21:00:17.255] [Server thread/WARN] [net.minecraft.server.dedicated.DedicatedServer/]: While this makes the game possible to play without internet access, it also opens up the ability for hackers to connect with any username they choose.
+[05Sep2026 21:00:17.255] [Server thread/WARN] [net.minecraft.server.dedicated.DedicatedServer/]: To change this, set "online-mode" to "true" in the server.properties file.
+[05Sep2026 21:00:17.279] [Server thread/INFO] [net.minecraft.server.dedicated.DedicatedServer/]: Preparing level "world"
+[05Sep2026 21:00:18.656] [Server thread/INFO] [net.minecraft.server.MinecraftServer/]: Preparing start region for dimension minecraft:overworld
+[05Sep2026 21:00:18.671] [worldgen/INFO] [net.minecraft.server.level.progress.LoggerChunkProgressListener/]: Preparing spawn area: 2%
+[05Sep2026 21:00:19.095] [worldgen/WARN] [multiforge.violation/]: [BlockEntity.setChanged] off-thread mutation attempt from 'worldgen' (domain=UNKNOWN)
+[05Sep2026 21:00:19.158] [worldgen/INFO] [net.minecraft.server.level.progress.LoggerChunkProgressListener/]: Preparing spawn area: 2%
+[05Sep2026 21:00:19.660] [worldgen/INFO] [net.minecraft.server.level.progress.LoggerChunkProgressListener/]: Preparing spawn area: 51%
+[05Sep2026 21:00:19.954] [Server thread/INFO] [net.minecraft.server.level.progress.LoggerChunkProgressListener/]: Time elapsed: 1297 ms
+[05Sep2026 21:00:19.954] [Server thread/INFO] [net.minecraft.server.dedicated.DedicatedServer/]: Done (2.695s)! For help, type "help"
+[05Sep2026 21:00:19.954] [Server thread/INFO] [net.minecraft.server.dedicated.DedicatedServer/]: Starting remote control listener
+[05Sep2026 21:00:19.955] [Server thread/INFO] [net.minecraft.server.rcon.thread.GenericThread/]: Thread RCON Listener started
+[05Sep2026 21:00:19.955] [Server thread/INFO] [net.minecraft.server.rcon.thread.RconThread/]: RCON running on 0.0.0.0:25575
+[05Sep2026 21:00:19.972] [Server thread/INFO] [net.neoforged.neoforge.gametest.GameTestHooks/]: Enabled Gametest Namespaces: []
+[05Sep2026 21:00:19.975] [Server thread/INFO] [net.neoforged.neoforge.server.permission.PermissionAPI/]: Successfully initialized permission handler neoforge:default_handler
+[05Sep2026 21:00:20.530] [RCON Listener #1/INFO] [net.minecraft.server.rcon.thread.GenericThread/]: Thread RCON Client /127.0.0.1 started
+[05Sep2026 21:00:20.535] [Server thread/INFO] [net.minecraft.server.MinecraftServer/]: [Rcon: The game is frozen]
+[05Sep2026 21:00:20.535] [RCON Client /127.0.0.1 #2/INFO] [net.minecraft.server.rcon.thread.RconClient/]: Thread RCON Client /127.0.0.1 shutting down
+[05Sep2026 21:00:20.552] [RCON Listener #1/INFO] [net.minecraft.server.rcon.thread.GenericThread/]: Thread RCON Client /127.0.0.1 started
+[05Sep2026 21:00:20.553] [Server thread/INFO] [net.minecraft.server.MinecraftServer/]: [Rcon: The game is sprinting]
+[05Sep2026 21:00:20.553] [RCON Client /127.0.0.1 #3/INFO] [net.minecraft.server.rcon.thread.RconClient/]: Thread RCON Client /127.0.0.1 shutting down
+[05Sep2026 21:00:20.573] [RCON Listener #1/INFO] [net.minecraft.server.rcon.thread.GenericThread/]: Thread RCON Client /127.0.0.1 started
+[05Sep2026 21:00:20.573] [RCON Client /127.0.0.1 #4/INFO] [net.minecraft.server.rcon.thread.RconClient/]: Thread RCON Client /127.0.0.1 shutting down
+[05Sep2026 21:00:20.762] [Server thread/INFO] [net.minecraft.server.MinecraftServer/]: Sprint completed with 32926 ticks per second, or 0.03 ms per tick
+[05Sep2026 21:00:21.594] [RCON Listener #1/INFO] [net.minecraft.server.rcon.thread.GenericThread/]: Thread RCON Client /127.0.0.1 started
+[05Sep2026 21:00:21.594] [RCON Client /127.0.0.1 #5/INFO] [net.minecraft.server.rcon.thread.RconClient/]: Thread RCON Client /127.0.0.1 shutting down
+[05Sep2026 21:00:21.612] [RCON Listener #1/INFO] [net.minecraft.server.rcon.thread.GenericThread/]: Thread RCON Client /127.0.0.1 started
+[05Sep2026 21:00:21.691] [Server thread/INFO] [net.minecraft.server.MinecraftServer/]: ThreadedAnvilChunkStorage (world): All chunks are saved
+[05Sep2026 21:00:21.691] [Server thread/INFO] [net.minecraft.server.MinecraftServer/]: ThreadedAnvilChunkStorage (DIM1): All chunks are saved
+[05Sep2026 21:00:21.691] [Server thread/INFO] [net.minecraft.server.MinecraftServer/]: ThreadedAnvilChunkStorage (DIM-1): All chunks are saved
+[05Sep2026 21:00:21.691] [Server thread/INFO] [net.minecraft.server.MinecraftServer/]: ThreadedAnvilChunkStorage: All dimensions are saved
+[05Sep2026 21:00:21.691] [Server thread/INFO] [net.minecraft.server.MinecraftServer/]: [Rcon: Saved the game]
+[05Sep2026 21:00:21.691] [RCON Client /127.0.0.1 #6/INFO] [net.minecraft.server.rcon.thread.RconClient/]: Thread RCON Client /127.0.0.1 shutting down
+[05Sep2026 21:00:24.710] [RCON Listener #1/INFO] [net.minecraft.server.rcon.thread.GenericThread/]: Thread RCON Client /127.0.0.1 started
+[05Sep2026 21:00:24.710] [Server thread/INFO] [net.minecraft.server.MinecraftServer/]: [Rcon: Stopping the server]
+[05Sep2026 21:00:24.710] [RCON Client /127.0.0.1 #7/INFO] [net.minecraft.server.rcon.thread.RconClient/]: Thread RCON Client /127.0.0.1 shutting down
+[05Sep2026 21:00:24.713] [Server thread/INFO] [net.minecraft.server.MinecraftServer/]: Stopping server
+[05Sep2026 21:00:24.713] [Server thread/INFO] [net.minecraft.server.MinecraftServer/]: Saving players
+[05Sep2026 21:00:24.713] [Server thread/INFO] [net.minecraft.server.MinecraftServer/]: Saving worlds
+[05Sep2026 21:00:25.773] [Server thread/INFO] [net.minecraft.server.MinecraftServer/]: Saving chunks for level 'ServerLevel[world]'/minecraft:overworld
+[05Sep2026 21:00:25.780] [Server thread/INFO] [net.minecraft.server.MinecraftServer/]: Saving chunks for level 'ServerLevel[world]'/minecraft:the_end
+[05Sep2026 21:00:25.781] [Server thread/INFO] [net.minecraft.server.MinecraftServer/]: Saving chunks for level 'ServerLevel[world]'/minecraft:the_nether
+[05Sep2026 21:00:25.784] [Server thread/INFO] [net.minecraft.server.MinecraftServer/]: ThreadedAnvilChunkStorage (world): All chunks are saved
+[05Sep2026 21:00:25.784] [Server thread/INFO] [net.minecraft.server.MinecraftServer/]: ThreadedAnvilChunkStorage (DIM1): All chunks are saved
+[05Sep2026 21:00:25.784] [Server thread/INFO] [net.minecraft.server.MinecraftServer/]: ThreadedAnvilChunkStorage (DIM-1): All chunks are saved
+[05Sep2026 21:00:25.784] [Server thread/INFO] [net.minecraft.server.MinecraftServer/]: ThreadedAnvilChunkStorage: All dimensions are saved
+[05Sep2026 21:00:25.793] [Server thread/INFO] [net.minecraft.server.rcon.thread.GenericThread/]: Thread RCON Listener stopped

@@ -67,6 +67,90 @@ jobs:
           sudo apt-get update && sudo apt-get install -y shellcheck
           shellcheck docker/entrypoint.sh
 
+  fork-build:
+    name: fork compile (upstream/neoforge-1.21.1)
+    runs-on: ubuntu-latest
+    # 30 minutes: :setup takes ~3 min, mavenLocal publish ~10s, patch apply
+    # ~1s, fork compile ~30s. The rest is Gradle warm-up + cache miss slack.
+    timeout-minutes: 30
+    # Advisory. Vanilla neoFormDecompile takes ~2 min of subprocess-heavy
+    # work (javap + vineflower) inside the same JVM heap as gradle. On the
+    # standard GHA `ubuntu-latest` runner it repeatedly gets preempted with
+    # "The runner has received a shutdown signal" mid-decompile — a known
+    # GHA infra issue with long-running JVM-intensive jobs, not a code
+    # defect. This job is retained for visibility but marked non-blocking
+    # so a green ci status doesn't require the fork-compile step to pass.
+    # Local verification remains authoritative: run
+    #   `cd upstream/neoforge-1.21.1 && ./gradlew :neoforge:applyMultiforgePatches :neoforge:compileJava`
+    # before every push to the fork paths (see .github/PULL_REQUEST_TEMPLATE.md
+    # "Chunk-system regression run" checkbox).
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v3
+        with:
+          cache-read-only: ${{ github.event_name == 'pull_request' }}
+
+      # Bigger heap for the fork build — NeoForge's :setup + platform plugin
+      # OOMs with the default 3G. Matches the local runner override we use
+      # for `runGameTestServer` per docs/blueprint.md notes.
+      - name: Set fork-build heap
+        run: echo "GRADLE_OPTS=-Xmx6G" >> "$GITHUB_ENV"
+
+      - name: Publish multiforge-runtime + api + license to mavenLocal
+        # Fork's projects/neoforge/build.gradle depends on these via mavenLocal
+        # — without publishing first, `:neoforge:compileJava` fails at the
+        # dependency resolution step. Also catches finding #14 of the /67
+        # review: runtime API drift would break the fork at this step, whereas
+        # the pure-Java `build` job would still report green.
+        run: |
+          ./gradlew \
+            :multiforge-license:publishToMavenLocal \
+            :multiforge-api:publishToMavenLocal \
+            :multiforge-runtime:publishToMavenLocal \
+            --no-daemon --stacktrace
+
+      - name: NeoForge :setup + apply MultiForge patches + compile fork
+        working-directory: upstream/neoforge-1.21.1
+        # One combined gradle invocation so the daemon stays warm and the
+        # neoform decompile cache carries into the compileJava step. Split
+        # invocations were burning ~40s per re-warm on top of the ~90s
+        # decompile, and the runner sometimes gets preempted mid-decompile.
+        # --parallel is safe here — neoform tasks are already sequential
+        # per their dependency graph. --build-cache lets subsequent runs
+        # on the same commit reuse decompile output when the gradle-actions
+        # cache restore hits.
+        # `setup` is required in addition to `:neoforge:applyMultiforgePatches`
+        # so `projects/neoforge/src/main/java/` gets populated — the platform
+        # plugin's `SourceFromAppliedPatches` writes to a build-cache path,
+        # and `:setup` is the task that copies/materialises those files into
+        # the neoforge sourceSet root that the applier + compileJava consume.
+        run: |
+          ./gradlew --no-configuration-cache --no-daemon --stacktrace --parallel --build-cache \
+            setup \
+            :neoforge:applyMultiforgePatches \
+            :neoforge:compileJava \
+            spotlessCheck \
+            licenseCheck
+
+      - name: Upload fork test/build reports on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fork-build-reports-${{ github.sha }}
+          path: |
+            upstream/neoforge-1.21.1/**/build/reports/
+            upstream/neoforge-1.21.1/**/build/patch-rejects/
+          retention-days: 7
+
   gitleaks:
     name: secret scan
     runs-on: ubuntu-latest

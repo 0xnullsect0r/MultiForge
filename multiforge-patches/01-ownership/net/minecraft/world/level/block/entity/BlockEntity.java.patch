@@ -1,0 +1,14 @@
+--- a/net/minecraft/world/level/block/entity/BlockEntity.java
++++ b/net/minecraft/world/level/block/entity/BlockEntity.java
+@@ -188,6 +188,11 @@
+     }
+ 
+     public void setChanged() {
++        // MultiForge (multiforge-patches/01-ownership/): see Level.setBlock for rationale.
++        if (!net.multiforge.neoforge.OwnershipGuard.canMutate("BlockEntity.setChanged")) {
++            net.multiforge.neoforge.OwnershipGuard.reroute("BlockEntity.setChanged", this::setChanged);
++            return;
++        }
+         if (this.level != null) {
+             setChanged(this.level, this.worldPosition, this.blockState);
+         }

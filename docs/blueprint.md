@@ -448,6 +448,347 @@ You need a first-class debugging stack:
 - docs, warnings, certifications
 - operational hardening
 
+## M7 — Ownership Enforcement in Real Source
+- wire OwnerToken/ViolationLogger/reroute logic (multiforge-runtime) into real
+  net.minecraft.* mutation sites via multiforge-patches/01-ownership/
+- connective tissue between M0/M1 scaffolding (already built, pure-Java) and
+  M2's region-tick MVP
+- exit gate: 01-ownership patches apply cleanly (via the new
+  `applyMultiforgePatches` Gradle task) against a fresh `:setup` inside
+  `upstream/neoforge-1.21.1`; full fork `./gradlew build` succeeds with
+  patches applied; NeoForge GameTest fixture (see
+  `upstream/neoforge-1.21.1/tests/src/main/java/net/multiforge/testfixtures/`)
+  proves off-thread mutation is detected, warn-logged, rerouted, and
+  eventually applied without crashing the tick loop; `multiforge-bench`
+  determinism harness (`WorldDiff` — pure-Java file diff, tolerates
+  known-nondeterministic paths) is available for the manual byte-identical
+  world-save comparison against a baseline unpatched fork on a fixed seed.
+  Automating that comparison end-to-end (server launch + baseline vs.
+  patched run + diff) is future work per the harness's own scope note —
+  M8 will need to replace byte-identical comparison with a
+  canonicalized/semantic NBT diff anyway once real parallel scheduling
+  makes chunk-save order legitimately non-deterministic.
+
+## M8 — Region Tick Loop
+Broken into 8 landable sub-steps, sized similarly to M7's sub-steps:
+- **Sub-step 1 (DONE):** `RegionizedData<T>` pure-Java slot API +
+  `RegionListener` callback interface, wired into `ThreadedRegionizer`
+  so subsystems can fold/peel per-region state atomically with
+  merge/split.
+- **Sub-step 2 (DONE):** `PhasedRegionTickBody` — 6-phase composition
+  (INBOUND_MAILBOX, BLOCK_FLUID_TICKS, ENTITY_AI, BLOCK_ENTITIES,
+  REGION_EVENTS, FLUSH_OUTBOUND) matching blueprint.md §"Region local
+  phase ordering". Auto-wires `TickRegionScheduler` and
+  `RegionizedTaskQueue` as `RegionListener`s in
+  `MultiThreadedSchedulerHost.regionizerFor(...)` so region death
+  automatically deregisters and merges move inboxes.
+- **Sub-step 3 (DONE):** `MultiForgeRegionizedRuntime` static holder
+  the fork patches call at bootstrap and shutdown; `ServerDomains`
+  gains `uninstall()` so shutdown properly unbinds the API-side host.
+- **Sub-step 4 (DONE):** fork's `ServerLifecycleHooks` calls
+  `MultiForgeRegionizedRuntime.install(defaults, no-op body)` at
+  `handleServerAboutToStart` and `.shutdown()` at
+  `handleServerStopped`. GameTest fixture at
+  `net/multiforge/testfixtures/RegionizedRuntimeTests.java` asserts
+  the host is reachable during real server runtime.
+- **Sub-step 5 (DONE, facade-first):** patched vanilla
+  `MinecraftServer.tickChildren` routes each `serverlevel.tick(p)` call
+  through a new fork-local `RegionizedTickCoordinator` facade
+  (`upstream/neoforge-1.21.1/src/main/java/net/multiforge/neoforge/`),
+  mirroring the OwnershipGuard pattern M7 established. Currently a
+  pass-through — no behavior change — so the vanilla patch can stay
+  stable while future sub-steps swap the facade to real per-region
+  dispatch. Second file in `multiforge-patches/02-region-tick/`.
+- **Sub-step 6a (DONE):** `ChunkEvent.Load`/`ChunkEvent.Unload`
+  handlers auto-register/deregister loaded chunks with the world's
+  regionizer via new `registerChunk`/`unregisterChunk` primitives on
+  `MultiThreadedSchedulerHost` — deliberately without dropping a
+  keep-loaded ticket (Vanilla's own tickets already keep the chunk
+  loaded; adding one would leak). Region workers now have real regions
+  to tick against, though the body remains no-op from sub-step 4 until
+  6b/c wire real per-region tick work. GameTest fixture at
+  `RegionizedRuntimeTests.loadedChunksHaveRegions` asserts a region
+  exists for the GameTest's own structure chunk.
+- **Sub-step 6b (DONE — M9 Phase 1.5, `ab5c185`):** swapped
+  `RegionizedTickCoordinator.dispatchLevelTick` from pass-through to real
+  per-region dispatch, decomposing `ServerLevel.tick`'s per-chunk work
+  (block/fluid ticks, entity iteration, block-entity iteration) so each
+  region owns its slice.
+- Sub-step 7 (pending, `multiforge-patches/03-world-data/`): convert
+  per-world mutable `ServerLevel` fields (block-tick list, fluid-tick
+  list, block-event queue, entity iterator caches) to `RegionizedData<T>`
+  slots.
+- **Sub-step 8a (DONE):** `RegionTickWatchdog` — records per-region
+  tick duration via `TickRegionScheduler.runWorker`'s enter/exit
+  hooks; when duration exceeds the threshold
+  (`-Dmultiforge.watchdog.warn-ms=500` default) fires a rate-limited
+  warn + bumps `ProbeRegistry` key `region-tick.overrun` for CI hard
+  regression prevention. `-Dmultiforge.regiontick.strict=on` upgrades
+  the warn to a thrown `RegionTickOverrunException`, used by the
+  regression harness. Catches blocking-wait violations that would
+  otherwise silently degrade tick throughput, and gives operators a
+  first-class signal that a region is too hot to fit in one tick and
+  should split.
+- Sub-step 8b (pending): upgrade `WorldDiff` (multiforge-bench) to
+  canonicalized/semantic NBT diff so parallel-scheduled chunk save
+  order stays testable once sub-step 6b/c actually parallelizes work.
+
+Exit gate for the milestone: deterministic-mode regression on real
+region-tick dispatch; no blocking calls on a region worker thread
+(verified via strict-mode regression run).
+
+### Known deferred races (documented, unfixed)
+
+Four rounds of /67 review surfaced concurrency bugs that admit no
+correct local fix without larger design work. Each is documented
+inline in the affected class's javadoc; enumerated here for
+future-session visibility. Nearly all have since landed real fixes
+during M9 Phase 1 (see "Resolved in M9 Phase 1" below); the remaining
+open item is the sole `checkOnly` semantics entry.
+
+- ~~**Merge-during-tick race**~~ FIXED (commit `fb8e99e`, M9 Phase 1
+  task 1.1) — `RegionizedData.onRegionsMerging` /
+  `ThreadedRegionizer.mergeInto` now quiesce the surviving region via
+  a FOLDING state on the write path before firing merge listeners,
+  matching Folia's ThreadedRegionizer shape.
+- ~~**`queueChunkTask` merge race**~~ FIXED (commit `daf3d3e`, M9
+  Phase 1 task 1.2) — producer now takes the regionizer's read lock
+  around the `ownerLookup → inboxFor(owner).add(task)` enqueue, so a
+  concurrent merge cannot drop the task via `inboxes.remove(dying)`.
+- ~~**`WorldGenLevel`-guard bypass**~~ FIXED — new discriminator
+  `WorldGenLevel && !(this instanceof ServerLevel)` correctly bypasses
+  only WorldGenRegion (verified as the only non-ServerLevel
+  WorldGenLevel implementer in the vanilla source).
+- **`checkOnly` semantics for return-value patches** (attempted for
+  Level.setBlock / ServerLevel.addFreshEntity): trading dishonest
+  sentinel return for real concurrent corruption is not net-safer.
+  Currently patches keep the reroute+return-false shape from M7 —
+  callers see false (dishonest, but callers branching on it don't
+  cause races), rerouted mutation runs later on the main executor.
+  Proper fix requires a synchronous-round-trip mechanism that does
+  not block on a region worker thread.
+- ~~**`WorldDiff` MCA location table not stripped**~~ FIXED —
+  canonical per-slot MCA hash now walks the location table, reads
+  each chunk's own declared length, and hashes payloads in fixed
+  slot-id order. Stable across timestamp + sector-reorder variation;
+  still catches payload and presence differences. Supersedes the
+  prior byte-range stripping.
+- ~~**`OwnershipEnforcer.unbindTickThreadAndRerouteTarget` race**~~
+  FIXED (via commit 97ef3f9) — wrapped `server::execute` bind in a
+  lambda that catches `RejectedExecutionException` and logs a
+  rate-limited warn. The fundamental race (cached local reference
+  after volatile swap) is unclosable via any swap protocol, but
+  making the target no-throw makes the race benign.
+- ~~**`splitIfDisconnected` publishes empty section→region mapping
+  mid-split**~~ FIXED (commit `3eb777b`, M9 Phase 1 batch 1) —
+  `ThreadedRegionizer.splitIfDisconnected` now stages new regions
+  off-map and swaps them into `sectionToRegion` atomically under the
+  write lock, closing the empty-window that let a concurrent
+  `regionAtChunk` see a spurious `null` and drop an observation.
+- ~~**`ServerLifecycleHooks` swallows `IllegalStateException` on
+  install failure**~~ FIXED (commit `3eb777b`, M9 Phase 1 batch 1) —
+  the two `IllegalStateException` sources are now discriminated by a
+  dedicated subclass so the hooks swallow only the "same instance
+  installed" case; a rogue ServiceLoader-bound host is now logged and
+  rethrown instead of silently disabling regionization forever.
+
+### Resolved in M9 Phase 1
+
+M9 Phase 1 (commits `3eb777b`, `7d06465`, `82c8857`, `fb8e99e`,
+`daf3d3e`, `ab5c185`) closed the load-bearing scheduler races that had
+been documented-and-deferred through M8:
+
+- `3eb777b` — Phase 1 batch 1: `splitIfDisconnected` empty-window
+  race; `ServerLifecycleHooks` `IllegalStateException` dedup;
+  `ChunkHolderManagerBridge` no-world-regionizer path;
+  `TicketExpiryTicker` scheduling.
+- `7d06465` — Phase 1 batch 2: `ChunkTaskScheduler.onRegionSplit`
+  peel semantics (correct per-region ticket handoff on split).
+- `82c8857` — Phase 1 batch 3: `DistanceManager` shadow bridge for
+  forced-chunk and player tickets (they now flow through the
+  MultiForge ticket map).
+- `fb8e99e` — Phase 1 task 1.1: `RegionizedData` merger race —
+  FOLDING quiescence on the write path.
+- `daf3d3e` — Phase 1 task 1.2: `queueChunkTask` merge race — read
+  lock around the enqueue.
+- `ab5c185` — Phase 1 task 1.5: M8 sub-step 6b real per-region
+  dispatch (`RegionizedTickCoordinator.dispatchLevelTick`).
+
+## M9 — Chunk System Port
+- Moonrise-equivalent port: binds already-built
+  NewChunkHolder/ChunkHolderManager to real
+  ChunkMap/DistanceManager/ServerChunkCache
+  (multiforge-patches/04-chunk-system/)
+- largest and riskiest patch group; own milestone(s), sequenced as multiple
+  landable sub-steps like M7
+- exit gate: chunk loading/unloading/ticket lifecycle
+  deterministic-regression-verified region-by-region
+
+### Status: Landed (pending Phase 7 verification runs)
+
+M9 code has landed on `develop` across Phases 0–6. Structural exit-gate
+work is complete; the milestone closes once the Phase 7 wall-clock
+verification runs (below) are executed and their outputs archived.
+
+Key commits by phase:
+
+- **Phase 1 — deferred-race fixes:** `3eb777b`, `7d06465`, `82c8857`,
+  `fb8e99e`, `daf3d3e`, `ab5c185` (see "Resolved in M9 Phase 1"
+  above).
+- **Phase 2 — NewChunkHolder full state:** `d8b761a`.
+- **Phase 3 — MCA I/O:** `e96f7cf`, `743759d`, `ff412bc`, `1925c5f`,
+  `089940d`, `63efccd`, `6fab940`.
+- **Phase 4.1 — MultiForgeChunkMap:** `128d248`, `11472c8`.
+- **Phase 4.2 — MultiForgeDistanceManager:** `322a71c`, `2078327`.
+- **Phase 4.4 — ChunkHolder shadow attachment:** `593b62f`.
+- **Phase 4.5 — MultiForgeLightEngine:** `f129970`, `c555837`.
+- **Phase 4.6 — ChunkTaskPriorityQueueSorter replacement:** `567e242`.
+- **Phase 4.8 — Ticket schema:** `9fa7e9e`.
+- **Phase 4 remaining (delegation patches + tests):** `bdd3c2c`,
+  `7d11a9b`, `bba1cc4`, `c725a7c`, `b9a70e4`, `8109609`, `617483d`,
+  `a3274ce`, `13943e5`.
+- **Phase 5 wave A** (tick body wiring, journal lifecycle, shutdown
+  coordinator): `66df523`.
+- **Phase 5 wave B** (real ticket writes, bridge deletion,
+  integration test): `c8bef8a`.
+- **Phase 6A — server-side audit:** `1f4c7b8`.
+- **Phase 6B — client + events audit:** `3dbc79b`.
+- **Phase 8 — conventions + PR template:** `43cd791`.
+
+### Phase 7 pending — verification runbook (user-triggered)
+
+Runbook items, not committed test output. Each is expected to be run
+manually against a real workload on the target host, its output
+archived under `docs/verification/m9/`, and cross-referenced from the
+milestone-close PR body.
+
+1. **Deterministic-mode regression, single worker** — fixed seed, 1
+   worker, 20 min; assert byte-identical world save vs upstream
+   NeoForge. Command: `./gradlew :multiforge-bench:determinism`.
+2. **Deterministic-mode regression, N=cores/2 workers** — same seed,
+   parallel dispatch; assert semantic-NBT parity (via M8 sub-step 8b
+   `WorldDiff` upgrade in Phase 7.1).
+3. **Bench harness — headless swarm** — 20 / 100 / 500 player bot
+   swarms; capture TPS p50/p95 baseline for M9 exit numbers. Command:
+   `./gradlew :multiforge-bench:atm10`.
+4. **Strict-mode watchdog** — 30 min under bench load with
+   `-Dmultiforge.regiontick.strict=on`; assert zero
+   `RegionTickOverrunException` and zero rate-limited warns on
+   `region-tick.overrun`.
+
+Only after all four runs are green does the milestone close and
+`develop` merge into `main` per the release-branch discipline in
+CLAUDE.md.
+
+### M9 sub-step 1 (DONE)
+
+- **Read-only ChunkMap → ChunkHolderManager shadow bridge**
+  (`multiforge-patches/04-chunk-system/net/minecraft/server/level/ChunkMap.java.patch`).
+  Single-line patch in `ChunkMap.updateChunkScheduling`, co-located
+  with NeoForge's existing `fireChunkTicketLevelUpdated` event hook,
+  calls `net.multiforge.neoforge.ChunkHolderManagerBridge.onTicketLevelUpdated`.
+  Bridge translates Vanilla coordinates + level to MultiForge equivalents
+  and populates `ChunkHolderManager` (which was already unit-tested but
+  had no Vanilla feed). Zero behavior change to Vanilla ticket-level
+  transitions.
+
+  Deliverables:
+  - `net.multiforge.neoforge.ChunkHolderManagerBridge` — fork facade
+  - `multiforge-patches/04-chunk-system/ChunkMap.java.patch` — 6-line
+    hunk right after the NeoForge event hook
+  - `/multiforge chunks <world>` command dumps per-level holder counts
+    from the shadow
+  - GameTest `chunkBridgeShadowsRealChunks` asserts the shadow has
+    ≥1 holder at ≥BORDER level after the test's own chunks load
+
+  Scope note: this is deliberately the smallest foundational M9 slice.
+  Real M9 requires REPLACING (not shadowing) Vanilla ChunkMap /
+  DistanceManager / ServerChunkCache with the per-region model —
+  months of work, ~30K lines in Folia's Moonrise. This bridge
+  establishes the coordinate + level translation infrastructure that
+  future substantive M9 sub-steps will build on.
+
+### M9 sub-step 1 hardening (DONE — /67 round-4)
+
+Six-agent /67 review across the M8+M9 landing surface (commits
+e3878b3..54b4ad7) surfaced 27 raw findings; 13 real after dedup, 10
+of them fixed in commit ee136a7:
+
+- **Central M9 correctness bug** (4-agent convergence): pre-fix
+  `ChunkHolderManager` and `ChunkTaskScheduler` defined
+  `onRegionMerged(RegionId, RegionId)` / `onRegionSplit(RegionId,
+  RegionId, Predicate)` methods that never fired — the
+  `RegionListener` interface requires `Region`-typed signatures. Fix:
+  both classes now `implements RegionListener` with the correct
+  signatures (existing methods retained as internal delegates); wired
+  into `MultiThreadedSchedulerHost.regionizerFor` alongside the
+  existing scheduler + taskQueue listeners. Every merge/split now
+  correctly folds per-region tickets and holder ownership.
+- **Bridge drops pre-Load transitions** (3-agent convergence):
+  Vanilla's initial `updateChunkScheduling` fires BEFORE
+  `ChunkEvent.Load` creates the region. Fix: seed shadow holder at
+  BORDER on Load via new `ChunkHolderManagerBridge.onChunkLoaded`.
+- **Bridge leaks holders forever**: no cleanup on INACCESSIBLE
+  transitions or unload. Fix: bridge drops holder when
+  `newLevel > 33`; new `onChunkUnloaded` handler symmetric with
+  Load.
+- **O(N × K) per-boot reroute** (2-agent convergence):
+  `RegionizedTaskQueue.orphaned` was a flat queue scanned in full on
+  every chunk load. Fix: partitioned into
+  `ConcurrentMap<OrphanBucket, Queue>` keyed by section, new
+  `rerouteAtChunk(world, x, z)` touches only the matching bucket.
+- **Always-green watchdog test** (2-agent convergence):
+  `exitAfterThrowClearsStateWithoutFiring` passed regardless of
+  behavior under `warnMs=0`. Split into two proper phase assertions.
+- **`RegionizedData` threw in production**: violated CLAUDE.md rule 5.
+  Fix: gate throw on `DomainAssertions.enabled()`, degrade to
+  warn+probe otherwise.
+- **Auto-creating lookups leaked maps on typos**: added
+  `chunkManagerForOrNull` and wired into observability paths.
+- **`PhasedRegionTickBody` had no per-phase exception isolation**:
+  fixed with try/catch inside phase iteration.
+- **`ServerDomains.uninstall` was public without `@ApiStatus.Internal`**:
+  annotated.
+- **Test-quality fixes**: `mcaCorruptSectorOffsetDoesNotCrash` used
+  byte pattern that didn't trigger the wrap it guarded against;
+  `shutdownUnbindsOwnershipEnforcerBindings` only asserted the
+  tick-thread half of the unbind.
+
+~~Deferred (require load-bearing scheduler changes): `RegionizedData`
+merger race, `queueChunkTask` merge race, `splitIfDisconnected` empty
+window, `ServerLifecycleHooks` `IllegalStateException` dedup~~ — all
+four landed real fixes in M9 Phase 1; see "Resolved in M9 Phase 1"
+above.
+
+## M10 — Entity Migration + Networking
+- Entity#teleportAsync binds to EntityMigrationCoordinator
+  (multiforge-patches/05-entity-migration/); gameplay packet handlers in
+  ServerGamePacketListenerImpl hop to sender's owner region via
+  RegionizedTaskQueue (multiforge-patches/06-networking/)
+- exit gate: cross-region entity migration correctness test (no dual-writer
+  windows, no lost UUID references); packet-handler region-hop regression
+
+## M11 — Persistence + Globals
+- wires AutoSaveRunner/RegionJournal into the chunk pipeline
+  (multiforge-patches/07-persistence/); moves
+  weather/time/border/dragon/wither/raids/scoreboards/command dispatch to a
+  dedicated global-region tick (multiforge-patches/08-globals/)
+- exit gate: crash-safety replay test (WAL journal recovery); global-tick
+  systems verified to not require per-region ownership
+
+## M12 — Event Routing
+- IEventBus.post honors @DispatchDomain annotations (already defined in
+  multiforge-api/, currently ignored at post time)
+  (multiforge-patches/09-events/)
+- exit gate: event dispatch domain/ordering contract regression
+  (REGION/GLOBAL/LEGACY_SERIAL routing verified per-listener)
+
+Each milestone from M7 onward touching net.minecraft.* repeats the same
+discipline: deterministic-mode regression before landing, patches grouped
+per-directory (multiforge-patches/<NN-name>/) for rebase scoping, and
+auto-reroute+warn as the default with strict-mode only behind an explicit
+boot flag.
+
 ---
 
 ## Detailed Engineering Work Breakdown

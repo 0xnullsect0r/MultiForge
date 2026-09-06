@@ -1,0 +1,55 @@
+> Task :buildSrc:checkKotlinGradlePluginConfigurationErrors SKIPPED
+> Task :buildSrc:generateExternalPluginSpecBuilders UP-TO-DATE
+> Task :buildSrc:extractPrecompiledScriptPluginPlugins UP-TO-DATE
+> Task :buildSrc:compilePluginsBlocks UP-TO-DATE
+> Task :buildSrc:generatePrecompiledScriptPluginAccessors UP-TO-DATE
+> Task :buildSrc:generateScriptPluginAdapters UP-TO-DATE
+> Task :buildSrc:compileKotlin UP-TO-DATE
+> Task :buildSrc:compileJava NO-SOURCE
+> Task :buildSrc:compileGroovy NO-SOURCE
+> Task :buildSrc:pluginDescriptors UP-TO-DATE
+> Task :buildSrc:processResources UP-TO-DATE
+> Task :buildSrc:classes UP-TO-DATE
+> Task :buildSrc:jar UP-TO-DATE
+> Task :multiforge-bench:compileJava UP-TO-DATE
+> Task :multiforge-bench:processResources NO-SOURCE
+> Task :multiforge-bench:classes UP-TO-DATE
+
+> Task :multiforge-bench:determinism FAILED
+DeterminismHarness: mode=BYTE_IDENTICAL
+DeterminismHarness: comparing /home/aric/MultiForge/docs/verification/m9/7.2/vanilla-1w-a/world ↔ /home/aric/MultiForge/docs/verification/m9/7.2/patched-1w-a/world
+  baseline files: 14
+  patched  files: 14
+  RESULT: MISMATCH
+    content differs (7):
+      DIM1/data/raids_end.dat  baseline=c947b8687754  patched=94517321e057
+      entities/r.-1.-1.mca  baseline=646450fdfcdf  patched=e3b0c44298fc
+      level.dat  baseline=b6e93c86a53b  patched=a38afffdbc79
+      region/r.-1.-1.mca  baseline=45ac2636c87b  patched=c08190556f6d
+      region/r.-1.0.mca  baseline=b1371405a8b3  patched=7e90cffa6354
+      region/r.0.-1.mca  baseline=292551c79677  patched=0358f4da01e7
+      region/r.0.0.mca  baseline=77f7c5ec33d0  patched=ecd51b5d313d
+
+
+[Incubating] Problems report is available at: file:///home/aric/MultiForge/build/reports/problems/problems-report.html
+
+FAILURE: Build failed with an exception.
+
+* What went wrong:
+Execution failed for task ':multiforge-bench:determinism'.
+> Process 'command '/home/aric/.local/jdk/jdk-21.0.12.1+1/bin/java'' finished with non-zero exit value 1
+
+* Try:
+> Run with --stacktrace option to get the stack trace.
+> Run with --info or --debug option to get more log output.
+> Run with --scan to get full insights.
+> Get more help at https://help.gradle.org.
+
+Deprecated Gradle features were used in this build, making it incompatible with Gradle 9.0.
+
+You can use '--warning-mode all' to show the individual deprecation warnings and determine if they come from your own scripts or plugins.
+
+For more on this, please refer to https://docs.gradle.org/8.14.3/userguide/command_line_interface.html#sec:command_line_warnings in the Gradle documentation.
+
+BUILD FAILED in 515ms
+11 actionable tasks: 1 executed, 10 up-to-date

@@ -1,0 +1,60 @@
+--- a/net/minecraft/server/level/ThreadedLevelLightEngine.java
++++ b/net/minecraft/server/level/ThreadedLevelLightEngine.java
+@@ -58,6 +58,8 @@
+     @Override
+     public void checkBlock(BlockPos p_9357_) {
+         BlockPos blockpos = p_9357_.immutable();
++        // MultiForge M9 task 4.5c — observe into the per-region light facade.
++        net.multiforge.neoforge.chunk.MultiForgeLightEngine.observeCheckBlock(this, blockpos);
+         this.addTask(
+             SectionPos.blockToSectionCoord(p_9357_.getX()),
+             SectionPos.blockToSectionCoord(p_9357_.getZ()),
+@@ -67,6 +69,8 @@
+     }
+
+     protected void updateChunkStatus(ChunkPos p_9331_) {
++        // MultiForge M9 task 4.5c — observe into the per-region light facade.
++        net.multiforge.neoforge.chunk.MultiForgeLightEngine.observeUpdateChunkStatus(this, p_9331_);
+         this.addTask(p_9331_.x, p_9331_.z, () -> 0, ThreadedLevelLightEngine.TaskType.PRE_UPDATE, Util.name(() -> {
+             super.retainData(p_9331_, false);
+             super.setLightEnabled(p_9331_, false);
+@@ -84,6 +88,8 @@
+
+     @Override
+     public void updateSectionStatus(SectionPos p_9364_, boolean p_9365_) {
++        // MultiForge M9 task 4.5c — observe into the per-region light facade.
++        net.multiforge.neoforge.chunk.MultiForgeLightEngine.observeUpdateSectionStatus(this, p_9364_, p_9365_);
+         this.addTask(
+             p_9364_.x(),
+             p_9364_.z(),
+@@ -115,6 +121,8 @@
+
+     @Override
+     public void queueSectionData(LightLayer p_285046_, SectionPos p_285496_, @Nullable DataLayer p_285495_) {
++        // MultiForge M9 task 4.5c — observe into the per-region light facade.
++        net.multiforge.neoforge.chunk.MultiForgeLightEngine.observeQueueSectionData(this, p_285046_, p_285496_);
+         this.addTask(
+             p_285496_.x(),
+             p_285496_.z(),
+@@ -139,6 +147,8 @@
+
+     @Override
+     public void retainData(ChunkPos p_9370_, boolean p_9371_) {
++        // MultiForge M9 task 4.5c — observe into the per-region light facade.
++        net.multiforge.neoforge.chunk.MultiForgeLightEngine.observeRetainData(this, p_9370_, p_9371_);
+         this.addTask(
+             p_9370_.x,
+             p_9370_.z,
+@@ -217,8 +227,11 @@
+     }
+
+     public CompletableFuture<?> waitForPendingTasks(int p_301257_, int p_300921_) {
++        // MultiForge M9 task 4.5c — observe start; end fires when the returned future completes.
++        net.multiforge.neoforge.chunk.MultiForgeLightEngine.observeWaitForTasksStart(this);
+         return CompletableFuture.runAsync(() -> {
+-        }, p_300778_ -> this.addTask(p_301257_, p_300921_, ThreadedLevelLightEngine.TaskType.POST_UPDATE, p_300778_));
++        }, p_300778_ -> this.addTask(p_301257_, p_300921_, ThreadedLevelLightEngine.TaskType.POST_UPDATE, p_300778_))
++                .whenComplete((v, t) -> net.multiforge.neoforge.chunk.MultiForgeLightEngine.observeWaitForTasksEnd(this));
+     }
+
+     static enum TaskType {
