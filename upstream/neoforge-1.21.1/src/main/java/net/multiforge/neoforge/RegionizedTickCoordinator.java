@@ -27,24 +27,25 @@ import net.multiforge.runtime.scheduler.MultiThreadedSchedulerHost;
  * runtime behind it is swapped out from behind without editing any
  * patch file.
  *
- * <p><b>M8 sub-step 6b state:</b> {@link #dispatchLevelTick} now
- * performs real per-region fan-out via
- * {@link TickRegionScheduler#tickAll(Collection, long)} before running
- * the vanilla per-level body. Region workers self-tick asynchronously
- * at ~20 TPS through the scheduler's own worker loop; this façade acts
- * as the <em>synchronisation barrier</em> for that work so the vanilla
- * global portion (weather, time, etc.) — still executed inline on the
- * main server thread — cannot race a region mid-tick. Phase 5 (M11)
- * will migrate the global portion into the synthetic global region and
- * remove the trailing inline call.
+ * <p><b>B3 state (post-M5 globals landing):</b> {@link #dispatchLevelTick}
+ * fans out to per-region workers via
+ * {@link TickRegionScheduler#tickAll(Collection, long)} as the
+ * synchronisation barrier for any regions currently mid-tick on the
+ * worker pool. The trailing inline invocation of Vanilla's per-level
+ * body has been removed on the success path: every global subsystem
+ * (weather, time, world-border, scoreboard, bossbars, raids,
+ * dragon-fight, command-dispatch) is ticked by {@code
+ * GlobalSystems.tickAll} on the synthetic global region (see
+ * {@link MultiThreadedSchedulerHost}'s {@code phaseGlobalSystemsTick}
+ * slot), and each Vanilla implementation is early-return-guarded by a
+ * matching {@code GlobalSystemsBridge.xxxReady()} check.
  *
- * <p>The per-region tick body itself is still the no-op default bound
- * by {@link MultiThreadedSchedulerHost}, so this dispatch is
- * behaviourally identical to the M8 sub-step 5 pass-through today —
- * the important change is the plumbing: the fan-out, the barrier, and
- * the {@link RegionTickWatchdog#mode() strict-mode} gate all light up
- * so Phase 5 can wire a real per-region body without further edits to
- * this file or its vanilla patch.
+ * <p>The three <em>fallback</em> {@code vanillaBody.run()} calls
+ * (bootstrap pre-runtime, no-regionizer, dispatch-side failure) are
+ * intentionally retained: they preserve CLAUDE.md rule 5's
+ * "auto-reroute + warn" default, so a fresh boot, a level with no
+ * materialised regions, or a dispatch-time bug still lets the server
+ * tick advance rather than hanging silently.
  */
 public final class RegionizedTickCoordinator {
     private static final String DEADLINE_PROP = "multiforge.regiontick.dispatch-ms";
@@ -96,10 +97,17 @@ public final class RegionizedTickCoordinator {
      * region worker's own exception, which stays on the worker),
      * warn + fall through to the inline body so the server tick
      * still runs.</li>
-     * <li>Finally, run {@code vanillaBody} on the caller thread for
-     * the global per-level portion (weather, time, wandering-trader
-     * spawner, etc.). Phase 5 + M11 will migrate this into the
-     * synthetic global region.</li>
+     * <li>On success the fan-out returns without invoking
+     * {@code vanillaBody}. The global per-level portion (weather,
+     * time, world-border, scoreboard, bossbars, raids, dragon-fight,
+     * command-dispatch) is driven by the synthetic global region's
+     * own tick body via {@code GlobalSystems.tickAll}
+     * ({@code MultiThreadedSchedulerHost.phaseGlobalSystemsTick}).
+     * Each migrated global subsystem's Vanilla method is guarded by
+     * a {@code GlobalSystemsBridge.xxxReady()} early-return, so
+     * calling {@code vanillaBody} here would be a no-op — omitting
+     * the call trims a redundant iteration over per-chunk block/
+     * fluid/entity ticks that region workers have already run.</li>
      * </ol>
      *
      * @param level       the level being ticked; the coordinator looks up its
@@ -155,10 +163,14 @@ public final class RegionizedTickCoordinator {
             ViolationLogger.warn("region-tick.dispatch.overrun", msg);
         }
 
-        // Global portion still runs inline on the main thread (weather,
-        // time, wandering trader, etc.). Phase 5 + M11 will migrate this
-        // into the synthetic global region.
-        vanillaBody.run();
+        // B3: the trailing vanillaBody.run() that used to run here is
+        // removed. Every global subsystem it would have driven is now
+        // ticked by GlobalSystems.tickAll on the synthetic global region
+        // (MultiThreadedSchedulerHost.phaseGlobalSystemsTick), and each
+        // Vanilla implementation is early-return-guarded by the matching
+        // GlobalSystemsBridge.xxxReady() check — so invoking it here
+        // added a redundant O(regions) iteration over per-chunk block/
+        // fluid/entity ticks that region workers have already run.
     }
 
     /**
