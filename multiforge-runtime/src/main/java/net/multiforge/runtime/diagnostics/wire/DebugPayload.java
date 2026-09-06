@@ -9,16 +9,33 @@ import java.util.Objects;
 
 /**
  * Payload records carried on the {@code multiforge:debug/v1} channel.
- * Each corresponds to one {@link DebugPacketKind}. Purely data — the
- * server produces them in {@code net.multiforge.runtime.diagnostics},
- * the client mod consumes them in {@code net.multiforge.client.hud}.
+ * Each of the six permitted records corresponds to one {@link
+ * DebugPacketKind}. Purely data — the server produces them in {@code
+ * net.multiforge.runtime.diagnostics} (see the {@code
+ * net.multiforge.runtime.diagnostics.emitters} producers), the client
+ * mod consumes them in {@code net.multiforge.client.hud}.
+ *
+ * <p>{@code sealed} (Track C1 / M6 addition) so a single {@code
+ * Consumer<DebugPayload>} sink — the shape every emitter in {@code
+ * net.multiforge.runtime.diagnostics.emitters} and the fork's {@code
+ * PayloadDistributor} are built around — can accept any of the six
+ * kinds, and so a future {@code switch} over a {@code DebugPayload}
+ * is exhaustiveness-checked by the compiler. This is a Java-level
+ * supertype addition only: no field, wire layout, or encode/decode
+ * behavior changes, so it does not require a {@code
+ * docs/design/client-debug-protocol.md} amendment under §8 (nothing
+ * about the wire contract itself changed).
+ *
+ * <p>{@link RegionStat}, {@link ChunkHeat}, and {@link PinBox} are
+ * <em>not</em> permitted subtypes — they are element types nested
+ * inside a list-carrying payload ({@link RegionSnapshot}, {@link
+ * HeatmapUpdate}, {@link PinList} respectively), not standalone
+ * packet kinds in their own right.
  */
-public final class DebugPayload {
-
-    private DebugPayload() {}
+public sealed interface DebugPayload {
 
     /** Handshake reply. */
-    public record Hello(int protocolVersion, int tickHz, String buildLabel) {
+    record Hello(int protocolVersion, int tickHz, String buildLabel) implements DebugPayload {
         public Hello {
             Objects.requireNonNull(buildLabel, "buildLabel");
             if (buildLabel.length() > 256) throw new IllegalArgumentException("buildLabel too long");
@@ -26,10 +43,10 @@ public final class DebugPayload {
     }
 
     /** One region's live stats. */
-    public record RegionStat(long regionId, int sectionCount, double msptP50, double msptP95, int ownedEntities) {}
+    record RegionStat(long regionId, int sectionCount, double msptP50, double msptP95, int ownedEntities) {}
 
     /** Periodic dump of every live region. */
-    public record RegionSnapshot(long tick, List<RegionStat> regions) {
+    record RegionSnapshot(long tick, List<RegionStat> regions) implements DebugPayload {
         public RegionSnapshot {
             Objects.requireNonNull(regions, "regions");
             regions = List.copyOf(regions);
@@ -37,10 +54,10 @@ public final class DebugPayload {
     }
 
     /** One chunk's heat sample. */
-    public record ChunkHeat(int chunkX, int chunkZ, float heatMspt) {}
+    record ChunkHeat(int chunkX, int chunkZ, float heatMspt) {}
 
     /** Per-chunk heat within the client's view radius. */
-    public record HeatmapUpdate(String worldId, List<ChunkHeat> heats) {
+    record HeatmapUpdate(String worldId, List<ChunkHeat> heats) implements DebugPayload {
         public HeatmapUpdate {
             Objects.requireNonNull(worldId, "worldId");
             Objects.requireNonNull(heats, "heats");
@@ -49,7 +66,7 @@ public final class DebugPayload {
     }
 
     /** One region pin. Coordinates are inclusive chunk bounds. */
-    public record PinBox(String id, String worldId, int fromChunkX, int fromChunkZ, int toChunkX, int toChunkZ) {
+    record PinBox(String id, String worldId, int fromChunkX, int fromChunkZ, int toChunkX, int toChunkZ) {
         public PinBox {
             Objects.requireNonNull(id, "id");
             Objects.requireNonNull(worldId, "worldId");
@@ -57,7 +74,7 @@ public final class DebugPayload {
     }
 
     /** Snapshot of every pin defined on the server. */
-    public record PinList(List<PinBox> pins) {
+    record PinList(List<PinBox> pins) implements DebugPayload {
         public PinList {
             Objects.requireNonNull(pins, "pins");
             pins = List.copyOf(pins);
@@ -65,7 +82,7 @@ public final class DebugPayload {
     }
 
     /** One reroute/warn event surfaced to the side panel. */
-    public record ViolationEvent(long epochMillis, String modId, String site, String detail) {
+    record ViolationEvent(long epochMillis, String modId, String site, String detail) implements DebugPayload {
         public ViolationEvent {
             Objects.requireNonNull(modId, "modId");
             Objects.requireNonNull(site, "site");
@@ -74,7 +91,7 @@ public final class DebugPayload {
     }
 
     /** Client-side flag bitset for what streams to receive. */
-    public record Subscribe(int flags) {
+    record Subscribe(int flags) implements DebugPayload {
         public static final int F_REGIONS = 0x01;
         public static final int F_HEATMAP = 0x02;
         public static final int F_PINS = 0x04;
