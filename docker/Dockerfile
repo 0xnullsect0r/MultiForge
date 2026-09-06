@@ -65,11 +65,12 @@ RUN useradd --system --create-home --home-dir /home/multiforge --shell /usr/sbin
 # Debian bookworm+); older pip3 on this base rejects the flag outright, so
 # try the plain install first and fall back to it rather than failing the
 # build on either pip vintage.
+# hadolint ignore=DL3008
 RUN apt-get update \
     && apt-get install -y --no-install-recommends python3 python3-pip \
     && rm -rf /var/lib/apt/lists/* \
-    && (pip3 install --no-cache-dir mcstatus \
-        || pip3 install --no-cache-dir --break-system-packages mcstatus)
+    && (pip3 install --no-cache-dir "mcstatus==11.1.1" \
+        || pip3 install --no-cache-dir --break-system-packages "mcstatus==11.1.1")
 
 # Pull the staged jars in one go. The builder stage guarantees these
 # directories exist regardless of the MC=true|false build arg, so this
