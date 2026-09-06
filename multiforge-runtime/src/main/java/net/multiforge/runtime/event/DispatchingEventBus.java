@@ -20,8 +20,6 @@ import java.util.HashSet;
 import java.util.Objects;
 import java.util.Set;
 import java.util.function.Consumer;
-import net.multiforge.api.event.DispatchDomainKind;
-import net.multiforge.api.event.OrderingContract;
 import net.multiforge.runtime.event.AnnotationScanner.MetadataEntry;
 import net.neoforged.bus.api.Event;
 import net.neoforged.bus.api.EventPriority;
@@ -53,20 +51,23 @@ import net.neoforged.bus.api.SubscribeEvent;
  *
  * <p><b>Why the {@code addListener(Consumer)} family can't be
  * annotation-routed:</b> a bare {@code Consumer<T>} lambda/method
- * reference carries no {@link Method} to read annotations off. Those
- * overloads are still wrapped (so they get the same {@link
- * DomainDispatcher} routing, ordering, and probe/warn behavior as every
- * other listener) but with a fixed {@code LEGACY_SERIAL}/{@code
- * PER_REGION} metadata — indistinguishable from an unannotated {@code
- * @SubscribeEvent} handler.
+ * reference carries no {@link Method} to read annotations off, and
+ * NeoForge's {@code EventBus.addListener(Consumer)} identifies the
+ * event type via ASM introspection of the consumer class's bytecode
+ * (looking for the invokedynamic bootstrap that a lambda leaves
+ * behind). Wrapping a lambda in our own {@link RoutingListenerWrapper}
+ * makes that introspection fail — the wrapper is a plain class and
+ * NeoForge throws {@code "Failed to resolve consumer event type"} at
+ * boot. So the {@code addListener} overloads pass the raw consumer
+ * straight through to the inner bus; those handlers run with pre-
+ * MultiForge Vanilla semantics (inline on the poster's thread).
+ * {@code @DispatchDomain} routing is only honored for listeners
+ * registered via {@link #register(Object)} with {@code @SubscribeEvent}.
  */
 public class DispatchingEventBus implements IEventBus {
 
     /** {@code -Dmultiforge.event-dispatch=off} disables routing — see {@link #isEnabled()}. */
     public static final String DISABLE_PROPERTY = "multiforge.event-dispatch";
-
-    private static final MetadataEntry LEGACY_SERIAL_DEFAULT =
-            new MetadataEntry(DispatchDomainKind.LEGACY_SERIAL, OrderingContract.PER_REGION);
 
     private final IEventBus inner;
     private final DomainDispatcher dispatcher;
@@ -159,54 +160,56 @@ public class DispatchingEventBus implements IEventBus {
     }
 
     // ---------------------------------------------------------------
-    // addListener(...) family — wrapped with the LEGACY_SERIAL default,
-    // since a bare Consumer carries no Method to scan annotations off.
+    // addListener(...) family — straight pass-through, no wrap.
+    //
+    // See the class Javadoc: wrapping the caller's Consumer in a
+    // RoutingListenerWrapper breaks NeoForge's ASM introspection
+    // ("Failed to resolve consumer event type"), and there is no
+    // Method to scan @DispatchDomain off anyway. These listeners
+    // run with pre-MultiForge Vanilla semantics — inline on the
+    // poster's thread. @DispatchDomain routing is only honored on
+    // register(Object) with @SubscribeEvent.
     // ---------------------------------------------------------------
 
     @Override
     public <T extends Event> void addListener(Consumer<T> consumer) {
-        inner.addListener(wrapLegacy(consumer));
+        inner.addListener(consumer);
     }
 
     @Override
     public <T extends Event> void addListener(Class<T> eventType, Consumer<T> consumer) {
-        inner.addListener(eventType, wrapLegacy(consumer));
+        inner.addListener(eventType, consumer);
     }
 
     @Override
     public <T extends Event> void addListener(EventPriority priority, Consumer<T> consumer) {
-        inner.addListener(priority, wrapLegacy(consumer));
+        inner.addListener(priority, consumer);
     }
 
     @Override
     public <T extends Event> void addListener(EventPriority priority, Class<T> eventType, Consumer<T> consumer) {
-        inner.addListener(priority, eventType, wrapLegacy(consumer));
+        inner.addListener(priority, eventType, consumer);
     }
 
     @Override
     public <T extends Event> void addListener(EventPriority priority, boolean receiveCanceled, Consumer<T> consumer) {
-        inner.addListener(priority, receiveCanceled, wrapLegacy(consumer));
+        inner.addListener(priority, receiveCanceled, consumer);
     }
 
     @Override
     public <T extends Event> void addListener(
             EventPriority priority, boolean receiveCanceled, Class<T> eventType, Consumer<T> consumer) {
-        inner.addListener(priority, receiveCanceled, eventType, wrapLegacy(consumer));
+        inner.addListener(priority, receiveCanceled, eventType, consumer);
     }
 
     @Override
     public <T extends Event> void addListener(boolean receiveCanceled, Consumer<T> consumer) {
-        inner.addListener(receiveCanceled, wrapLegacy(consumer));
+        inner.addListener(receiveCanceled, consumer);
     }
 
     @Override
     public <T extends Event> void addListener(boolean receiveCanceled, Class<T> eventType, Consumer<T> consumer) {
-        inner.addListener(receiveCanceled, eventType, wrapLegacy(consumer));
-    }
-
-    private <T extends Event> Consumer<T> wrapLegacy(Consumer<T> consumer) {
-        Objects.requireNonNull(consumer, "consumer");
-        return new RoutingListenerWrapper<>(consumer, LEGACY_SERIAL_DEFAULT, dispatcher);
+        inner.addListener(receiveCanceled, eventType, consumer);
     }
 
     // ---------------------------------------------------------------
