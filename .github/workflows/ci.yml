@@ -36,7 +36,25 @@ jobs:
         run: ./gradlew spotlessCheck --no-daemon --stacktrace
 
       - name: Build + test
-        run: ./gradlew build --no-daemon --stacktrace
+        # Enumerate the CI-scoped modules explicitly. `./gradlew build`
+        # at the root pulls in :multiforge-client which needs the
+        # NeoForge `moddev` plugin's compile classpath (a full NeoForge
+        # + officially-mapped Minecraft jar tree) to compile — that dep
+        # is not resolvable from public Maven, so the ordinary build
+        # cannot include the client module. Wiring moddev is deferred
+        # past v1.2.0 per multiforge-client/build.gradle.kts's own
+        # commentary; until then, the client module is verified by
+        # direct javac against the fork's built classes.
+        run: |
+          ./gradlew \
+            :multiforge-license:build \
+            :multiforge-license-cli:build \
+            :multiforge-api:build \
+            :multiforge-runtime:build \
+            :multiforge-scanner:build \
+            :multiforge-installer:build \
+            :multiforge-bench:build \
+            --no-daemon --stacktrace
 
       - name: Upload test reports on failure
         if: failure()
