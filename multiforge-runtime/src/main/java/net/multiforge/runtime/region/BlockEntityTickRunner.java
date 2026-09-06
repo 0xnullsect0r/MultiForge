@@ -90,8 +90,7 @@ public interface BlockEntityTickRunner {
      *     chunk manager has been materialised for that world yet.
      */
     static BlockEntityTickRunner standard(
-            Function<RegionId, WorldRef> worldForRegion,
-            Function<WorldRef, ChunkHolderManager> chunkManagerForOrNull) {
+            Function<RegionId, WorldRef> worldForRegion, Function<WorldRef, ChunkHolderManager> chunkManagerForOrNull) {
         return region -> {
             WorldRef world = worldForRegion.apply(region.id());
             if (world == null) return; // region died, or not yet claimed by any world

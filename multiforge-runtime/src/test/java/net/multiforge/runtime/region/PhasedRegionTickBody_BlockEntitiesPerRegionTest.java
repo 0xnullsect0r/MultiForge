@@ -20,7 +20,6 @@ import static org.assertj.core.api.Assertions.assertThat;
 import java.nio.file.Path;
 import java.util.concurrent.atomic.AtomicInteger;
 import net.multiforge.api.world.BlockPos;
-import net.multiforge.api.world.ChunkPos;
 import net.multiforge.api.world.WorldRef;
 import net.multiforge.runtime.chunk.ChunkHolderManager;
 import net.multiforge.runtime.chunk.TickingBlockEntityRef;
@@ -153,33 +152,32 @@ class PhasedRegionTickBody_BlockEntitiesPerRegionTest {
     @Test
     void globalSystemsAndPerRegionBodiesBothFireLayeredOnBlockEntitiesPhase(@TempDir Path journalDir) {
         AtomicInteger globalTicks = new AtomicInteger();
-        host.globalSystems()
-                .register(new net.multiforge.runtime.globals.GlobalSystem() {
-                    @Override
-                    public String name() {
-                        return "test-fixture";
-                    }
+        host.globalSystems().register(new net.multiforge.runtime.globals.GlobalSystem() {
+            @Override
+            public String name() {
+                return "test-fixture";
+            }
 
-                    @Override
-                    public void tick(net.multiforge.runtime.globals.GlobalTickContext ctx) {
-                        globalTicks.incrementAndGet();
-                    }
+            @Override
+            public void tick(net.multiforge.runtime.globals.GlobalTickContext ctx) {
+                globalTicks.incrementAndGet();
+            }
 
-                    @Override
-                    public java.util.Set<WorldRef> readSet() {
-                        return java.util.Set.of();
-                    }
+            @Override
+            public java.util.Set<WorldRef> readSet() {
+                return java.util.Set.of();
+            }
 
-                    @Override
-                    public java.util.Set<WorldRef> writeSet() {
-                        return java.util.Set.of();
-                    }
+            @Override
+            public java.util.Set<WorldRef> writeSet() {
+                return java.util.Set.of();
+            }
 
-                    @Override
-                    public void crossRegionEffect(net.multiforge.runtime.region.RegionId dest, Runnable task) {
-                        // unused
-                    }
-                });
+            @Override
+            public void crossRegionEffect(net.multiforge.runtime.region.RegionId dest, Runnable task) {
+                // unused
+            }
+        });
 
         Region normal = host.touchChunk(WORLD, 0, 0);
         ChunkHolderManager manager = host.chunkManagerFor(WORLD);
