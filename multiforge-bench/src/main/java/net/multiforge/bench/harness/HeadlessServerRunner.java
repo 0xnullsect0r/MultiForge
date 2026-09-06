@@ -1,6 +1,17 @@
 /*
- * MultiForge — Proprietary. Copyright (c) 2026 MultiForge authors.
- * All rights reserved. See LICENSE at the repository root.
+ * MultiForge — Copyright (c) 2026 MultiForge authors.
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, version 3.
+ *
+ * This program is distributed in the hope that it will be useful, but
+ * WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
+ * General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program. If not, see <https://www.gnu.org/licenses/>.
  */
 package net.multiforge.bench.harness;
 
@@ -117,7 +128,6 @@ public final class HeadlessServerRunner implements AutoCloseable {
         pb.redirectOutput(bootLog.toFile());
 
         var env = pb.environment();
-        env.put("MULTIFORGE_LICENSE", licenseKeyContents());
         // Force, not putIfAbsent: this is a nested `gradlew
         // :neoforge:runServer` invocation, and a GRADLE_OPTS already set
         // in the environment this JVM was launched from (e.g. the outer
@@ -300,11 +310,6 @@ public final class HeadlessServerRunner implements AutoCloseable {
         Files.writeString(runDir.resolve("eula.txt"), "eula=true\n");
         Files.writeString(runDir.resolve("server.properties"), serverProperties());
 
-        Path license = licenseKeyPath();
-        if (Files.exists(license)) {
-            Files.copy(license, runDir.resolve("license.key"), StandardCopyOption.REPLACE_EXISTING);
-        }
-
         if (config.modsSourceDir() != null && Files.isDirectory(config.modsSourceDir())) {
             deleteRecursively(runDir.resolve("mods"));
             copyDirectory(config.modsSourceDir(), runDir.resolve("mods"));
@@ -326,19 +331,6 @@ public final class HeadlessServerRunner implements AutoCloseable {
                 + "enable-rcon=true\n"
                 + "rcon.password=" + RCON_PASSWORD + "\n"
                 + "rcon.port=" + RCON_PORT + "\n";
-    }
-
-    private static Path licenseKeyPath() {
-        return Path.of(System.getProperty("user.home"), ".multiforge", "license.key");
-    }
-
-    private String licenseKeyContents() throws IOException {
-        Path license = licenseKeyPath();
-        if (!Files.exists(license)) {
-            throw new IOException("no license key at " + license + " — a MultiForge dev server needs one to boot; "
-                    + "see docs/design/m9-phase7-runbook.md §1");
-        }
-        return Files.readString(license, StandardCharsets.UTF_8).trim();
     }
 
     private boolean waitForBootLogPattern(String needle, Duration timeout) throws InterruptedException, IOException {

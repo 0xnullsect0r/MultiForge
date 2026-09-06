@@ -1,0 +1,18 @@
+--- a/net/minecraft/server/network/ServerGamePacketListenerImpl.java
++++ b/net/minecraft/server/network/ServerGamePacketListenerImpl.java
+@@ -870,6 +870,15 @@
+                     double d2 = clampHorizontal(p_9874_.getZ(this.player.getZ()));
+                     float f = Mth.wrapDegrees(p_9874_.getYRot(this.player.getYRot()));
+                     float f1 = Mth.wrapDegrees(p_9874_.getXRot(this.player.getXRot()));
++                    // MultiForge (multiforge-patches/06-networking/, M4 Track A3.1): detect a
++                    // cross-region move before Vanilla's own movement physics / absMoveTo run, and
++                    // never call Vanilla setPos while a migration for this player is in flight —
++                    // see NetworkMigrationBridge.handleMovePlayer's javadoc. Returning here defers
++                    // the whole packet (already-in-flight case) or hands the position update off
++                    // to the destination region worker once the hop settles (newly-detected case).
++                    if (net.multiforge.neoforge.entity.NetworkMigrationBridge.handleMovePlayer(this.player, d0, d1, d2, f, f1)) {
++                        return;
++                    }
+                     if (this.player.isPassenger()) {
+                         this.player.absMoveTo(this.player.getX(), this.player.getY(), this.player.getZ(), f, f1);
+                         this.player.serverLevel().getChunkSource().move(this.player);

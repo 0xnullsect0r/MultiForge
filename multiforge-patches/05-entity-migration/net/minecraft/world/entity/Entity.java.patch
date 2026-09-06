@@ -1,0 +1,42 @@
+--- a/net/minecraft/world/entity/Entity.java
++++ b/net/minecraft/world/entity/Entity.java
+@@ -2620,6 +2620,13 @@
+                 serverlevel.resetEmptyTime();
+                 serverlevel1.resetEmptyTime();
+                 p_350951_.postDimensionTransition().onTransition(entity2);
++                // MultiForge (multiforge-patches/05-entity-migration/, M4 Track A2.4): 2-hop
++                // bookkeeping through the global region (source dim -> global -> destination dim,
++                // mirroring PlayerJoinCoordinator's netty->global hop). Vanilla already recreated
++                // the Entity object above (entity2), so this call only keeps EntityRegistry
++                // bookkeeping in sync; it enqueues and returns immediately, never blocking this
++                // (source region worker) thread — CLAUDE.md rule 4.
++                net.multiforge.neoforge.entity.EntityMigrationBridge.onChangeDimension(this, entity2, serverlevel1);
+             }
+ 
+             serverlevel.getProfiler().pop();
+@@ -2784,6 +2791,12 @@
+         if (this.level() instanceof ServerLevel) {
+             this.moveTo(p_19887_, p_19888_, p_19889_, this.getYRot(), this.getXRot());
+             this.teleportPassengers();
++            // MultiForge (multiforge-patches/05-entity-migration/, M4 Track A2.3): force-flush the
++            // whole passenger tree atomically — Vanilla's teleportPassengers() above already
++            // repositioned every rider via moveTo, so this only needs to detect whether the final
++            // position crossed a region boundary and, if so, hand the tree off as one unit. See
++            // EntityMigrationBridge.onTeleport's javadoc.
++            net.multiforge.neoforge.entity.EntityMigrationBridge.onTeleport(this);
+         }
+     }
+ 
+@@ -3392,6 +3405,12 @@
+             }
+ 
+             this.levelCallback.onMove();
++            // MultiForge (multiforge-patches/05-entity-migration/, M4 Track A2.1): the single
++            // chokepoint every Vanilla position-changing call (move, teleportTo, changeDimension,
++            // moveTo, ...) ultimately funnels through. Cheap fast path (two ConcurrentHashMap
++            // lookups) unless this move actually crossed a region boundary — see
++            // EntityMigrationBridge.onPositionChanged's javadoc.
++            net.multiforge.neoforge.entity.EntityMigrationBridge.onPositionChanged(this);
+         }
+         if (this.isAddedToLevel() && !this.level.isClientSide && !this.isRemoved()) this.level.getChunk((int) Math.floor(p_20344_) >> 4, (int) Math.floor(p_20346_) >> 4); // Forge - ensure target chunk is loaded.
+     }

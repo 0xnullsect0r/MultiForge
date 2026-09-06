@@ -1,0 +1,33 @@
+--- a/net/minecraft/world/level/entity/PersistentEntitySectionManager.java
++++ b/net/minecraft/world/level/entity/PersistentEntitySectionManager.java
+@@ -84,6 +84,13 @@
+         if (!this.addEntityUuid(p_157539_)) {
+             return false;
+         } else {
++            // MultiForge (multiforge-patches/05-entity-migration/, M4 Track A2.6): funnel every
++            // Vanilla entity-add path (fresh spawn, legacy/worldgen chunk load, player join) through
++            // EntityRegistry.register before the section insert below. Idempotent — see
++            // EntityMigrationBridge.onEntityRegistered's javadoc.
++            if (p_157539_ instanceof net.minecraft.world.entity.Entity entity) {
++                net.multiforge.neoforge.entity.EntityMigrationBridge.onEntityRegistered(entity);
++            }
+             long i = SectionPos.asLong(p_157539_.blockPosition());
+             EntitySection<T> entitysection = this.sectionStorage.getOrCreateSection(i);
+             entitysection.add(p_157539_);
+@@ -401,6 +408,16 @@
+             BlockPos blockpos = this.entity.blockPosition();
+             long i = SectionPos.asLong(blockpos);
+             if (i != this.currentSectionKey) {
++                // MultiForge (multiforge-patches/05-entity-migration/, M4 Track A2.5): a section
++                // change that also crosses a MultiForge region boundary is handed off to the
++                // two-phase EntityMigrationCoordinator instead of Vanilla's local section swap
++                // below — the destination re-materializes a fresh Vanilla Entity object from an
++                // NBT capture (EntityMigrationBridge.onSectionMove's javadoc), so this manager's
++                // own bookkeeping for this UUID must NOT be mutated any further on this thread.
++                if (this.realEntity != null
++                        && net.multiforge.neoforge.entity.EntityMigrationBridge.onSectionMove(this.realEntity, blockpos)) {
++                    return;
++                }
+                 Visibility visibility = this.currentSection.getStatus();
+                 if (!this.currentSection.remove(this.entity)) {
+                     PersistentEntitySectionManager.LOGGER

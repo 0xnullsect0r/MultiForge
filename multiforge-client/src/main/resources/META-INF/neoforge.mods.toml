@@ -8,7 +8,7 @@ license = "Proprietary — see LICENSE at the multiforge repo root"
 issueTrackerURL = "https://github.com/0xnullsect0r/multiforge/issues"
 
 [[mods]]
-modId = "multiforge_client"
+modId = "multiforge_debug"
 version = "${version}"
 displayName = "MultiForge Debug Client"
 description = '''
@@ -21,14 +21,14 @@ the server does not advertise multiforge:debug/v1.
 logoFile = "logo.png"
 authors = "MultiForge authors"
 
-[[dependencies.multiforge_client]]
+[[dependencies.multiforge_debug]]
 modId = "neoforge"
 type = "required"
 versionRange = "[21.1,)"
 ordering = "NONE"
 side = "CLIENT"
 
-[[dependencies.multiforge_client]]
+[[dependencies.multiforge_debug]]
 modId = "minecraft"
 type = "required"
 versionRange = "[1.21.1,1.22)"

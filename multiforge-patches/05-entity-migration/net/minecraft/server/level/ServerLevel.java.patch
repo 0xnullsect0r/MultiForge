@@ -1,0 +1,18 @@
+--- a/net/minecraft/server/level/ServerLevel.java
++++ b/net/minecraft/server/level/ServerLevel.java
+@@ -975,6 +975,15 @@
+     }
+ 
+     private boolean addEntity(Entity p_8873_) {
++        // MultiForge (multiforge-patches/05-entity-migration/, M4 Track A2.8): addFreshEntity
++        // already carries an OwnershipGuard check (multiforge-patches/01-ownership/), but
++        // addWithUUID / addDuringTeleport (and, indirectly, addPlayer's non-player sibling path)
++        // funnel through this shared private method WITHOUT one — a single guard here covers
++        // every one of those call sites instead of patching each individually.
++        if (!net.multiforge.neoforge.OwnershipGuard.canMutate("ServerLevel.addEntity")) {
++            net.multiforge.neoforge.OwnershipGuard.reroute("ServerLevel.addEntity", () -> this.addEntity(p_8873_));
++            return false;
++        }
+         if (p_8873_.isRemoved()) {
+             LOGGER.warn("Tried to add entity {} but it was marked as removed already", EntityType.getKey(p_8873_.getType()));
+             return false;

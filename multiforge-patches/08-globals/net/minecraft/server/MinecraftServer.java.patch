@@ -1,0 +1,29 @@
+--- a/net/minecraft/server/MinecraftServer.java
++++ b/net/minecraft/server/MinecraftServer.java
+@@ -1078,6 +1078,26 @@
+     }
+ 
+     private void synchronizeTime(ServerLevel p_276371_) {
++        // MultiForge (multiforge-patches/08-globals/): the every-20-tick
++        // client time broadcast migrates onto the global region's phase-4
++        // tick slot (net.multiforge.runtime.globals.TimeSystem), fired
++        // via TimeSystem's crossRegionEffect broadcast rather than
++        // inline from MinecraftServer.tickChildren, once this world has
++        // a registered TimeSystem.TimeTarget. Falls through to the
++        // original Vanilla body otherwise (bootstrap window).
++        if (net.multiforge.neoforge.globals.GlobalSystemsBridge.timeHandled(p_276371_)) {
++            return;
++        }
++        this.mfSynchronizeTimeBody(p_276371_);
++    }
++
++    /**
++     * MultiForge (multiforge-patches/08-globals/): the original,
++     * unmodified {@code synchronizeTime} body — see {@code
++     * ServerLevel.mfAdvanceWeatherCycleBody}'s javadoc for the
++     * extraction rationale.
++     */
++    public void mfSynchronizeTimeBody(ServerLevel p_276371_) {
+         ClientboundSetTimePacket vanillaPacket = new ClientboundSetTimePacket(p_276371_.getGameTime(), p_276371_.getDayTime(), p_276371_.getGameRules().getBoolean(GameRules.RULE_DAYLIGHT));
+         net.neoforged.neoforge.network.payload.ClientboundCustomSetTimePayload neoPacket = new net.neoforged.neoforge.network.payload.ClientboundCustomSetTimePayload(p_276371_.getGameTime(), p_276371_.getDayTime(), p_276371_.getGameRules().getBoolean(GameRules.RULE_DAYLIGHT), p_276371_.getDayTimeFraction(), p_276371_.getDayTimePerTick());
+         for (ServerPlayer serverplayer : playerList.getPlayers()) {

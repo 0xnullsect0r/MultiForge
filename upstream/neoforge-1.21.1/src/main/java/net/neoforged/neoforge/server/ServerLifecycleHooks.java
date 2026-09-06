@@ -131,6 +131,12 @@ public class ServerLifecycleHooks {
         // early here means every subsequent runtime consumer
         // (RegionizedData slots, per-world regionizers) has a live host
         // to reach for.
+        // M5 (Track B) §4.3: whether this call actually constructed a new
+        // MultiThreadedSchedulerHost (fresh boot) vs. reused an existing
+        // one (GameTestServer, same JVM, successive server instances) —
+        // gates the B2low global-subsystem registration block below so a
+        // reused host does not get every subsystem double-registered.
+        boolean freshInstall = true;
         try {
             net.multiforge.runtime.scheduler.MultiForgeRegionizedRuntime.install(
                     net.multiforge.runtime.config.MultiForgeConfig.defaults(),
@@ -138,6 +144,7 @@ public class ServerLifecycleHooks {
         } catch (net.multiforge.runtime.scheduler.MultiForgeRegionizedRuntime.AlreadyInstalledException already) {
             // Test harnesses (GameTestServer) may install once per JVM and reuse
             // across successive server instances — that's fine, keep going.
+            freshInstall = false;
         } catch (IllegalStateException foreign) {
             // /67 round-4 fix (1.4): the pre-fix catch swallowed BOTH the
             // benign "already installed same instance" case AND the "foreign
@@ -178,6 +185,18 @@ public class ServerLifecycleHooks {
         // Idempotent per JVM.
         net.multiforge.neoforge.RegionizedChunkLifecycle.installOnEventBus();
 
+        // MultiForge M5 (Track B, B2low): register the five low-risk
+        // global subsystems (weather, time, world border, scoreboard,
+        // boss events) on the freshly-installed host's GlobalSystems
+        // registry — see docs/design/global-region.md §4.2/§4.3. Gated
+        // on freshInstall (set above) so a reused host (GameTestServer,
+        // same JVM) never gets every subsystem double-registered — the
+        // single most likely correctness bug the design doc calls out
+        // for this wiring.
+        if (mfHost != null && freshInstall) {
+            net.multiforge.neoforge.globals.MultiForgeGlobalSystemsInit.install(mfHost, server);
+        }
+
         currentServer = server;
         // on the dedi server we need to force the stuff to setup properly
         LogicalSidedProvider.setServer(() -> server);
@@ -216,6 +235,12 @@ public class ServerLifecycleHooks {
         // happen next boot.
         try {
             net.multiforge.runtime.scheduler.MultiForgeRegionizedRuntime.shutdown();
+            // B2low teardown: drop the bindings/side-tables MultiForgeGlobalSystemsInit
+            // set up for the host being shut down, so a subsequent fresh
+            // install (next GameTestServer instance, same JVM) starts from
+            // a clean slate rather than accumulating stale WorldBorder
+            // identity entries across server restarts.
+            net.multiforge.neoforge.globals.GlobalSystemsBridge.unbind();
         } catch (Throwable t) {
             // Never let a runtime-shutdown hiccup prevent normal server-stop cleanup.
             org.slf4j.LoggerFactory.getLogger("multiforge.lifecycle")

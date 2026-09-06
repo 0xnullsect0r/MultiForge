@@ -1,0 +1,37 @@
+--- a/net/minecraft/server/bossevents/CustomBossEvents.java
++++ b/net/minecraft/server/bossevents/CustomBossEvents.java
+@@ -19,13 +19,32 @@
+     }
+ 
+     public CustomBossEvent create(ResourceLocation p_136300_, Component p_136301_) {
++        // MultiForge (multiforge-patches/08-globals/): a named bossbar
++        // can be created from any region's thread (a datapack function
++        // running on a foreign region, a command executed there). Route
++        // the map mutation through
++        // net.multiforge.runtime.globals.BossEventSystem so it lands
++        // single-threaded on the global region — never racing a
++        // concurrent create()/remove() from a different region. The
++        // CustomBossEvent instance itself is constructed synchronously
++        // (cheap, side-effect-free) so callers always get a non-null
++        // return value even while the map insert is still in flight on
++        // the global region's mailbox.
+         CustomBossEvent custombossevent = new CustomBossEvent(p_136300_, p_136301_);
+-        this.events.put(p_136300_, custombossevent);
++        if (!net.multiforge.neoforge.globals.GlobalSystemsBridge.routeBossEventMutation(
++                () -> this.events.put(p_136300_, custombossevent))) {
++            this.events.put(p_136300_, custombossevent);
++        }
+         return custombossevent;
+     }
+ 
+     public void remove(CustomBossEvent p_136303_) {
+-        this.events.remove(p_136303_.getTextId());
++        // MultiForge (multiforge-patches/08-globals/): see create()'s
++        // comment above for the rationale.
++        if (!net.multiforge.neoforge.globals.GlobalSystemsBridge.routeBossEventMutation(
++                () -> this.events.remove(p_136303_.getTextId()))) {
++            this.events.remove(p_136303_.getTextId());
++        }
+     }
+ 
+     public Collection<ResourceLocation> getIds() {

@@ -1,16 +1,30 @@
 /*
- * MultiForge — Proprietary. Copyright (c) 2026 MultiForge authors.
- * All rights reserved. See LICENSE at the repository root.
+ * MultiForge — Copyright (c) 2026 MultiForge authors.
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, version 3.
+ *
+ * This program is distributed in the hope that it will be useful, but
+ * WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
+ * General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program. If not, see <https://www.gnu.org/licenses/>.
  */
 package net.multiforge.runtime.scheduler;
 
 import java.io.IOException;
 import java.nio.file.Path;
+import java.util.Comparator;
+import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.BiFunction;
@@ -36,6 +50,13 @@ import net.multiforge.runtime.chunk.TicketType;
 import net.multiforge.runtime.config.MultiForgeConfig;
 import net.multiforge.runtime.diagnostics.ProbeRegistry;
 import net.multiforge.runtime.diagnostics.ViolationLogger;
+import net.multiforge.runtime.entity.EntityMigrationCoordinator;
+import net.multiforge.runtime.entity.EntityRegistry;
+import net.multiforge.runtime.entity.PlayerJoinCoordinator;
+import net.multiforge.runtime.globals.CrossRegionEffects;
+import net.multiforge.runtime.globals.GlobalRegionThreadMarker;
+import net.multiforge.runtime.globals.GlobalSystems;
+import net.multiforge.runtime.globals.GlobalTickContext;
 import net.multiforge.runtime.journal.AutoSaveRunner;
 import net.multiforge.runtime.journal.JournalReplayHarness;
 import net.multiforge.runtime.journal.RegionJournal;
@@ -47,6 +68,7 @@ import net.multiforge.runtime.region.RegionId;
 import net.multiforge.runtime.region.RegionListener;
 import net.multiforge.runtime.region.RegionTickBody;
 import net.multiforge.runtime.region.RegionizedTaskQueue;
+import net.multiforge.runtime.region.SectionPos;
 import net.multiforge.runtime.region.ThreadedRegionizer;
 import net.multiforge.runtime.region.TickRegionScheduler;
 import net.multiforge.runtime.shutdown.RegionShutdownCoordinator;
@@ -134,6 +156,25 @@ public final class MultiThreadedSchedulerHost implements SchedulerHost, AutoClos
     private final Region globalRegion;
     private final ThreadedRegionizer globalRegionizer;
 
+    // Registry of GlobalSystem/GlobalTicker subsystems ticked from the
+    // BLOCK_ENTITIES phase-4 slot whenever the region being ticked is
+    // globalRegion (see phaseGlobalSystemsTick). Constructed alongside
+    // globalRegion/globalRegionizer per docs/design/global-region.md §2.3.
+    private final GlobalSystems globalSystems = new GlobalSystems();
+
+    // M4 Track A2 wiring: per-host entity registry + migration coordinator, bound to this host's
+    // own taskQueue and chunkManagerFor lookup so a cross-region hop's BORDER-gated completion
+    // (docs/design/entity-migration.md §3) resolves against the same regionizers everything else
+    // in this host uses. One instance per host lifetime, matching chunkManagers/taskQueue/scheduler
+    // above — constructed in the constructor body (after taskQueue is assigned) and closed
+    // alongside them in close(). playerJoinCoordinator is wired against the synthetic global
+    // region's WorldRef so ServerConnectionListener's login-complete hop (fork glue) has a
+    // ready-made 2-hop (netty -> global -> spawn chunk) target without constructing its own
+    // EntityRegistry.
+    private final EntityRegistry entityRegistry = new EntityRegistry();
+    private final EntityMigrationCoordinator entityMigrationCoordinator;
+    private final PlayerJoinCoordinator playerJoinCoordinator;
+
     public MultiThreadedSchedulerHost(MultiForgeConfig config) {
         this(config, region -> {}); // no-op tick body until M2 patch supplies the vanilla body
     }
@@ -195,6 +236,22 @@ public final class MultiThreadedSchedulerHost implements SchedulerHost, AutoClos
         // symmetry with the previous shape / test readability.
         scheduler.register(globalRegion);
 
+        // M4 Track A2: constructed here (not as a field initializer) because
+        // EntityMigrationCoordinator requires a non-null taskQueue, which this constructor only
+        // just assigned above. chunkManagerFor is the *creating* accessor (not
+        // chunkManagerForOrNull) — the coordinator's BORDER-gated completeAt needs a live
+        // ChunkHolderManager for the destination world even the first time an entity migrates
+        // there, matching docs/design/entity-migration.md §3.2.
+        this.entityMigrationCoordinator =
+                new EntityMigrationCoordinator(this.taskQueue, this.entityRegistry, this::chunkManagerFor);
+        // playerJoinCoordinator hops through the synthetic global region exactly like every other
+        // GlobalDomain dispatch (see enqueueOnGlobal below) — the "wakeup" is a no-op here because
+        // the global region already self-ticks on the scheduler's own worker loop; a dedicated
+        // wakeup signal is only needed if login hand-off must preempt the global region's normal
+        // tick cadence, which M4 does not require.
+        this.playerJoinCoordinator =
+                new PlayerJoinCoordinator(this.taskQueue, this.entityRegistry, globalWorld, () -> {});
+
         AtomicInteger dSeq = new AtomicInteger();
         this.delayedExec = Executors.newScheduledThreadPool(1, r -> {
             Thread t = new Thread(r, "multiforge-delayed-" + dSeq.incrementAndGet());
@@ -207,6 +264,17 @@ public final class MultiThreadedSchedulerHost implements SchedulerHost, AutoClos
             t.setDaemon(true);
             return t;
         });
+
+        // Bind the real CrossRegionEffects implementation now that
+        // regionToWorld/taskQueue/regionizers are all initialized. See
+        // docs/design/global-region.md §3.6 — resolves a RegionId to a
+        // live Region via a linear scan over the owning world's
+        // regionizer.regions() (deliberately not a new ThreadedRegionizer
+        // accessor — out of scope for B1.1), then anchors on that
+        // region's lowest SectionPos and delegates to
+        // RegionizedTaskQueue.queueChunkTask, which re-resolves ownership
+        // at drain time under the regionizer's read lock.
+        globalSystems.bindCrossRegionEffects(this::deliverCrossRegionEffect);
     }
 
     /** Install as the {@link ServerDomains} binding. */
@@ -272,8 +340,48 @@ public final class MultiThreadedSchedulerHost implements SchedulerHost, AutoClos
         return taskQueue;
     }
 
+    /**
+     * Per-host {@link EntityRegistry} (M4 Track A2). The {@code net.multiforge.neoforge.entity}
+     * fork glue binds Vanilla {@code Entity} lifecycle call sites (add/remove/move/teleport/change
+     * dimension) to this single registry so every world shares one UUID-keyed table, matching
+     * Vanilla's own per-server (not per-level) entity UUID uniqueness invariant.
+     */
+    public EntityRegistry entityRegistry() {
+        return entityRegistry;
+    }
+
+    /** Per-host {@link EntityMigrationCoordinator} (M4 Track A2) — see {@link #entityRegistry()}. */
+    public EntityMigrationCoordinator entityMigrationCoordinator() {
+        return entityMigrationCoordinator;
+    }
+
+    /** Per-host {@link PlayerJoinCoordinator} (M4 Track A2) — see {@link #entityRegistry()}. */
+    public PlayerJoinCoordinator playerJoinCoordinator() {
+        return playerJoinCoordinator;
+    }
+
     public TickRegionScheduler scheduler() {
         return scheduler;
+    }
+
+    /**
+     * The registry of {@link net.multiforge.runtime.globals.GlobalSystem}/
+     * {@link net.multiforge.runtime.globals.GlobalTicker} subsystems ticked
+     * once per global tick from the {@code BLOCK_ENTITIES} phase-4 slot
+     * (docs/design/global-region.md §2.3). Fork glue (e.g. {@code
+     * ServerLifecycleHooks}) registers B2.x subsystems here at boot.
+     */
+    public GlobalSystems globalSystems() {
+        return globalSystems;
+    }
+
+    /**
+     * The synthetic global region — a real {@link Region}, materialised
+     * eagerly at host-construction time and stable for the life of this
+     * host instance (docs/design/global-region.md §1.2).
+     */
+    public Region globalRegion() {
+        return globalRegion;
     }
 
     public ThreadedRegionizer regionizerFor(WorldRef world) {
@@ -359,6 +467,18 @@ public final class MultiThreadedSchedulerHost implements SchedulerHost, AutoClos
      */
     public ThreadedRegionizer regionizerForOrNull(WorldRef world) {
         return regionizers.get(world.dimensionId());
+    }
+
+    /**
+     * Read-only snapshot of every world's regionizer, keyed by {@link
+     * WorldRef#dimensionId()} (includes the synthetic {@code
+     * multiforge:global} world). Observability call sites (e.g. the
+     * {@code diagnostics.emitters} package's {@code RegionMapEmitter})
+     * use this to enumerate every live region across every world
+     * without reaching into host internals.
+     */
+    public Map<String, ThreadedRegionizer> regionizers() {
+        return Map.copyOf(regionizers);
     }
 
     public ChunkTaskScheduler chunkTaskScheduler() {
@@ -464,11 +584,118 @@ public final class MultiThreadedSchedulerHost implements SchedulerHost, AutoClos
         }
 
         // Build the wired body and swap it into the scheduler.
+        //
+        // BLOCK_ENTITIES is repurposed for the global-subsystem tick slot
+        // (B1.1, docs/design/global-region.md §2.2/§2.3): it is
+        // semantically vacant for every real region as of this freeze (no
+        // M8 patch wires block-entity ticking into it yet), and
+        // phaseGlobalSystemsTick itself no-ops for every non-global
+        // region. Appended (not `.set`) so any caller-supplied
+        // BLOCK_ENTITIES body — e.g. a test probe — still runs; production
+        // behavior is identical either way since nothing else is wired
+        // into this phase, but `.append` avoids silently discarding a
+        // caller's body the way `.set` would.
         PhasedRegionTickBody.Builder wired = userBuilder
                 .prepend(PhasedRegionTickBody.Phase.INBOUND_MAILBOX, this::phasePollFullLoadUpdate)
+                .append(PhasedRegionTickBody.Phase.BLOCK_ENTITIES, this::phaseGlobalSystemsTick)
                 .append(PhasedRegionTickBody.Phase.REGION_EVENTS, this::phaseDrainChunkTasks)
                 .append(PhasedRegionTickBody.Phase.FLUSH_OUTBOUND, this::phaseAutoSave);
         scheduler.setBody(wired.build());
+    }
+
+    /**
+     * {@code BLOCK_ENTITIES} phase body (repurposed, see {@link
+     * #installM9WiredTickBody}) — no-op for every region except {@link
+     * #globalRegion}; for the global region, ticks every registered
+     * {@link net.multiforge.runtime.globals.GlobalSystem}/{@link
+     * net.multiforge.runtime.globals.GlobalTicker} once. Runs after
+     * phase 1's {@code phasePollFullLoadUpdate} drain and before phase
+     * 5's {@code phaseDrainChunkTasks}, so a same-tick ticket
+     * add/remove made by a global subsystem is visible to
+     * {@code REGION_EVENTS} handlers the same tick (docs/design/global-
+     * region.md §2.2 point 2).
+     *
+     * <p>The whole body runs inside {@link
+     * net.multiforge.runtime.globals.GlobalRegionThreadMarker#runMarked(Runnable)}
+     * (round-6 fork B F2): this is the one call site that actually
+     * executes on the global region's worker thread, so marking here —
+     * try/finally, cleared on every exit path including a thrown
+     * exception — is what lets {@code BossEventSystem.tryRoute} and
+     * {@code ScoreboardSystem.tryRoute} detect same-thread reentry (a
+     * command function or event handler mutating boss-bar/scoreboard
+     * state from within this very tick) and run that mutation inline
+     * instead of deferring it to next tick's mailbox drain.
+     */
+    private void phaseGlobalSystemsTick(Region region) {
+        if (!region.id().equals(globalRegion.id())) return;
+        GlobalRegionThreadMarker.runMarked(() -> {
+            GlobalTickContext ctx = new GlobalTickContext(globalSystems.currentTick() + 1, region.id());
+            globalSystems.tickAll(ctx);
+            return null;
+        });
+    }
+
+    /**
+     * {@link CrossRegionEffects} implementation bound to {@link
+     * #globalSystems} at construction time. Resolves {@code dest} to a
+     * live {@link Region} by (1) looking up its owning {@link WorldRef}
+     * via {@link #regionToWorld}, (2) linear-scanning that world's
+     * {@link ThreadedRegionizer#regions()} for a matching id (deliberately
+     * not a new {@code ThreadedRegionizer.regionById} accessor — out of
+     * scope for B1.1, and off the tick-hot path so O(regions) is
+     * acceptable per docs/design/global-region.md §3.6), then (3)
+     * anchoring on that region's lowest {@link SectionPos} (by (x, z))
+     * and delegating to {@link RegionizedTaskQueue#queueChunkTask}, which
+     * re-resolves ownership at drain time under the regionizer's read
+     * lock. Never throws — a {@code dest} that no longer resolves to a
+     * live region (died since the subsystem last observed it) is logged
+     * and dropped (CLAUDE.md rule 5).
+     */
+    private void deliverCrossRegionEffect(RegionId dest, Runnable task) {
+        WorldRef world = regionToWorld.get(dest);
+        if (world == null) {
+            ProbeRegistry.bump("global.system.effects.dead-region");
+            ViolationLogger.warn(
+                    "global.system.effects",
+                    "crossRegionEffect(" + dest + ") dropped — no live world for this region id");
+            return;
+        }
+        ThreadedRegionizer regionizer = regionizerForOrNull(world);
+        if (regionizer == null) {
+            ProbeRegistry.bump("global.system.effects.no-regionizer");
+            ViolationLogger.warn(
+                    "global.system.effects",
+                    "crossRegionEffect(" + dest + ") dropped — no regionizer materialised for " + world);
+            return;
+        }
+        Region dstRegion = null;
+        for (Region candidate : regionizer.regions()) {
+            if (candidate.id().equals(dest)) {
+                dstRegion = candidate;
+                break;
+            }
+        }
+        if (dstRegion == null) {
+            ProbeRegistry.bump("global.system.effects.dead-region");
+            ViolationLogger.warn(
+                    "global.system.effects",
+                    "crossRegionEffect(" + dest + ") dropped — region no longer live in " + world);
+            return;
+        }
+        var sections = dstRegion.sections();
+        if (sections.isEmpty()) {
+            ProbeRegistry.bump("global.system.effects.no-sections");
+            ViolationLogger.warn(
+                    "global.system.effects", "crossRegionEffect(" + dest + ") dropped — region owns no sections");
+            return;
+        }
+        SectionPos anchor = sections.stream()
+                .min(Comparator.comparingInt(SectionPos::x).thenComparingInt(SectionPos::z))
+                .orElseThrow();
+        int shift = dstRegion.sectionChunkShift();
+        int chunkX = anchor.x() << shift;
+        int chunkZ = anchor.z() << shift;
+        taskQueue.queueChunkTask(world, chunkX, chunkZ, task);
     }
 
     /**
@@ -642,6 +869,7 @@ public final class MultiThreadedSchedulerHost implements SchedulerHost, AutoClos
     @Override
     public void close() {
         scheduler.close();
+        entityRegistry.close();
         delayedExec.shutdownNow();
         asyncExec.shutdownNow();
         try {
@@ -650,6 +878,74 @@ public final class MultiThreadedSchedulerHost implements SchedulerHost, AutoClos
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
         }
+        // Deliberately not shutting down DiagExecutorHolder.EXEC here: it is
+        // a JVM-wide singleton shared by every host instance (see its
+        // javadoc), and other still-live hosts' diagnostics emitters may
+        // depend on it. Individual scheduleGlobal callers own their own
+        // ScheduledFuture and are responsible for cancelling it.
+    }
+
+    // ============================================================
+    // Diagnostics emitter scheduling (Track C1 / M6)
+    // ============================================================
+
+    /**
+     * Lazily-initialised, JVM-wide singleton executor backing {@link
+     * #scheduleGlobal}. A single daemon thread is enough: the {@code
+     * net.multiforge.runtime.diagnostics.emitters} producers this
+     * drives (region snapshots, heatmaps, heartbeats) are cheap,
+     * non-blocking, 4&nbsp;Hz jobs that read already-published
+     * snapshot state — see CLAUDE.md rule 4 and
+     * {@code docs/design/client-debug-protocol.md} §3. Kept as a
+     * nested holder class (not a field) so the thread is never created
+     * unless some emitter actually calls {@link #scheduleGlobal}.
+     */
+    private static final class DiagExecutorHolder {
+        private static final ScheduledExecutorService EXEC = Executors.newSingleThreadScheduledExecutor(r -> {
+            Thread t = new Thread(r, "mf-diag-emitters");
+            t.setDaemon(true);
+            return t;
+        });
+
+        private DiagExecutorHolder() {}
+    }
+
+    /**
+     * Schedule {@code task} to run at a fixed rate on the shared {@code
+     * mf-diag-emitters} daemon thread, starting immediately. Used
+     * exclusively by {@code net.multiforge.runtime.diagnostics.emitters}
+     * producers to drive their 4&nbsp;Hz (250&nbsp;ms) cadence per
+     * {@code docs/design/client-debug-protocol.md} §3 — never by
+     * gameplay code, and never on a region worker thread.
+     *
+     * <p>{@code task} is wrapped so a thrown {@link RuntimeException}
+     * never kills the shared scheduled-executor thread (which would
+     * silently stop every other registered emitter): the exception is
+     * caught, counted via {@link ProbeRegistry}, and rate-limit logged
+     * via {@link ViolationLogger} instead (CLAUDE.md rule 5).
+     *
+     * @param task the periodic job; must not block (CLAUDE.md rule 4)
+     * @param periodMillis must be {@code > 0}
+     * @return a handle the caller uses to cancel the schedule
+     */
+    public ScheduledFuture<?> scheduleGlobal(Runnable task, long periodMillis) {
+        Objects.requireNonNull(task, "task");
+        if (periodMillis <= 0) throw new IllegalArgumentException("periodMillis must be > 0: " + periodMillis);
+        return DiagExecutorHolder.EXEC.scheduleAtFixedRate(
+                () -> {
+                    try {
+                        task.run();
+                    } catch (RuntimeException e) {
+                        ProbeRegistry.bump("diag-emitter.failure");
+                        ViolationLogger.warn(
+                                "MultiThreadedSchedulerHost.scheduleGlobal",
+                                "diagnostics emitter task threw: "
+                                        + e.getClass().getSimpleName() + ": " + e.getMessage());
+                    }
+                },
+                0L,
+                periodMillis,
+                TimeUnit.MILLISECONDS);
     }
 
     @Override

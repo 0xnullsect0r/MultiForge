@@ -1,6 +1,17 @@
 /*
- * MultiForge — Proprietary. Copyright (c) 2026 MultiForge authors.
- * All rights reserved. See LICENSE at the repository root.
+ * MultiForge — Copyright (c) 2026 MultiForge authors.
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, version 3.
+ *
+ * This program is distributed in the hope that it will be useful, but
+ * WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
+ * General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program. If not, see <https://www.gnu.org/licenses/>.
  */
 package net.multiforge.runtime.entity;
 
@@ -62,6 +73,19 @@ public final class PlayerJoinCoordinator {
         globalWakeup.run();
     }
 
+    /**
+     * Named entry point the M4 Track A3.3 wiring calls from {@code PlayerList.placeNewPlayer}
+     * (via the fork-side {@code PlayerJoinBridge}) — a thin alias for {@link
+     * #onPlayerLoginCompleted} kept under the name the networking design contract uses
+     * ("Netty→global→spawn-chunk-owning-region hop"). Both names hop through the exact same
+     * two-step queue-and-complete machinery; this one exists purely so call sites read as "begin
+     * the join flow" rather than "login completed," which reads oddly from a call site that fires
+     * after Vanilla has already placed the player in its destination level.
+     */
+    public void beginJoin(UUID playerUuid, WorldRef spawnWorld, BlockPos spawnPos, String initialPayload) {
+        onPlayerLoginCompleted(playerUuid, spawnWorld, spawnPos, initialPayload);
+    }
+
     private void globalRegionAssign(UUID playerUuid, WorldRef spawnWorld, BlockPos spawnPos, String payload) {
         // Step 2: publish the UUID in whatever server-global data store
         // needs it (Vanilla: PlayerList, saveplayerdata dir), then
@@ -75,8 +99,18 @@ public final class PlayerJoinCoordinator {
     }
 
     private void spawnAtDestination(UUID playerUuid, WorldRef spawnWorld, BlockPos spawnPos, String payload) {
-        MigratingEntityRef ref = new MigratingEntityRef(playerUuid, spawnWorld, spawnPos.toChunkPos());
-        registry.add(ref, payload);
+        // A3.3: by the time this drains, Vanilla's own PlayerList.placeNewPlayer has typically
+        // already registered the player via PersistentEntitySectionManager.addEntity's
+        // EntityMigrationBridge.onEntityRegistered hook (A2.6) — this hop is supplementary
+        // MultiForge bookkeeping racing (harmlessly) against that Vanilla-driven path, not the
+        // only place the ref gets created. Match A2.6's own idempotent register-or-refresh idiom
+        // rather than assuming this hop always wins the race and gets to be the first `add()`.
+        if (registry.get(playerUuid) == null) {
+            MigratingEntityRef ref = new MigratingEntityRef(playerUuid, spawnWorld, spawnPos.toChunkPos());
+            registry.add(ref, payload);
+        } else {
+            registry.updatePayload(playerUuid, payload);
+        }
         // The M4 patch signals ServerGamePacketListenerImpl to release
         // the queued initial packets to the player here.
     }

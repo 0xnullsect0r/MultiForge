@@ -1,3 +1,5 @@
+import java.time.Duration
+
 plugins {
     id("multiforge.base")
     application
@@ -150,4 +152,78 @@ tasks.register<JavaExec>("swarm") {
     systemProperty(
             "bench.bootLog",
             layout.buildDirectory.file("bench-logs/swarm-$players-boot.log").get().asFile.absolutePath)
+
+    // Phase X task X.8 (docs/verification/m456/x8-strict-mode-swarm.md) is
+    // the carrier the comment above anticipated: it needs the strict-mode
+    // flag AND its own evidence-dir output/boot-log paths instead of the
+    // M9-era swarm-$players/ defaults above. These three are the "once
+    // that carrier flag is wired through" follow-up.
+    (project.findProperty("extraJvmArgs") as String?)?.let { systemProperty("bench.extraJvmArgs", it) }
+    (project.findProperty("outputFile") as String?)?.let { systemProperty("bench.outputFile", it) }
+    (project.findProperty("bootLog") as String?)?.let { systemProperty("bench.bootLog", it) }
 }
+
+// -------------------------------------------------------------------------
+// Phase X (m456) bench-verification harness — see docs/verification/m456/
+// and multiforge-bench/verification/m456/*.sh. These four tasks each shell
+// out to the matching script; the script (not this task) owns the actual
+// server-launch/RCON/WorldDiff logic, so it can also be run directly
+// outside Gradle (e.g. `bash multiforge-bench/verification/m456/x1-cross-
+// region-teleport.sh --dry-run`). Every script accepts --dry-run and ends
+// with a machine-parseable "PASS"/"FAIL" as its last stdout line.
+//
+// Real runs need a real headless-server-capable workstation with
+// vendored upstream/neoforge-1.21.1 — nothing CI can do — so by default
+// these tasks pass --dry-run themselves; add
+// -PrealRun to actually launch a server (see docs/verification/m456/
+// README.md "How to run" for the full prerequisites and expected wall
+// clock per task).
+// -------------------------------------------------------------------------
+
+val m456VerificationDir = project.projectDir.resolve("verification/m456")
+
+fun registerM456VerificationTask(taskName: String, scriptName: String, timeoutMinutes: Long, taskDescription: String) {
+    tasks.register<Exec>(taskName) {
+        group = "verification"
+        description = taskDescription
+        workingDir = rootProject.projectDir
+        val scriptArgs = mutableListOf("bash", m456VerificationDir.resolve(scriptName).absolutePath)
+        if (!project.hasProperty("realRun")) {
+            scriptArgs += "--dry-run"
+        }
+        commandLine(scriptArgs)
+        timeout.set(Duration.ofMinutes(timeoutMinutes))
+    }
+}
+
+registerM456VerificationTask(
+        "x1CrossRegionTeleport",
+        "x1-cross-region-teleport.sh",
+        15,
+        "Phase X.1 — cross-region entity teleport regression: 100 rapid /tp calls across 4 regions, " +
+                "SEMANTIC world-save parity vs a 1-worker baseline of the same seed. " +
+                "Usage: ./gradlew :multiforge-bench:x1CrossRegionTeleport [-PrealRun].")
+
+registerM456VerificationTask(
+        "x2RaidStress",
+        "x2-raid-stress.sh",
+        15,
+        "Phase X.2 — cross-region raid stress: 20 raid-capture seeds spanning 4 region-boundary " +
+                "quadrants; asserts zero raider-spawn-routing failures and zero ownership violations. " +
+                "Usage: ./gradlew :multiforge-bench:x2RaidStress [-PrealRun].")
+
+registerM456VerificationTask(
+        "x3DragonFight",
+        "x3-dragon-fight-regression.sh",
+        15,
+        "Phase X.3 — dragon fight regression: fixed seed, forced kill cycle, end-podium/gateway " +
+                "SEMANTIC parity vs a 1-worker baseline. " +
+                "Usage: ./gradlew :multiforge-bench:x3DragonFight [-PrealRun].")
+
+registerM456VerificationTask(
+        "x8StrictSwarm",
+        "x8-strict-mode-swarm.sh",
+        65,
+        "Phase X.8 — 60-minute strict-mode headless swarm at 100 bots (-Dmultiforge.regiontick.strict=on); " +
+                "asserts zero RegionTickOverrunException and zero OwnershipEnforcer REROUTE hits. " +
+                "Usage: ./gradlew :multiforge-bench:x8StrictSwarm [-PrealRun].")

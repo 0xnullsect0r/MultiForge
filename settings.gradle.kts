@@ -22,8 +22,6 @@ rootProject.name = "multiforge"
 // model; the NeoForge-flavored bits are added by the M6 patch bundle
 // under `-Pmc=true`.
 include(
-    "multiforge-license",
-    "multiforge-license-cli",
     "multiforge-api",
     "multiforge-runtime",
     "multiforge-client",
@@ -31,6 +29,9 @@ include(
     // Determinism harness: pure-Java file diffing, no Minecraft dep — buildable
     // standalone. Only the world dirs it consumes come from an MC-enabled run.
     "multiforge-bench",
+    // Static ASM-based mod-jar safety scanner. No Minecraft/NeoForge dep —
+    // see docs/design/scanner-rules.md §1.1.
+    "multiforge-scanner",
 )
 
 // MultiForge patches under `multiforge-patches/<NN-group>/` are applied

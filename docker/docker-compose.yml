@@ -1,9 +1,8 @@
-# Minimal MultiForge server compose file.
-# See docs/license.md for how to obtain a MULTIFORGE_LICENSE token.
+# Minimal MultiForge server compose file. GPL-3.0-only.
 
 services:
   multiforge:
-    image: ghcr.io/0xnullsect0r/multiforge-server:1.0.0
+    image: ghcr.io/0xnullsect0r/multiforge-server:latest
     container_name: multiforge
     restart: unless-stopped
     ports:
@@ -12,14 +11,17 @@ services:
     environment:
       EULA: "TRUE"
       MEMORY: "8G"
-      MULTIFORGE_LICENSE: "${MULTIFORGE_LICENSE:?set MULTIFORGE_LICENSE in your environment or .env file}"
       MULTIFORGE_MODE: "hybrid"
       MULTIFORGE_CORES: "8"
       MULTIFORGE_THREADS_PER_CORE: "2"
     volumes:
       - ./data:/data
     healthcheck:
-      test: ["CMD", "sh", "-c", "printf 'GET / HTTP/1.0\\r\\n\\r\\n' | nc -w2 127.0.0.1 25565 > /dev/null 2>&1 || exit 0"]
+      # Real Minecraft server-list-ping probe (mcstatus is installed in the
+      # image, see docker/Dockerfile). Exit code reflects whether the
+      # server actually answered the ping — no `|| exit 0` fallback, so a
+      # down server is correctly reported unhealthy.
+      test: ["CMD", "mcstatus", "127.0.0.1:25565", "ping"]
       interval: 30s
       timeout: 5s
       retries: 3

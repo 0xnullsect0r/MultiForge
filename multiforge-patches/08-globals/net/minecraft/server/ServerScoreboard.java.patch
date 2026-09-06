@@ -1,0 +1,57 @@
+--- a/net/minecraft/server/ServerScoreboard.java
++++ b/net/minecraft/server/ServerScoreboard.java
+@@ -37,6 +37,29 @@
+ 
+     @Override
+     protected void onScoreChanged(ScoreHolder p_313858_, Objective p_313953_, Score p_136206_) {
++        // MultiForge (multiforge-patches/08-globals/): a score can change
++        // from any region's thread (an entity dying, a command running
++        // cross-region). Route the whole mutation — including the
++        // super() bookkeeping and the client broadcast — through
++        // net.multiforge.runtime.globals.ScoreboardSystem so it always
++        // lands single-threaded on the global region, never racing a
++        // concurrent mutation from a different region. Falls through to
++        // the inline Vanilla body when MultiForge is not installed
++        // (bootstrap window).
++        if (net.multiforge.neoforge.globals.GlobalSystemsBridge.routeScoreboardMutation(
++                () -> this.mfOnScoreChangedBody(p_313858_, p_313953_, p_136206_))) {
++            return;
++        }
++        this.mfOnScoreChangedBody(p_313858_, p_313953_, p_136206_);
++    }
++
++    /**
++     * MultiForge (multiforge-patches/08-globals/): the original,
++     * unmodified {@code onScoreChanged} body — see {@code
++     * ServerLevel.mfAdvanceWeatherCycleBody}'s javadoc for the
++     * extraction rationale.
++     */
++    public void mfOnScoreChangedBody(ScoreHolder p_313858_, Objective p_313953_, Score p_136206_) {
+         super.onScoreChanged(p_313858_, p_313953_, p_136206_);
+         if (this.trackedObjectives.contains(p_313953_)) {
+             this.server
+@@ -63,6 +86,24 @@
+ 
+     @Override
+     public void onPlayerRemoved(ScoreHolder p_313870_) {
++        // MultiForge (multiforge-patches/08-globals/): a scoreboard
++        // entry (score-holder) removal can be triggered from any
++        // region's thread (an entity dying on a foreign region, a
++        // player disconnecting). Route through
++        // net.multiforge.runtime.globals.ScoreboardSystem — see
++        // onScoreChanged's patch comment above for the full rationale.
++        if (net.multiforge.neoforge.globals.GlobalSystemsBridge.routeScoreboardMutation(
++                () -> this.mfOnPlayerRemovedBody(p_313870_))) {
++            return;
++        }
++        this.mfOnPlayerRemovedBody(p_313870_);
++    }
++
++    /**
++     * MultiForge (multiforge-patches/08-globals/): the original,
++     * unmodified {@code onPlayerRemoved} body.
++     */
++    public void mfOnPlayerRemovedBody(ScoreHolder p_313870_) {
+         super.onPlayerRemoved(p_313870_);
+         this.server.getPlayerList().broadcastAll(new ClientboundResetScorePacket(p_313870_.getScoreboardName(), null));
+         this.setDirty();

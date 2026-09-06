@@ -36,7 +36,23 @@ jobs:
         run: ./gradlew spotlessCheck --no-daemon --stacktrace
 
       - name: Build + test
-        run: ./gradlew build --no-daemon --stacktrace
+        # Enumerate the CI-scoped modules explicitly. `./gradlew build`
+        # at the root pulls in :multiforge-client which needs the
+        # NeoForge `moddev` plugin's compile classpath (a full NeoForge
+        # + officially-mapped Minecraft jar tree) to compile — that dep
+        # is not resolvable from public Maven, so the ordinary build
+        # cannot include the client module. Wiring moddev is deferred
+        # past v1.2.0 per multiforge-client/build.gradle.kts's own
+        # commentary; until then, the client module is verified by
+        # direct javac against the fork's built classes.
+        run: |
+          ./gradlew \
+            :multiforge-api:build \
+            :multiforge-runtime:build \
+            :multiforge-scanner:build \
+            :multiforge-installer:build \
+            :multiforge-bench:build \
+            --no-daemon --stacktrace
 
       - name: Upload test reports on failure
         if: failure()
@@ -105,7 +121,7 @@ jobs:
       - name: Set fork-build heap
         run: echo "GRADLE_OPTS=-Xmx6G" >> "$GITHUB_ENV"
 
-      - name: Publish multiforge-runtime + api + license to mavenLocal
+      - name: Publish multiforge-runtime + api to mavenLocal
         # Fork's projects/neoforge/build.gradle depends on these via mavenLocal
         # — without publishing first, `:neoforge:compileJava` fails at the
         # dependency resolution step. Also catches finding #14 of the /67
@@ -113,7 +129,6 @@ jobs:
         # the pure-Java `build` job would still report green.
         run: |
           ./gradlew \
-            :multiforge-license:publishToMavenLocal \
             :multiforge-api:publishToMavenLocal \
             :multiforge-runtime:publishToMavenLocal \
             --no-daemon --stacktrace

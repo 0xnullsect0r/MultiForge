@@ -1,6 +1,17 @@
 /*
- * MultiForge — Proprietary. Copyright (c) 2026 MultiForge authors.
- * All rights reserved. See LICENSE at the repository root.
+ * MultiForge — Copyright (c) 2026 MultiForge authors.
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, version 3.
+ *
+ * This program is distributed in the hope that it will be useful, but
+ * WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
+ * General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program. If not, see <https://www.gnu.org/licenses/>.
  */
 package net.multiforge.bench.harness;
 
@@ -69,6 +80,13 @@ public final class SwarmBench {
                 System.getProperty("bench.outputFile", "docs/verification/m9/7.4/swarm-" + players + "/patched.json"));
         Path bootLog = Path.of(System.getProperty(
                 "bench.bootLog", "multiforge-bench/build/bench-logs/swarm-" + players + "-boot.log"));
+        // Phase X task X.8 (docs/verification/m456/x8-strict-mode-swarm.md)
+        // needs the nested `:neoforge:runServer` launch to carry
+        // -Dmultiforge.regiontick.strict=on so the strict-mode watchdog is
+        // actually armed for the run — nothing plumbed extraJvmArgs through
+        // to this Config field until now (VanillaBench/Atm10Bench still
+        // hardcode ""). See HeadlessServerRunner.Config#extraJvmArgs.
+        String extraJvmArgs = System.getProperty("bench.extraJvmArgs", "");
 
         // ticks/20 mirrors the "N ticks at the natural 20 TPS target"
         // framing the other two profiles use for -Pticks, but here it is
@@ -79,7 +97,7 @@ public final class SwarmBench {
                 + "s (real-time; simplified RCON /summon armor-stand swarm — see multiforge-bench/README.md)");
 
         HeadlessServerRunner.Config config = new HeadlessServerRunner.Config(
-                workspaceDir, 1, "1234567890", Math.max(players + 4, 20), null, null, "");
+                workspaceDir, 1, "1234567890", Math.max(players + 4, 20), null, null, extraJvmArgs);
         MetricsCollector metrics = new MetricsCollector();
         Instant start = Instant.now();
 

@@ -4,7 +4,7 @@
 
 ## Scope
 
-<!-- Which milestone/module. E.g. "M0 · multiforge-license", "M2 · region tick". -->
+<!-- Which milestone/module. E.g. "M2 · region tick", "M6 · scanner". -->
 
 ## Checklist
 
@@ -12,8 +12,8 @@
 - [ ] No blocking calls on region worker threads.
 - [ ] Never throws from a mod code path — reroute + warn only.
 - [ ] Tests added or updated; `./gradlew build` green locally.
-- [ ] No dependency additions (or PR body explains license/binary-size review).
-- [ ] Diff does **not** contain a real Ed25519 private key or license token.
+- [ ] GPL-3 header on every new source file (spotless will fail otherwise).
+- [ ] No dependency additions (or PR body explains GPL-3-compat + binary-size review).
 - [ ] **Chunk-system regression run** (only if this PR touches `multiforge-runtime/src/main/java/net/multiforge/runtime/chunk/`, `net/multiforge/runtime/region/`, `multiforge-patches/04-chunk-system/`, or `upstream/neoforge-1.21.1/src/main/java/net/multiforge/neoforge/chunk/`):
   - [ ] `./gradlew :multiforge-runtime:build` green
   - [ ] `./gradlew :multiforge-bench:determinism` byte-identical parity vs. baseline (fixed seed, single worker)

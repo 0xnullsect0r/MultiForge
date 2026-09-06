@@ -1,0 +1,30 @@
+--- a/net/minecraft/commands/Commands.java
++++ b/net/minecraft/commands/Commands.java
+@@ -260,6 +260,27 @@
+     }
+ 
+     public void performPrefixedCommand(CommandSourceStack p_230958_, String p_230959_) {
++        // MultiForge (multiforge-patches/08-globals/): command dispatch migrates onto
++        // region-scoped or global-region dispatch (net.multiforge.runtime.globals.CommandDispatchSystem)
++        // once the subsystem is installed — see docs/design/global-region.md §6.3 and the
++        // M4+M5+M6 landing plan's Track B2.8. Falls through to the original Vanilla body
++        // otherwise (bootstrap window, or MultiForge not installed at all).
++        if (net.multiforge.neoforge.globals.GlobalSystemsBridge.commandDispatchReady()) {
++            net.multiforge.neoforge.globals.GlobalSystemsBridge.dispatchCommand(this, p_230958_, p_230959_);
++            return;
++        }
++        this.mfPerformPrefixedCommandBody(p_230958_, p_230959_);
++    }
++
++    /**
++     * MultiForge (multiforge-patches/08-globals/): the original, unmodified
++     * {@code performPrefixedCommand} body — see {@code
++     * ServerLevel.mfAdvanceWeatherCycleBody}'s javadoc for the extraction
++     * rationale. Invoked directly on the MultiForge-off fallthrough, or via
++     * {@code GlobalSystemsBridge.dispatchCommand}'s routed closure once a
++     * dispatch destination has been chosen.
++     */
++    public void mfPerformPrefixedCommandBody(CommandSourceStack p_230958_, String p_230959_) {
+         p_230959_ = p_230959_.startsWith("/") ? p_230959_.substring(1) : p_230959_;
+         this.performCommand(this.dispatcher.parse(p_230959_, p_230958_), p_230959_);
+     }

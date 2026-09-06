@@ -1,0 +1,57 @@
+--- a/net/minecraft/world/level/dimension/end/EndDragonFight.java
++++ b/net/minecraft/world/level/dimension/end/EndDragonFight.java
+@@ -151,6 +151,27 @@
+     }
+ 
+     public void tick() {
++        // MultiForge (multiforge-patches/08-globals/): the dragon-fight
++        // phase state machine migrates onto the global region's phase-4
++        // tick slot (net.multiforge.runtime.globals.DragonFightSystem)
++        // once this level has a registered target — see
++        // docs/design/global-region.md §6.3. Falls through to the
++        // original Vanilla body otherwise (bootstrap window, or an
++        // EndDragonFight instance MultiForge never registered, e.g. a
++        // throwaway test instance).
++        if (net.multiforge.neoforge.globals.GlobalSystemsBridge.dragonFightReady()) {
++            return;
++        }
++        this.mfTickBody();
++    }
++
++    /**
++     * MultiForge (multiforge-patches/08-globals/): the original,
++     * unmodified {@code tick} body — see {@code
++     * ServerLevel.mfAdvanceWeatherCycleBody}'s javadoc for the
++     * extraction rationale.
++     */
++    public void mfTickBody() {
+         this.dragonEvent.setVisible(!this.dragonKilled);
+         if (++this.ticksSinceLastPlayerScan >= 20) {
+             this.updatePlayers();
+@@ -190,6 +211,26 @@
+         }
+     }
+ 
++    /**
++     * MultiForge (multiforge-patches/08-globals/): fight origin, for
++     * {@code DragonFightSystem}'s arena-chunk pin computation
++     * (docs/design/global-region.md §5.3).
++     */
++    public BlockPos mfOrigin() {
++        return this.origin;
++    }
++
++    /**
++     * MultiForge (multiforge-patches/08-globals/): mirrors the {@code
++     * !dragonEvent.getPlayers().isEmpty()} gate {@link #mfTickBody()}
++     * itself checks — exposed so {@code DragonFightSystem} can decide
++     * whether the {@code TicketType.DRAGON} pin should currently be
++     * held, independent of when {@link #mfTickBody()} next runs.
++     */
++    public boolean mfHasNearbyPlayers() {
++        return !this.dragonEvent.getPlayers().isEmpty();
++    }
++
+     private void scanState() {
+         LOGGER.info("Scanning for legacy world dragon fight...");
+         boolean flag = this.hasActiveExitPortal();

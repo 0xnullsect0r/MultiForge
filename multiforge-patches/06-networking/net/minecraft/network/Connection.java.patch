@@ -1,0 +1,16 @@
+--- a/net/minecraft/network/Connection.java
++++ b/net/minecraft/network/Connection.java
+@@ -334,6 +334,13 @@
+     }
+ 
+     public void send(Packet<?> p_295839_, @Nullable PacketSendListener p_294866_, boolean p_294265_) {
++        // MultiForge (multiforge-patches/06-networking/, M4 Track A3.2): a packet destined for a
++        // player whose MigratingEntityRef is MIGRATING is queued on that ref's pendingOutbound
++        // deque instead of going out now — drained in order once the hop settles. See
++        // NetworkMigrationBridge.enqueueIfMigrating's javadoc.
++        if (net.multiforge.neoforge.entity.NetworkMigrationBridge.enqueueIfMigrating(this, p_295839_, p_294866_, p_294265_)) {
++            return;
++        }
+         if (this.isConnected()) {
+             this.flushQueue();
+             this.sendPacket(p_295839_, p_294866_, p_294265_);

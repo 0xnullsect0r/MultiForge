@@ -27,3 +27,35 @@
   guide: config, commands, debug client, shutdown, crash recovery.
 - [`website-install-copy.md`](website-install-copy.md) — drop-in copy
   for the purchase site's Installation page.
+
+## Concurrency + Ops
+
+- [`concurrency-contract.md`](concurrency-contract.md) — Domain enum,
+  OwnerToken semantics, DomainAssertions (dev/CI), OwnershipEnforcer
+  modes (OFF/REROUTE/STRICT), per-domain read/write rules.
+- [`scheduler-api.md`](scheduler-api.md) — runtime-internal scheduler
+  guide: MultiForgeRegionizedRuntime, RegionizedTaskQueue.queueChunkTask,
+  ChunkHolderManager, the four SchedulerHost domains, do's/don'ts,
+  cross-region recipes.
+- [`events.md`](events.md) — @DispatchDomain contract + a ~30-event
+  domain reference table (target mapping pending M12 enforcement).
+- [`legacy-compat.md`](legacy-compat.md) — what the LEGACY_SERIAL lane
+  does today vs. what the blueprint designs, mod-pattern compatibility
+  table, migration path for mods hitting REROUTE warnings.
+
+## Mod Safety + Performance
+
+- [`mod-porting.md`](mod-porting.md) — before/after recipes for
+  porting an existing NeoForge mod: chunk access, entity teleport,
+  static caches, off-thread block/block-entity mutation, config
+  reload, world-wide broadcasts, packet handling.
+- [`debugging-violations.md`](debugging-violations.md) — reading
+  `ViolationLogger` output, common violation types + fixes, using
+  `-Dmultiforge.ownership.mode=strict` for regression, the client
+  debug mod HUD, correlating stack traces to source lines.
+- [`perf-tuning.md`](perf-tuning.md) — `multiforge.toml` tunables,
+  region-count/memory and autosave-frequency tradeoffs, per-region vs
+  server-average TPS, worker-count guidance, bench harness usage.
+- [`certification.md`](certification.md) — MultiForge-certified
+  criteria and process, `/multiforge warn` and `/multiforge certify`
+  command reference.

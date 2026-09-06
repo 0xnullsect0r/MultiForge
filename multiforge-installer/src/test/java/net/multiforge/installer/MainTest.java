@@ -1,6 +1,17 @@
 /*
- * MultiForge — Proprietary. Copyright (c) 2026 MultiForge authors.
- * All rights reserved. See LICENSE at the repository root.
+ * MultiForge — Copyright (c) 2026 MultiForge authors.
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, version 3.
+ *
+ * This program is distributed in the hope that it will be useful, but
+ * WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
+ * General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program. If not, see <https://www.gnu.org/licenses/>.
  */
 package net.multiforge.installer;
 
@@ -28,12 +39,10 @@ class MainTest {
 
         Path libs = dir.resolve("libraries/multiforge");
         assertThat(libs.resolve("multiforge-runtime.jar")).exists();
-        assertThat(libs.resolve("multiforge-license.jar")).exists();
         assertThat(dir.resolve("run.sh")).exists();
         assertThat(dir.resolve("run.bat")).exists();
         assertThat(dir.resolve("config/multiforge-server.toml")).exists();
         assertThat(dir.resolve("eula.txt")).exists();
-        assertThat(dir.resolve("license.key")).exists();
         assertThat(Files.readString(dir.resolve("eula.txt"))).contains("eula=false");
     }
 
@@ -54,32 +63,6 @@ class MainTest {
     }
 
     @Test
-    void installAcceptsInlineLicenseToken(@TempDir Path dir) throws IOException {
-        Main.run(
-                new String[] {"install", "--install-dir", dir.toString(), "--license", "eyJfake.token"},
-                new PrintStream(new ByteArrayOutputStream()),
-                new PrintStream(new ByteArrayOutputStream()));
-        assertThat(Files.readString(dir.resolve("license.key"))).isEqualTo("eyJfake.token\n");
-    }
-
-    @Test
-    void installAcceptsLicenseFromFile(@TempDir Path dir) throws IOException {
-        Path tokenFile = dir.resolve("my-token.txt");
-        Files.writeString(tokenFile, "eyJfromFile.token\n");
-        Main.run(
-                new String[] {
-                    "install",
-                    "--install-dir",
-                    dir.resolve("srv").toString(),
-                    "--license",
-                    "@" + tokenFile.toAbsolutePath()
-                },
-                new PrintStream(new ByteArrayOutputStream()),
-                new PrintStream(new ByteArrayOutputStream()));
-        assertThat(Files.readString(dir.resolve("srv/license.key"))).isEqualTo("eyJfromFile.token\n");
-    }
-
-    @Test
     void buildZipEmitsExpectedEntries(@TempDir Path dir) throws IOException {
         Path zip = dir.resolve("multiforge-test-replacement.zip");
         int code = Main.run(
@@ -97,7 +80,6 @@ class MainTest {
         assertThat(entries)
                 .contains(
                         "libraries/multiforge/multiforge-runtime.jar",
-                        "libraries/multiforge/multiforge-license.jar",
                         "run.multiforge.sh",
                         "run.multiforge.bat",
                         "config/multiforge-server.toml.example",

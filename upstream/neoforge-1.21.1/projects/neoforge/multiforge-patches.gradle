@@ -116,3 +116,23 @@ tasks.named('applyMultiforgePatches').configure {
 tasks.named('compileJava').configure {
     dependsOn(applyMultiforgePatches)
 }
+
+// Gradle 8.7's static task-input-output validation flags every task
+// in this subproject that reads from src/main/{java,resources} as
+// consuming an output of the umbrella :setup task without a declared
+// edge, failing the scanner CI's build step. (The main fork-build
+// hides the same failure via continue-on-error.) The applier already
+// wires `sourceFromPatchesTaskName` (an internal NeoGradle task the
+// setup umbrella depends on), which is sufficient for correctness —
+// but Gradle can't reason about that implicit chain, so declare the
+// explicit `:setup` edge on every source-consuming task.
+//
+// Guarded by findByPath so the dep is only wired when the umbrella
+// task actually exists (subprojects that don't participate in setup
+// still work).
+def sourceConsumers = ['compileJava', 'processResources', 'javadoc', 'sourcesJar']
+tasks.matching { task -> sourceConsumers.contains(task.name) }.configureEach {
+    if (rootProject.tasks.findByPath(':setup') != null) {
+        dependsOn(':setup')
+    }
+}

@@ -8,16 +8,10 @@ on:
 permissions:
   contents: write
   packages: write
-  id-token: write
 
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository_owner }}/multiforge-server
-  # Public sibling repo that hosts release assets. This repo is private
-  # so GitHub Release assets attached here are gated behind auth; the
-  # downloads repo is a plain public repo whose only purpose is holding
-  # binaries. See docs/install.md and the release-repo setup notes.
-  RELEASES_REPO: ${{ vars.RELEASES_REPO || '0xnullsect0r/multiforge-releases' }}
 
 jobs:
   build-jars:
@@ -36,8 +30,15 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v3
 
-      - name: Build all jars
-        run: ./gradlew build --no-daemon --stacktrace
+      - name: Build release artifacts (pure-Java modules)
+        run: |
+          ./gradlew \
+            :multiforge-api:build \
+            :multiforge-runtime:build \
+            :multiforge-scanner:build \
+            :multiforge-installer:build \
+            :multiforge-bench:build \
+            --no-daemon --stacktrace
 
       - name: Assemble release bundle
         run: |
@@ -49,15 +50,8 @@ jobs:
           # Runtime library — mod authors compile against this.
           cp multiforge-runtime/build/libs/multiforge-runtime-*.jar "$RELEASE_DIR/" \
               2>/dev/null || cp multiforge-runtime/build/libs/*.jar "$RELEASE_DIR/"
-          # License verifier + signer.
-          cp multiforge-license/build/libs/*.jar "$RELEASE_DIR/"
-          cp multiforge-license-cli/build/distributions/*.tar "$RELEASE_DIR/"
 
-          # Fresh-install jar — the Fabric-installer-shaped path.
-          # Copy under both the versioned name (multiforge-installer-<v>.jar)
-          # and a version-free `latest` alias so the site can pin
-          # https://github.com/.../releases/latest/download/multiforge-installer.jar
-          # without churning the URL every release.
+          # Fresh-install jar.
           INSTALLER_JAR=$(find multiforge-installer/build/libs -maxdepth 1 -type f \
               -name 'multiforge-installer-*.jar' ! -name '*-sources.jar' | head -1)
           if [ -n "$INSTALLER_JAR" ]; then
@@ -66,34 +60,10 @@ jobs:
           fi
 
           # Replacement zip — overlay onto an existing NeoForge server.
-          # Produced by the installer jar itself (build-zip subcommand)
-          # so the layout stays in sync with what `install` writes.
           if [ -n "$INSTALLER_JAR" ]; then
               java -jar "$INSTALLER_JAR" build-zip \
                   --out "$RELEASE_DIR/multiforge-${VER}-replacement.zip"
-              cp "$RELEASE_DIR/multiforge-${VER}-replacement.zip" \
-                  "$RELEASE_DIR/multiforge-replacement.zip"
           fi
-
-          # Operator install bundle — a self-contained tarball with
-          # docker-compose, install script, and every operator-facing
-          # doc, so a customer can grab one file and be running.
-          BUNDLE_DIR="multiforge-${VER}-install"
-          mkdir -p "$BUNDLE_DIR/docs"
-          cp docker/docker-compose.yml "$BUNDLE_DIR/"
-          cp docker/entrypoint.sh "$BUNDLE_DIR/" 2>/dev/null || true
-          cp docs/install.md "$BUNDLE_DIR/docs/"
-          cp docs/operator-handbook.md "$BUNDLE_DIR/docs/"
-          cp docs/persistence.md "$BUNDLE_DIR/docs/"
-          cp docs/regions.md "$BUNDLE_DIR/docs/"
-          cp docs/chunks.md "$BUNDLE_DIR/docs/"
-          cp docs/migration.md "$BUNDLE_DIR/docs/"
-          cp docs/global-network.md "$BUNDLE_DIR/docs/"
-          cp docs/license.md "$BUNDLE_DIR/docs/"
-          cp docs/README.md "$BUNDLE_DIR/docs/"
-          cp scripts/install.sh "$BUNDLE_DIR/install.sh"
-          chmod +x "$BUNDLE_DIR/install.sh"
-          tar czf "$RELEASE_DIR/${BUNDLE_DIR}.tar.gz" "$BUNDLE_DIR"
 
           ls -l "$RELEASE_DIR/"
 
@@ -136,7 +106,6 @@ jobs:
             type=raw,value=latest,enable=${{ !contains(github.ref_name, '-') }}
 
       - name: Build + push
-        id: build
         uses: docker/build-push-action@v5
         with:
           context: .
@@ -147,19 +116,6 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
-          build-args: |
-            MC=false
-
-      - name: Install cosign
-        uses: sigstore/cosign-installer@v3
-
-      - name: Sign image digest
-        env:
-          COSIGN_EXPERIMENTAL: "true"
-        run: |
-          echo "${{ steps.meta.outputs.tags }}" | while read -r tag; do
-            [ -n "$tag" ] && cosign sign --yes "${tag}@${{ steps.build.outputs.digest }}"
-          done
 
   gh-release:
     name: create GitHub release
@@ -175,33 +131,23 @@ jobs:
           name: jars-${{ github.ref_name }}
           path: release/
 
-      - name: Create Release (public downloads repo)
+      - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
-          repository: ${{ env.RELEASES_REPO }}
-          # RELEASES_REPO_TOKEN is a PAT (or GitHub App token) with
-          # `contents: write` on the downloads repo. Fine-grained PAT
-          # scoped to that one repo is the safest shape.
-          token: ${{ secrets.RELEASES_REPO_TOKEN }}
           tag_name: ${{ github.ref_name }}
           name: ${{ github.ref_name }}
           files: release/*
           draft: false
           prerelease: ${{ contains(github.ref_name, '-') }}
-          # `generate_release_notes: true` needs read access to this
-          # (private) source repo; the downloads-repo token can't see
-          # commits here, so we build a minimal body instead.
+          generate_release_notes: true
           body: |
-            MultiForge ${{ github.ref_name }}.
+            MultiForge ${{ github.ref_name }} — GPL-3.0-only.
 
             Downloads:
             - Fresh installer JAR: `multiforge-installer-*.jar`
-              (stable alias: [multiforge-installer.jar](https://github.com/${{ env.RELEASES_REPO }}/releases/latest/download/multiforge-installer.jar))
+              (stable alias: [multiforge-installer.jar](https://github.com/${{ github.repository }}/releases/latest/download/multiforge-installer.jar))
             - Drop-in replacement ZIP: `multiforge-*-replacement.zip`
-              (stable alias: [multiforge-replacement.zip](https://github.com/${{ env.RELEASES_REPO }}/releases/latest/download/multiforge-replacement.zip))
             - Docker image: `docker pull ghcr.io/${{ github.repository_owner }}/multiforge-server:${{ github.ref_name }}`
-            - Operator install bundle: `multiforge-*-install.tar.gz` (docs + docker-compose + install helper)
             - Runtime library (for mod authors): `multiforge-runtime-*.jar`
-            - License CLI: `multiforge-license-cli-*.tar`
 
-            See install docs at https://github.com/${{ env.RELEASES_REPO }}#install.
+            See [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/main/CHANGELOG.md) for what changed.

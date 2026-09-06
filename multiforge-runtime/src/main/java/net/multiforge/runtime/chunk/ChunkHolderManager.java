@@ -1,6 +1,17 @@
 /*
- * MultiForge — Proprietary. Copyright (c) 2026 MultiForge authors.
- * All rights reserved. See LICENSE at the repository root.
+ * MultiForge — Copyright (c) 2026 MultiForge authors.
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, version 3.
+ *
+ * This program is distributed in the hope that it will be useful, but
+ * WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
+ * General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program. If not, see <https://www.gnu.org/licenses/>.
  */
 package net.multiforge.runtime.chunk;
 
@@ -10,6 +21,10 @@ import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.locks.Lock;
 import java.util.function.Supplier;
 import net.multiforge.api.world.ChunkPos;
@@ -54,6 +69,30 @@ import net.multiforge.runtime.region.ThreadedRegionizer;
  * prior lock-free shape.
  */
 public final class ChunkHolderManager implements RegionListener {
+
+    /** Default deadline for {@link #scheduleWhenHolderAt(ChunkPos, ChunkLoadLevel, Runnable)}. */
+    public static final long DEFAULT_SCHEDULE_DEADLINE_MS = 500L;
+
+    /** Poll cadence used while a holder has not yet been created at all (no future to hook). */
+    private static final long SCHEDULE_POLL_INTERVAL_MS = 5L;
+
+    private static final AtomicInteger SCHEDULER_SEQ = new AtomicInteger();
+
+    /**
+     * Shared single-thread scheduler backing {@link #scheduleWhenHolderAt}. Static (not
+     * per-instance) since {@link ChunkHolderManager} is created per world — a per-instance
+     * executor would leak one daemon thread per world materialised over a server's lifetime.
+     * Never runs caller work inline on a region worker thread and never blocks (CLAUDE.md rule
+     * 4) — it only polls a volatile field / attaches a {@code thenRun} continuation and hands the
+     * result back via the caller-supplied {@code Runnable}, which production callers (see {@code
+     * EntityMigrationCoordinator.completeAt}) re-enter through {@code RegionizedTaskQueue} rather
+     * than running directly on this thread.
+     */
+    private static final ScheduledExecutorService SCHEDULE_EXECUTOR = Executors.newSingleThreadScheduledExecutor(r -> {
+        Thread t = new Thread(r, "mf-chunkholder-scheduler-" + SCHEDULER_SEQ.incrementAndGet());
+        t.setDaemon(true);
+        return t;
+    });
 
     private final WorldRef world;
     private final ConcurrentMap<ChunkPos, NewChunkHolder> byChunk = new ConcurrentHashMap<>();
@@ -113,6 +152,75 @@ public final class ChunkHolderManager implements RegionListener {
             h.setOwningRegion(owner);
             return h;
         });
+    }
+
+    /**
+     * Run {@code task} once the holder at {@code pos} reaches at least {@code minLevel},
+     * deferring rather than blocking when it hasn't yet — see {@code
+     * docs/design/entity-migration.md} §3.2. Uses {@link #DEFAULT_SCHEDULE_DEADLINE_MS} and drops
+     * the task silently on timeout; prefer the overload with an explicit {@code onTimeout}
+     * fallback for any caller that needs to observe a timeout (entity migration's
+     * {@code abortAndRestore} path does).
+     */
+    public void scheduleWhenHolderAt(ChunkPos pos, ChunkLoadLevel minLevel, Runnable task) {
+        scheduleWhenHolderAt(pos, minLevel, task, DEFAULT_SCHEDULE_DEADLINE_MS, null);
+    }
+
+    /**
+     * Run {@code task} once the holder at {@code pos} reaches at least {@code minLevel}, or invoke
+     * {@code onTimeout} (if non-null) if it has not by {@code deadlineMs} from now.
+     *
+     * <p><b>Never blocks, never spins the calling thread</b> (CLAUDE.md rule 4). If the holder
+     * already satisfies {@code minLevel}, {@code task} runs inline on the calling thread
+     * immediately. Otherwise this arms a bounded, non-blocking poll on the shared {@link
+     * #SCHEDULE_EXECUTOR}, re-checking every {@link #SCHEDULE_POLL_INTERVAL_MS} until either the
+     * level is reached or {@code deadlineMs} elapses. {@code task} or {@code onTimeout} ultimately
+     * runs on {@link #SCHEDULE_EXECUTOR}'s single thread, never inline on a region worker — callers
+     * that need the work to run on a specific region's own thread must re-enter through {@code
+     * RegionizedTaskQueue.queueChunkTask} from inside {@code task} (see {@code
+     * EntityMigrationCoordinator.completeAt}, which does exactly this).
+     *
+     * <p><b>Why polling, not the promotion future.</b> {@link NewChunkHolder#getFullChunkFuture()}
+     * only completes once fork glue outside this Minecraft-free module calls {@link
+     * NewChunkHolder#setFullChunkFuture} — plain ticket promotion via {@link #addTicket} does not
+     * touch it. Relying on that future here would silently starve {@code task} in exactly this
+     * module's own tests (and in any host that has not wired the fork glue yet), so this method
+     * intentionally polls the holder's {@link NewChunkHolder#level()} directly instead — the
+     * primitive that {@link #addTicket}/{@link #removeTicket} do keep authoritative.
+     *
+     * <p>A transient promotion that demotes again before {@code task} actually runs is a real
+     * possibility under adversarial load/unload churn; each poll re-checks the live level at fire
+     * time, so a demotion observed on a later poll simply keeps polling rather than firing early.
+     */
+    public void scheduleWhenHolderAt(
+            ChunkPos pos, ChunkLoadLevel minLevel, Runnable task, long deadlineMs, Runnable onTimeout) {
+        Objects.requireNonNull(pos, "pos");
+        Objects.requireNonNull(minLevel, "minLevel");
+        Objects.requireNonNull(task, "task");
+        NewChunkHolder holder = byChunk.get(pos);
+        if (holder != null && holder.level().isAtLeast(minLevel)) {
+            task.run();
+            return;
+        }
+        long deadlineAt = System.currentTimeMillis() + Math.max(0L, deadlineMs);
+        pollHolderAt(pos, minLevel, task, deadlineAt, onTimeout);
+    }
+
+    private void pollHolderAt(
+            ChunkPos pos, ChunkLoadLevel minLevel, Runnable task, long deadlineAtMillis, Runnable onTimeout) {
+        NewChunkHolder holder = byChunk.get(pos);
+        if (holder != null && holder.level().isAtLeast(minLevel)) {
+            task.run();
+            return;
+        }
+        if (System.currentTimeMillis() >= deadlineAtMillis) {
+            if (onTimeout != null) onTimeout.run();
+            return;
+        }
+        SCHEDULE_EXECUTOR.schedule(
+                () -> pollHolderAt(pos, minLevel, task, deadlineAtMillis, onTimeout),
+                SCHEDULE_POLL_INTERVAL_MS,
+                TimeUnit.MILLISECONDS);
     }
 
     public HolderManagerRegionData regionData(RegionId region) {

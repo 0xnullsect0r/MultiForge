@@ -97,27 +97,23 @@ dependencies {
     implementation "net.multiforge:multiforge-runtime:${project.multiforge_runtime_version}"
     implementation "net.multiforge:multiforge-api:${project.multiforge_runtime_version}"
 
-    // MultiForge fork addition: embed the runtime (and its own runtime deps,
-    // multiforge-api + multiforge-license) into the -universal.jar via
-    // NeoGradle's JarJar mechanism (net.neoforged.gradle.common.tasks.JarJar,
-    // the same mechanism regular NeoForge mods use to embed their own
-    // dependencies) so multiforge classes are physically present wherever the
-    // universal jar is, with no separate installer library or network
-    // download required.
+    // MultiForge fork addition: embed the runtime (and its own runtime dep,
+    // multiforge-api) into the -universal.jar via NeoGradle's JarJar mechanism
+    // (net.neoforged.gradle.common.tasks.JarJar, the same mechanism regular
+    // NeoForge mods use to embed their own dependencies) so multiforge classes
+    // are physically present wherever the universal jar is, with no separate
+    // installer library or network download required.
     //
-    // The `installer` configuration was tried first (see git history) but
-    // does not work here: NeoGradle's CreateLauncherJson/CreateLegacyInstallerJson
-    // resolve every `installer`-configuration library against a hardcoded
-    // host allowlist (minecraft.net / neoforged.net / mojang.com — see
-    // net.neoforged.gradle.dsl.platform.util.LibraryCollector's HOST_WHITELIST)
-    // because those libraries are expected to be publicly downloadable by an
-    // end user's installer. multiforge-runtime is neither published there nor
-    // publishable there (proprietary, mavenLocal-only per CLAUDE.md M7 notes),
-    // so that configuration 404s during :neoforge:createLauncherJson. jarJar
-    // instead ships the bytes inside our own artifact, no external fetch.
+    // The `installer` configuration was tried first (see git history) but does
+    // not work here: NeoGradle's CreateLauncherJson/CreateLegacyInstallerJson
+    // resolve every `installer`-configuration library against a hardcoded host
+    // allowlist (minecraft.net / neoforged.net / mojang.com — see
+    // net.neoforged.gradle.dsl.platform.util.LibraryCollector's HOST_WHITELIST).
+    // multiforge-runtime is not published to any of those, so that configuration
+    // 404s during :neoforge:createLauncherJson. jarJar instead ships the bytes
+    // inside our own artifact, no external fetch.
     jarJar "net.multiforge:multiforge-runtime:${project.multiforge_runtime_version}"
     jarJar "net.multiforge:multiforge-api:${project.multiforge_runtime_version}"
-    jarJar "net.multiforge:multiforge-license:${project.multiforge_runtime_version}"
 
     runtimeOnly "cpw.mods:bootstraplauncher:${project.bootstraplauncher_version}"
 

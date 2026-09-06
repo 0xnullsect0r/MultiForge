@@ -1,6 +1,17 @@
 /*
- * MultiForge — Proprietary. Copyright (c) 2026 MultiForge authors.
- * All rights reserved. See LICENSE at the repository root.
+ * MultiForge — Copyright (c) 2026 MultiForge authors.
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, version 3.
+ *
+ * This program is distributed in the hope that it will be useful, but
+ * WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
+ * General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program. If not, see <https://www.gnu.org/licenses/>.
  */
 package net.multiforge.runtime.chunk;
 
@@ -54,6 +65,22 @@ public record TicketType(String name, int defaultDistance, int timeoutTicks) {
      * pearls fly at once. Vanilla timeout: 40 ticks.
      */
     public static final TicketType ENDER_PEARL = new TicketType("ender_pearl", ChunkLoadLevel.TICKING.distance(), 40);
+
+    /**
+     * End-dragon-fight arena pin: keeps the end-podium and dragon
+     * phase-relevant chunks loaded for the duration of an active fight,
+     * independent of player presence. Matches vanilla's own
+     * {@code net.minecraft.server.level.TicketType<Unit> DRAGON}
+     * ({@code TicketType.create("dragon", (a, b) -> 0)}, timeout 0),
+     * translated into this module's {@code (name, distance, timeoutTicks)}
+     * shape. {@link ChunkLoadLevel#TICKING}'s distance (32) is used
+     * rather than {@link ChunkLoadLevel#ENTITY_TICKING}'s (31) — block
+     * and fluid ticks fire on the arena unconditionally, while a nearby
+     * {@code PLAYER} ticket is what promotes chunks the rest of the way
+     * to entity-ticking, mirroring vanilla's own layering. See
+     * docs/design/global-region.md §5.1.
+     */
+    public static final TicketType DRAGON = new TicketType("dragon", ChunkLoadLevel.TICKING.distance(), 0);
 
     /** Named ticket type with permanent (never-expires) semantics. */
     public static TicketType of(String name, int defaultDistance) {
