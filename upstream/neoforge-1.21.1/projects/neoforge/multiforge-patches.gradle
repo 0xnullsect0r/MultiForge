@@ -111,8 +111,27 @@ def sourceFromPatchesTaskName =
 
 tasks.named('applyMultiforgePatches').configure {
     dependsOn(sourceFromPatchesTaskName)
+    // The umbrella :setup task (this project's parent-level `setup`
+    // in the root build) is what wires all subprojects' individual
+    // sourceFromPatches / decompile / etc. tasks together. Gradle
+    // 8.7's task-input-output validation (see docs/design/
+    // m9-patch-strategy.md) can't infer the implicit link between
+    // `setup`'s aggregate output and this task's consumption of the
+    // patched-vanilla source tree, so declare it explicitly. Without
+    // this, `:neoforge:compileJava` fails validation whenever it
+    // runs alongside `setup` in the same invocation (e.g. the
+    // scanner.yml build).
+    if (rootProject.tasks.findByPath(':setup') != null) {
+        dependsOn(':setup')
+    }
 }
 
 tasks.named('compileJava').configure {
     dependsOn(applyMultiforgePatches)
+    // Same validation gate as above — compileJava is what actually
+    // consumes projects/neoforge/src/main/java, so it also needs the
+    // explicit `setup` edge to satisfy Gradle 8.7's validator.
+    if (rootProject.tasks.findByPath(':setup') != null) {
+        dependsOn(':setup')
+    }
 }
