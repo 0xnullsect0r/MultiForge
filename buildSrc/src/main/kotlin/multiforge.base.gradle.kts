@@ -34,6 +34,13 @@ tasks.withType<Test>().configureEach {
         events("passed", "skipped", "failed")
         showStandardStreams = false
     }
+    // Bump the test JVM heap. Some concurrent-stress tests (e.g.
+    // RegionFileIntegrationTest.concurrentReadStress) drive ~16 threads
+    // × 5s of random reads producing many transient byte[] allocations
+    // and OOM under the JVM's default heap on shared CI runners; local
+    // dev boxes with more RAM never trip it. 2 GiB is comfortably above
+    // any single test's working set while still fitting the CI runner.
+    maxHeapSize = "2g"
 }
 
 configure<SpotlessExtension> {
