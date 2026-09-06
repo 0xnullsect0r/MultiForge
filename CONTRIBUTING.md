@@ -16,7 +16,6 @@ Thanks for taking a look. MultiForge is GPL-3.0-only free software and welcomes 
 
 - **JDK 21** (the toolchain expects Temurin; other builds work but aren't tested).
 - **~20 GB free disk** for the vendored NeoForge workspace under `upstream/neoforge-1.21.1/`.
-- **Docker with buildx** — only needed if you're building the Docker image (`:multiforge-installer:dockerBuild`).
 - **git** (obviously).
 
 ### First-time setup
@@ -46,7 +45,7 @@ cd upstream/neoforge-1.21.1
 3. **Grouped patches** — new patches to `net.minecraft.*` or `net.neoforged.*` go under `multiforge-patches/NN-name/` (see the existing groups 01-ownership through 09-events). Keep hunks thin — heavy logic in `net.multiforge.neoforge.*` fork bridges or `net.multiforge.runtime.*` pure-Java.
 4. **Tests** — JUnit 5 + AssertJ + jqwik. Live under `src/test/java`. Every new API needs coverage; every bug fix needs a regression test that would have caught the bug.
 5. **spotlessApply** before you commit if you added any files — the outer template lives in `buildSrc/src/main/resources/license-header.txt` and matches the fork's own spotless config (blank-line-free header). Both will fight you if you write your own header shape.
-6. **Push + open a PR** against `develop`. CI runs on push (build+test, dockerfile lint, secret scan, fork compile, mod-safety scanner). Fork compile + scanner are advisory (`continue-on-error: true`); the other three are required.
+6. **Push + open a PR** against `develop`. CI runs on push (build+test, secret scan, fork compile, mod-safety scanner). Fork compile + scanner are advisory (`continue-on-error: true`); the other two are required.
 
 ### Commit conventions
 

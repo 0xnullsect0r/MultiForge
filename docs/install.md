@@ -1,95 +1,21 @@
 # Installing MultiForge
 
-MultiForge ships as three different install artifacts, each suited to a different starting point. Pick the one that matches how you already run your server — you don't have to migrate to a different deployment style to try it.
+MultiForge ships two install artifacts, each suited to a different starting point.
 
 | Method | Best for | Starts from | Migration effort |
 |---|---|---|---|
-| **[Docker image](#method-1--docker-image)** | New servers, ops-first setups, anyone already on containers | Empty machine + Docker | ~5 min |
-| **[Fresh installer JAR](#method-2--fresh-installer-jar)** | Bare-metal Linux/Windows/macOS operators, systemd deployments | Empty directory | ~10 min |
-| **[Drop-in replacement ZIP](#method-3--drop-in-replacement-zip)** | Existing NeoForge 1.21.1 servers with an already-loved world, mods, configs | Working NeoForge server | ~5 min (overlay) + your usual restart |
+| **[Fresh installer JAR](#method-1--fresh-installer-jar)** | New MultiForge servers on bare-metal Linux/Windows/macOS, systemd deployments | Empty directory | ~10 min |
+| **[Drop-in replacement ZIP](#method-2--drop-in-replacement-zip)** | Existing NeoForge 1.21.1 servers with an already-loved world, mods, configs | Working NeoForge server | ~5 min (overlay) + your usual restart |
 
-All three land the same runtime + patched NeoForge fork. Post-install steps (EULA, `multiforge-server.toml`, mods, world) are the same regardless of how you installed.
+Both land the same runtime + patched NeoForge fork. Post-install steps (EULA, `multiforge-server.toml`, mods, world) are the same regardless of how you installed.
 
-**Requirements** — Java 21 (the fresh-install and drop-in methods) or Docker with buildx / Compose (the Docker method), 8 GB RAM per typical server (adjust via `MEMORY` env / `-Xmx`), MC 1.21.1 server directory shape (`world/`, `mods/`, `config/`, `eula.txt`).
+**Requirements** — Java 21, 8 GB RAM per typical server (adjust via `-Xmx`), MC 1.21.1 server directory shape (`world/`, `mods/`, `config/`, `eula.txt`).
 
-**License** — MultiForge is [GPL-3.0-only](../LICENSE). No token, no activation, no phone-home. Every install method above installs the same free software.
-
----
-
-## Method 1 — Docker image
-
-Best if you're starting fresh or already run your Minecraft server in a container.
-
-### Quick start
-
-```yaml
-# docker-compose.yml
-services:
-  multiforge:
-    image: ghcr.io/0xnullsect0r/multiforge-server:1.3.0    # or :latest
-    container_name: multiforge
-    restart: unless-stopped
-    ports:
-      - "25565:25565/tcp"
-      - "25565:25565/udp"
-    environment:
-      EULA: "TRUE"                                          # accept the Minecraft EULA
-      MEMORY: "8G"
-      MULTIFORGE_MODE: "hybrid"                             # or "player-only" / "full-world"
-      MULTIFORGE_CORES: "8"
-      MULTIFORGE_THREADS_PER_CORE: "2"
-    volumes:
-      - ./data:/data
-    healthcheck:
-      test: ["CMD", "mcstatus", "127.0.0.1:25565", "ping"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-      start_period: 60s
-```
-
-```
-docker compose up -d
-docker compose logs -f multiforge     # watch it boot
-```
-
-The server's world, mods, configs, and logs all live under `./data/` on the host. Stop with `docker compose down`.
-
-### What goes in `./data/`
-
-```
-data/
-├── eula.txt                    # auto-created with eula=false; edit to eula=true or set EULA=TRUE env
-├── server.properties           # standard MC config
-├── config/
-│   └── multiforge-server.toml  # cores/threads/regions/persistence tunables (see docs/perf-tuning.md)
-├── mods/                       # drop your NeoForge mods here
-├── world/                      # generated on first boot; back this up
-└── logs/                       # server + MultiForge diagnostic logs
-```
-
-### Environment variables
-
-| Var | Default | Meaning |
-|---|---|---|
-| `EULA` | `false` | Set to `TRUE` to accept the Minecraft EULA (required to boot). |
-| `MEMORY` | `4G` | Heap size passed to the JVM (`-Xms` = `-Xmx`). |
-| `MULTIFORGE_MODE` | `hybrid` | Region assignment mode: `hybrid`, `player-only`, `full-world`. |
-| `MULTIFORGE_CORES` | `8` | Number of region-worker cores. |
-| `MULTIFORGE_THREADS_PER_CORE` | `2` | Threads per core (total workers = `cores × threads-per-core`). |
-| `JVM_OPTS` | *(empty)* | Extra JVM flags appended to the launch command. |
-
-### Image tags
-
-- `1.3.0` — pinned version, safe for production.
-- `1.3` — track the latest v1.3.x patch release.
-- `latest` — bleeding-edge; matches whatever the most recent tag on `main` is.
-
-Available at [`ghcr.io/0xnullsect0r/multiforge-server`](https://github.com/0xnullsect0r/MultiForge/pkgs/container/multiforge-server).
+**License** — MultiForge is [GPL-3.0-only](../LICENSE). No token, no activation, no phone-home.
 
 ---
 
-## Method 2 — Fresh installer JAR
+## Method 1 — Fresh installer JAR
 
 The Fabric-installer-shaped path: run a small JAR that lays out a fresh MultiForge server directory. Best for bare-metal deployments, systemd services, or operators who want direct control over the launch command.
 
@@ -154,7 +80,7 @@ java -jar multiforge-installer.jar <command>
 
 Commands:
   install [--install-dir DIR]     Lay out a fresh MultiForge server in DIR (default: cwd)
-  build-zip --out ZIP             Write the drop-in replacement archive (see Method 3)
+  build-zip --out ZIP             Write the drop-in replacement archive (see Method 2)
   version                         Print the installer version
   help                            This screen
 ```
@@ -187,7 +113,7 @@ journalctl -u multiforge -f
 
 ---
 
-## Method 3 — Drop-in replacement ZIP
+## Method 2 — Drop-in replacement ZIP
 
 Overlay MultiForge onto an existing NeoForge 1.21.1 server directory without touching your world, mods, or configs. Best for servers already running vanilla NeoForge that want to try MultiForge without rebuilding from scratch.
 
@@ -214,7 +140,7 @@ Overlay MultiForge onto an existing NeoForge 1.21.1 server directory without tou
    curl -LO https://github.com/0xnullsect0r/MultiForge/releases/latest/download/multiforge-replacement.zip
    ```
 
-   Or build it yourself from the installer JAR (Method 2's `build-zip` subcommand):
+   Or build it yourself from the installer JAR (Method 1's `build-zip` subcommand):
 
    ```
    java -jar multiforge-installer.jar build-zip --out multiforge-replacement.zip
@@ -308,17 +234,15 @@ For deep observability (region borders, MSPT heatmap, live pin selection) instal
 
 ## Troubleshooting
 
-**Server won't boot: `error: cannot find symbol` / `NoClassDefFoundError`.** The runtime jar didn't land on the classpath. Verify `libraries/multiforge/multiforge-runtime.jar` exists and is non-empty (`ls -la libraries/multiforge/`). If Docker, rebuild with `docker compose pull` to refresh the image.
+**Server won't boot: `error: cannot find symbol` / `NoClassDefFoundError`.** The runtime jar didn't land on the classpath. Verify `libraries/multiforge/multiforge-runtime.jar` exists and is non-empty (`ls -la libraries/multiforge/`).
 
-**"EULA not accepted" on first boot.** Edit `eula.txt` to `eula=true`, or set `EULA=TRUE` in the Docker env.
+**"EULA not accepted" on first boot.** Edit `eula.txt` to `eula=true`.
 
 **"MultiForge cannot start — no region-worker cores available."** Bad `multiforge-server.toml`: `cores` must be ≥ 1. Default is 8 — a value of 0 or a negative number rejects boot.
 
-**Server boots but everything runs single-threaded.** Check the log for `[multiforge]: Region scheduler: N cores × M threads/core = W workers` — if W is 1, your config or Docker env sets it low. `cores × threads-per-core` should be at most your physical core count.
+**Server boots but everything runs single-threaded.** Check the log for `[multiforge]: Region scheduler: N cores × M threads/core = W workers` — if W is 1, your config sets it low. `cores × threads-per-core` should be at most your physical core count.
 
 **"Chunk system port failed — falling back to Vanilla ChunkMap."** MultiForge's M9 chunk-system port didn't initialize. Check earlier log lines for a stack trace, and file an issue at [github.com/0xnullsect0r/MultiForge/issues](https://github.com/0xnullsect0r/MultiForge/issues) with the boot log attached.
-
-**Docker: `mcstatus: command not found` in healthcheck.** Old image without the healthcheck runtime. Pull the latest: `docker compose pull && docker compose up -d`.
 
 **Drop-in method: `world/multiforge/` grows unbounded.** Per-region WAL journal isn't rolling over. Set `journal-max-file-mb = 128` in `config/multiforge-server.toml` (default is 512).
 

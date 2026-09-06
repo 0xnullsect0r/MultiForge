@@ -2,7 +2,7 @@
 
 **MultiForge is a free-software, Folia-style regionized multithreaded drop-in replacement for the NeoForge dedicated Minecraft server, released under the GNU General Public License v3.0.**
 
-Swap your `neoforge-<version>-server.jar` (or Docker image) for MultiForge's. Your existing world, mods, configs, and launch command keep working. Under the hood, MultiForge partitions the world into ownership regions that tick in parallel on a worker pool sized by `cores × threads-per-core`, with automatic reroute-and-warn for mods that assume single-thread access.
+Swap your `neoforge-<version>-server.jar` for MultiForge's. Your existing world, mods, configs, and launch command keep working. Under the hood, MultiForge partitions the world into ownership regions that tick in parallel on a worker pool sized by `cores × threads-per-core`, with automatic reroute-and-warn for mods that assume single-thread access.
 
 ---
 
@@ -14,30 +14,9 @@ Pre-alpha. In active development. See [`docs/blueprint.md`](docs/blueprint.md) f
 
 ## Install
 
-Three ways to install, all under GPL-3 — no token, no activation, no phone-home. Full details in [docs/install.md](docs/install.md).
+Two ways to install, both under GPL-3 — no token, no activation, no phone-home. Full details in [docs/install.md](docs/install.md).
 
-### 1. Docker (recommended for new servers)
-
-```yaml
-# docker-compose.yml
-services:
-  multiforge:
-    image: ghcr.io/0xnullsect0r/multiforge-server:1.3.0    # or :latest
-    ports: ["25565:25565/tcp", "25565:25565/udp"]
-    environment:
-      EULA: "TRUE"
-      MEMORY: "8G"
-      MULTIFORGE_CORES: "8"
-      MULTIFORGE_THREADS_PER_CORE: "2"
-    volumes: [ "./data:/data" ]
-    restart: unless-stopped
-```
-
-```
-docker compose up -d
-```
-
-### 2. Fresh installer JAR (bare-metal / systemd)
+### 1. Fresh installer JAR (bare-metal / systemd)
 
 ```
 curl -LO https://github.com/0xnullsect0r/MultiForge/releases/latest/download/multiforge-installer.jar
@@ -47,7 +26,7 @@ sed -i 's/eula=false/eula=true/' eula.txt
 ./run.sh
 ```
 
-### 3. Drop-in replacement ZIP (overlay an existing NeoForge 1.21.1 server)
+### 2. Drop-in replacement ZIP (overlay an existing NeoForge 1.21.1 server)
 
 Your world, mods, configs, and `server.properties` stay in place. Requires Minecraft NeoForge 1.21.1.
 
@@ -103,7 +82,6 @@ multiforge/
 ├── multiforge-installer/    Repackages patched NeoForge + runtime
 ├── multiforge-client/       Client-side debug mod (F3 overlay, region renderer)
 ├── multiforge-bench/        Headless bot-swarm TPS harness
-├── docker/                  Dockerfile + docker-compose examples
 ├── docs/                    Design docs
 └── upstream/neoforge-1.21.1 Vendored NeoForge source (patched)
 ```
@@ -117,10 +95,9 @@ git clone https://github.com/0xnullsect0r/MultiForge.git
 cd MultiForge
 ./gradlew :setup                # vendor NeoForge 1.21.1
 ./gradlew build                 # build all pure-Java artifacts
-./gradlew :multiforge-installer:dockerBuild   # build the Docker image
 ```
 
-Requires JDK 21, Docker with buildx, and ~20 GB free disk for the NeoForge workspace.
+Requires JDK 21 and ~20 GB free disk for the NeoForge workspace.
 
 ---
 

@@ -29,9 +29,6 @@ Everything below assumes the dev-box layout in `CLAUDE.md`.
 - `./gradlew :multiforge-runtime:publishToMavenLocal` recent — the
   patched fork consumes the runtime from `~/.m2`. Re-run whenever a
   runtime commit lands.
-- **Docker + buildx** — only for `./gradlew
-  :multiforge-installer:dockerBuild` and the swarm profile. Not
-  required for 7.2 / 7.3 / 7.6.
 - **~20 GB free disk** — NeoForge workspace, two world captures per
   run, journal files.
 - **16 GB RAM** — 4 GB heap headroom for the server + swarm clients.
