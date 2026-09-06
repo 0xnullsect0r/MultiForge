@@ -241,6 +241,10 @@ public class ServerLifecycleHooks {
             // a clean slate rather than accumulating stale WorldBorder
             // identity entries across server restarts.
             net.multiforge.neoforge.globals.GlobalSystemsBridge.unbind();
+            // B3.4 teardown: drop the per-world "installed" bridge state
+            // (docs/design/m13-b3-region-tick.md §5.3) alongside B2low's,
+            // for the same reused-JVM-across-server-instances reason.
+            net.multiforge.neoforge.tick.BlockEntityTickerBridge.unbind();
         } catch (Throwable t) {
             // Never let a runtime-shutdown hiccup prevent normal server-stop cleanup.
             org.slf4j.LoggerFactory.getLogger("multiforge.lifecycle")

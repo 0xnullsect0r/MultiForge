@@ -63,7 +63,9 @@ import net.multiforge.runtime.journal.AutoSaveRunner;
 import net.multiforge.runtime.journal.JournalReplayHarness;
 import net.multiforge.runtime.journal.RegionJournal;
 import net.multiforge.runtime.journal.RegionJournalLifecycle;
+import net.multiforge.runtime.ownership.Domain;
 import net.multiforge.runtime.ownership.OwnerToken;
+import net.multiforge.runtime.region.BlockEntityTickRunner;
 import net.multiforge.runtime.region.PhasedRegionTickBody;
 import net.multiforge.runtime.region.Region;
 import net.multiforge.runtime.region.RegionChunkSource;
@@ -182,6 +184,14 @@ public final class MultiThreadedSchedulerHost implements SchedulerHost, AutoClos
     // globalRegion (see phaseGlobalSystemsTick). Constructed alongside
     // globalRegion/globalRegionizer per docs/design/global-region.md §2.3.
     private final GlobalSystems globalSystems = new GlobalSystems();
+
+    // B3.4 (docs/design/m13-b3-region-tick.md §5.3): per-region BLOCK_ENTITIES
+    // phase body. Built once against this host's own worldForRegion/
+    // chunkManagerForOrNull lookups so a fresh call always sees the
+    // freshest regionToWorld/chunkManagers state (both mutate after
+    // construction as worlds/regions materialise).
+    private final BlockEntityTickRunner blockEntityTickRunner =
+            BlockEntityTickRunner.standard(this::worldForRegion, this::chunkManagerForOrNull);
 
     // M4 Track A2 wiring: per-host entity registry + migration coordinator, bound to this host's
     // own taskQueue and chunkManagerFor lookup so a cross-region hop's BORDER-gated completion
@@ -669,20 +679,32 @@ public final class MultiThreadedSchedulerHost implements SchedulerHost, AutoClos
 
         // Build the wired body and swap it into the scheduler.
         //
-        // BLOCK_ENTITIES is repurposed for the global-subsystem tick slot
-        // (B1.1, docs/design/global-region.md §2.2/§2.3): it is
-        // semantically vacant for every real region as of this freeze (no
-        // M8 patch wires block-entity ticking into it yet), and
-        // phaseGlobalSystemsTick itself no-ops for every non-global
-        // region. Appended (not `.set`) so any caller-supplied
-        // BLOCK_ENTITIES body — e.g. a test probe — still runs; production
-        // behavior is identical either way since nothing else is wired
-        // into this phase, but `.append` avoids silently discarding a
-        // caller's body the way `.set` would.
+        // BLOCK_ENTITIES carries two layered bodies as of B3.4
+        // (docs/design/m13-b3-region-tick.md §5.3):
+        //
+        //   1. phaseGlobalSystemsTick (B1.1, docs/design/global-region.md
+        //      §2.2/§2.3) — ticks the eight global subsystems once, but
+        //      only for globalRegion; early-returns for every other
+        //      region.
+        //   2. phaseBlockEntitiesTickPerRegion (B3.4) — ticks this
+        //      region's own block-entity tickers; a no-op for
+        //      globalRegion (its synthetic single chunk never has
+        //      ordinary block entities registered against it) and for
+        //      any region with an empty blockEntityTickers slice.
+        //
+        // Both run, in order, for every region every tick — they are
+        // naturally mutually-exclusive in practice, and the order itself
+        // matters for one reason: a global-subsystem mutation a region's
+        // block entities might observe this same tick (unlikely, but not
+        // structurally ruled out) is applied first. Appended (not
+        // `.set`) so any caller-supplied BLOCK_ENTITIES body — e.g. a
+        // test probe — still runs, and so B3.4's body layers on top of
+        // B1.1's rather than replacing it.
         PhasedRegionTickBody.Builder wired = userBuilder
                 .prepend(PhasedRegionTickBody.Phase.INBOUND_MAILBOX, this::phasePollFullLoadUpdate)
                 .append(PhasedRegionTickBody.Phase.BLOCK_FLUID_TICKS, this::phaseBlockFluidTicksTick)
                 .append(PhasedRegionTickBody.Phase.BLOCK_ENTITIES, this::phaseGlobalSystemsTick)
+                .append(PhasedRegionTickBody.Phase.BLOCK_ENTITIES, this::phaseBlockEntitiesTickPerRegion)
                 .append(PhasedRegionTickBody.Phase.REGION_EVENTS, this::phaseDrainChunkTasks)
                 .append(PhasedRegionTickBody.Phase.FLUSH_OUTBOUND, this::phaseAutoSave);
         scheduler.setBody(wired.build());
@@ -752,6 +774,46 @@ public final class MultiThreadedSchedulerHost implements SchedulerHost, AutoClos
             globalSystems.tickAll(ctx);
             return null;
         });
+    }
+
+    /**
+     * {@code BLOCK_ENTITIES} phase body (B3.4, docs/design/
+     * m13-b3-region-tick.md §5.3) — the per-region counterpart of
+     * {@link #phaseGlobalSystemsTick}, layered immediately after it in
+     * the same phase slot (see {@link #installM9WiredTickBody}). Ticks
+     * {@code region}'s own slice of {@code HolderManagerRegionData
+     * .blockEntityTickers} via {@link #blockEntityTickRunner}.
+     *
+     * <p>OwnerToken correctness guard: mirrors {@code
+     * RegionizedData.assertOwnedOrIgnore}'s shape (same file's package,
+     * {@code net.multiforge.runtime.region.RegionizedData}) — {@link
+     * Domain#UNKNOWN} and {@link Domain#GLOBAL} pass through untouched
+     * (tests driving {@code tickOnce} by hand off any worker thread, and
+     * the global region's own worker, both need to reach this body
+     * normally); a {@link Domain#REGION} token whose {@code regionId}
+     * does not match {@code region.id()} is a foreign-thread call — per
+     * CLAUDE.md rule 5 this warns + bumps a probe and skips ticking
+     * rather than touching another region's chunk-owned state.
+     */
+    private void phaseBlockEntitiesTickPerRegion(Region region) {
+        OwnerToken tok = OwnerToken.current();
+        if (tok.domain() == Domain.REGION && tok.regionId() != region.id().value()) {
+            ProbeRegistry.bump("block-entities.phase.wrong-owner");
+            ViolationLogger.warn(
+                    "MultiThreadedSchedulerHost.phaseBlockEntitiesTickPerRegion",
+                    "region=" + region.id() + " token=" + tok
+                            + " — skipping per-region block-entity tick (foreign-thread guard)");
+            return;
+        }
+        try {
+            blockEntityTickRunner.tickBlockEntitiesForRegion(region);
+        } catch (Throwable t) {
+            ProbeRegistry.bump("block-entities.phase.failure");
+            ViolationLogger.warn(
+                    "MultiThreadedSchedulerHost.phaseBlockEntitiesTickPerRegion",
+                    "block-entity phase failed for region " + region.id() + ": "
+                            + t.getClass().getSimpleName() + ": " + t.getMessage());
+        }
     }
 
     /**

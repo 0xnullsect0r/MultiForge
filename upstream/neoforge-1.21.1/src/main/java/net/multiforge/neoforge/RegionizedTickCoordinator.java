@@ -17,6 +17,7 @@ package net.multiforge.neoforge;
 
 import java.util.Collection;
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.world.level.Level;
 import net.multiforge.api.world.WorldRef;
 import net.multiforge.runtime.diagnostics.ProbeRegistry;
 import net.multiforge.runtime.diagnostics.ViolationLogger;
@@ -214,6 +215,41 @@ public final class RegionizedTickCoordinator {
         if (host == null) return false;
         if (host.regionizerForOrNull(asWorldRef(level)) == null) return false;
         return host.hasBlockFluidRunner();
+    }
+
+    /**
+     * B3.4 (docs/design/m13-b3-region-tick.md §5.3): {@code true} iff
+     * {@code level} is a {@link ServerLevel} the MultiForge runtime is
+     * installed for <em>and</em> {@link
+     * net.multiforge.neoforge.tick.BlockEntityTickerBridge#installOnLevel}
+     * has run for its world. Consulted by two of the
+     * {@code 02-region-tick/net/minecraft/world/level/Level.java.patch}
+     * hunks:
+     *
+     * <ul>
+     *   <li>{@code Level.addBlockEntityTicker} — a newly added ticker is
+     *       routed into its owning region's {@code
+     *       HolderManagerRegionData.blockEntityTickers} slice only when
+     *       this returns {@code true}; otherwise it stays purely on the
+     *       Vanilla-inline list (the ordinary pre-B3.4 behaviour).</li>
+     *   <li>{@code Level.tickBlockEntities()} — the entire inline
+     *       iteration is skipped when this returns {@code true}, because
+     *       {@code MultiThreadedSchedulerHost}'s per-region {@code
+     *       BLOCK_ENTITIES} phase body does that work instead. Ticking
+     *       both would double-tick every block entity in the world.</li>
+     * </ul>
+     *
+     * <p>Both call sites reading the same flag is what keeps them
+     * consistent with each other — see {@code BlockEntityTickerBridge}'s
+     * class javadoc for why a ticker added before installation can never
+     * fall into the permanent gap of "not on the inline list's tick path
+     * (guard flipped true) and not on any region's list (never
+     * bridged)."
+     */
+    public static boolean regionsHandleBlockEntities(Level level) {
+        if (!(level instanceof ServerLevel serverLevel)) return false;
+        if (MultiForgeRegionizedRuntime.current() == null) return false;
+        return net.multiforge.neoforge.tick.BlockEntityTickerBridge.isInstalled(serverLevel);
     }
 
     /**

@@ -150,6 +150,30 @@ public final class MultiForgeGlobalSystemsInit {
         // whole install() on a reused-JVM GameTestServer restart is safe.
         net.multiforge.neoforge.tick.ScheduledTickRunnerBridge.installOnEventBus();
         host.setBlockFluidRunner(new net.multiforge.neoforge.tick.ScheduledTickRunnerBridge());
+
+        // MultiForge M13 (Track B3, B3.4): install the per-region
+        // BLOCK_ENTITIES bridge (docs/design/m13-b3-region-tick.md §5.3)
+        // — every server ServerLevel that loads from here on has its
+        // Vanilla-added block-entity tickers routed into the owning
+        // region's HolderManagerRegionData.blockEntityTickers slice, and
+        // the Level.tickBlockEntities() inline iteration skipped in
+        // favour of MultiThreadedSchedulerHost's own per-region phase
+        // body. Installed last, after every B2.x global subsystem, per
+        // this method's own registration-order convention — B3.4 has no
+        // tick-order dependency on any of them, so "last" simply keeps
+        // this diff at the bottom of an already-long method.
+        installBlockEntityTickerBridgeListeners();
+    }
+
+    private static void installBlockEntityTickerBridgeListeners() {
+        NeoForge.EVENT_BUS.addListener((LevelEvent.Load event) -> {
+            if (!(event.getLevel() instanceof ServerLevel level)) return;
+            net.multiforge.neoforge.tick.BlockEntityTickerBridge.installOnLevel(level);
+        });
+        NeoForge.EVENT_BUS.addListener((LevelEvent.Unload event) -> {
+            if (!(event.getLevel() instanceof ServerLevel level)) return;
+            net.multiforge.neoforge.tick.BlockEntityTickerBridge.uninstallLevel(level);
+        });
     }
 
     private static void installDragonFightLevelLifecycleListeners(
