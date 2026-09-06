@@ -175,6 +175,32 @@ public final class MultiForgeGlobalSystemsInit {
         // tick-order dependency on any of them, so "last" simply keeps
         // this diff at the bottom of an already-long method.
         installBlockEntityTickerBridgeListeners();
+
+        // MultiForge M12 (Task 4.2, M12.2, docs/design/m12-event-routing.md
+        // §2.1/§12): attach the scheduler-backed dispatch executor onto
+        // NeoForge.EVENT_BUS's LazyDispatchingEventBus (installed at
+        // class-load time by the 09-events/NeoForge.java.patch hunk).
+        // Until this runs, every listener — regardless of its declared
+        // @DispatchDomain — dispatches inline (pre-M12 Vanilla-equivalent
+        // behavior; see LazyDispatchingEventBus's javadoc). Idempotent
+        // (EventBusBridge.attach → LazyDispatchingEventBus.attachExecutor
+        // is a CAS), so a GameTestServer restart on a reused JVM re-running
+        // install() is safe. Registered last, after every other
+        // B2.x/B3.x subsystem, since it has no tick-order dependency on
+        // any of them.
+        boolean eventBusAttached = net.multiforge.neoforge.event.EventBusBridge.attach(NeoForge.EVENT_BUS, host);
+        if (!eventBusAttached) {
+            // Auto-reroute+warn (CLAUDE.md rule 5): NeoForge.EVENT_BUS is not a
+            // LazyDispatchingEventBus — the 09-events patch was not applied, or
+            // something else replaced the bus. This must never prevent the
+            // server from finishing boot: every listener still dispatches via
+            // the real bus's own (un-routed) semantics, exactly as it did
+            // before M12.
+            ViolationLogger.warn(
+                    "global.system.registration",
+                    "failed to attach SchedulerBackedDispatchExecutor onto NeoForge.EVENT_BUS "
+                            + "(not a LazyDispatchingEventBus); events will dispatch without M12 domain routing");
+        }
     }
 
     private static void installBlockEntityTickerBridgeListeners() {

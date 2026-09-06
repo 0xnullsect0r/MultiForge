@@ -63,7 +63,7 @@ import net.neoforged.bus.api.SubscribeEvent;
  * PER_REGION} metadata — indistinguishable from an unannotated {@code
  * @SubscribeEvent} handler.
  */
-public final class DispatchingEventBus implements IEventBus {
+public class DispatchingEventBus implements IEventBus {
 
     /** {@code -Dmultiforge.event-dispatch=off} disables routing — see {@link #isEnabled()}. */
     public static final String DISABLE_PROPERTY = "multiforge.event-dispatch";
