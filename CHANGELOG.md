@@ -43,7 +43,6 @@ The v1.2.0 shape shipped a re-license from proprietary to GPL-3.0-only (`f91b732
 - Top-20 mod compatibility matrix
 - 24-hour ATM10 soak test
 - MC 1.21.2+ / Fabric support
-- Publish first Docker image to GHCR
 - OSS onboarding polish (CONTRIBUTING.md, CODE_OF_CONDUCT.md, SECURITY.md)
 
 ## v1.2.0 — M4 + M5 + M6 landing

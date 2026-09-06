@@ -2,7 +2,7 @@
 
 ## Getting started
 
-- [`install.md`](install.md) — install guide covering all three methods (Docker image, fresh installer JAR, drop-in replacement ZIP for existing NeoForge servers). EULA, config, systemd, rollback, troubleshooting.
+- [`install.md`](install.md) — install guide covering both methods (fresh installer JAR, drop-in replacement ZIP for existing NeoForge servers). EULA, config, systemd, rollback, troubleshooting.
 
 ## Design
 

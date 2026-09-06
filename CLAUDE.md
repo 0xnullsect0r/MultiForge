@@ -83,22 +83,17 @@ See top-level `README.md`. Key directories:
 - `multiforge-patches/` — patches against `upstream/neoforge-1.21.1/`.
   Grouped `01-*` .. `09-*`.
 - `multiforge-installer/` — repackages patched NeoForge + runtime into
-  installer jar and Docker image.
+  installer jar.
 - `multiforge-client/` — client-side debug mod, ordinary NeoForge mod.
 - `multiforge-testmods/` — fixture mods.
 - `multiforge-bench/` — headless bot swarm + TPS harness.
-- `docker/` — Dockerfile, entrypoint script, compose examples.
 - `docs/` — design docs.
 
 ## Build
 
-- Requires **JDK 21**, Docker with buildx, ~20 GB free disk for NeoForge
-  workspace.
+- Requires **JDK 21**, ~20 GB free disk for NeoForge workspace.
 - `./gradlew :setup` vendors NeoForge 1.21.1 into `upstream/`.
-- `./gradlew build` runs the full build. `spotless` and `licenseHeader` run
-  automatically.
-- `./gradlew :multiforge-installer:dockerBuild` builds the multi-arch
-  Docker image.
+- `./gradlew build` runs the full build. `spotless` runs automatically.
 - Sub-projects that do not depend on Minecraft (api, runtime, scanner,
   installer, bench) build standalone without the `:setup` step.
 

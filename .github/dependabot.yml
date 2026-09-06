@@ -21,14 +21,3 @@ updates:
       - "0xnullsect0r"
     commit-message:
       prefix: "ci(deps)"
-
-  - package-ecosystem: "docker"
-    directory: "/docker"
-    schedule:
-      interval: "weekly"
-      day: "monday"
-    open-pull-requests-limit: 3
-    reviewers:
-      - "0xnullsect0r"
-    commit-message:
-      prefix: "docker(deps)"

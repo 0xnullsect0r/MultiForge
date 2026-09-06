@@ -856,7 +856,7 @@ this surfaces drift for the reviewer instead of hiding it.
   "scannerVersion": "1.0.0",
   "asmVersion": "9.7",
   "scannedAt": "2026-09-06T00:00:00Z",
-  "inputs": ["docker/atm10-modpack/mods/examplemod-1.2.3.jar"],
+  "inputs": ["mods/examplemod-1.2.3.jar"],
   "summary": { "errors": 2, "warnings": 5, "suppressed": 1, "staleSuppressions": 0 },
   "findings": [
     {
@@ -948,7 +948,7 @@ java -jar multiforge-scanner.jar [--sarif|--json] [--severity=warn|error] <jar-o
 
 Example CI invocation (Track C4.5 target):
 ```
-java -jar multiforge-scanner.jar --sarif docker/atm10-modpack/mods/*.jar > scanner-results.sarif
+java -jar multiforge-scanner.jar --sarif mods/*.jar > scanner-results.sarif
 ```
 
 ---

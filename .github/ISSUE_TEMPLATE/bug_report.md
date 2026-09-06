@@ -6,11 +6,11 @@ labels: bug
 
 ## Environment
 
-- MultiForge version: `docker inspect ghcr.io/multiforge/multiforge-server | jq '.[0].RepoTags'`
+- MultiForge version: `java -jar multiforge-installer.jar version`
 - NeoForge base version:
 - Host OS / kernel:
 - CPU / cores / RAM:
-- Java runtime (if bare metal):
+- Java runtime:
 
 ## What happened
 

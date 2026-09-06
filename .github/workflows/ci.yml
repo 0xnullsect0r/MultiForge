@@ -65,24 +65,6 @@ jobs:
             **/build/test-results/
           retention-days: 7
 
-  docker-lint:
-    name: dockerfile lint
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Hadolint
-        uses: hadolint/hadolint-action@v3.1.0
-        with:
-          dockerfile: docker/Dockerfile
-          failure-threshold: warning
-
-      - name: shellcheck entrypoint
-        run: |
-          sudo apt-get update && sudo apt-get install -y shellcheck
-          shellcheck docker/entrypoint.sh
-
   fork-build:
     name: fork compile (upstream/neoforge-1.21.1)
     runs-on: ubuntu-latest
