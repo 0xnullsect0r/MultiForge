@@ -116,8 +116,14 @@ jobs:
         # per their dependency graph. --build-cache lets subsequent runs
         # on the same commit reuse decompile output when the gradle-actions
         # cache restore hits.
+        # `setup` is required in addition to `:neoforge:applyMultiforgePatches`
+        # so `projects/neoforge/src/main/java/` gets populated — the platform
+        # plugin's `SourceFromAppliedPatches` writes to a build-cache path,
+        # and `:setup` is the task that copies/materialises those files into
+        # the neoforge sourceSet root that the applier + compileJava consume.
         run: |
           ./gradlew --no-configuration-cache --no-daemon --stacktrace --parallel --build-cache \
+            setup \
             :neoforge:applyMultiforgePatches \
             :neoforge:compileJava \
             spotlessCheck \
