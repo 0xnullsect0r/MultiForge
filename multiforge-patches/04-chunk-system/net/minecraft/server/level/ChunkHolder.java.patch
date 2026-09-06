@@ -1,13 +1,6 @@
 --- a/net/minecraft/server/level/ChunkHolder.java
 +++ b/net/minecraft/server/level/ChunkHolder.java
-@@ -43,40 +43,96 @@
-     private final ShortSet[] changedBlocksPerSection;
-     private final BitSet blockChangedLightSectionFilter = new BitSet();
-     private final BitSet skyChangedLightSectionFilter = new BitSet();
-     private final LevelLightEngine lightEngine;
-     private final ChunkHolder.LevelChangeListener onLevelChange;
-     private final ChunkHolder.PlayerProvider playerProvider;
-     private boolean wasAccessibleSinceLastSave;
+@@ -50,6 +50,23 @@
      private CompletableFuture<?> pendingFullStateConfirmation = CompletableFuture.completedFuture(null);
      private CompletableFuture<?> sendSync = CompletableFuture.completedFuture(null);
      private CompletableFuture<?> saveSync = CompletableFuture.completedFuture(null);
@@ -31,19 +24,7 @@
  
      public ChunkHolder(
          ChunkPos p_142986_,
-         int p_142987_,
-         LevelHeightAccessor p_142988_,
-         LevelLightEngine p_142989_,
-         ChunkHolder.LevelChangeListener p_142990_,
-         ChunkHolder.PlayerProvider p_142991_
-     ) {
-         super(p_142986_);
-         this.levelHeightAccessor = p_142988_;
-         this.lightEngine = p_142989_;
-         this.onLevelChange = p_142990_;
-         this.playerProvider = p_142991_;
-         this.oldTicketLevel = ChunkLevel.MAX_LEVEL + 1;
-         this.ticketLevel = this.oldTicketLevel;
+@@ -69,6 +86,44 @@
          this.queueLevel = this.oldTicketLevel;
          this.setTicketLevel(p_142987_);
          this.changedBlocksPerSection = new ShortSet[p_142988_.getSectionsCount()];
@@ -67,7 +48,7 @@
 +                }
 +            }
 +        }
-     }
++    }
 +
 +    /**
 +     * MultiForge-internal setter used by {@code MultiForgeChunkMap} and
@@ -85,26 +66,10 @@
 +     */
 +    protected void attachMfShadow(net.multiforge.runtime.chunk.NewChunkHolder holder) {
 +        this.mfShadow = holder;
-+    }
-+
+     }
+ 
      public CompletableFuture<ChunkResult<LevelChunk>> getTickingChunkFuture() {
-         return this.tickingChunkFuture;
-     }
- 
-     public CompletableFuture<ChunkResult<LevelChunk>> getEntityTickingChunkFuture() {
-         return this.entityTickingChunkFuture;
-     }
- 
-     public CompletableFuture<ChunkResult<LevelChunk>> getFullChunkFuture() {
-         return this.fullChunkFuture;
-@@ -232,20 +288,28 @@
-     public int getQueueLevel() {
-         return this.queueLevel;
-     }
- 
-     private void setQueueLevel(int p_140087_) {
-         this.queueLevel = p_140087_;
-     }
+@@ -240,6 +295,14 @@
  
      public void setTicketLevel(int p_140028_) {
          this.ticketLevel = p_140028_;
@@ -119,10 +84,3 @@
      }
  
      private void scheduleFullChunkPromotion(
-         ChunkMap p_142999_, CompletableFuture<ChunkResult<LevelChunk>> p_143000_, Executor p_143001_, FullChunkStatus p_287621_
-     ) {
-         this.pendingFullStateConfirmation.cancel(false);
-         CompletableFuture<Void> completablefuture = new CompletableFuture<>();
-         completablefuture.thenRunAsync(() -> p_142999_.onFullChunkStatusChange(this.pos, p_287621_), p_143001_);
-         this.pendingFullStateConfirmation = completablefuture;
-         p_143000_.thenAccept(p_329909_ -> p_329909_.ifSuccess(p_200424_ -> completablefuture.complete(null)));
