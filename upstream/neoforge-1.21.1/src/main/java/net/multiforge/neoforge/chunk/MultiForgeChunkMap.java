@@ -5,7 +5,6 @@
 package net.multiforge.neoforge.chunk;
 
 import com.google.common.collect.ImmutableList;
-import com.google.common.collect.Lists;
 import com.google.common.collect.Sets;
 import com.mojang.datafixers.DataFixer;
 import com.mojang.logging.LogUtils;
@@ -27,7 +26,6 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.BooleanSupplier;
 import java.util.function.IntSupplier;
 import java.util.function.Supplier;
-import javax.annotation.Nullable;
 import net.minecraft.CrashReport;
 import net.minecraft.CrashReportCategory;
 import net.minecraft.ReportedException;
@@ -90,8 +88,6 @@ import net.multiforge.runtime.chunk.ChunkTaskPriority;
 import net.multiforge.runtime.chunk.ChunkTaskScheduler;
 import net.multiforge.runtime.chunk.InstanceRegistry;
 import net.multiforge.runtime.chunk.NewChunkHolder;
-import net.multiforge.runtime.chunk.Ticket;
-import net.multiforge.runtime.chunk.TicketType;
 import net.multiforge.runtime.diagnostics.ViolationLogger;
 import net.multiforge.runtime.region.Region;
 import net.multiforge.runtime.region.RegionId;
@@ -99,6 +95,7 @@ import net.multiforge.runtime.region.ThreadedRegionizer;
 import net.multiforge.runtime.scheduler.MultiForgeRegionizedRuntime;
 import net.multiforge.runtime.scheduler.MultiThreadedSchedulerHost;
 import org.jetbrains.annotations.ApiStatus;
+import org.jetbrains.annotations.Nullable;
 import org.slf4j.Logger;
 
 /**
@@ -107,52 +104,52 @@ import org.slf4j.Logger;
  *
  * <p><b>Responsibility split vs. Vanilla:</b>
  * <ul>
- *   <li><b>Holder table</b> — Vanilla's {@code updatingChunkMap} /
- *       {@code visibleChunkMap} become a live view backed by
- *       {@link ChunkHolderManager#byChunk} per world, exposed via
- *       {@link ChunkHolderShim} so external callers reading a Vanilla
- *       {@link ChunkHolder} continue to work unchanged.</li>
- *   <li><b>Worldgen dispatch</b> — the {@code worldgenMailbox} /
- *       {@code mainThreadMailbox} plumbing around {@link WorldGenContext}
- *       is replaced with per-region priority routing through
- *       {@link ChunkTaskScheduler#scheduleChunkTask}.</li>
- *   <li><b>Player tracking</b> — the {@code playerMap} + {@code entityMap}
- *       stay main-thread driven in 4.1b, but every add/remove path now
- *       also writes {@link NewChunkHolder#addPlayer}/{@code removePlayer}
- *       so region workers can consult the watcher set without touching
- *       the main-thread {@code playerMap}.</li>
- *   <li><b>Save/load</b> — {@code saveAllChunks} walks per-region
- *       autosave queues via {@link ChunkHolderManager#markDirty}; the
- *       {@code mainThreadExecutor.managedBlock} drain that Vanilla uses
- *       is deleted (that call would deadlock a region worker).</li>
+ * <li><b>Holder table</b> — Vanilla's {@code updatingChunkMap} /
+ * {@code visibleChunkMap} become a live view backed by
+ * {@link ChunkHolderManager#byChunk} per world, exposed via
+ * {@link ChunkHolderShim} so external callers reading a Vanilla
+ * {@link ChunkHolder} continue to work unchanged.</li>
+ * <li><b>Worldgen dispatch</b> — the {@code worldgenMailbox} /
+ * {@code mainThreadMailbox} plumbing around {@link WorldGenContext}
+ * is replaced with per-region priority routing through
+ * {@link ChunkTaskScheduler#scheduleChunkTask}.</li>
+ * <li><b>Player tracking</b> — the {@code playerMap} + {@code entityMap}
+ * stay main-thread driven in 4.1b, but every add/remove path now
+ * also writes {@link NewChunkHolder#addPlayer}/{@code removePlayer}
+ * so region workers can consult the watcher set without touching
+ * the main-thread {@code playerMap}.</li>
+ * <li><b>Save/load</b> — {@code saveAllChunks} walks per-region
+ * autosave queues via {@link ChunkHolderManager#markDirty}; the
+ * {@code mainThreadExecutor.managedBlock} drain that Vanilla uses
+ * is deleted (that call would deadlock a region worker).</li>
  * </ul>
  *
  * <p><b>Threading contract</b> (see design doc §5 for the full matrix):
  * <ul>
- *   <li>Any-thread safe reads:
- *       {@link #getVisibleChunkIfPresent}, {@link #getUpdatingChunkIfPresent},
- *       {@link #getChunks}, {@link #size}, {@link #getPoiManager},
- *       {@link #getStorageName}, {@link #getPlayersCloseForSpawning},
- *       {@link #anyPlayerCloseEnoughForSpawning}, {@link #getPlayers},
- *       {@link #getChunkToSend}, {@link #hasWork},
- *       {@link #getTickingGenerated}, {@link #getChunkDebugData}.</li>
- *   <li>Owning region worker ONLY:
- *       {@link #applyStep} continuation, save-path body,
- *       {@link #scheduleChunkLoad} body, and every
- *       {@code NewChunkHolder} mutation.</li>
- *   <li>Main thread ONLY (transitional): {@link #tick()},
- *       {@link #move}, {@link #addEntity}, {@link #removeEntity},
- *       {@link #updatePlayerStatus}, {@link #setServerViewDistance}.</li>
+ * <li>Any-thread safe reads:
+ * {@link #getVisibleChunkIfPresent}, {@link #getUpdatingChunkIfPresent},
+ * {@link #getChunks}, {@link #size}, {@link #getPoiManager},
+ * {@link #getStorageName}, {@link #getPlayersCloseForSpawning},
+ * {@link #anyPlayerCloseEnoughForSpawning}, {@link #getPlayers},
+ * {@link #getChunkToSend}, {@link #hasWork},
+ * {@link #getTickingGenerated}, {@link #getChunkDebugData}.</li>
+ * <li>Owning region worker ONLY:
+ * {@link #applyStep} continuation, save-path body,
+ * {@link #scheduleChunkLoad} body, and every
+ * {@code NewChunkHolder} mutation.</li>
+ * <li>Main thread ONLY (transitional): {@link #tick()},
+ * {@link #move}, {@link #addEntity}, {@link #removeEntity},
+ * {@link #updatePlayerStatus}, {@link #setServerViewDistance}.</li>
  * </ul>
  *
  * <p><b>Prohibited anti-patterns</b> (all M9-blocking):
  * <ol>
- *   <li>No {@code .join()} / {@code .get()} on any {@code CompletableFuture}
- *       from any facade method. Consumers chain via {@code thenAccept}.</li>
- *   <li>No {@code synchronized} on any monitor that another region worker
- *       could contend on.</li>
- *   <li>No {@code mainThreadExecutor.managedBlock} — the field is deleted.</li>
- *   <li>No {@code Thread.sleep}. Ever.</li>
+ * <li>No {@code .join()} / {@code .get()} on any {@code CompletableFuture}
+ * from any facade method. Consumers chain via {@code thenAccept}.</li>
+ * <li>No {@code synchronized} on any monitor that another region worker
+ * could contend on.</li>
+ * <li>No {@code mainThreadExecutor.managedBlock} — the field is deleted.</li>
+ * <li>No {@code Thread.sleep}. Ever.</li>
  * </ol>
  *
  * <p><b>Wiring status:</b> Phase 4.1b creates the facade in isolation; the
@@ -166,7 +163,6 @@ import org.slf4j.Logger;
 @ApiStatus.Internal
 public final class MultiForgeChunkMap extends ChunkStorage
         implements ChunkHolder.PlayerProvider, GeneratingChunkMap {
-
     private static final Logger LOGGER = LogUtils.getLogger();
 
     // === API-compat constants preserved from Vanilla ChunkMap.java:113-115 ===
@@ -181,8 +177,7 @@ public final class MultiForgeChunkMap extends ChunkStorage
      * chaining via {@code thenApply} propagate the "unloaded" outcome
      * without ever awaiting a real future.
      */
-    private static final CompletableFuture<ChunkResult<LevelChunk>> UNLOADED_LEVEL_CHUNK_FUTURE =
-            CompletableFuture.completedFuture(ChunkHolder.UNLOADED_LEVEL_CHUNK);
+    private static final CompletableFuture<ChunkResult<LevelChunk>> UNLOADED_LEVEL_CHUNK_FUTURE = CompletableFuture.completedFuture(ChunkHolder.UNLOADED_LEVEL_CHUNK);
 
     /**
      * NEW (Phase 4.1c) — ServerLevel to MultiForgeChunkMap registry so the
@@ -300,8 +295,7 @@ public final class MultiForgeChunkMap extends ChunkStorage
             this.randomState = RandomState.create(
                     NoiseGeneratorSettings.dummy(), registryAccess.lookupOrThrow(Registries.NOISE), seed);
         }
-        this.chunkGeneratorState =
-                generator.createState(registryAccess.lookupOrThrow(Registries.STRUCTURE_SET), this.randomState, seed);
+        this.chunkGeneratorState = generator.createState(registryAccess.lookupOrThrow(Registries.STRUCTURE_SET), this.randomState, seed);
 
         // Light engine wiring is deferred: ThreadedLevelLightEngine's
         // constructor demands a ChunkMap back-pointer, and this facade
@@ -351,9 +345,8 @@ public final class MultiForgeChunkMap extends ChunkStorage
         // instance during 4.1b and this facade's worldgen path is not yet
         // wired.
         // TODO(phase-4.7): replace with region-routing ProcessorHandle shim.
-        net.minecraft.util.thread.ProcessorHandle<ChunkTaskPriorityQueueSorter.Message<Runnable>> genMailbox =
-                net.minecraft.util.thread.ProcessorHandle.of(
-                        "mf-worldgen-passthrough", (ChunkTaskPriorityQueueSorter.Message<Runnable> m) -> {});
+        net.minecraft.util.thread.ProcessorHandle<ChunkTaskPriorityQueueSorter.Message<Runnable>> genMailbox = net.minecraft.util.thread.ProcessorHandle.of(
+                "mf-worldgen-passthrough", (ChunkTaskPriorityQueueSorter.Message<Runnable> m) -> {});
         this.worldGenContext = new WorldGenContext(level, generator, structures, this.lightEngine, genMailbox);
     }
 
@@ -396,7 +389,8 @@ public final class MultiForgeChunkMap extends ChunkStorage
      * net.multiforge.neoforge.*}; no cross-package/mod-facing caller
      * depends on the internal {@link ChunkHolderManager} return type.
      */
-    @Nullable ChunkHolderManager holders() {
+    @Nullable
+    ChunkHolderManager holders() {
         MultiThreadedSchedulerHost h = host();
         return h == null ? null : h.chunkManagerForOrNull(worldRef);
     }
@@ -406,7 +400,8 @@ public final class MultiForgeChunkMap extends ChunkStorage
      *
      * <p>Round-5 H2: package-private — same rationale as {@link #holders()}.
      */
-    @Nullable ChunkTaskScheduler tasks() {
+    @Nullable
+    ChunkTaskScheduler tasks() {
         MultiThreadedSchedulerHost h = host();
         return h == null ? null : h.chunkTaskScheduler();
     }
@@ -421,7 +416,8 @@ public final class MultiForgeChunkMap extends ChunkStorage
      * across {@code upstream/} and {@code multiforge-runtime/}); leaking
      * {@link RegionId} publicly ahead of an actual caller buys nothing.
      */
-    @Nullable RegionId regionIdFor(ChunkPos pos) {
+    @Nullable
+    RegionId regionIdFor(ChunkPos pos) {
         MultiThreadedSchedulerHost h = host();
         if (h == null) return null;
         ThreadedRegionizer r = h.regionizerForOrNull(worldRef);
@@ -469,8 +465,7 @@ public final class MultiForgeChunkMap extends ChunkStorage
     public ChunkHolder getVisibleChunkIfPresent(long pos) {
         ChunkHolderManager mgr = holders();
         if (mgr == null) return null;
-        NewChunkHolder shadow =
-                mgr.holderAt(new net.multiforge.api.world.ChunkPos((int) pos, (int) (pos >> 32)));
+        NewChunkHolder shadow = mgr.holderAt(new net.multiforge.api.world.ChunkPos((int) pos, (int) (pos >> 32)));
         if (shadow == null) return null;
         return ChunkHolderShim.forShadow(shadow, this.level, this.lightEngine, this);
     }
@@ -484,8 +479,7 @@ public final class MultiForgeChunkMap extends ChunkStorage
         return () -> {
             ChunkHolderManager mgr = holders();
             if (mgr == null) return ChunkLevel.MAX_LEVEL + 1;
-            NewChunkHolder shadow =
-                    mgr.holderAt(new net.multiforge.api.world.ChunkPos((int) pos, (int) (pos >> 32)));
+            NewChunkHolder shadow = mgr.holderAt(new net.multiforge.api.world.ChunkPos((int) pos, (int) (pos >> 32)));
             return shadow == null ? ChunkLevel.MAX_LEVEL + 1 : shadow.level().distance();
         };
     }
@@ -769,15 +763,15 @@ public final class MultiForgeChunkMap extends ChunkStorage
      */
     private CompletableFuture<ChunkAccess> scheduleChunkLoad(ChunkPos pos) {
         return read(pos).thenApply(opt -> opt.map(this::upgradeChunkTag)).thenApplyAsync(
-                        opt -> {
-                            if (opt.isPresent()) {
-                                ChunkAccess ca = net.minecraft.world.level.chunk.storage.ChunkSerializer.read(
-                                        this.level, this.poiManager, this.storageInfo(), pos, opt.get());
-                                return ca;
-                            }
-                            return createEmptyChunk(pos);
-                        },
-                        this.bgExecutor)
+                opt -> {
+                    if (opt.isPresent()) {
+                        ChunkAccess ca = net.minecraft.world.level.chunk.storage.ChunkSerializer.read(
+                                this.level, this.poiManager, this.storageInfo(), pos, opt.get());
+                        return ca;
+                    }
+                    return createEmptyChunk(pos);
+                },
+                this.bgExecutor)
                 .exceptionally(t -> {
                     LOGGER.error("Failed to load chunk {}", pos, t);
                     return createEmptyChunk(pos);
@@ -1002,7 +996,8 @@ public final class MultiForgeChunkMap extends ChunkStorage
         int d = getPlayerViewDistance(player);
         if (player.getChunkTrackingView() instanceof ChunkTrackingView.Positioned p
                 && p.center().equals(pos)
-                && p.viewDistance() == d) return;
+                && p.viewDistance() == d)
+            return;
         applyChunkTrackingView(player, ChunkTrackingView.of(pos, d));
     }
 
@@ -1034,8 +1029,7 @@ public final class MultiForgeChunkMap extends ChunkStorage
         // watcher set without touching main-thread playerMap.
         ChunkHolderManager mgr = holders();
         if (mgr != null) {
-            NewChunkHolder shadow =
-                    mgr.holderAt(new net.multiforge.api.world.ChunkPos(pos.x, pos.z));
+            NewChunkHolder shadow = mgr.holderAt(new net.multiforge.api.world.ChunkPos(pos.x, pos.z));
             if (shadow != null) shadow.addPlayer(player);
         }
     }
@@ -1049,8 +1043,7 @@ public final class MultiForgeChunkMap extends ChunkStorage
         player.connection.chunkSender.dropChunk(player, pos);
         ChunkHolderManager mgr = holders();
         if (mgr != null) {
-            NewChunkHolder shadow =
-                    mgr.holderAt(new net.multiforge.api.world.ChunkPos(pos.x, pos.z));
+            NewChunkHolder shadow = mgr.holderAt(new net.multiforge.api.world.ChunkPos(pos.x, pos.z));
             if (shadow != null) shadow.removePlayer(player);
         }
     }

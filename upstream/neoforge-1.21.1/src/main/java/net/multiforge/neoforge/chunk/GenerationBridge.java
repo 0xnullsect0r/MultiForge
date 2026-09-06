@@ -46,7 +46,6 @@ import org.jetbrains.annotations.ApiStatus;
  */
 @ApiStatus.Internal
 public final class GenerationBridge {
-
     /** Probe name — {@link GenerationChunkHolder#applyStep} entry. */
     private static final String PROBE_STEP_START = "mfgen.observe.step.start";
 

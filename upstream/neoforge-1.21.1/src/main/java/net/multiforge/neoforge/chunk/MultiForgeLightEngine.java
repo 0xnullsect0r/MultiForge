@@ -8,7 +8,6 @@ import java.lang.ref.WeakReference;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
-import javax.annotation.Nullable;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.SectionPos;
 import net.minecraft.server.level.ChunkMap;
@@ -28,6 +27,7 @@ import net.multiforge.runtime.diagnostics.ProbeRegistry;
 import net.multiforge.runtime.region.RegionizedTaskQueue;
 import net.multiforge.runtime.scheduler.MultiForgeRegionizedRuntime;
 import net.multiforge.runtime.scheduler.MultiThreadedSchedulerHost;
+import org.jetbrains.annotations.Nullable;
 
 /**
  * M9 Phase 4 task 4.5b — fork facade replacing the single-mailbox
@@ -92,15 +92,13 @@ import net.multiforge.runtime.scheduler.MultiThreadedSchedulerHost;
  * preserving reflective-mod compatibility.
  */
 public final class MultiForgeLightEngine extends ThreadedLevelLightEngine {
-
     /**
      * No-op mailbox handed to super so the inherited {@code taskMailbox}
      * field resolves for any reflective mod that probes it. The
      * executor swallows every {@code Runnable} submitted; we never
      * enqueue onto this mailbox from this class.
      */
-    private static final ProcessorMailbox<Runnable> NO_OP_TASK_MAILBOX =
-            ProcessorMailbox.create(r -> {}, "multiforge-light-noop-mailbox");
+    private static final ProcessorMailbox<Runnable> NO_OP_TASK_MAILBOX = ProcessorMailbox.create(r -> {}, "multiforge-light-noop-mailbox");
 
     /**
      * Task 4.5c — weak identity registry that lets the Vanilla
@@ -126,8 +124,7 @@ public final class MultiForgeLightEngine extends ThreadedLevelLightEngine {
      * future all-engines walk a safe-iteration path this class doesn't
      * currently need.
      */
-    private static final InstanceRegistry<ThreadedLevelLightEngine, WeakReference<MultiForgeLightEngine>> REGISTRY =
-            InstanceRegistry.weak();
+    private static final InstanceRegistry<ThreadedLevelLightEngine, WeakReference<MultiForgeLightEngine>> REGISTRY = InstanceRegistry.weak();
 
     /**
      * No-op sorter handle handed to super so the inherited
@@ -135,8 +132,7 @@ public final class MultiForgeLightEngine extends ThreadedLevelLightEngine {
      * {@code tell(msg)} drops the message — this class never enqueues
      * onto the sorter path.
      */
-    private static final ProcessorHandle<ChunkTaskPriorityQueueSorter.Message<Runnable>> NO_OP_SORTER =
-            ProcessorHandle.of("multiforge-light-noop-sorter", msg -> {});
+    private static final ProcessorHandle<ChunkTaskPriorityQueueSorter.Message<Runnable>> NO_OP_SORTER = ProcessorHandle.of("multiforge-light-noop-sorter", msg -> {});
 
     /**
      * Nullable — resolved at construction from

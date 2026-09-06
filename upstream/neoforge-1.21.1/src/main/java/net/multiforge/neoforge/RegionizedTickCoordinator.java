@@ -47,11 +47,9 @@ import net.multiforge.runtime.scheduler.MultiThreadedSchedulerHost;
  * this file or its vanilla patch.
  */
 public final class RegionizedTickCoordinator {
-
     private static final String DEADLINE_PROP = "multiforge.regiontick.dispatch-ms";
     private static final long DEFAULT_DISPATCH_DEADLINE_MS = 500L;
-    private static final long DISPATCH_DEADLINE_NANOS =
-            parseDispatchDeadlineMs(System.getProperty(DEADLINE_PROP)) * 1_000_000L;
+    private static final long DISPATCH_DEADLINE_NANOS = parseDispatchDeadlineMs(System.getProperty(DEADLINE_PROP)) * 1_000_000L;
 
     private RegionizedTickCoordinator() {}
 
@@ -79,34 +77,34 @@ public final class RegionizedTickCoordinator {
      *
      * <p>Flow:
      * <ol>
-     *   <li>If the MultiForge runtime is not yet installed (fresh boot,
-     *       pre-{@code ServerAboutToStart}) or no regionizer has been
-     *       materialised for {@code level}'s world yet, run
-     *       {@code vanillaBody} inline — the vanilla parity fallback.
-     *       This preserves Vanilla behaviour at bootstrap.</li>
-     *   <li>Otherwise, snapshot the world's live regions and invoke
-     *       {@link TickRegionScheduler#tickAll(Collection, long)} as the
-     *       synchronisation barrier for any regions currently mid-tick
-     *       on the worker pool.</li>
-     *   <li>If any region overruns the dispatch deadline, route to the
-     *       strict-mode-vs-warn path: in
-     *       {@link RegionTickWatchdog.Mode#STRICT STRICT} mode
-     *       ({@code -Dmultiforge.regiontick.strict=on}), throw; otherwise
-     *       (the default) rate-limited warn + probe bump + continue,
-     *       matching CLAUDE.md rule 5's "auto-reroute + warn" default.</li>
-     *   <li>If the fan-out itself throws (dispatch-side bug — never a
-     *       region worker's own exception, which stays on the worker),
-     *       warn + fall through to the inline body so the server tick
-     *       still runs.</li>
-     *   <li>Finally, run {@code vanillaBody} on the caller thread for
-     *       the global per-level portion (weather, time, wandering-trader
-     *       spawner, etc.). Phase 5 + M11 will migrate this into the
-     *       synthetic global region.</li>
+     * <li>If the MultiForge runtime is not yet installed (fresh boot,
+     * pre-{@code ServerAboutToStart}) or no regionizer has been
+     * materialised for {@code level}'s world yet, run
+     * {@code vanillaBody} inline — the vanilla parity fallback.
+     * This preserves Vanilla behaviour at bootstrap.</li>
+     * <li>Otherwise, snapshot the world's live regions and invoke
+     * {@link TickRegionScheduler#tickAll(Collection, long)} as the
+     * synchronisation barrier for any regions currently mid-tick
+     * on the worker pool.</li>
+     * <li>If any region overruns the dispatch deadline, route to the
+     * strict-mode-vs-warn path: in
+     * {@link RegionTickWatchdog.Mode#STRICT STRICT} mode
+     * ({@code -Dmultiforge.regiontick.strict=on}), throw; otherwise
+     * (the default) rate-limited warn + probe bump + continue,
+     * matching CLAUDE.md rule 5's "auto-reroute + warn" default.</li>
+     * <li>If the fan-out itself throws (dispatch-side bug — never a
+     * region worker's own exception, which stays on the worker),
+     * warn + fall through to the inline body so the server tick
+     * still runs.</li>
+     * <li>Finally, run {@code vanillaBody} on the caller thread for
+     * the global per-level portion (weather, time, wandering-trader
+     * spawner, etc.). Phase 5 + M11 will migrate this into the
+     * synthetic global region.</li>
      * </ol>
      *
-     * @param level the level being ticked; the coordinator looks up its
-     *              regionizer via
-     *              {@link MultiThreadedSchedulerHost#regionizerForOrNull}.
+     * @param level       the level being ticked; the coordinator looks up its
+     *                    regionizer via
+     *                    {@link MultiThreadedSchedulerHost#regionizerForOrNull}.
      * @param vanillaBody the vanilla per-level tick call.
      */
     public static void dispatchLevelTick(ServerLevel level, Runnable vanillaBody) {

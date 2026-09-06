@@ -5,7 +5,6 @@
 package net.multiforge.neoforge.chunk;
 
 import java.util.concurrent.CompletableFuture;
-import javax.annotation.Nullable;
 import net.minecraft.server.level.ChunkHolder;
 import net.minecraft.server.level.ChunkResult;
 import net.minecraft.server.level.ServerLevel;
@@ -14,6 +13,7 @@ import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.level.chunk.LevelChunk;
 import net.multiforge.runtime.chunk.NewChunkHolder;
 import org.jetbrains.annotations.ApiStatus;
+import org.jetbrains.annotations.Nullable;
 
 /**
  * Facade adapter that projects a {@link NewChunkHolder} shadow onto the
@@ -47,7 +47,6 @@ import org.jetbrains.annotations.ApiStatus;
  */
 @ApiStatus.Internal
 final class ChunkHolderShim extends ChunkHolder {
-
     private final NewChunkHolder shadow;
 
     private ChunkHolderShim(
@@ -174,6 +173,5 @@ final class ChunkHolderShim extends ChunkHolder {
      * bridge (installed by {@link MultiForgeChunkMap} at Phase 5.1
      * wire-in time), so the Vanilla-ctor listener is redundant.
      */
-    private static final ChunkHolder.LevelChangeListener NO_OP_LEVEL_CHANGE =
-            (pos, oldLevel, newLevel, setter) -> {};
+    private static final ChunkHolder.LevelChangeListener NO_OP_LEVEL_CHANGE = (pos, oldLevel, newLevel, setter) -> {};
 }

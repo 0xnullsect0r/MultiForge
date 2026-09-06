@@ -42,16 +42,16 @@ import net.multiforge.runtime.region.Region;
  * Vanilla API is:
  *
  * <ul>
- *   <li>{@code ChunkSerializer.write(ServerLevel, ChunkAccess)
+ * <li>{@code ChunkSerializer.write(ServerLevel, ChunkAccess)
  *       -> CompoundTag} — {@link LevelChunk} implements {@code ChunkAccess}
- *       so it slots in directly.</li>
- *   <li>{@code ChunkSerializer.read(ServerLevel, PoiManager,
+ * so it slots in directly.</li>
+ * <li>{@code ChunkSerializer.read(ServerLevel, PoiManager,
  *       RegionStorageInfo, ChunkPos, CompoundTag) -> ProtoChunk} —
- *       returns a {@code ProtoChunk} (or {@code ImposterProtoChunk})
- *       directly, no wrapper struct; the caller must forward the
- *       target level's {@link PoiManager} and its chunk-source's
- *       {@link RegionStorageInfo} so relocated-chunk warnings and POI
- *       consistency checks happen against the right storage.</li>
+ * returns a {@code ProtoChunk} (or {@code ImposterProtoChunk})
+ * directly, no wrapper struct; the caller must forward the
+ * target level's {@link PoiManager} and its chunk-source's
+ * {@link RegionStorageInfo} so relocated-chunk warnings and POI
+ * consistency checks happen against the right storage.</li>
  * </ul>
  *
  * <p>Covered by Phase 5 integration + gameTestServer regression;
@@ -108,15 +108,15 @@ public final class RegionChunkSerializer {
      * than propagating into the tick pipeline (CLAUDE.md rule 5).
      *
      * @param region the region the chunk's holder belongs to; used
-     *     only for diagnostics (the region id in a warn message).
+     *               only for diagnostics (the region id in a warn message).
      * @param holder the chunk's shadow holder. {@link
-     *     NewChunkHolder#getCurrentChunk()} is {@code Object}-typed
-     *     because this runtime module cannot import {@code
+     *               NewChunkHolder#getCurrentChunk()} is {@code Object}-typed
+     *               because this runtime module cannot import {@code
      *     net.minecraft.*} — this method does the cast back to
-     *     {@link LevelChunk}.
+     *               {@link LevelChunk}.
      * @return compressed NBT bytes, or {@code byte[0]} if the chunk
-     *     isn't loaded (null / not yet a {@link LevelChunk}), isn't
-     *     attached to a {@link ServerLevel}, or serialization failed.
+     *         isn't loaded (null / not yet a {@link LevelChunk}), isn't
+     *         attached to a {@link ServerLevel}, or serialization failed.
      */
     public static byte[] serializeForJournal(Region region, NewChunkHolder holder) {
         if (holder == null) return new byte[0];

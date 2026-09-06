@@ -169,8 +169,7 @@ public class ServerLifecycleHooks {
         // byte[0] payloads to the journal (durable but content-free),
         // which is what made the Phase 7.2/7.3 determinism runs unable
         // to validate against real world saves.
-        net.multiforge.runtime.scheduler.MultiThreadedSchedulerHost mfHost =
-                net.multiforge.runtime.scheduler.MultiForgeRegionizedRuntime.current();
+        net.multiforge.runtime.scheduler.MultiThreadedSchedulerHost mfHost = net.multiforge.runtime.scheduler.MultiForgeRegionizedRuntime.current();
         if (mfHost != null) {
             mfHost.setChunkSerializer(net.multiforge.neoforge.io.RegionChunkSerializer::serializeForJournal);
         }

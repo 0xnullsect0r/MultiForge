@@ -4,12 +4,10 @@
  */
 package net.multiforge.neoforge.chunk;
 
-import java.util.Collection;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.Executor;
 import java.util.concurrent.atomic.AtomicInteger;
-import javax.annotation.Nullable;
 import net.minecraft.core.SectionPos;
 import net.minecraft.server.level.ChunkHolder;
 import net.minecraft.server.level.ChunkLevel;
@@ -34,6 +32,7 @@ import net.multiforge.runtime.region.Region;
 import net.multiforge.runtime.region.RegionId;
 import net.multiforge.runtime.region.ThreadedRegionizer;
 import net.multiforge.runtime.scheduler.MultiThreadedSchedulerHost;
+import org.jetbrains.annotations.Nullable;
 
 /**
  * MultiForge replacement for Vanilla {@link DistanceManager}.
@@ -92,7 +91,6 @@ import net.multiforge.runtime.scheduler.MultiThreadedSchedulerHost;
  * {@code CompletableFuture.get}, no {@code synchronized}.
  */
 public abstract class MultiForgeDistanceManager extends DistanceManager {
-
     /** Vanilla ticket-level corresponding to {@link FullChunkStatus#FULL} (== 33). */
     private static final int FULL_STATUS_LEVEL = ChunkLevel.byStatus(FullChunkStatus.FULL);
 
@@ -103,8 +101,7 @@ public abstract class MultiForgeDistanceManager extends DistanceManager {
     private static final String NULL_REGION_WARN_SITE = "distance-manager.null-region";
 
     /** Immutable set of ticket-type names retained through {@link #removeTicketsOnClosing()}. */
-    private static final java.util.Set<String> SHUTDOWN_KEEP_TYPE_NAMES =
-            java.util.Set.of(TicketType.UNKNOWN.toString(), TicketType.POST_TELEPORT.toString());
+    private static final java.util.Set<String> SHUTDOWN_KEEP_TYPE_NAMES = java.util.Set.of(TicketType.UNKNOWN.toString(), TicketType.POST_TELEPORT.toString());
 
     /**
      * Identity-keyed registry of every live {@link MultiForgeDistanceManager}
@@ -137,8 +134,7 @@ public abstract class MultiForgeDistanceManager extends DistanceManager {
      * InstanceRegistry#snapshot()} for safe iteration, so the hazard is
      * fixed once for every facade instead of per call site.
      */
-    private static final InstanceRegistry<DistanceManager, MultiForgeDistanceManager> INSTANCE_REGISTRY =
-            InstanceRegistry.weak();
+    private static final InstanceRegistry<DistanceManager, MultiForgeDistanceManager> INSTANCE_REGISTRY = InstanceRegistry.weak();
 
     protected final MultiThreadedSchedulerHost host;
     protected final WorldRef worldRef;
@@ -188,17 +184,17 @@ public abstract class MultiForgeDistanceManager extends DistanceManager {
 
     /**
      * @param mainThreadExec Vanilla main-thread executor. Passed as the
-     *     second super arg so {@code super.mainThreadExecutor} is
-     *     populated for source-compat with mods reflecting on the field.
+     *                       second super arg so {@code super.mainThreadExecutor} is
+     *                       populated for source-compat with mods reflecting on the field.
      * @param tickThreadExec Region-worker / background executor. Passed
-     *     as the first super arg where Vanilla's ctor constructs its
-     *     unused-under-MultiForge {@code ChunkTaskPriorityQueueSorter}
-     *     (see design §3).
-     * @param host The process-wide {@link MultiThreadedSchedulerHost}
-     *     that owns the per-world regionizer and chunk-holder-manager
-     *     tables. Never null in production; tests may pass a fake.
-     * @param worldRef The world this distance manager belongs to. Every
-     *     ticket write scopes region resolution to this world.
+     *                       as the first super arg where Vanilla's ctor constructs its
+     *                       unused-under-MultiForge {@code ChunkTaskPriorityQueueSorter}
+     *                       (see design §3).
+     * @param host           The process-wide {@link MultiThreadedSchedulerHost}
+     *                       that owns the per-world regionizer and chunk-holder-manager
+     *                       tables. Never null in production; tests may pass a fake.
+     * @param worldRef       The world this distance manager belongs to. Every
+     *                       ticket write scopes region resolution to this world.
      */
     protected MultiForgeDistanceManager(
             Executor mainThreadExec, Executor tickThreadExec, MultiThreadedSchedulerHost host, WorldRef worldRef) {
@@ -224,12 +220,12 @@ public abstract class MultiForgeDistanceManager extends DistanceManager {
 
     /**
      * @return the region owning {@code (chunkX, chunkZ)} in this
-     *     distance manager's world, or {@code null} when the section
-     *     isn't yet registered with the regionizer (early boot, chunk
-     *     far from any player). Callers on the null path emit a
-     *     rate-limited warn — plan §Ground rule 5 — and drop the write;
-     *     the next {@code addTicket} after the section joins a region
-     *     succeeds.
+     *         distance manager's world, or {@code null} when the section
+     *         isn't yet registered with the regionizer (early boot, chunk
+     *         far from any player). Callers on the null path emit a
+     *         rate-limited warn — plan §Ground rule 5 — and drop the write;
+     *         the next {@code addTicket} after the section joins a region
+     *         succeeds.
      */
     @Nullable
     private Region regionOrNull(int chunkX, int chunkZ) {
@@ -267,8 +263,7 @@ public abstract class MultiForgeDistanceManager extends DistanceManager {
         String typeName = vanilla.getType().toString();
         int level = vanilla.getTicketLevel();
         int timeout = (int) vanilla.getType().timeout();
-        net.multiforge.runtime.chunk.TicketType mfType =
-                net.multiforge.runtime.chunk.TicketType.of(typeName, level, timeout);
+        net.multiforge.runtime.chunk.TicketType mfType = net.multiforge.runtime.chunk.TicketType.of(typeName, level, timeout);
         // Deduplicate on the ticket's identity string — matches the
         // shadow bridge's approach in DistanceManagerBridge.
         String keyStr = String.valueOf(vanilla);
@@ -283,8 +278,7 @@ public abstract class MultiForgeDistanceManager extends DistanceManager {
      * {@link Ticket} in hand, e.g. player-add path).
      */
     private net.multiforge.runtime.chunk.Ticket translate(TicketType<?> type, int level, Object key, int timeout) {
-        net.multiforge.runtime.chunk.TicketType mfType =
-                net.multiforge.runtime.chunk.TicketType.of(type.toString(), level, timeout);
+        net.multiforge.runtime.chunk.TicketType mfType = net.multiforge.runtime.chunk.TicketType.of(type.toString(), level, timeout);
         return net.multiforge.runtime.chunk.Ticket.at(mfType, level, String.valueOf(key), mfTickCounter);
     }
 
@@ -542,8 +536,8 @@ public abstract class MultiForgeDistanceManager extends DistanceManager {
 
     /**
      * @return a short per-world summary of ticket / holder counts.
-     *     Replaces Vanilla's {@code ticketThrottler.getDebugStatus()}
-     *     which no longer exists under MultiForge.
+     *         Replaces Vanilla's {@code ticketThrottler.getDebugStatus()}
+     *         which no longer exists under MultiForge.
      */
     @Override
     public String getDebugStatus() {
@@ -602,8 +596,7 @@ public abstract class MultiForgeDistanceManager extends DistanceManager {
         // is O(n) but per-chunk ticket lists are tiny (Vanilla docs the
         // sorted-array-set at initial capacity 4). Only ever called
         // from debug / observability paths.
-        java.util.Iterator<net.multiforge.runtime.chunk.Ticket> it =
-                tickets.snapshot().iterator();
+        java.util.Iterator<net.multiforge.runtime.chunk.Ticket> it = tickets.snapshot().iterator();
         return it.hasNext() ? it.next().toString() : "no_ticket";
     }
 
@@ -662,8 +655,7 @@ public abstract class MultiForgeDistanceManager extends DistanceManager {
             // Snapshot the chunk keys first so we can mutate the map
             // while iterating (PerRegionTicketMap.removeTicket may drop
             // the chunk-tickets entry when the last ticket goes).
-            java.util.List<net.multiforge.api.world.ChunkPos> chunks =
-                    new java.util.ArrayList<>(map.loadedChunks());
+            java.util.List<net.multiforge.api.world.ChunkPos> chunks = new java.util.ArrayList<>(map.loadedChunks());
             for (net.multiforge.api.world.ChunkPos pos : chunks) {
                 PerChunkTickets tickets = map.ticketsAt(pos);
                 if (tickets == null) continue;
@@ -682,8 +674,8 @@ public abstract class MultiForgeDistanceManager extends DistanceManager {
 
     /**
      * @return true iff at least one region has at least one live
-     *     ticket. Cheap scan over per-region maps (typically single
-     *     digits of regions).
+     *         ticket. Cheap scan over per-region maps (typically single
+     *         digits of regions).
      */
     @Override
     public boolean hasTickets() {
@@ -744,8 +736,8 @@ public abstract class MultiForgeDistanceManager extends DistanceManager {
 
     /**
      * @return current internal tick counter driving expiry-clock
-     *     stamps on outbound MultiForge tickets. Bumped by
-     *     {@link #purgeStaleTickets()}.
+     *         stamps on outbound MultiForge tickets. Bumped by
+     *         {@link #purgeStaleTickets()}.
      */
     public long tickCounter() {
         return mfTickCounter;
@@ -765,8 +757,8 @@ public abstract class MultiForgeDistanceManager extends DistanceManager {
 
     /**
      * @return the {@link MultiForgeDistanceManager} previously registered
-     *     against {@code dm} in {@link #INSTANCE_REGISTRY}, or empty when
-     *     none. Never throws.
+     *         against {@code dm} in {@link #INSTANCE_REGISTRY}, or empty when
+     *         none. Never throws.
      */
     public static java.util.Optional<MultiForgeDistanceManager> of(@Nullable DistanceManager dm) {
         return INSTANCE_REGISTRY.of(dm);
