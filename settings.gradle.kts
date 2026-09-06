@@ -31,6 +31,9 @@ include(
     // Determinism harness: pure-Java file diffing, no Minecraft dep — buildable
     // standalone. Only the world dirs it consumes come from an MC-enabled run.
     "multiforge-bench",
+    // Static ASM-based mod-jar safety scanner. No Minecraft/NeoForge dep —
+    // see docs/design/scanner-rules.md §1.1.
+    "multiforge-scanner",
 )
 
 // MultiForge patches under `multiforge-patches/<NN-group>/` are applied
