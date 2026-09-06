@@ -88,5 +88,15 @@ private-key.*
 bench/reports/
 bench/tmp/
 
+# M9 Phase 7 wall-clock verification world captures.
+# Only summary logs (latest.log, boot.log, elapsed-sec.txt,
+# world-size-bytes.txt) and diff outputs land in git.
+docs/verification/m9/**/world/
+docs/verification/m9/**/license.key
+# The global `*.log` rule above ignores latest.log, boot.log, diff logs
+# etc. anywhere; force them back in under docs/verification/ so the
+# summary artefacts committed alongside the results doc are tracked.
+!docs/verification/**/*.log
+
 # Node (docs site future)
 node_modules/

@@ -1,0 +1,43 @@
+[05Sep2026 20:08:46.740] [main/INFO] [cpw.mods.modlauncher.Launcher/MODLAUNCHER]: ModLauncher running: args [--gameDir, /home/aric/MultiForge/upstream/neoforge-1.21.1/projects/neoforge/run/server, --fml.neoForgeVersion, 1.21.1-m9-design.47-beta-develop, --fml.fmlVersion, 4.0.24, --fml.mcVersion, 1.21.1, --fml.neoFormVersion, 20240808.144430, nogui, --launchTarget, forgeserverdev]
+[05Sep2026 20:08:46.741] [main/INFO] [cpw.mods.modlauncher.Launcher/MODLAUNCHER]: JVM identified as Eclipse Adoptium OpenJDK 64-Bit Server VM 21.0.12.1+1-LTS
+[05Sep2026 20:08:46.742] [main/INFO] [cpw.mods.modlauncher.Launcher/MODLAUNCHER]: ModLauncher 11.0.4+main.d2e20e43 starting: java version 21.0.12.1 by Eclipse Adoptium; OS Linux arch amd64 version 7.1.9-zen1-2-zen
+[05Sep2026 20:08:46.796] [main/INFO] [net.neoforged.fml.loading.ImmediateWindowHandler/]: ImmediateWindowProvider not loading because launch target is forgeserverdev
+[05Sep2026 20:08:46.821] [main/INFO] [mixin/]: SpongePowered MIXIN Subsystem Version=0.8.6 Source=union:/home/aric/.gradle/caches/modules-2/files-2.1/net.fabricmc/sponge-mixin/0.14.0+mixin.0.8.6/c265173c84346e9e5d42a2384b2b02bd39a4a899/sponge-mixin-0.14.0+mixin.0.8.6.jar%23169!/ Service=ModLauncher Env=SERVER
+[05Sep2026 20:08:46.919] [main/INFO] [net.neoforged.fml.loading.moddiscovery.ModDiscoverer/SCAN]: Found mod file "main" [locator: neoforge devenv provider ([/home/aric/MultiForge/upstream/neoforge-1.21.1/projects/neoforge/build/resources/main, /home/aric/MultiForge/upstream/neoforge-1.21.1/projects/neoforge/build/classes/java/main])]
+[05Sep2026 20:08:46.925] [main/INFO] [net.neoforged.fml.loading.moddiscovery.ModDiscoverer/SCAN]: Found mod file "main" [locator: neoforge devenv provider ([/home/aric/MultiForge/upstream/neoforge-1.21.1/projects/neoforge/build/resources/main, /home/aric/MultiForge/upstream/neoforge-1.21.1/projects/neoforge/build/classes/java/main])]
+[05Sep2026 20:08:46.929] [main/INFO] [net.neoforged.fml.loading.moddiscovery.ModDiscoverer/SCAN]: Found mod file "main" [locator: userdev mods and services, reader: mod manifest]
+[05Sep2026 20:08:46.952] [main/INFO] [net.neoforged.fml.loading.moddiscovery.locators.JarInJarDependencyLocator/]: No dependencies to load found. Skipping!
+[05Sep2026 20:08:47.055] [main/INFO] [net.neoforged.fml.loading.FMLServiceProvider/CORE]: Loading coremod script-engine for [neoforge]
+[05Sep2026 20:08:47.490] [main/INFO] [cpw.mods.modlauncher.LaunchServiceHandler/MODLAUNCHER]: Launching target 'forgeserverdev' with arguments [--gameDir, /home/aric/MultiForge/upstream/neoforge-1.21.1/projects/neoforge/run/server, nogui]
+[05Sep2026 20:08:50.338] [main/WARN] [net.minecraft.commands.Commands/]: Ambiguity between arguments [teleport, location] and [teleport, destination] with inputs: [0.1 -0.5 .9, 0 0 0]
+[05Sep2026 20:08:50.339] [main/WARN] [net.minecraft.commands.Commands/]: Ambiguity between arguments [teleport, location] and [teleport, targets] with inputs: [0.1 -0.5 .9, 0 0 0]
+[05Sep2026 20:08:50.341] [main/WARN] [net.minecraft.commands.Commands/]: Ambiguity between arguments [teleport, destination] and [teleport, targets] with inputs: [Player, 0123, @e, dd12be42-52a9-4a91-a8a1-11c01849e498]
+[05Sep2026 20:08:50.341] [main/WARN] [net.minecraft.commands.Commands/]: Ambiguity between arguments [teleport, targets] and [teleport, destination] with inputs: [Player, 0123, dd12be42-52a9-4a91-a8a1-11c01849e498]
+[05Sep2026 20:08:50.342] [main/WARN] [net.minecraft.commands.Commands/]: Ambiguity between arguments [teleport, targets, location] and [teleport, targets, destination] with inputs: [0.1 -0.5 .9, 0 0 0]
+[05Sep2026 20:08:50.385] [modloading-worker-0/INFO] [net.neoforged.neoforge.common.NeoForgeMod/NEOFORGE-MOD]: NeoForge mod loading, version 1.21.1-m9-design.47-beta-develop, for MC 1.21.1
+[05Sep2026 20:08:50.537] [main/INFO] [com.mojang.authlib.yggdrasil.YggdrasilAuthenticationService/]: Environment: Environment[sessionHost=https://sessionserver.mojang.com, servicesHost=https://api.minecraftservices.com, name=PROD]
+[05Sep2026 20:08:50.559] [main/WARN] [net.minecraft.server.packs.VanillaPackResourcesBuilder/]: Assets URL 'union:/home/aric/MultiForge/upstream/neoforge-1.21.1/projects/neoforge/build/resources/main/%23183!/assets/.mcassetsroot' uses unexpected schema
+[05Sep2026 20:08:50.559] [main/WARN] [net.minecraft.server.packs.VanillaPackResourcesBuilder/]: Assets URL 'union:/home/aric/MultiForge/upstream/neoforge-1.21.1/projects/neoforge/build/resources/main/%23183!/data/.mcassetsroot' uses unexpected schema
+[05Sep2026 20:08:50.803] [main/INFO] [net.minecraft.server.Main/]: No existing world data, creating new world
+[05Sep2026 20:08:50.982] [main/INFO] [net.minecraft.world.item.crafting.RecipeManager/]: Loaded 1290 recipes
+[05Sep2026 20:08:51.054] [main/INFO] [net.minecraft.advancements.AdvancementTree/]: Loaded 1399 advancements
+[05Sep2026 20:08:51.324] [Server thread/INFO] [net.minecraft.server.dedicated.DedicatedServer/]: Starting minecraft server version 1.21.1
+[05Sep2026 20:08:51.324] [Server thread/INFO] [net.minecraft.server.dedicated.DedicatedServer/]: Loading properties
+[05Sep2026 20:08:51.324] [Server thread/INFO] [net.minecraft.server.dedicated.DedicatedServer/]: Default game type: SURVIVAL
+[05Sep2026 20:08:51.324] [Server thread/INFO] [net.minecraft.server.MinecraftServer/]: Generating keypair
+[05Sep2026 20:08:51.373] [Server thread/INFO] [net.minecraft.server.dedicated.DedicatedServer/]: Starting Minecraft server on *:25565
+[05Sep2026 20:08:51.395] [Server thread/INFO] [net.minecraft.server.network.ServerConnectionListener/]: Using epoll channel type
+[05Sep2026 20:08:51.411] [Server thread/WARN] [net.minecraft.server.dedicated.DedicatedServer/]: **** SERVER IS RUNNING IN OFFLINE/INSECURE MODE!
+[05Sep2026 20:08:51.411] [Server thread/WARN] [net.minecraft.server.dedicated.DedicatedServer/]: The server will make no attempt to authenticate usernames. Beware.
+[05Sep2026 20:08:51.411] [Server thread/WARN] [net.minecraft.server.dedicated.DedicatedServer/]: While this makes the game possible to play without internet access, it also opens up the ability for hackers to connect with any username they choose.
+[05Sep2026 20:08:51.411] [Server thread/WARN] [net.minecraft.server.dedicated.DedicatedServer/]: To change this, set "online-mode" to "true" in the server.properties file.
+[05Sep2026 20:08:51.438] [Server thread/INFO] [net.minecraft.server.dedicated.DedicatedServer/]: Preparing level "world"
+[05Sep2026 20:08:52.827] [Server thread/INFO] [net.minecraft.server.MinecraftServer/]: Preparing start region for dimension minecraft:overworld
+[05Sep2026 20:08:52.843] [worldgen/INFO] [net.minecraft.server.level.progress.LoggerChunkProgressListener/]: Preparing spawn area: 2%
+[05Sep2026 20:08:53.268] [worldgen/WARN] [multiforge.violation/]: [BlockEntity.setChanged] off-thread mutation attempt from 'worldgen' (domain=UNKNOWN)
+[05Sep2026 20:08:53.328] [worldgen/INFO] [net.minecraft.server.level.progress.LoggerChunkProgressListener/]: Preparing spawn area: 2%
+[05Sep2026 20:08:53.829] [worldgen/INFO] [net.minecraft.server.level.progress.LoggerChunkProgressListener/]: Preparing spawn area: 51%
+[05Sep2026 20:08:54.165] [Server thread/INFO] [net.minecraft.server.level.progress.LoggerChunkProgressListener/]: Time elapsed: 1339 ms
+[05Sep2026 20:08:54.166] [Server thread/INFO] [net.minecraft.server.dedicated.DedicatedServer/]: Done (2.749s)! For help, type "help"
+[05Sep2026 20:08:54.182] [Server thread/INFO] [net.neoforged.neoforge.gametest.GameTestHooks/]: Enabled Gametest Namespaces: []
+[05Sep2026 20:08:54.184] [Server thread/INFO] [net.neoforged.neoforge.server.permission.PermissionAPI/]: Successfully initialized permission handler neoforge:default_handler
