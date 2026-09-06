@@ -12,6 +12,7 @@
  */
 package net.multiforge.runtime.scheduler;
 
+import java.util.concurrent.ConcurrentHashMap;
 import net.multiforge.runtime.diagnostics.ProbeRegistry;
 import net.multiforge.runtime.diagnostics.ViolationLogger;
 
@@ -52,6 +53,18 @@ public final class LevelTickDispatchProbes {
     public static final String DISPATCH_FAILURE_PROBE = "region-tick.dispatch.failure";
 
     /**
+     * Sentinel set of world ids that have already emitted a {@link
+     * #noRegionizerSkip} warn. {@link ViolationLogger}'s rate limiter
+     * buckets by site, and every world previously shared the single site
+     * {@link #NO_REGIONIZER_SKIP_PROBE} — on an idle server with both
+     * {@code the_end} and {@code the_nether} unloaded, the two worlds
+     * contended for one shared 5/60s bucket and drowned each other out.
+     * Keyed per world so each world gets its own warn-once-then-silent
+     * behaviour instead of a shared rate-limit budget.
+     */
+    private static final ConcurrentHashMap<String, Boolean> warnedNoRegionizer = new ConcurrentHashMap<>();
+
+    /**
      * Bootstrap fallback: the MultiForge runtime is not installed yet
      * (fresh boot, pre-{@code ServerAboutToStart}). Bumps {@link
      * #BOOTSTRAP_SKIP_PROBE} and emits a rate-limited warn. The caller
@@ -73,16 +86,25 @@ public final class LevelTickDispatchProbes {
     /**
      * No-regionizer fallback: {@code worldId}'s world has no materialised
      * regionizer yet (no {@code ChunkEvent.Load} has fired, or the world
-     * is exiting). Bumps {@link #NO_REGIONIZER_SKIP_PROBE} and emits a
-     * rate-limited warn. Same shape as {@link #bootstrapSkip} otherwise.
+     * is exiting). Bumps {@link #NO_REGIONIZER_SKIP_PROBE} unconditionally
+     * — operators can always see the true per-world skip frequency via
+     * the probe counter — but emits a warn at most once per {@code
+     * worldId}, ever, after which that world falls silent. The warn site
+     * is {@code NO_REGIONIZER_SKIP_PROBE + "::" + worldId} so distinct
+     * worlds get distinct {@link ViolationLogger} rate-limit buckets on
+     * the rare occasion more than one world's first warn lands close
+     * together.
      *
-     * @param worldId the world's dimension id, used only in the warn message.
+     * @param worldId the world's dimension id, used both as part of the
+     *                 per-world warn-once key and in the warn message.
      */
     public static void noRegionizerSkip(String worldId) {
         ProbeRegistry.bump(NO_REGIONIZER_SKIP_PROBE);
-        ViolationLogger.warn(
-                NO_REGIONIZER_SKIP_PROBE,
-                "level " + worldId + " has no materialised regionizer yet — skipping this tick");
+        if (warnedNoRegionizer.putIfAbsent(worldId, Boolean.TRUE) == null) {
+            ViolationLogger.warn(
+                    NO_REGIONIZER_SKIP_PROBE + "::" + worldId,
+                    "level " + worldId + " has no materialised regionizer yet — skipping this tick");
+        }
     }
 
     /**
@@ -101,5 +123,10 @@ public final class LevelTickDispatchProbes {
                 DISPATCH_FAILURE_PROBE,
                 "tickAll failed for " + worldId + ": " + failure.getClass().getSimpleName() + ": "
                         + failure.getMessage());
+    }
+
+    /** Test-only: clears the per-world warn-once sentinel so per-test state doesn't leak. */
+    public static void resetForTesting() {
+        warnedNoRegionizer.clear();
     }
 }
