@@ -34,12 +34,9 @@ import net.minecraft.resources.ResourceLocation;
  * build does not depend on that module. Duplicate is the simplest fix.
  */
 public record DebugFramePayload(byte[] data) implements CustomPacketPayload {
+    public static final CustomPacketPayload.Type<DebugFramePayload> TYPE = new CustomPacketPayload.Type<>(ResourceLocation.parse("multiforge:debug/v1"));
 
-    public static final CustomPacketPayload.Type<DebugFramePayload> TYPE =
-            new CustomPacketPayload.Type<>(ResourceLocation.parse("multiforge:debug/v1"));
-
-    public static final StreamCodec<ByteBuf, DebugFramePayload> STREAM_CODEC =
-            ByteBufCodecs.BYTE_ARRAY.map(DebugFramePayload::new, DebugFramePayload::data);
+    public static final StreamCodec<ByteBuf, DebugFramePayload> STREAM_CODEC = ByteBufCodecs.BYTE_ARRAY.map(DebugFramePayload::new, DebugFramePayload::data);
 
     public DebugFramePayload {
         Objects.requireNonNull(data, "data");

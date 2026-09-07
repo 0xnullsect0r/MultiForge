@@ -79,7 +79,6 @@ import org.slf4j.LoggerFactory;
  * cycles cleanly.
  */
 public final class DebugChannelServer {
-
     private static final Logger LOGGER = LoggerFactory.getLogger("multiforge.debug");
 
     private static final AtomicBoolean MOD_BUS_INSTALLED = new AtomicBoolean(false);
