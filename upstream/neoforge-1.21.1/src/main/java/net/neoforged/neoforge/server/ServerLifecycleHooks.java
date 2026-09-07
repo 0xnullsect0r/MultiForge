@@ -197,17 +197,11 @@ public class ServerLifecycleHooks {
             net.multiforge.neoforge.globals.MultiForgeGlobalSystemsInit.install(mfHost, server);
         }
 
-        // MultiForge v1.3.5: wire /multiforge into Brigadier. Loads the
-        // config store + region-pin manager from <serverDir>/config/ and
-        // installs a RegisterCommandsEvent listener that binds
-        // /multiforge to a MultiForgeCommandDispatcher built from them.
-        // Pre-v1.3.5 the dispatcher class shipped in the runtime jar but
-        // was never wrapped in a Brigadier tree — every /multiforge
-        // command hit "Unknown or incomplete command" for both ops and
-        // the server console.
-        if (freshInstall) {
-            net.multiforge.neoforge.commands.MultiForgeCommandBinder.register(server);
-        }
+        // MultiForge v1.3.5-1.3.9 hook point moved to handleServerStarting
+        // in v1.3.10 — at AboutToStart, server.getCommands() is null (Commands
+        // is built inside loadLevel() which runs AFTER this method returns).
+        // See MultiForgeCommandBinder for the direct-dispatcher registration
+        // approach that replaces the earlier RegisterCommandsEvent listener.
 
         currentServer = server;
         // on the dedi server we need to force the stuff to setup properly
@@ -225,6 +219,14 @@ public class ServerLifecycleHooks {
                 GameTestHooks.registerGametests();
         }
         PermissionAPI.initializePermissionAPI();
+
+        // MultiForge v1.3.10: wire /multiforge directly into the server's
+        // command dispatcher now that loadLevel() has built Commands.
+        // Registration on the concrete dispatcher works reliably; the
+        // RegisterCommandsEvent listener approach used in v1.3.5-1.3.9
+        // never actually fired on the MultiForge-wrapped bus.
+        net.multiforge.neoforge.commands.MultiForgeCommandBinder.register(server);
+
         NeoForge.EVENT_BUS.post(new ServerStartingEvent(server));
     }
 
