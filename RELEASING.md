@@ -27,7 +27,10 @@ Standard release flow + fallback if the fork-installer CI job fails.
    - `multiforge-runtime-1.3.2.jar` (mod-author compile target)
    - `multiforge-installer-1.3.2.jar` (pure-Java stub installer; kept for compat but the fork installer is what actually works)
    - `multiforge-1.3.2-installer.jar` (**the fork installer — this is the one users install with**)
+   - `multiforge-installer.jar` (stable-alias copy of the fork installer)
    - `multiforge-1.3.2-replacement.zip` (drop-in overlay)
+   - `multiforge-client-1.3.2.jar` (optional client debug mod; NeoForge 1.21.1)
+   - `multiforge-client.jar` (stable-alias copy of the client mod)
    - `pelican-egg.json` (Pelican Panel / Pterodactyl egg)
 
    No further action needed.

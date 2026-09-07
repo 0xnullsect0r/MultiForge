@@ -25,7 +25,13 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v3
 
-      - name: Build release artifacts (pure-Java modules)
+      - name: Build release artifacts (pure-Java modules + client mod)
+        # v1.3.5: :multiforge-client compiles through moddev (NeoForm-produced
+        # vanilla + NeoForge merged) so the client debug mod ships as a
+        # real distributable jar. Heap bumped to 6G to match scanner.yml's
+        # fork-build (moddev's NeoForm decompile is the largest step).
+        env:
+          GRADLE_OPTS: -Xmx6G
         run: |
           ./gradlew \
             :multiforge-api:build \
@@ -33,6 +39,7 @@ jobs:
             :multiforge-scanner:build \
             :multiforge-installer:build \
             :multiforge-bench:build \
+            :multiforge-client:build \
             --no-daemon --stacktrace
 
       - name: Assemble release bundle
@@ -45,6 +52,19 @@ jobs:
           # Runtime library — mod authors compile against this.
           cp multiforge-runtime/build/libs/multiforge-runtime-*.jar "$RELEASE_DIR/" \
               2>/dev/null || cp multiforge-runtime/build/libs/*.jar "$RELEASE_DIR/"
+
+          # v1.3.5: client debug mod. Ships both a versioned filename and
+          # a stable-alias multiforge-client.jar so docs can link
+          # `.../releases/latest/download/multiforge-client.jar` without
+          # a version bump every release.
+          CLIENT_JAR=$(find multiforge-client/build/libs -maxdepth 1 -type f \
+              -name 'multiforge-client-*.jar' ! -name '*-sources.jar' | head -1)
+          if [ -n "$CLIENT_JAR" ]; then
+              cp "$CLIENT_JAR" "$RELEASE_DIR/"
+              cp "$CLIENT_JAR" "$RELEASE_DIR/multiforge-client.jar"
+          else
+              echo "::warning::multiforge-client jar not found under multiforge-client/build/libs — client debug mod will not ship in this release."
+          fi
 
           # Pure-Java installer jar (used ONLY by the build-zip subcommand
           # below to synthesize the drop-in replacement ZIP — never shipped
@@ -212,6 +232,12 @@ jobs:
               standard NeoForge installer CLI. See [docs/install.md § Method 1](https://github.com/${{ github.repository }}/blob/main/docs/install.md#method-1--fresh-installer-jar).
             - Drop-in replacement ZIP: `multiforge-*-replacement.zip`
             - Runtime library (for mod authors): `multiforge-runtime-*.jar`
+            - **Client debug mod: `multiforge-client-*.jar`**
+              (stable alias: [multiforge-client.jar](https://github.com/${{ github.repository }}/releases/latest/download/multiforge-client.jar))
+              Optional — drop into your Minecraft client's `mods/` folder
+              for the F3 overlay, chunk-border renderer, MSPT heatmap, and
+              region-pin selection. Stays inert if the server doesn't
+              advertise `multiforge:debug/v1`.
             - Pelican Panel / Pterodactyl egg: `pelican-egg.json`
               (import via panel: Nests → Import Egg — see
               [docs/install.md § Method 3](https://github.com/${{ github.repository }}/blob/main/docs/install.md#method-3--pelican-panel--pterodactyl-egg))

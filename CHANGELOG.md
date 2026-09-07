@@ -1,5 +1,29 @@
 # CHANGELOG
 
+## v1.3.5 — ship `multiforge-client` as a real mod jar + wire `/multiforge` into Brigadier
+
+Two user-visible correctness gaps closed in the same release.
+
+### Gap A — `multiforge-client` is now a distributable NeoForge mod jar
+
+Prior to v1.3.5 the client debug mod lived in the repo only as source: `multiforge-client/build.gradle.kts` carried a `compileOnly` on the NeoForge `-universal` classifier (only ~1.4k of the ~8k needed classes), six of the nine `.java` files failed to compile, and the built jar contained three classes and no `FMLModType` manifest — not a mod. `docs/install.md:288` pointed users at the source directory, which is a dead link from an install doc.
+
+- **`settings.gradle.kts`** — added `maven("https://maven.neoforged.net/releases")` to `pluginManagement.repositories { }` so the `net.neoforged.moddev` plugin resolves, and added `mavenLocal()` to `dependencyResolutionManagement.repositories { }` so the vendored fork's mavenLocal-published multiforge-runtime + multiforge-api artifacts are visible outer-side.
+- **`multiforge-client/build.gradle.kts`** — replaced the compileOnly-`:universal` workaround with the `net.neoforged.moddev` plugin (`version = "2.0.78"`), which supplies a real NeoForge compile classpath (NeoForm-produced vanilla + NeoForge patches, merged). Targets `neoForgeVersion=21.1.90` from the outer `gradle.properties`. Deleted the ~40-line comment block that documented the missing wiring.
+- **`multiforge-client/src/main/resources/META-INF/neoforge.mods.toml`** — dropped the `logoFile = "logo.png"` reference (no `logo.png` on disk); corrected the license field from `"Proprietary — see LICENSE …"` (stale, from pre-v1.2.0) to `"GPL-3.0-only"`; fixed the issue-tracker URL casing.
+- **`.github/workflows/release.yml`** — `build-jars` job now also runs `:multiforge-client:build`; the assemble step stages the built jar into `release/` under both `multiforge-client-<v>.jar` and stable-alias `multiforge-client.jar` (matches the fork installer's pattern so docs can link `.../releases/latest/download/multiforge-client.jar`). Release-body Downloads section describes the new asset. `GRADLE_OPTS=-Xmx6G` bumped to match `scanner.yml`'s fork-build (moddev's NeoForm decompile is the largest step).
+- **`docs/install.md`** — client-mod link swapped from source-dir path to stable-alias release URL, with drop-into-`mods/` instructions.
+- **`RELEASING.md`** — asset enumeration extended for `multiforge-client-*.jar` + `multiforge-client.jar` (and the previously-undocumented `multiforge-installer.jar` stable alias).
+
+### Gap B — `/multiforge` command is registered on Brigadier
+
+Live-verified on a v1.3.4 server: an op user typing `multiforge` in chat, and the server-console typing the same, both hit `Unknown or incomplete command … multiforge<--[HERE]`. `/neoforge` worked, so Brigadier was healthy. Root cause: `multiforge-runtime/src/main/java/net/multiforge/runtime/commands/MultiForgeCommandDispatcher.java` was a pure-Java parser (`Consumer<String>` output); no code anywhere in the runtime, fork, or patches wrapped it in a Brigadier tree, constructed it, or subscribed to `RegisterCommandsEvent`. The class shipped in the runtime jar but was unreachable. Every command documented in `README.md § In-game commands` was dead.
+
+- **`upstream/neoforge-1.21.1/src/main/java/net/multiforge/neoforge/commands/MultiForgeCommandBinder.java`** — new file. Loads `MultiForgeConfigStore` from `<serverDir>/config/multiforge-server.toml` and `RegionPinManager` from `<serverDir>/config/multiforge-region-pins.json` (both files are created on first successful mutation; missing/malformed files log a `ViolationLogger.warn` and fall back to defaults so the command tree still installs). Constructs a `MultiForgeCommandDispatcher(configStore, pins)` and registers a `RegisterCommandsEvent` listener on `NeoForge.EVENT_BUS` that binds `/multiforge` to a Brigadier tree with a greedy-string args argument. `.requires(src -> src.hasPermission(2))` restricts to ops + server console per README's "op-only" language.
+- **`upstream/neoforge-1.21.1/src/main/java/net/neoforged/neoforge/server/ServerLifecycleHooks.java`** — call `MultiForgeCommandBinder.register(server)` from `handleServerAboutToStart`, gated on the same `freshInstall` flag used by `MultiForgeGlobalSystemsInit.install(...)` so a re-used GameTestServer JVM doesn't double-register the command.
+
+Follow-up gap not in v1.3.5 scope: `/multiforge config cores N` writes to disk but the live `MultiForgeConfig` inside `MultiThreadedSchedulerHost` isn't re-plumbed to the store's `subscribe(...)` hook, so worker-pool changes still require a restart. Same pre-existing limitation as M6; separate M-milestone.
+
 ## v1.3.4 — fix `processResources` rename bug that crashed boot + fix README EULA step
 
 v1.3.3 got the fork installer down the wire correctly, but the resulting server crashed on boot with:

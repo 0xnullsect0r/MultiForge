@@ -285,7 +285,7 @@ Then, from an op-level in-game console or RCON:
 /multiforge probe event.dispatch  # verify M12 event routing is live
 ```
 
-For deep observability (region borders, MSPT heatmap, live pin selection) install the [MultiForge client debug mod](../multiforge-client/) on your Minecraft client — connects automatically to any MultiForge server.
+For deep observability (region borders, MSPT heatmap, live pin selection) download the [MultiForge client debug mod](https://github.com/0xnullsect0r/MultiForge/releases/latest/download/multiforge-client.jar) and drop it into your Minecraft client's `mods/` folder. It loads on any NeoForge 1.21.1 client and stays inert until you connect to a MultiForge server (which advertises the `multiforge:debug/v1` channel).
 
 ---
 

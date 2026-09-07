@@ -2,6 +2,10 @@ pluginManagement {
     repositories {
         gradlePluginPortal()
         mavenCentral()
+        // v1.3.5: `net.neoforged.moddev` plugin lives here.
+        maven("https://maven.neoforged.net/releases") {
+            name = "NeoForge"
+        }
     }
 }
 
@@ -12,6 +16,11 @@ dependencyResolutionManagement {
         maven("https://maven.neoforged.net/releases") {
             name = "NeoForge"
         }
+        // v1.3.5: the vendored fork's mavenLocal-published artifacts
+        // (multiforge-runtime, multiforge-api) become visible outer-side
+        // so :multiforge-client can resolve its runtime dep without
+        // needing to re-publish through Maven Central.
+        mavenLocal()
     }
 }
 
