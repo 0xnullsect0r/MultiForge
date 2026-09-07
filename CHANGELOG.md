@@ -1,5 +1,26 @@
 # CHANGELOG
 
+## v1.3.12 — bundle `multiforge-runtime` + `multiforge-api` classes into `multiforge-client.jar`
+
+v1.3.11 got `multiforge-client.jar` past FML's mods.toml parse, but the mod then crashed at construct-time on a stock NeoForge 21.1.249 client with:
+
+```
+java.lang.NoClassDefFoundError: net/multiforge/runtime/diagnostics/wire/DebugPayload$PinList
+  at net.multiforge.client.DebugHudState.<init>(DebugHudState.java:41)
+```
+
+Root cause: the client jar contained only `net.multiforge.client.*` classes. `DebugHudState`, `DebugPayloadRegistration`, and the four renderers reference wire-protocol types from `net.multiforge.runtime.diagnostics.wire.*` (`DebugPayload` + its inner records, `DebugPacketCodec`, `DebugPacketKind`) — those classes ship in `multiforge-runtime.jar`, which is embedded as `META-INF/jarjar/multiforge-runtime-*.jar` inside the fork's universal jar server-side, but has no path onto a stock NeoForge client. The `implementation(project(":multiforge-runtime"))` gradle dep resolved the classes at *compile* time but the shipped jar's runtime classpath had nothing.
+
+- **multiforge-client/build.gradle.kts** — new `tasks.jar { from(zipTree(...)) }` block that merges `multiforge-runtime`'s and `multiforge-api`'s class files directly into the client jar. Server-only runtime classes come along as dead code (harmless — class-loading is lazy; the client execution path never touches region/scheduler/chunk classes). Explicit excludes:
+  - `META-INF/services/**` — avoids a v1.3.4-style `securejarhandler` "Invalid service type name" crash from the runtime's `SchedulerHost` SPI file landing in the client jar's module descriptor.
+  - `META-INF/MANIFEST.MF` — client keeps its own manifest, no duplicate error.
+  - `META-INF/maven/**` — drops the mavenLocal-published pom debris from the merge.
+  - `multiforge-runtime.properties*` — pre-existing runtime-jar debris (the template file that survives runtime's `processResources` when the `filesMatching` pattern doesn't match); belongs in the runtime jar cleanup, not the client jar.
+
+Also (same release):
+- **`/multiforge help`** — new subcommand printing an intuitive one-screen reference for every `/multiforge` subcommand (worker pool / region topology / diagnostics / scanner). Same output now fires on a bare `/multiforge` too (previously printed a terse `Usage: /multiforge <config|region|…>` line). Aliases: `help`, `?`, `--help`, `-h`. `Unknown subcommand` responses now direct the user to `/multiforge help`.
+- **Tab-completion for `/multiforge`** — `MultiForgeCommandBinder` now builds a full Brigadier tree instead of a single greedy-string catchall. Ops get real Brigadier autocomplete on every subcommand, argument-type checking (integer args are bounded — e.g. `config cores 1..128`, `region size 1..256`), and typed suggestions (`region mode` offers `player-only` / `full-world`; `region pin <id> <world>` and `chunks <world>` suggest the loaded dimensions via `SharedSuggestionProvider.suggestResource`). Every terminal node still routes through the same `MultiForgeCommandDispatcher.dispatch(String[], Consumer<String>)` so subcommand behavior stays centralized in the runtime.
+
 ## v1.3.11 — expand `${version}` in `multiforge-client`'s `neoforge.mods.toml`
 
 Every release from v1.3.7 through v1.3.10 shipped a `multiforge-client.jar` with a literal `version = "${version}"` in its bundled `META-INF/neoforge.mods.toml` — FML rejects it at scan with `Illegal version number specified version` and refuses to load the mod. Reported by a user who dropped `multiforge-client.jar` into a stock NeoForge 21.1.249 client's `mods/` folder:

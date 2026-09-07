@@ -149,10 +149,14 @@ public final class MultiForgeCommandDispatcher {
         Objects.requireNonNull(args, "args");
         Objects.requireNonNull(output, "output");
         if (args.length == 0) {
-            output.accept("Usage: /multiforge <config|region|probes|chunks|warn|certify> ...");
-            return false;
+            printHelp(output);
+            return true;
         }
         return switch (args[0]) {
+            case "help", "?", "--help", "-h" -> {
+                printHelp(output);
+                yield true;
+            }
             case "config" -> handleConfig(args, output);
             case "region" -> handleRegion(args, output);
             case "probes" -> handleProbes(args, output);
@@ -160,10 +164,49 @@ public final class MultiForgeCommandDispatcher {
             case "warn" -> handleWarn(args, output);
             case "certify" -> handleCertify(args, output);
             default -> {
-                output.accept("Unknown subcommand: " + args[0]);
+                output.accept("Unknown subcommand: " + args[0] + ". Try `/multiforge help`.");
                 yield false;
             }
         };
+    }
+
+    /**
+     * Op-visible help — one intuitive one-screen reference for every
+     * {@code /multiforge} subcommand. Also fired by the bare {@code
+     * /multiforge} form so a new operator who doesn't know the tree
+     * gets guidance instead of a bare "Usage:" line.
+     */
+    private void printHelp(Consumer<String> output) {
+        output.accept("=== MultiForge commands (op only) ===");
+        output.accept("");
+        output.accept("Worker pool + region sizing (persists to config/multiforge-server.toml):");
+        output.accept("  /multiforge config cores <n>       — worker-pool cores (1..N-1 physical)");
+        output.accept("  /multiforge config threads <n>     — threads per core (1 or 2 typical)");
+        output.accept("");
+        output.accept("Region topology:");
+        output.accept("  /multiforge region list            — show materialized regions + owners");
+        output.accept("  /multiforge region size <chunks>   — square region edge in chunks (power of 2, 1..256)");
+        output.accept("  /multiforge region mode <m>        — m = player-only | full-world");
+        output.accept("  /multiforge region pin <id> <world> <fromCX> <fromCZ> <toCX> <toCZ>");
+        output.accept("                                     — pin a rectangle to prevent auto merge/split");
+        output.accept("  /multiforge region unpin <id>      — release a pinned region");
+        output.accept("");
+        output.accept("Diagnostics:");
+        output.accept("  /multiforge probes                 — dump every ProbeRegistry counter");
+        output.accept("  /multiforge probes <prefix>        — filter, e.g. `probes region-tick`");
+        output.accept("  /multiforge chunks <world>         — M9 chunk-shadow summary for one world");
+        output.accept("                                     — world = namespaced id, e.g. minecraft:overworld");
+        output.accept("  /multiforge warn list              — recent ViolationLogger events");
+        output.accept("  /multiforge warn clear             — reset the violation history ring buffer");
+        output.accept("");
+        output.accept("Mod-safety scanner:");
+        output.accept("  /multiforge certify <modId>        — scan one mod jar under ./mods");
+        output.accept("  /multiforge certify all            — scan every jar under ./mods");
+        output.accept("");
+        output.accept("Also:");
+        output.accept("  /multiforge help                   — this reference");
+        output.accept("");
+        output.accept("Docs: https://github.com/0xnullsect0r/MultiForge/blob/main/docs/blueprint.md");
     }
 
     /**
