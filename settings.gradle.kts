@@ -10,7 +10,13 @@ pluginManagement {
 }
 
 dependencyResolutionManagement {
-    repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+    // PREFER_SETTINGS (softened from FAIL_ON_PROJECT_REPOS in v1.3.5) —
+    // net.neoforged.moddev's RepositoriesPlugin adds "Mojang Minecraft
+    // Libraries" at project scope during application; FAIL_ON_PROJECT_REPOS
+    // treats that as an error. PREFER_SETTINGS lets moddev add its
+    // required repos (with a warning) while still preferring
+    // settings-declared repos everywhere else.
+    repositoriesMode.set(RepositoriesMode.PREFER_SETTINGS)
     repositories {
         mavenCentral()
         maven("https://maven.neoforged.net/releases") {
