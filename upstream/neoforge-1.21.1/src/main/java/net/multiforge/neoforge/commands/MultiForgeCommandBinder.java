@@ -12,11 +12,17 @@
  */
 package net.multiforge.neoforge.commands;
 
+import com.mojang.brigadier.arguments.IntegerArgumentType;
 import com.mojang.brigadier.arguments.StringArgumentType;
+import com.mojang.brigadier.builder.LiteralArgumentBuilder;
+import com.mojang.brigadier.context.CommandContext;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.stream.Stream;
+import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.commands.Commands;
+import net.minecraft.commands.SharedSuggestionProvider;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.MinecraftServer;
 import net.multiforge.runtime.commands.MultiForgeCommandDispatcher;
@@ -27,37 +33,21 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * Wraps {@link MultiForgeCommandDispatcher} in a Brigadier tree rooted
- * at {@code /multiforge} and registers it directly on the server's
- * command dispatcher. Op-only ({@code source.hasPermission(2)}), per
- * {@code README.md § In-game commands}.
+ * Builds the {@code /multiforge} Brigadier tree and registers it
+ * directly on the server's command dispatcher from {@code
+ * handleServerStarting}. Every terminal node routes through the same
+ * {@link MultiForgeCommandDispatcher} so subcommand behavior stays
+ * centralized in the runtime module — the tree here only exists for
+ * tab-completion and argument-typing.
  *
- * <p>Called from {@link net.neoforged.neoforge.server.ServerLifecycleHooks#handleServerStarting}
- * (not {@code AboutToStart}) so {@code server.getCommands()} is already
- * initialized — {@code loadLevel()} constructs {@code
- * ReloadableServerResources} which owns {@code Commands}, so by the
- * time {@code handleServerStarting} runs the dispatcher exists.
- *
- * <p>Direct registration bypasses {@code RegisterCommandsEvent}
- * entirely. v1.3.7 and v1.3.8 both proved (via log-line instrumentation)
- * that both {@code NeoForge.EVENT_BUS.addListener(Class, Consumer)} and
- * {@code register(Object)} with {@code @SubscribeEvent} DO successfully
- * register a listener on the MultiForge-wrapped bus, yet the listener
- * never fires when {@code RegisterCommandsEvent} is posted. Rather
- * than chase that mystery, this class registers on the concrete
- * dispatcher instead — same effect, no event-bus dependency.
+ * <p>Op-only ({@code source.hasPermission(2)}), per {@code README.md
+ * § In-game commands}.
  */
 public final class MultiForgeCommandBinder {
     private static final Logger LOGGER = LoggerFactory.getLogger("multiforge.commands");
 
     private MultiForgeCommandBinder() {}
 
-    /**
-     * Load the config store + pin manager from the server directory and
-     * add the {@code /multiforge} subtree to the server's command
-     * dispatcher. Idempotent per server instance — a re-invocation for
-     * a reused GameTestServer JVM overwrites the previous registration.
-     */
     public static void register(MinecraftServer server) {
         Path serverDir = server.getServerDirectory().toAbsolutePath();
         Path configFile = serverDir.resolve("config").resolve("multiforge-server.toml");
@@ -88,31 +78,116 @@ public final class MultiForgeCommandBinder {
         MultiForgeCommandDispatcher dispatcher = new MultiForgeCommandDispatcher(configStore, pins);
 
         try {
-            server.getCommands()
-                    .getDispatcher()
-                    .register(Commands.literal("multiforge")
-                            .requires(src -> src.hasPermission(2))
-                            .executes(ctx -> {
-                                dispatcher.dispatch(
-                                        new String[0],
-                                        msg -> ctx.getSource().sendSuccess(() -> Component.literal(msg), false));
-                                return 1;
-                            })
-                            .then(Commands.argument("args", StringArgumentType.greedyString())
-                                    .executes(ctx -> {
-                                        String raw = StringArgumentType.getString(ctx, "args")
-                                                .trim();
-                                        String[] tokens = raw.isEmpty() ? new String[0] : raw.split("\\s+");
-                                        dispatcher.dispatch(
-                                                tokens,
-                                                msg -> ctx.getSource().sendSuccess(() -> Component.literal(msg), false));
-                                        return 1;
-                                    })));
-            LOGGER.info("MultiForge: /multiforge command registered directly on server's Brigadier dispatcher");
+            server.getCommands().getDispatcher().register(buildTree(dispatcher));
+            LOGGER.info("MultiForge: /multiforge Brigadier tree registered with tab-completion");
         } catch (Throwable t) {
             ViolationLogger.warn(
                     "MultiForgeCommandBinder.register",
                     "failed to register /multiforge on the server's dispatcher: " + t.getMessage());
         }
+    }
+
+    private static LiteralArgumentBuilder<CommandSourceStack> buildTree(MultiForgeCommandDispatcher dispatcher) {
+        return Commands.literal("multiforge")
+                .requires(src -> src.hasPermission(2))
+                .executes(ctx -> run(dispatcher, ctx)) // bare `/multiforge` → help
+                .then(Commands.literal("help").executes(ctx -> run(dispatcher, ctx, "help")))
+                .then(configSubtree(dispatcher))
+                .then(regionSubtree(dispatcher))
+                .then(probesSubtree(dispatcher))
+                .then(chunksSubtree(dispatcher))
+                .then(warnSubtree(dispatcher))
+                .then(certifySubtree(dispatcher));
+    }
+
+    private static LiteralArgumentBuilder<CommandSourceStack> configSubtree(MultiForgeCommandDispatcher dispatcher) {
+        return Commands.literal("config")
+                .then(Commands.literal("cores")
+                        .then(Commands.argument("n", IntegerArgumentType.integer(1, 128))
+                                .executes(ctx -> run(dispatcher, ctx, "config", "cores", intArg(ctx, "n")))))
+                .then(Commands.literal("threads")
+                        .then(Commands.argument("n", IntegerArgumentType.integer(1, 8))
+                                .executes(ctx -> run(dispatcher, ctx, "config", "threads", intArg(ctx, "n")))));
+    }
+
+    private static LiteralArgumentBuilder<CommandSourceStack> regionSubtree(MultiForgeCommandDispatcher dispatcher) {
+        return Commands.literal("region")
+                .then(Commands.literal("list").executes(ctx -> run(dispatcher, ctx, "region", "list")))
+                .then(Commands.literal("size")
+                        .then(Commands.argument("chunks", IntegerArgumentType.integer(1, 256))
+                                .executes(ctx -> run(dispatcher, ctx, "region", "size", intArg(ctx, "chunks")))))
+                .then(Commands.literal("mode")
+                        .then(Commands.argument("mode", StringArgumentType.word())
+                                .suggests((ctx, b) -> SharedSuggestionProvider.suggest(
+                                        Stream.of("player-only", "full-world"), b))
+                                .executes(ctx -> run(dispatcher, ctx, "region", "mode", strArg(ctx, "mode")))))
+                .then(Commands.literal("pin")
+                        .then(Commands.argument("id", StringArgumentType.word())
+                                .then(Commands.argument("world", StringArgumentType.string())
+                                        .suggests((ctx, b) -> SharedSuggestionProvider.suggestResource(
+                                                ctx.getSource().levels().stream()
+                                                        .map(level -> level.location()),
+                                                b))
+                                        .then(Commands.argument("fromCX", IntegerArgumentType.integer())
+                                                .then(Commands.argument("fromCZ", IntegerArgumentType.integer())
+                                                        .then(Commands.argument("toCX", IntegerArgumentType.integer())
+                                                                .then(Commands.argument("toCZ", IntegerArgumentType.integer())
+                                                                        .executes(ctx -> run(
+                                                                                dispatcher,
+                                                                                ctx,
+                                                                                "region",
+                                                                                "pin",
+                                                                                strArg(ctx, "id"),
+                                                                                strArg(ctx, "world"),
+                                                                                intArg(ctx, "fromCX"),
+                                                                                intArg(ctx, "fromCZ"),
+                                                                                intArg(ctx, "toCX"),
+                                                                                intArg(ctx, "toCZ")))))))))))
+                .then(Commands.literal("unpin")
+                        .then(Commands.argument("id", StringArgumentType.word())
+                                .executes(ctx -> run(dispatcher, ctx, "region", "unpin", strArg(ctx, "id")))));
+    }
+
+    private static LiteralArgumentBuilder<CommandSourceStack> probesSubtree(MultiForgeCommandDispatcher dispatcher) {
+        return Commands.literal("probes")
+                .executes(ctx -> run(dispatcher, ctx, "probes"))
+                .then(Commands.argument("prefix", StringArgumentType.greedyString())
+                        .suggests((ctx, b) -> SharedSuggestionProvider.suggest(
+                                Stream.of("region-tick", "chunk-system", "event-dispatch", "ownership"), b))
+                        .executes(ctx -> run(dispatcher, ctx, "probes", strArg(ctx, "prefix"))));
+    }
+
+    private static LiteralArgumentBuilder<CommandSourceStack> chunksSubtree(MultiForgeCommandDispatcher dispatcher) {
+        return Commands.literal("chunks")
+                .then(Commands.argument("world", StringArgumentType.string())
+                        .suggests((ctx, b) -> SharedSuggestionProvider.suggestResource(
+                                ctx.getSource().levels().stream().map(level -> level.location()), b))
+                        .executes(ctx -> run(dispatcher, ctx, "chunks", strArg(ctx, "world"))));
+    }
+
+    private static LiteralArgumentBuilder<CommandSourceStack> warnSubtree(MultiForgeCommandDispatcher dispatcher) {
+        return Commands.literal("warn")
+                .then(Commands.literal("list").executes(ctx -> run(dispatcher, ctx, "warn", "list")))
+                .then(Commands.literal("clear").executes(ctx -> run(dispatcher, ctx, "warn", "clear")));
+    }
+
+    private static LiteralArgumentBuilder<CommandSourceStack> certifySubtree(MultiForgeCommandDispatcher dispatcher) {
+        return Commands.literal("certify")
+                .then(Commands.literal("all").executes(ctx -> run(dispatcher, ctx, "certify", "all")))
+                .then(Commands.argument("modId", StringArgumentType.word())
+                        .executes(ctx -> run(dispatcher, ctx, "certify", strArg(ctx, "modId"))));
+    }
+
+    private static int run(MultiForgeCommandDispatcher dispatcher, CommandContext<CommandSourceStack> ctx, String... args) {
+        dispatcher.dispatch(args, msg -> ctx.getSource().sendSuccess(() -> Component.literal(msg), false));
+        return 1;
+    }
+
+    private static String strArg(CommandContext<CommandSourceStack> ctx, String name) {
+        return StringArgumentType.getString(ctx, name);
+    }
+
+    private static String intArg(CommandContext<CommandSourceStack> ctx, String name) {
+        return String.valueOf(IntegerArgumentType.getInteger(ctx, name));
     }
 }

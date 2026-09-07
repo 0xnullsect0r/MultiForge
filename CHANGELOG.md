@@ -17,8 +17,9 @@ Root cause: the client jar contained only `net.multiforge.client.*` classes. `De
   - `META-INF/maven/**` — drops the mavenLocal-published pom debris from the merge.
   - `multiforge-runtime.properties*` — pre-existing runtime-jar debris (the template file that survives runtime's `processResources` when the `filesMatching` pattern doesn't match); belongs in the runtime jar cleanup, not the client jar.
 
-Also (small, same release):
+Also (same release):
 - **`/multiforge help`** — new subcommand printing an intuitive one-screen reference for every `/multiforge` subcommand (worker pool / region topology / diagnostics / scanner). Same output now fires on a bare `/multiforge` too (previously printed a terse `Usage: /multiforge <config|region|…>` line). Aliases: `help`, `?`, `--help`, `-h`. `Unknown subcommand` responses now direct the user to `/multiforge help`.
+- **Tab-completion for `/multiforge`** — `MultiForgeCommandBinder` now builds a full Brigadier tree instead of a single greedy-string catchall. Ops get real Brigadier autocomplete on every subcommand, argument-type checking (integer args are bounded — e.g. `config cores 1..128`, `region size 1..256`), and typed suggestions (`region mode` offers `player-only` / `full-world`; `region pin <id> <world>` and `chunks <world>` suggest the loaded dimensions via `SharedSuggestionProvider.suggestResource`). Every terminal node still routes through the same `MultiForgeCommandDispatcher.dispatch(String[], Consumer<String>)` so subcommand behavior stays centralized in the runtime.
 
 ## v1.3.11 — expand `${version}` in `multiforge-client`'s `neoforge.mods.toml`
 
