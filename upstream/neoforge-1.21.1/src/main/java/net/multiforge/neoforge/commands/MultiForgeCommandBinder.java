@@ -121,31 +121,40 @@ public final class MultiForgeCommandBinder {
                                 .suggests((ctx, b) -> SharedSuggestionProvider.suggest(
                                         Stream.of("player-only", "full-world"), b))
                                 .executes(ctx -> run(dispatcher, ctx, "region", "mode", strArg(ctx, "mode")))))
-                .then(Commands.literal("pin")
-                        .then(Commands.argument("id", StringArgumentType.word())
-                                .then(Commands.argument("world", StringArgumentType.string())
-                                        .suggests((ctx, b) -> SharedSuggestionProvider.suggestResource(
-                                                ctx.getSource().levels().stream()
-                                                        .map(level -> level.location()),
-                                                b))
-                                        .then(Commands.argument("fromCX", IntegerArgumentType.integer())
-                                                .then(Commands.argument("fromCZ", IntegerArgumentType.integer())
-                                                        .then(Commands.argument("toCX", IntegerArgumentType.integer())
-                                                                .then(Commands.argument("toCZ", IntegerArgumentType.integer())
-                                                                        .executes(ctx -> run(
-                                                                                dispatcher,
-                                                                                ctx,
-                                                                                "region",
-                                                                                "pin",
-                                                                                strArg(ctx, "id"),
-                                                                                strArg(ctx, "world"),
-                                                                                intArg(ctx, "fromCX"),
-                                                                                intArg(ctx, "fromCZ"),
-                                                                                intArg(ctx, "toCX"),
-                                                                                intArg(ctx, "toCZ")))))))))))
+                .then(pinSubtree(dispatcher))
                 .then(Commands.literal("unpin")
                         .then(Commands.argument("id", StringArgumentType.word())
                                 .executes(ctx -> run(dispatcher, ctx, "region", "unpin", strArg(ctx, "id")))));
+    }
+
+    /**
+     * `/multiforge region pin <id> <world> <fromCX> <fromCZ> <toCX> <toCZ>` —
+     * broken into a helper so the deeply-nested Brigadier tree doesn't
+     * exceed Google-Java-Format's parser depth.
+     */
+    private static LiteralArgumentBuilder<CommandSourceStack> pinSubtree(MultiForgeCommandDispatcher dispatcher) {
+        // Build inside-out so we avoid Java 21 parser limits and keep it readable.
+        var toCZ = Commands.argument("toCZ", IntegerArgumentType.integer())
+                .executes(ctx -> run(
+                        dispatcher,
+                        ctx,
+                        "region",
+                        "pin",
+                        strArg(ctx, "id"),
+                        strArg(ctx, "world"),
+                        intArg(ctx, "fromCX"),
+                        intArg(ctx, "fromCZ"),
+                        intArg(ctx, "toCX"),
+                        intArg(ctx, "toCZ")));
+        var toCX = Commands.argument("toCX", IntegerArgumentType.integer()).then(toCZ);
+        var fromCZ = Commands.argument("fromCZ", IntegerArgumentType.integer()).then(toCX);
+        var fromCX = Commands.argument("fromCX", IntegerArgumentType.integer()).then(fromCZ);
+        var world = Commands.argument("world", StringArgumentType.string())
+                .suggests((ctx, b) -> SharedSuggestionProvider.suggestResource(
+                        ctx.getSource().levels().stream().map(level -> level.location()), b))
+                .then(fromCX);
+        var id = Commands.argument("id", StringArgumentType.word()).then(world);
+        return Commands.literal("pin").then(id);
     }
 
     private static LiteralArgumentBuilder<CommandSourceStack> probesSubtree(MultiForgeCommandDispatcher dispatcher) {
