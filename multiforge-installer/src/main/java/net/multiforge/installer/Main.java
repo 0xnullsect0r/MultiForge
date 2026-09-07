@@ -222,16 +222,42 @@ public final class Main {
     // ---- payloads -------------------------------------------------------
 
     private static String runShScript() {
+        // v1.3.18: preflight JDK version. MultiForge + NeoForge 1.21.1
+        // require JDK 21 exactly. Booting on JDK 22+ crashes at
+        // mod-scan when any bundled SpongeMixin transformer tries to
+        // read a class file with major version > 65 (Java 21). We
+        // catch that before the launcher runs and give a clear
+        // remediation message instead of the deep mixin trace.
         return """
                 #!/usr/bin/env bash
                 # MultiForge server launcher.
                 set -euo pipefail
                 cd "$(dirname "$0")"
 
+                if [ -n "${JAVA_HOME:-}" ] && [ -x "$JAVA_HOME/bin/java" ]; then
+                    JAVA_BIN="$JAVA_HOME/bin/java"
+                else
+                    JAVA_BIN="$(command -v java || true)"
+                fi
+                if [ -z "$JAVA_BIN" ]; then
+                    echo "MultiForge: no java on PATH and JAVA_HOME is unset. Install Temurin 21." >&2
+                    exit 1
+                fi
+                JAVA_MAJOR=$("$JAVA_BIN" -version 2>&1 | awk -F '"' '/version/ { split($2, a, "."); print a[1]; exit }')
+                if [ "${JAVA_MAJOR:-0}" != "21" ]; then
+                    cat >&2 <<'PREFLIGHT_FAIL'
+                MultiForge requires JDK 21. Found: ${JAVA_MAJOR:-unknown} at $JAVA_BIN.
+                Point $JAVA_HOME at a JDK 21 install (Temurin 21 recommended) and retry.
+                Any 1.21.1 modpack that uses SpongeMixin (ATM10, ATM9, most kitchen-sink packs)
+                crashes on JDK 22+ with "Unsupported class file major version 7X" at mod-scan.
+                PREFLIGHT_FAIL
+                    exit 1
+                fi
+
                 MEMORY="${MEMORY:-4G}"
                 JVM_OPTS="${JVM_OPTS:-}"
 
-                exec java -Xms${MEMORY} -Xmx${MEMORY} ${JVM_OPTS} \\
+                exec "$JAVA_BIN" -Xms${MEMORY} -Xmx${MEMORY} ${JVM_OPTS} \\
                     -cp "libraries/multiforge/*" \\
                     net.multiforge.runtime.bootstrap.Main "$@"
                 """;
@@ -242,9 +268,26 @@ public final class Main {
                 @echo off
                 REM MultiForge server launcher.
                 cd /d "%~dp0"
+
+                REM v1.3.18: preflight JDK version.
+                if defined JAVA_HOME (
+                    set JAVA_BIN="%JAVA_HOME%\\bin\\java.exe"
+                ) else (
+                    set JAVA_BIN=java
+                )
+                for /f "tokens=3" %%v in ('%JAVA_BIN% -version 2^>^&1 ^| findstr /i "version"') do (
+                    set JAVA_VER=%%~v
+                )
+                for /f "delims=. tokens=1" %%m in ("%JAVA_VER%") do set JAVA_MAJOR=%%m
+                if not "%JAVA_MAJOR%"=="21" (
+                    echo MultiForge requires JDK 21. Found: %JAVA_MAJOR% at %JAVA_BIN%.
+                    echo Point JAVA_HOME at a JDK 21 install ^(Temurin 21 recommended^) and retry.
+                    exit /b 1
+                )
+
                 if "%MEMORY%"=="" set MEMORY=4G
 
-                java -Xms%MEMORY% -Xmx%MEMORY% %JVM_OPTS% ^
+                %JAVA_BIN% -Xms%MEMORY% -Xmx%MEMORY% %JVM_OPTS% ^
                     -cp "libraries\\multiforge\\*" ^
                     net.multiforge.runtime.bootstrap.Main %*
                 """;

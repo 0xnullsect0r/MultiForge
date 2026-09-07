@@ -10,7 +10,11 @@ MultiForge ships three install methods, each suited to a different starting poin
 
 All three land the same runtime + patched NeoForge fork. Post-install steps (EULA, `multiforge-server.toml`, mods, world) are the same regardless of how you installed.
 
-**Requirements** — Java 21, 8 GB RAM per typical server (adjust via `-Xmx`), MC 1.21.1 server directory shape (`world/`, `mods/`, `config/`, `eula.txt`).
+**Requirements**
+
+- **JDK 21 exactly.** MultiForge (like NeoForge 1.21.1 itself) does *not* run on JDK 22 or newer. Any 1.21.1 modpack that uses SpongeMixin (ATM10, ATM9, AllTheModsX, most kitchen-sink packs) crashes at mod-scan with `Unsupported class file major version 7X` on JDK 22+ because the bundled mixin transformer's class-file reader only understands Java 21 bytecode. Common trap: `java -version` shows JDK 24/25/26 because you installed the "latest" JDK from your distro. Install Temurin 21 (`brew install temurin@21` / `apt install temurin-21-jdk` / `pacman -S jdk21-temurin`) and either set `JAVA_HOME=/path/to/jdk-21` or invoke the launcher with an explicit path (`JAVA_HOME=/usr/lib/jvm/temurin-21-jdk ./run.sh`). As of v1.3.18 the launcher scripts refuse to run on the wrong JDK with a clear remediation message.
+- **8 GB RAM** per typical server (adjust via `-Xmx`).
+- **MC 1.21.1 server directory shape**: `world/`, `mods/`, `config/`, `eula.txt`.
 
 **License** — MultiForge is [GPL-3.0-only](../LICENSE). No token, no activation, no phone-home.
 
@@ -290,6 +294,8 @@ For deep observability (region borders, MSPT heatmap, live pin selection) downlo
 ---
 
 ## Troubleshooting
+
+**"Unsupported class file major version 7X" at mod scan.** Your `java` is a JDK newer than 21 (`70` = JDK 26, `69` = JDK 25, `68` = JDK 24, `67` = JDK 23, `66` = JDK 22). SpongeMixin — bundled by nearly every 1.21.1 mod, including everything in ATM10 / AllTheModsX / most kitchen-sink packs — ships a class-file reader that only understands Java 21 bytecode and rejects anything newer, which crashes mod-loading before MultiForge or NeoForge ever gets a chance to run. Fix: install Temurin 21 (`sudo pacman -S jdk21-temurin` / `apt install temurin-21-jdk` / `brew install temurin@21`), then re-invoke the launcher with an explicit JDK path — for example `JAVA_HOME=/usr/lib/jvm/temurin-21-jdk ./run.sh`. As of v1.3.18 the installer-generated `run.sh` refuses to run on the wrong JDK with this message and a non-zero exit. See Requirements above.
 
 **Server won't boot: `error: cannot find symbol` / `NoClassDefFoundError`.** The runtime jar didn't land on the classpath. Verify `libraries/multiforge/multiforge-runtime.jar` exists and is non-empty (`ls -la libraries/multiforge/`).
 
