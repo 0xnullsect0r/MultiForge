@@ -31,3 +31,18 @@ dependencies {
     testImplementation("org.junit.jupiter:junit-jupiter:5.10.3")
     testImplementation("org.assertj:assertj-core:3.26.3")
 }
+
+// v1.3.11: neoforge.mods.toml carries `version = "${version}"` which
+// moddev 2.0.78 does NOT auto-expand. Without this block the shipped
+// jar contains the literal string "${version}", and FML rejects the
+// mod at scan with "Illegal version number specified version". Mirrors
+// the pattern in multiforge-runtime/build.gradle.kts (processResources
+// + filesMatching + expand). No buildTime token here — that would
+// defeat Gradle's build cache and the mods.toml has no such need.
+tasks.processResources {
+    val tokens = mapOf("version" to project.version.toString())
+    inputs.properties(tokens)
+    filesMatching("META-INF/neoforge.mods.toml") {
+        expand(tokens)
+    }
+}
