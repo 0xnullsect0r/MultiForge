@@ -25,6 +25,8 @@ import net.multiforge.runtime.diagnostics.ViolationLogger;
 import net.multiforge.runtime.region.pin.RegionPinManager;
 import net.neoforged.neoforge.common.NeoForge;
 import net.neoforged.neoforge.event.RegisterCommandsEvent;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * Wraps {@link MultiForgeCommandDispatcher} in a Brigadier tree rooted
@@ -44,6 +46,8 @@ import net.neoforged.neoforge.event.RegisterCommandsEvent;
  * harnesses use ephemeral tmpdirs).
  */
 public final class MultiForgeCommandBinder {
+    private static final Logger LOGGER = LoggerFactory.getLogger("multiforge.commands");
+
     private MultiForgeCommandBinder() {}
 
     /**
@@ -82,25 +86,33 @@ public final class MultiForgeCommandBinder {
             pins = new RegionPinManager(pinsFile);
         }
 
-        MultiForgeCommandDispatcher dispatcher = new MultiForgeCommandDispatcher(configStore, pins);
+        final MultiForgeCommandDispatcher dispatcher = new MultiForgeCommandDispatcher(configStore, pins);
+        LOGGER.info("MultiForge: /multiforge command binder attaching RegisterCommandsEvent listener");
 
-        NeoForge.EVENT_BUS.addListener((RegisterCommandsEvent event) -> event.getDispatcher()
-                .register(Commands.literal("multiforge")
-                        .requires(src -> src.hasPermission(2))
-                        .executes(ctx -> {
-                            dispatcher.dispatch(
-                                    new String[0],
-                                    msg -> ctx.getSource().sendSuccess(() -> Component.literal(msg), false));
-                            return 1;
-                        })
-                        .then(Commands.argument("args", StringArgumentType.greedyString())
-                                .executes(ctx -> {
-                                    String raw = StringArgumentType.getString(ctx, "args").trim();
-                                    String[] tokens = raw.isEmpty() ? new String[0] : raw.split("\\s+");
-                                    dispatcher.dispatch(
-                                            tokens,
-                                            msg -> ctx.getSource().sendSuccess(() -> Component.literal(msg), false));
-                                    return 1;
-                                }))));
+        // Explicit Class<T> form — bypasses NeoForge's ASM introspection
+        // of the Consumer lambda's generic type, which has been unreliable
+        // for MultiForge event-bus wrappers (see M12 fix history).
+        NeoForge.EVENT_BUS.addListener(RegisterCommandsEvent.class, event -> {
+            LOGGER.info("MultiForge: RegisterCommandsEvent fired — registering /multiforge Brigadier tree");
+            event.getDispatcher()
+                    .register(Commands.literal("multiforge")
+                            .requires(src -> src.hasPermission(2))
+                            .executes(ctx -> {
+                                dispatcher.dispatch(
+                                        new String[0],
+                                        msg -> ctx.getSource().sendSuccess(() -> Component.literal(msg), false));
+                                return 1;
+                            })
+                            .then(Commands.argument("args", StringArgumentType.greedyString())
+                                    .executes(ctx -> {
+                                        String raw = StringArgumentType.getString(ctx, "args")
+                                                .trim();
+                                        String[] tokens = raw.isEmpty() ? new String[0] : raw.split("\\s+");
+                                        dispatcher.dispatch(
+                                                tokens,
+                                                msg -> ctx.getSource().sendSuccess(() -> Component.literal(msg), false));
+                                        return 1;
+                                    })));
+        });
     }
 }
