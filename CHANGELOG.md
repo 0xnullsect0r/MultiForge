@@ -1,5 +1,19 @@
 # CHANGELOG
 
+## v1.3.11 — expand `${version}` in `multiforge-client`'s `neoforge.mods.toml`
+
+Every release from v1.3.7 through v1.3.10 shipped a `multiforge-client.jar` with a literal `version = "${version}"` in its bundled `META-INF/neoforge.mods.toml` — FML rejects it at scan with `Illegal version number specified version` and refuses to load the mod. Reported by a user who dropped `multiforge-client.jar` into a stock NeoForge 21.1.249 client's `mods/` folder:
+
+```
+Exception message: net.neoforged.neoforgespi.locating.InvalidModFileException:
+  Illegal version number specified version (multiforge-client.jar)
+  at net.neoforged.fml.loading.moddiscovery.ModInfo.<init>(ModInfo.java:77)
+```
+
+Bug was invisible in server-side testing (the mod jar is never loaded there) and only surfaces on a real NeoForge client's mod scanner.
+
+- **multiforge-client/build.gradle.kts** — new `processResources { filesMatching("META-INF/neoforge.mods.toml") { expand(mapOf("version" to project.version.toString())) } }` block. Mirrors the pattern already in `multiforge-runtime/build.gradle.kts` (which templates its own `multiforge-runtime.properties.in`). Root cause: the `net.neoforged.moddev` 2.0.78 plugin does NOT auto-configure Groovy-template expansion on `neoforge.mods.toml`.
+
 ## v1.3.5 — ship `multiforge-client` as a real mod jar + wire `/multiforge` into Brigadier
 
 Two user-visible correctness gaps closed in the same release.
