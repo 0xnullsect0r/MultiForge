@@ -34,8 +34,33 @@ public final class DebugChannelClient {
 
     private final DebugHudState state;
 
+    /**
+     * v1.3.16: once-per-connection latch consulted by
+     * {@link DebugPayloadRegistration}'s HELLO handler. Prevents the
+     * SUBSCRIBE-per-HELLO-keepalive spam that showed up in v1.3.15 —
+     * before, we'd send a SUBSCRIBE_ALL frame every 250 ms as long as
+     * the server's HeartbeatEmitter was ticking. Reset by
+     * {@link #resetSubscription()} on client disconnect.
+     */
+    private boolean subscribed = false;
+
     public DebugChannelClient(DebugHudState state) {
         this.state = Objects.requireNonNull(state, "state");
+    }
+
+    /** @return whether we've already replied SUBSCRIBE on this connection. */
+    public boolean hasSubscribed() {
+        return subscribed;
+    }
+
+    /** Called by {@link DebugPayloadRegistration} after it sends SUBSCRIBE. */
+    public void markSubscribed() {
+        this.subscribed = true;
+    }
+
+    /** Called on client disconnect so the next server sends a fresh SUBSCRIBE. */
+    public void resetSubscription() {
+        this.subscribed = false;
     }
 
     public void onFrame(byte[] raw) throws IOException {

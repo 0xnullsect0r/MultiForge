@@ -302,12 +302,17 @@ public final class MultiForgeCommandDispatcher {
                     };
             if (next == null) return false;
             output.accept("Set " + args[1] + " = " + n + " (worker pool now " + next.tickWorkerCount() + " threads)");
+            output.accept(RESTART_HINT);
             return true;
         } catch (IOException e) {
             output.accept("Failed to persist config: " + e.getMessage());
             return false;
         }
     }
+
+    /** v1.3.16: shown after every config-persisting subcommand reply. */
+    private static final String RESTART_HINT =
+            "(applied on next server restart — live-reload not yet wired; see docs/multiforge-command.md)";
 
     private boolean handleRegion(String[] args, Consumer<String> output) {
         if (args.length < 2) {
@@ -347,6 +352,7 @@ public final class MultiForgeCommandDispatcher {
         try {
             configStore.update(c -> c.withRegionSize(shift));
             output.accept("Region size set to " + chunks + " chunks per side (shift=" + shift + ")");
+            output.accept(RESTART_HINT);
             return true;
         } catch (IOException e) {
             output.accept("Failed to persist: " + e.getMessage());
@@ -369,6 +375,7 @@ public final class MultiForgeCommandDispatcher {
         try {
             configStore.update(c -> c.withRegionMode(mode));
             output.accept("Region mode set to " + args[2]);
+            output.accept(RESTART_HINT);
             return true;
         } catch (IOException e) {
             output.accept("Failed to persist: " + e.getMessage());

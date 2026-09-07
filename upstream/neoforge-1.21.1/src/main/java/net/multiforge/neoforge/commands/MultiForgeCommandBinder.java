@@ -25,10 +25,13 @@ import net.minecraft.commands.Commands;
 import net.minecraft.commands.SharedSuggestionProvider;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.MinecraftServer;
+import net.multiforge.neoforge.MultiForgeServerState;
 import net.multiforge.runtime.commands.MultiForgeCommandDispatcher;
 import net.multiforge.runtime.config.MultiForgeConfigStore;
 import net.multiforge.runtime.diagnostics.ViolationLogger;
 import net.multiforge.runtime.region.pin.RegionPinManager;
+import net.multiforge.runtime.scheduler.MultiForgeRegionizedRuntime;
+import net.multiforge.runtime.scheduler.MultiThreadedSchedulerHost;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -51,7 +54,6 @@ public final class MultiForgeCommandBinder {
     public static void register(MinecraftServer server) {
         Path serverDir = server.getServerDirectory().toAbsolutePath();
         Path configFile = serverDir.resolve("config").resolve("multiforge-server.toml");
-        Path pinsFile = serverDir.resolve("config").resolve("multiforge-region-pins.json");
 
         MultiForgeConfigStore configStore;
         try {
@@ -65,17 +67,23 @@ public final class MultiForgeCommandBinder {
                     configFile, net.multiforge.runtime.config.MultiForgeConfig.defaults());
         }
 
-        RegionPinManager pins;
-        try {
-            pins = RegionPinManager.load(pinsFile);
-        } catch (IOException e) {
-            ViolationLogger.warn(
-                    "MultiForgeCommandBinder.register",
-                    "failed to load " + pinsFile + " — /multiforge region pin state resets on restart: " + e.getMessage());
-            pins = new RegionPinManager(pinsFile);
-        }
+        // v1.3.16: share ONE RegionPinManager instance with
+        // DebugChannelServer via MultiForgeServerState so /multiforge
+        // region pin mutations are visible to the client's pin
+        // renderer within one 4 Hz PinListEmitter tick.
+        RegionPinManager pins = MultiForgeServerState.pinManagerFor(server);
 
-        MultiForgeCommandDispatcher dispatcher = new MultiForgeCommandDispatcher(configStore, pins);
+        // v1.3.16: wire the 3-arg dispatcher constructor so
+        // /multiforge chunks <world> resolves against the M9
+        // ChunkHolderManager instead of returning "bridge not
+        // installed". chunkManagerForOrNull is a non-creating
+        // lookup — legitimate for a diagnostic subcommand.
+        java.util.function.Function<net.multiforge.api.world.WorldRef, net.multiforge.runtime.chunk.ChunkHolderManager>
+                chunkManagers = world -> {
+                    MultiThreadedSchedulerHost host = MultiForgeRegionizedRuntime.current();
+                    return host == null ? null : host.chunkManagerForOrNull(world);
+                };
+        MultiForgeCommandDispatcher dispatcher = new MultiForgeCommandDispatcher(configStore, pins, chunkManagers);
 
         try {
             server.getCommands().getDispatcher().register(buildTree(dispatcher));

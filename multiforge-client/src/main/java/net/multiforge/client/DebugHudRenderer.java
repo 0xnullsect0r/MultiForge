@@ -49,17 +49,19 @@ public final class DebugHudRenderer {
         if (!state.overlaysEnabled()) {
             return;
         }
+        // v1.3.16: dropped the mc.getDebugOverlay().showDebugScreen() gate.
+        // HUD is now always visible when overlays are on and a HELLO frame
+        // has arrived — matches what docs/client-mod-guide.md §2.1
+        // promises. Old behavior only showed the HUD while F3 was held.
         Minecraft mc = Minecraft.getInstance();
-        if (!mc.getDebugOverlay().showDebugScreen()) {
-            return;
-        }
         List<String> lines = buildLines(state);
         if (lines.isEmpty()) {
             return;
         }
         GuiGraphics graphics = event.getGuiGraphics();
         Font font = mc.font;
-        int y = graphics.guiHeight() - MARGIN - lines.size() * LINE_HEIGHT;
+        // v1.3.16: top-left, not bottom-left.
+        int y = MARGIN;
         for (String line : lines) {
             graphics.drawString(font, line, MARGIN, y, TEXT_COLOR);
             y += LINE_HEIGHT;
