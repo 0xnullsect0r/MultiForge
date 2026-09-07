@@ -51,7 +51,16 @@ public final class DebugPayloadRegistration {
     private DebugPayloadRegistration() {}
 
     static void register(RegisterPayloadHandlersEvent event, DebugChannelClient channelClient) {
-        PayloadRegistrar registrar = event.registrar("1");
+        // v1.3.13: mark the channel OPTIONAL so a stock NeoForge server
+        // (or a MultiForge server that has not yet wired the server side
+        // of the channel) does not reject client connections. The client
+        // HUD/renderers stay inert on servers that do not advertise
+        // multiforge:debug/v1 — matches the mods.toml description
+        // ("stays inert if the server does not advertise
+        // multiforge:debug/v1"). Without this, the client's REQUIRED
+        // channel registration made every connection attempt hit
+        // "Incompatible client! Please use NeoForge 1.21.1-v…-beta".
+        PayloadRegistrar registrar = event.registrar("1").optional();
         registrar.playBidirectional(DebugFramePayload.TYPE, DebugFramePayload.STREAM_CODEC, (payload, context) -> {
             byte[] raw = payload.data();
             DebugPacketCodec.Frame frame;
