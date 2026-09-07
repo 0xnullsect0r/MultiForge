@@ -44,7 +44,6 @@ import net.neoforged.neoforge.event.RegisterCommandsEvent;
  * harnesses use ephemeral tmpdirs).
  */
 public final class MultiForgeCommandBinder {
-
     private MultiForgeCommandBinder() {}
 
     /**
