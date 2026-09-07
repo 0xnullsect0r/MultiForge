@@ -62,16 +62,16 @@ import org.slf4j.LoggerFactory;
  * gap:
  *
  * <ul>
- *   <li>Mod-bus hook — registers the payload channel as OPTIONAL (so a
- *       client without the mod still connects) and wires an inbound
- *       handler for {@code SUBSCRIBE} frames.
- *   <li>Game-bus hooks — instantiates the runtime's five emitters on
- *       {@code ServerAboutToStart}, tears them down on {@code
- *       ServerStopping}, and sends the unconditional {@code HELLO}
- *       frame on {@code PlayerLoggedIn}.
- *   <li>Sink — every emitter feeds a single {@link #broadcast(DebugPayload)}
- *       method that fans out to all connected players whose
- *       subscription mask enables the frame's stream.
+ * <li>Mod-bus hook — registers the payload channel as OPTIONAL (so a
+ * client without the mod still connects) and wires an inbound handler
+ * for {@code SUBSCRIBE} frames.
+ * <li>Game-bus hooks — instantiates the runtime's five emitters on
+ * {@code ServerAboutToStart}, tears them down on {@code
+ * ServerStopping}, and sends the unconditional {@code HELLO} frame on
+ * {@code PlayerLoggedIn}.
+ * <li>Sink — every emitter feeds a single {@link #broadcast(DebugPayload)}
+ * method that fans out to all connected players whose subscription
+ * mask enables the frame's stream.
  * </ul>
  *
  * <p>Idempotent per JVM. Everything is per-server state that's cleared
