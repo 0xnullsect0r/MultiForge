@@ -197,6 +197,18 @@ public class ServerLifecycleHooks {
             net.multiforge.neoforge.globals.MultiForgeGlobalSystemsInit.install(mfHost, server);
         }
 
+        // MultiForge v1.3.5: wire /multiforge into Brigadier. Loads the
+        // config store + region-pin manager from <serverDir>/config/ and
+        // installs a RegisterCommandsEvent listener that binds
+        // /multiforge to a MultiForgeCommandDispatcher built from them.
+        // Pre-v1.3.5 the dispatcher class shipped in the runtime jar but
+        // was never wrapped in a Brigadier tree — every /multiforge
+        // command hit "Unknown or incomplete command" for both ops and
+        // the server console.
+        if (freshInstall) {
+            net.multiforge.neoforge.commands.MultiForgeCommandBinder.register(server);
+        }
+
         currentServer = server;
         // on the dedi server we need to force the stuff to setup properly
         LogicalSidedProvider.setServer(() -> server);

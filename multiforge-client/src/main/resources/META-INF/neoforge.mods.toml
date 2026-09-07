@@ -4,8 +4,8 @@
 # pin selection boxes + violation side panel.
 modLoader = "javafml"
 loaderVersion = "[4,)"
-license = "Proprietary — see LICENSE at the multiforge repo root"
-issueTrackerURL = "https://github.com/0xnullsect0r/multiforge/issues"
+license = "GPL-3.0-only"
+issueTrackerURL = "https://github.com/0xnullsect0r/MultiForge/issues"
 
 [[mods]]
 modId = "multiforge_debug"
@@ -18,7 +18,6 @@ region selection boxes, and a live reroute/warn violation panel.
 Load on any vanilla NeoForge 1.21.x client — the panel stays inert if
 the server does not advertise multiforge:debug/v1.
 '''
-logoFile = "logo.png"
 authors = "MultiForge authors"
 
 [[dependencies.multiforge_debug]]
