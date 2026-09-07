@@ -551,6 +551,13 @@ public class NeoForgeMod {
         NeoForge.EVENT_BUS.register(new NeoForgeEventHandler());
         NeoForge.EVENT_BUS.addListener(this::registerPermissionNodes);
 
+        // MultiForge v1.3.14: hook the multiforge:debug/v1 payload channel
+        // registration onto NeoForge's mod bus. RegisterPayloadHandlersEvent
+        // is a mod-bus (IModBusEvent) event so it only fires on per-mod
+        // buses — since the MultiForge fork doesn't ship its own @Mod class,
+        // the neoforge mod bus is the natural home.
+        net.multiforge.neoforge.debug.DebugChannelServer.installOnModBus(modEventBus);
+
         UsernameCache.load();
         DualStackUtils.initialise();
         TagConventionLogWarning.init();

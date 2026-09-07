@@ -1,5 +1,21 @@
 # CHANGELOG
 
+## v1.3.14 — wire the server side of `multiforge:debug/v1` so client overlays actually populate
+
+v1.3.13 fixed the "Incompatible client!" disconnect by making the client's channel registration optional. Clients could now connect, but nothing appeared in the debug HUD or overlays because **no server-side of the channel existed** — no `RegisterPayloadHandlersEvent` listener ever ran on the server, no emitters were instantiated, no `PacketDistributor.sendToPlayer(...)` call site anywhere. The five emitter classes (`HeartbeatEmitter`, `RegionMapEmitter`, `PinListEmitter`, `TpsHistogramEmitter`, `ViolationEmitter`) shipped in the runtime jar were unreachable.
+
+- **New: `upstream/neoforge-1.21.1/src/main/java/net/multiforge/neoforge/debug/DebugChannelServer.java`** — the missing bridge. On the neoforge mod bus, registers the `multiforge:debug/v1` payload channel as OPTIONAL (matches the client), handling inbound `SUBSCRIBE` frames per-player. On `NeoForge.EVENT_BUS`, hooks `ServerAboutToStart` (instantiates the four periodic emitters + heartbeat), `ServerStopping` (closes all handles), `PlayerLoggedIn` (sends unconditional `HELLO`), `PlayerLoggedOut` (clears per-player state), and `LevelEvent.Load`/`Unload` (installs one `TpsHistogramEmitter` per active world). Every emitter feeds a single fan-out sink that broadcasts each frame to every player whose subscription mask enables its stream (F_REGIONS/F_HEATMAP/F_PINS/F_VIOLATIONS per protocol §5).
+- **New: `upstream/neoforge-1.21.1/src/main/java/net/multiforge/neoforge/debug/DebugFramePayload.java`** — deliberate duplicate of `multiforge-client/…/DebugFramePayload.java`. Same `Type.id()` (`ResourceLocation("multiforge:debug/v1")`), same `StreamCodec` shape, so both sides interoperate on the wire. Cannot live in `multiforge-runtime` (Minecraft-independent per CLAUDE.md); cannot live in `multiforge-client` (fork build doesn't depend on client module). Deferred cleanup: extract a shared `multiforge-wire` module.
+- **`upstream/…/NeoForge.EVENT_BUS`-side glue**: `NeoForgeMod.java` gets one added line calling `DebugChannelServer.installOnModBus(modEventBus)` alongside the existing NeoForge event-handler registrations; `ServerLifecycleHooks.handleServerAboutToStart` gets one line calling `DebugChannelServer.installGameBusHooks()` right before the `ServerAboutToStartEvent` is posted.
+
+Effect after v1.3.14: an op with the v1.3.14 client mod installed connects to a v1.3.14 MultiForge server. The three-line HUD (build + regions/workers/tps + worstP95/warns) populates within one second (HELLO arrives on channel-open). The chunk-border, heatmap, and pin overlays fill in as the client's SUBSCRIBE round-trips complete.
+
+Deferred (not v1.3.14 scope):
+
+- Permission-node gating via `multiforge.debug.view` (currently everyone in `PLAYERS` receives frames their SUBSCRIBE mask allows; per-viewer op-level filtering is a follow-up).
+- Sharing the `RegionPinManager` between the `/multiforge region pin` command binder and the debug-channel pin emitter — currently each loads a fresh instance from the same JSON file, so runtime pin changes need a reload cycle to appear in the client overlay.
+- Dropping HELLO's 4Hz keepalive cadence to something lighter (1Hz).
+
 ## v1.3.13 — mark `multiforge:debug/v1` channel optional so clients can connect anywhere
 
 User reported connection rejected after installing v1.3.12 client jar:
