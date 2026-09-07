@@ -16,6 +16,7 @@ import com.mojang.brigadier.arguments.StringArgumentType;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.concurrent.atomic.AtomicReference;
 import net.minecraft.commands.Commands;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.MinecraftServer;
@@ -23,6 +24,7 @@ import net.multiforge.runtime.commands.MultiForgeCommandDispatcher;
 import net.multiforge.runtime.config.MultiForgeConfigStore;
 import net.multiforge.runtime.diagnostics.ViolationLogger;
 import net.multiforge.runtime.region.pin.RegionPinManager;
+import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.neoforge.common.NeoForge;
 import net.neoforged.neoforge.event.RegisterCommandsEvent;
 import org.slf4j.Logger;
@@ -35,10 +37,13 @@ import org.slf4j.LoggerFactory;
  * ({@code source.hasPermission(2)}), per {@code README.md § In-game
  * commands}.
  *
- * <p>Prior to v1.3.5 the dispatcher class shipped in the runtime jar
- * but was unreachable — no Brigadier registration existed anywhere in
- * the fork or runtime. Every {@code /multiforge …} the user typed hit
- * "Unknown or incomplete command". This class closes that gap.
+ * <p>Uses {@code NeoForge.EVENT_BUS.register(this)} with a
+ * {@link SubscribeEvent}-annotated instance method — same pattern as
+ * NeoForge's own {@code /neoforge} command via {@code
+ * NeoForgeEventHandler}, which is the empirically-working shape on the
+ * MultiForge-wrapped bus. The 1-arg / 2-arg {@code addListener} paths
+ * did not observe listener firings during v1.3.7/v1.3.8 live testing;
+ * v1.3.9 switches to the {@code register(Object)} path.
  *
  * <p>Called from {@link net.neoforged.neoforge.server.ServerLifecycleHooks#handleServerAboutToStart}
  * with the server passed through so the config-store + pin-manager can
@@ -48,18 +53,25 @@ import org.slf4j.LoggerFactory;
 public final class MultiForgeCommandBinder {
     private static final Logger LOGGER = LoggerFactory.getLogger("multiforge.commands");
 
-    private MultiForgeCommandBinder() {}
+    /** Singleton — one instance per JVM. NeoForge.EVENT_BUS.register(this) once. */
+    private static final AtomicReference<MultiForgeCommandBinder> INSTANCE = new AtomicReference<>();
+
+    private final MultiForgeCommandDispatcher dispatcher;
+
+    private MultiForgeCommandBinder(MultiForgeCommandDispatcher dispatcher) {
+        this.dispatcher = dispatcher;
+    }
 
     /**
      * Load the config store + pin manager from the server directory and
-     * register a {@link RegisterCommandsEvent} listener that binds
-     * {@code /multiforge} to a {@link MultiForgeCommandDispatcher}
-     * built from them.
-     *
-     * <p>The event listener is added to {@link NeoForge#EVENT_BUS} —
-     * same pattern as {@link net.multiforge.neoforge.RegionizedChunkLifecycle#register}.
+     * register a {@link RegisterCommandsEvent}-subscribing instance on
+     * {@link NeoForge#EVENT_BUS}. Idempotent per JVM.
      */
     public static void register(MinecraftServer server) {
+        if (INSTANCE.get() != null) {
+            LOGGER.info("MultiForge: /multiforge binder already registered — skipping");
+            return;
+        }
         Path serverDir = server.getServerDirectory().toAbsolutePath();
         Path configFile = serverDir.resolve("config").resolve("multiforge-server.toml");
         Path pinsFile = serverDir.resolve("config").resolve("multiforge-region-pins.json");
@@ -86,33 +98,33 @@ public final class MultiForgeCommandBinder {
             pins = new RegionPinManager(pinsFile);
         }
 
-        final MultiForgeCommandDispatcher dispatcher = new MultiForgeCommandDispatcher(configStore, pins);
-        LOGGER.info("MultiForge: /multiforge command binder attaching RegisterCommandsEvent listener");
+        MultiForgeCommandBinder binder = new MultiForgeCommandBinder(new MultiForgeCommandDispatcher(configStore, pins));
+        if (INSTANCE.compareAndSet(null, binder)) {
+            NeoForge.EVENT_BUS.register(binder);
+            LOGGER.info("MultiForge: /multiforge binder registered via NeoForge.EVENT_BUS.register(Object) with @SubscribeEvent");
+        }
+    }
 
-        // Explicit Class<T> form — bypasses NeoForge's ASM introspection
-        // of the Consumer lambda's generic type, which has been unreliable
-        // for MultiForge event-bus wrappers (see M12 fix history).
-        NeoForge.EVENT_BUS.addListener(RegisterCommandsEvent.class, event -> {
-            LOGGER.info("MultiForge: RegisterCommandsEvent fired — registering /multiforge Brigadier tree");
-            event.getDispatcher()
-                    .register(Commands.literal("multiforge")
-                            .requires(src -> src.hasPermission(2))
-                            .executes(ctx -> {
-                                dispatcher.dispatch(
-                                        new String[0],
-                                        msg -> ctx.getSource().sendSuccess(() -> Component.literal(msg), false));
-                                return 1;
-                            })
-                            .then(Commands.argument("args", StringArgumentType.greedyString())
-                                    .executes(ctx -> {
-                                        String raw = StringArgumentType.getString(ctx, "args")
-                                                .trim();
-                                        String[] tokens = raw.isEmpty() ? new String[0] : raw.split("\\s+");
-                                        dispatcher.dispatch(
-                                                tokens,
-                                                msg -> ctx.getSource().sendSuccess(() -> Component.literal(msg), false));
-                                        return 1;
-                                    })));
-        });
+    @SubscribeEvent
+    public void onRegisterCommands(RegisterCommandsEvent event) {
+        LOGGER.info("MultiForge: RegisterCommandsEvent fired — registering /multiforge Brigadier tree");
+        event.getDispatcher()
+                .register(Commands.literal("multiforge")
+                        .requires(src -> src.hasPermission(2))
+                        .executes(ctx -> {
+                            dispatcher.dispatch(
+                                    new String[0],
+                                    msg -> ctx.getSource().sendSuccess(() -> Component.literal(msg), false));
+                            return 1;
+                        })
+                        .then(Commands.argument("args", StringArgumentType.greedyString())
+                                .executes(ctx -> {
+                                    String raw = StringArgumentType.getString(ctx, "args").trim();
+                                    String[] tokens = raw.isEmpty() ? new String[0] : raw.split("\\s+");
+                                    dispatcher.dispatch(
+                                            tokens,
+                                            msg -> ctx.getSource().sendSuccess(() -> Component.literal(msg), false));
+                                    return 1;
+                                })));
     }
 }
