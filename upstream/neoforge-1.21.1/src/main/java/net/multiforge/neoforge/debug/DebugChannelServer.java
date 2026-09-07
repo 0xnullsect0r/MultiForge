@@ -36,7 +36,6 @@ import net.multiforge.runtime.diagnostics.emitters.ViolationEmitter;
 import net.multiforge.runtime.diagnostics.wire.DebugPacketCodec;
 import net.multiforge.runtime.diagnostics.wire.DebugPacketKind;
 import net.multiforge.runtime.diagnostics.wire.DebugPayload;
-import net.multiforge.runtime.region.pin.RegionPinManager;
 import net.multiforge.runtime.scheduler.MultiForgeRegionizedRuntime;
 import net.multiforge.runtime.scheduler.MultiThreadedSchedulerHost;
 import net.neoforged.bus.api.IEventBus;

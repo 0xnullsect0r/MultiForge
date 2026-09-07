@@ -78,11 +78,10 @@ public final class MultiForgeCommandBinder {
         // ChunkHolderManager instead of returning "bridge not
         // installed". chunkManagerForOrNull is a non-creating
         // lookup — legitimate for a diagnostic subcommand.
-        java.util.function.Function<net.multiforge.api.world.WorldRef, net.multiforge.runtime.chunk.ChunkHolderManager>
-                chunkManagers = world -> {
-                    MultiThreadedSchedulerHost host = MultiForgeRegionizedRuntime.current();
-                    return host == null ? null : host.chunkManagerForOrNull(world);
-                };
+        java.util.function.Function<net.multiforge.api.world.WorldRef, net.multiforge.runtime.chunk.ChunkHolderManager> chunkManagers = world -> {
+            MultiThreadedSchedulerHost host = MultiForgeRegionizedRuntime.current();
+            return host == null ? null : host.chunkManagerForOrNull(world);
+        };
         MultiForgeCommandDispatcher dispatcher = new MultiForgeCommandDispatcher(configStore, pins, chunkManagers);
 
         try {
