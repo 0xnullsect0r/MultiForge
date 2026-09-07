@@ -64,6 +64,9 @@ public final class ChunkBorderRenderer {
 
     @SubscribeEvent
     public void onRenderLevelStage(RenderLevelStageEvent event) {
+        if (!state.overlaysEnabled()) {
+            return;
+        }
         if (event.getStage() != RenderLevelStageEvent.Stage.AFTER_PARTICLES) {
             return;
         }

@@ -46,6 +46,9 @@ public final class DebugHudRenderer {
 
     @SubscribeEvent
     public void onRenderGuiPost(RenderGuiEvent.Post event) {
+        if (!state.overlaysEnabled()) {
+            return;
+        }
         Minecraft mc = Minecraft.getInstance();
         if (!mc.getDebugOverlay().showDebugScreen()) {
             return;

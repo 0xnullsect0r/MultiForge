@@ -52,6 +52,9 @@ public final class PinRenderer {
 
     @SubscribeEvent
     public void onRenderLevelStage(RenderLevelStageEvent event) {
+        if (!state.overlaysEnabled()) {
+            return;
+        }
         if (event.getStage() != RenderLevelStageEvent.Stage.AFTER_PARTICLES) {
             return;
         }

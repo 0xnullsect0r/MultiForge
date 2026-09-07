@@ -14,6 +14,7 @@ package net.multiforge.client;
 
 import net.neoforged.bus.api.IEventBus;
 import net.neoforged.fml.common.Mod;
+import net.neoforged.neoforge.client.event.RegisterKeyMappingsEvent;
 import net.neoforged.neoforge.common.NeoForge;
 import net.neoforged.neoforge.network.event.RegisterPayloadHandlersEvent;
 import org.slf4j.Logger;
@@ -53,10 +54,16 @@ public final class MultiForgeDebugMod {
         modEventBus.addListener(
                 (RegisterPayloadHandlersEvent event) -> DebugPayloadRegistration.register(event, channelClient));
 
+        // v1.3.15: user-configurable keybind (default F6) that toggles
+        // every overlay + HUD line via DebugHudState.overlaysEnabled.
+        // Keymapping registration is a mod-bus event.
+        modEventBus.addListener((RegisterKeyMappingsEvent event) -> MultiForgeKeyMappings.register(event));
+
         NeoForge.EVENT_BUS.register(new DebugHudRenderer(state));
         NeoForge.EVENT_BUS.register(new ChunkBorderRenderer(state));
         NeoForge.EVENT_BUS.register(new HeatmapRenderer(state));
         NeoForge.EVENT_BUS.register(new PinRenderer(state));
+        NeoForge.EVENT_BUS.register(new KeyInputHandler(state));
 
         LOGGER.info("MultiForge debug client mod initialized (channel {})", DebugChannelClient.CHANNEL_ID);
     }
