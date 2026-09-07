@@ -17,6 +17,9 @@ Root cause: the client jar contained only `net.multiforge.client.*` classes. `De
   - `META-INF/maven/**` — drops the mavenLocal-published pom debris from the merge.
   - `multiforge-runtime.properties*` — pre-existing runtime-jar debris (the template file that survives runtime's `processResources` when the `filesMatching` pattern doesn't match); belongs in the runtime jar cleanup, not the client jar.
 
+Also (small, same release):
+- **`/multiforge help`** — new subcommand printing an intuitive one-screen reference for every `/multiforge` subcommand (worker pool / region topology / diagnostics / scanner). Same output now fires on a bare `/multiforge` too (previously printed a terse `Usage: /multiforge <config|region|…>` line). Aliases: `help`, `?`, `--help`, `-h`. `Unknown subcommand` responses now direct the user to `/multiforge help`.
+
 ## v1.3.11 — expand `${version}` in `multiforge-client`'s `neoforge.mods.toml`
 
 Every release from v1.3.7 through v1.3.10 shipped a `multiforge-client.jar` with a literal `version = "${version}"` in its bundled `META-INF/neoforge.mods.toml` — FML rejects it at scan with `Illegal version number specified version` and refuses to load the mod. Reported by a user who dropped `multiforge-client.jar` into a stock NeoForge 21.1.249 client's `mods/` folder:
