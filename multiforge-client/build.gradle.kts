@@ -23,8 +23,10 @@ dependencies {
     implementation(project(":multiforge-runtime"))
     implementation(project(":multiforge-api"))
 
-    // SLF4J API is provided by NeoForge at runtime.
-    compileOnly("org.slf4j:slf4j-api:2.0.13")
+    // NOTE: SLF4J is transitively provided by moddev's neoForge{} block
+    // (net.neoforged:minecraft-dependencies pins it strictly to 2.0.9);
+    // declaring a compileOnly on 2.0.13 here caused an unresolvable
+    // version-strictly conflict at compile time in v1.3.5.
 
     testImplementation("org.junit.jupiter:junit-jupiter:5.10.3")
     testImplementation("org.assertj:assertj-core:3.26.3")
