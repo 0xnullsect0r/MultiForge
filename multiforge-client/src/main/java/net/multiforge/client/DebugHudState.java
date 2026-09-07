@@ -18,6 +18,7 @@ import java.util.Deque;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicBoolean;
 import net.multiforge.runtime.diagnostics.wire.DebugPayload;
 
 /**
@@ -40,6 +41,14 @@ public final class DebugHudState {
     private DebugPayload.HeatmapUpdate latestHeatmap;
     private DebugPayload.PinList pins = new DebugPayload.PinList(List.of());
     private final Deque<DebugPayload.ViolationEvent> violations = new ArrayDeque<>();
+
+    /**
+     * v1.3.15: master on/off for every overlay + HUD line. Toggled by
+     * the user's keybind (default F6, remappable via Options → Controls →
+     * "MultiForge Debug"). Default ON — the debug mod stays as visible as
+     * pre-v1.3.15 unless the user explicitly hides it.
+     */
+    private final AtomicBoolean overlaysEnabled = new AtomicBoolean(true);
 
     public void apply(DebugPayload.Hello hello) {
         this.hello = hello;
@@ -80,6 +89,22 @@ public final class DebugHudState {
 
     public List<DebugPayload.ViolationEvent> recentViolations() {
         return List.copyOf(violations);
+    }
+
+    /** Every renderer / HUD-line producer checks this before drawing. */
+    public boolean overlaysEnabled() {
+        return overlaysEnabled.get();
+    }
+
+    /**
+     * Flip the overlay flag and return the new value. Called from
+     * {@link KeyInputHandler} on the F6 (or whatever the user has
+     * bound) key press.
+     */
+    public boolean toggleOverlays() {
+        boolean next = !overlaysEnabled.get();
+        overlaysEnabled.set(next);
+        return next;
     }
 
     /**

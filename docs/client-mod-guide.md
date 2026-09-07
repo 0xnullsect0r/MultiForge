@@ -59,6 +59,18 @@ Per-chunk overlay coloured by how expensive the chunk was to tick last frame. Ro
 
 When an op has run `/multiforge region pin <id> <world> <fromCX> <fromCZ> <toCX> <toCZ>` on the server, the pinned rectangle is drawn as a labelled box in the world. Pinned regions are exempt from automatic merge/split, so this is what you look at to see the "hand-frozen" boundaries the operator has locked in.
 
+### 2.5 Toggle overlays with a keybind
+
+Since **v1.3.15** the whole overlay stack (HUD lines, chunk borders, heatmap, pin boxes) has a master on/off toggle bound to a keybind. Default: **F6** (unbound in Vanilla, so no conflict). Press it once to hide everything, again to bring it back. You'll see a small status message (`MultiForge overlays: on / off`) in the chat area as feedback.
+
+To remap or clear the binding:
+
+1. `Esc` → **Options → Controls → Key Binds**.
+2. Scroll to the **MultiForge Debug** category.
+3. Click the button next to **Toggle overlays**, press the new key (or `Esc` to leave it unbound), and click **Done**.
+
+Default is ON — the mod behaves like pre-v1.3.15 unless you explicitly press the key to hide it.
+
 ---
 
 ## 3. Auto-behaviour on connect

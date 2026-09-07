@@ -1,5 +1,17 @@
 # CHANGELOG
 
+## v1.3.15 — user-configurable keybind toggles the client mod's overlays
+
+Adds a client-side toggle for the whole debug overlay stack (F3-style HUD, chunk borders, tick-cost heatmap, region-pin boxes). Default key: **F6** (unbound in Vanilla). User can remap or clear the binding under **Options → Controls → MultiForge Debug**.
+
+- **New: `multiforge-client/…/MultiForgeKeyMappings.java`** — declares one `KeyMapping` (`key.multiforge_debug.toggle_overlays`) under a new `key.categories.multiforge_debug` category. `KeyConflictContext.IN_GAME`, `GLFW_KEY_F6` default. Registered via `RegisterKeyMappingsEvent` on the mod bus (in `MultiForgeDebugMod`'s constructor alongside the existing payload-handler registration).
+- **New: `multiforge-client/…/KeyInputHandler.java`** — `@SubscribeEvent` handler for `ClientTickEvent.Post`. Drains any queued clicks via `consumeClick()`, flips `DebugHudState.overlaysEnabled` (new field, default `true`), and shows a status chat line (`MultiForge overlays: on/off`) as feedback.
+- **Modified: `DebugHudState.java`** — new `AtomicBoolean overlaysEnabled` (default `true`), plus `overlaysEnabled()` getter and `toggleOverlays()` returning the new value.
+- **Modified: `DebugHudRenderer`, `ChunkBorderRenderer`, `HeatmapRenderer`, `PinRenderer`** — each gains an early-exit `if (!state.overlaysEnabled()) return;` at the top of its event handler.
+- **New: `multiforge-client/…/assets/multiforge_debug/lang/en_us.json`** — English strings for the category (`"MultiForge Debug"`) and binding (`"Toggle overlays"`) so the Controls menu shows real names instead of raw translation keys.
+
+Default is ON — the mod behaves exactly like pre-v1.3.15 unless the user explicitly presses F6 (or their remapped key) to hide the overlays.
+
 ## v1.3.14 — wire the server side of `multiforge:debug/v1` so client overlays actually populate
 
 v1.3.13 fixed the "Incompatible client!" disconnect by making the client's channel registration optional. Clients could now connect, but nothing appeared in the debug HUD or overlays because **no server-side of the channel existed** — no `RegisterPayloadHandlersEvent` listener ever ran on the server, no emitters were instantiated, no `PacketDistributor.sendToPlayer(...)` call site anywhere. The five emitter classes (`HeartbeatEmitter`, `RegionMapEmitter`, `PinListEmitter`, `TpsHistogramEmitter`, `ViolationEmitter`) shipped in the runtime jar were unreachable.
