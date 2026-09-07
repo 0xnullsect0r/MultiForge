@@ -208,6 +208,14 @@ public class ServerLifecycleHooks {
         LogicalSidedProvider.setServer(() -> server);
         ConfigTracker.INSTANCE.loadConfigs(ModConfig.Type.SERVER, FMLPaths.CONFIGDIR.get(), getServerConfigPath(server));
         runModifiers(server);
+
+        // MultiForge v1.3.14: install the game-bus listeners (ServerAboutToStart,
+        // ServerStopping, PlayerLoggedIn/Out, LevelEvent.Load/Unload) that
+        // drive the multiforge:debug/v1 channel. Idempotent per JVM. Must
+        // happen BEFORE the post() below so this boot's ServerAboutToStartEvent
+        // reaches DebugChannelServer.onServerAboutToStart.
+        net.multiforge.neoforge.debug.DebugChannelServer.installGameBusHooks();
+
         NeoForge.EVENT_BUS.post(new ServerAboutToStartEvent(server));
     }
 
