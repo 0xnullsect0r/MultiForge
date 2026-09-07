@@ -1,5 +1,22 @@
 # CHANGELOG
 
+## v1.3.13 — mark `multiforge:debug/v1` channel optional so clients can connect anywhere
+
+User reported connection rejected after installing v1.3.12 client jar:
+
+```
+Channel [multiforge:debug/v1] failed to connect: This channel is missing on the server side, but required on the client!
+Client disconnected with reason: Incompatible client! Please use NeoForge 1.21.1-v1.3.12.0-beta
+```
+
+Root cause: `multiforge-client/src/main/java/net/multiforge/client/DebugPayloadRegistration.java` registered the channel via `event.registrar("1").playBidirectional(...)`, which defaults to REQUIRED. NeoForge's channel-negotiation phase rejects any connection whose peer doesn't advertise every REQUIRED channel — so the mod blocked connections to (a) every non-MultiForge server, and (b) every current MultiForge server too, because the server-side of the channel isn't wired yet on the fork.
+
+The mod's `neoforge.mods.toml` description explicitly promises "the panel stays inert if the server does not advertise multiforge:debug/v1" — that only works if the channel is OPTIONAL.
+
+- **DebugPayloadRegistration** — insert `.optional()` in the registrar chain: `event.registrar("1").optional().playBidirectional(...)`. Client can now connect to any NeoForge server; the debug HUD/renderers stay inert on servers that don't advertise the channel.
+
+Follow-up (deferred): wire the *server side* of the `multiforge:debug/v1` channel on the MultiForge fork so the debug HUD actually gets frames when connected to a MultiForge server. Separate release.
+
 ## v1.3.12 — bundle `multiforge-runtime` + `multiforge-api` classes into `multiforge-client.jar`
 
 v1.3.11 got `multiforge-client.jar` past FML's mods.toml parse, but the mod then crashed at construct-time on a stock NeoForge 21.1.249 client with:
