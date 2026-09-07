@@ -1,5 +1,17 @@
 # CHANGELOG
 
+## v1.3.4 — fix `processResources` rename bug that crashed boot + fix README EULA step
+
+v1.3.3 got the fork installer down the wire correctly, but the resulting server crashed on boot with:
+
+```
+IllegalArgumentException: multiforge-runtime.properties: Invalid service type name: 'multiforge-runtime' is not a Java identifier
+  at cpw.mods.securejarhandler/cpw.mods.jarhandling.impl.SimpleJarMetadata.computeDescriptor(SimpleJarMetadata.java:47)
+```
+
+- **multiforge-runtime/build.gradle.kts** — `processResources` was calling `rename { "multiforge-runtime.properties" }` from inside a `filesMatching { }` block. In Kotlin DSL, that `rename(Closure)` resolves to the outer `AbstractCopyTask.rename` method, which runs the closure against **every file in the copy** — the closure unconditionally returns `"multiforge-runtime.properties"`, so every file got renamed to that. `META-INF/services/net.multiforge.api.spi.SchedulerHost` ended up as `META-INF/services/multiforge-runtime.properties`, which broke the SchedulerHost SPI AND crashed `securejarhandler` on boot because "multiforge-runtime" is not a valid Java identifier. Fix: replace the outer `rename` call with `name = "multiforge-runtime.properties"` on the `FileCopyDetails` inside `filesMatching`, and widen the pattern to `**/multiforge-runtime.properties.in` so the template is actually matched and expanded.
+- **README.md + docs/install.md Method 1** — swapped the EULA step from `sed -i 's/eula=false/eula=true/' eula.txt` to `echo "eula=true" > eula.txt`. The fork installer doesn't seed `eula.txt`, so `sed -i` on a nonexistent file failed silently; users had to know to write it manually. Also removed the phantom `eula.txt` entry from the installer's file-layout diagram.
+
 ## v1.3.3 — `multiforge-installer.jar` stable alias points at the fork installer
 
 v1.3.2 shipped both the working fork installer (`multiforge-1.3.2-installer.jar`, produced by `build-fork-installer` CI job) AND the broken pure-Java installer (`multiforge-installer-1.3.2.jar` + `multiforge-installer.jar` stable alias, produced by `build-jars` job). The README's `curl` command downloaded the stable alias, which resolved to the broken pure-Java installer — every user who followed the README got `Error: Could not find or load main class net.multiforge.runtime.bootstrap.Main`.
