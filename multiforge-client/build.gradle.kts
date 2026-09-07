@@ -46,3 +46,30 @@ tasks.processResources {
         expand(tokens)
     }
 }
+
+// v1.3.12: multiforge-client references net.multiforge.runtime.diagnostics.wire.*
+// (DebugPayload/PacketCodec/PacketKind + their inner records) for its wire
+// protocol. On the MultiForge fork server, those classes come from a
+// META-INF/jarjar/multiforge-runtime-*.jar embedded in the
+// neoforge-*-universal.jar. On a stock NeoForge client, nothing provides
+// them — mod construct-time hits NoClassDefFoundError on the first
+// wire-type reference (DebugHudState.<init>).
+//
+// Fix: merge multiforge-runtime + multiforge-api's class files into the
+// client jar itself. Server-only runtime classes come along as dead code
+// (harmless — class-loading is lazy). Exclude META-INF/services/** so the
+// SchedulerHost SPI file doesn't poison the client jar's module descriptor
+// (v1.3.4-style securejarhandler crash).
+tasks.jar {
+    val runtimeJarTask = project(":multiforge-runtime").tasks.named<Jar>("jar")
+    val apiJarTask = project(":multiforge-api").tasks.named<Jar>("jar")
+    dependsOn(runtimeJarTask, apiJarTask)
+    from(runtimeJarTask.flatMap { it.archiveFile }.map { zipTree(it) })
+    from(apiJarTask.flatMap { it.archiveFile }.map { zipTree(it) })
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+    exclude("META-INF/services/**")
+    exclude("META-INF/MANIFEST.MF")
+    exclude("META-INF/maven/**")
+    exclude("multiforge-runtime.properties.in")
+    exclude("multiforge-runtime.properties")
+}
