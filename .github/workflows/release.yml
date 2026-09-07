@@ -77,9 +77,15 @@ jobs:
               -name 'multiforge-installer-*.jar' ! -name '*-sources.jar' | head -1)
 
           # Replacement zip — overlay onto an existing NeoForge server.
+          # v1.3.17: also ship a stable-alias multiforge-replacement.zip
+          # (matches multiforge-installer.jar's stable-alias pattern) so
+          # docs can link .../releases/latest/download/multiforge-replacement.zip
+          # without a version bump every release.
           if [ -n "$INSTALLER_JAR" ]; then
               java -jar "$INSTALLER_JAR" build-zip \
                   --out "$RELEASE_DIR/multiforge-${VER}-replacement.zip"
+              cp "$RELEASE_DIR/multiforge-${VER}-replacement.zip" \
+                  "$RELEASE_DIR/multiforge-replacement.zip"
           fi
 
           # Pelican Panel / Pterodactyl egg (v1.3.2 E.3). Kept at repo
@@ -230,7 +236,10 @@ jobs:
               (stable alias: [multiforge-installer.jar](https://github.com/${{ github.repository }}/releases/latest/download/multiforge-installer.jar))
               Run with `java -jar multiforge-installer.jar --installServer <dir>` —
               standard NeoForge installer CLI. See [docs/install.md § Method 1](https://github.com/${{ github.repository }}/blob/main/docs/install.md#method-1--fresh-installer-jar).
-            - Drop-in replacement ZIP: `multiforge-*-replacement.zip`
+            - **Drop-in replacement ZIP: `multiforge-*-replacement.zip`**
+              (stable alias: [multiforge-replacement.zip](https://github.com/${{ github.repository }}/releases/latest/download/multiforge-replacement.zip))
+              Overlay onto an existing NeoForge 1.21.1 server — see
+              [docs/install.md § Method 2](https://github.com/${{ github.repository }}/blob/main/docs/install.md#method-2--drop-in-replacement-zip).
             - Runtime library (for mod authors): `multiforge-runtime-*.jar`
             - **Client debug mod: `multiforge-client-*.jar`**
               (stable alias: [multiforge-client.jar](https://github.com/${{ github.repository }}/releases/latest/download/multiforge-client.jar))

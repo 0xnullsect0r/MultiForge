@@ -1,5 +1,11 @@
 # CHANGELOG
 
+## v1.3.17 — stable-alias `multiforge-replacement.zip` in the release
+
+- **`.github/workflows/release.yml`** — `build-jars` step now stages a `multiforge-replacement.zip` alias next to the versioned `multiforge-<v>-replacement.zip`. Same pattern the fork installer's `multiforge-installer.jar` has had since v1.3.3 and the client mod's `multiforge-client.jar` has had since v1.3.5. Users can link `.../releases/latest/download/multiforge-replacement.zip` and get the newest drop-in ZIP without needing to know the version. Release-body downloads section extended to name the stable alias.
+
+Version bump 1.3.16 → 1.3.17.
+
 ## v1.3.16 — debug-mod UX cleanup (seven bugs surfaced by live testing)
 
 User installed v1.3.14 server + v1.3.15 client and reported seven distinct bugs on a real playthrough. This release fixes all of them in one pass.

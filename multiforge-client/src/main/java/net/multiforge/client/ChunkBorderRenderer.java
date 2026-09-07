@@ -176,8 +176,8 @@ public final class ChunkBorderRenderer {
             double y1,
             double z1,
             float[] rgb) {
-        var matrix = poseStack.last().pose();
-        var normal = poseStack.last().normal();
+        var pose = poseStack.last();
+        var matrix = pose.pose();
         float nx = (float) (x1 - x0);
         float ny = (float) (y1 - y0);
         float nz = (float) (z1 - z0);
@@ -189,10 +189,10 @@ public final class ChunkBorderRenderer {
         }
         consumer.addVertex(matrix, (float) x0, (float) y0, (float) z0)
                 .setColor(rgb[0], rgb[1], rgb[2], LINE_ALPHA)
-                .setNormal(normal, nx, ny, nz);
+                .setNormal(pose, nx, ny, nz);
         consumer.addVertex(matrix, (float) x1, (float) y1, (float) z1)
                 .setColor(rgb[0], rgb[1], rgb[2], LINE_ALPHA)
-                .setNormal(normal, nx, ny, nz);
+                .setNormal(pose, nx, ny, nz);
     }
 
     private static long pickRegionId(List<DebugPayload.RegionStat> regions, int chunkX, int chunkZ) {
