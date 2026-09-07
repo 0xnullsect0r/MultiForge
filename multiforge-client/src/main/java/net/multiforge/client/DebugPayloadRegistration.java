@@ -84,11 +84,16 @@ public final class DebugPayloadRegistration {
                 LOGGER.warn("Dropping undecodable multiforge:debug/v1 {} frame: {}", frame.kind(), e.toString());
                 return;
             }
-            if (frame.kind() == DebugPacketKind.HELLO) {
-                // First contact with a MultiForge server: opt into every
-                // stream immediately so the HUD/overlays have data without
-                // requiring the player to toggle anything client-side.
+            if (frame.kind() == DebugPacketKind.HELLO && !channelClient.hasSubscribed()) {
+                // v1.3.16: once-per-connection latch. Pre-v1.3.16 we
+                // sent a SUBSCRIBE_ALL every time a HELLO arrived, but
+                // v1.3.14's HeartbeatEmitter emits HELLO at 4 Hz as a
+                // keepalive, so we were flooding the server with 4
+                // SUBSCRIBEs per second per client. Now we only send
+                // once per connection; hasSubscribed() is reset on
+                // client-side disconnect (see DebugChannelClient).
                 context.reply(new DebugFramePayload(channelClient.encodeSubscribe(SUBSCRIBE_ALL)));
+                channelClient.markSubscribed();
             }
         });
     }

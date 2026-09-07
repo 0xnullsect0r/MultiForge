@@ -64,6 +64,9 @@ public final class MultiForgeDebugMod {
         NeoForge.EVENT_BUS.register(new HeatmapRenderer(state));
         NeoForge.EVENT_BUS.register(new PinRenderer(state));
         NeoForge.EVENT_BUS.register(new KeyInputHandler(state));
+        // v1.3.16: reset the SUBSCRIBE-once latch on client disconnect
+        // so hopping between MultiForge servers in one session works.
+        NeoForge.EVENT_BUS.register(new DebugSessionHandler(channelClient));
 
         LOGGER.info("MultiForge debug client mod initialized (channel {})", DebugChannelClient.CHANNEL_ID);
     }

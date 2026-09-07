@@ -325,7 +325,8 @@ Fix or drop mods with R09 (blocking on worker thread) ERROR findings; WARN-only 
 
 ## Deferred behaviour
 
-- `/multiforge config cores <n>` and `config threads <n>` persist to disk immediately but don't yet re-plumb the running `MultiThreadedSchedulerHost`'s pool. Restart required. Live-mutating hook is a follow-up (M6 hook not yet wired).
-- `certify` requires you to ship `multiforge-scanner.jar` on-server — no auto-bundle.
+Every subcommand that mutates `<serverDir>/config/multiforge-server.toml` — `config cores`, `config threads`, `region size`, `region mode` — persists to disk immediately but does NOT yet re-plumb the running `MultiThreadedSchedulerHost`. Restart required for the change to take effect. As of **v1.3.16** the command reply now explicitly warns you (`"(applied on next server restart — live-reload not yet wired; see docs/multiforge-command.md)"`) so you don't have to remember which knobs need a restart. Live-mutating hook is deferred to M6.
 
-Both are known limitations; behaviour will change in a future release without breaking the command surface.
+`certify` requires you to ship `multiforge-scanner.jar` on-server — no auto-bundle.
+
+All are known limitations; behaviour will change in a future release without breaking the command surface.

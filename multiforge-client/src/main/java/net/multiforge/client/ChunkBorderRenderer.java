@@ -19,42 +19,44 @@ import java.util.List;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.client.player.LocalPlayer;
-import net.minecraft.client.renderer.LevelRenderer;
+import net.minecraft.client.renderer.MultiBufferSource;
 import net.minecraft.client.renderer.RenderType;
+import net.minecraft.util.Mth;
 import net.minecraft.world.level.ChunkPos;
-import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.Vec3;
 import net.multiforge.runtime.diagnostics.wire.DebugPayload;
 import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.neoforge.client.event.RenderLevelStageEvent;
 
 /**
- * Draws full-height chunk-boundary pillars around the player, tinted
- * per swatch from the live region ids in the most recent {@code
- * REGION_SNAPSHOT} (protocol §7.2).
+ * Draws vertical strips only along the seams where two adjacent
+ * chunks belong to (hash-picked) different regions. Iterates a 9×9
+ * grid around the player, but instead of a full-height AABB per chunk
+ * (v1.3.5–v1.3.15 behaviour, which produced corner-pillar farms and
+ * z-fighting above clouds), it walks the north+east edge of each
+ * chunk and draws a single line strip if the neighbour on that side
+ * has a different colour. Y range is clamped to a 48-block band
+ * around the player to keep the strips crisp and dodge depth-buffer
+ * precision loss at high altitude.
  *
- * <p><b>Known limitation:</b> {@code REGION_SNAPSHOT} carries no
- * per-chunk region membership -- {@code RegionId} is an opaque
- * monotonically-increasing counter, not a spatial key (see {@code
- * net.multiforge.runtime.region.RegionId}), and regions themselves are
- * irregular, dynamically grown/merged/split sets of sections rather
- * than a fixed grid (see {@code net.multiforge.runtime.region.Region}).
- * The client therefore cannot reconstruct which chunk truly belongs to
- * which region from the wire alone. Until a future, backward-compatible
- * protocol revision adds a per-chunk mapping (e.g. a new packet kind at
- * one of the {@code 0x06}-{@code 0x0F} reserved ids in protocol §2),
- * this renderer assigns colours to the visible chunk grid by hashing
- * each chunk's own coordinate against the pool of currently-live region
- * ids. That produces a stable, visually distinct grid per session --
- * useful for eyeballing region churn -- but it is a placeholder, not a
- * ground-truth region boundary. Flagged for the protocol owner.
+ * <p><b>Known limitation:</b> the region-per-chunk assignment is
+ * hash-based, not real (protocol §7.2 doesn't carry per-chunk
+ * ownership — see the v1.3.5–v1.3.15 Javadoc for the full story).
+ * The seam view is still useful for eyeballing region churn, but a
+ * seam that appears in-world is a hash artifact, not a truth.
+ * Deferred to v1.4: a new packet kind carrying per-chunk region-ids.
  */
 public final class ChunkBorderRenderer {
 
-    /** Chunks drawn in each direction from the player; keeps the line count modest. */
+    /** Chunks drawn in each direction from the player; keeps the strip count modest. */
     private static final int RADIUS_CHUNKS = 4;
 
-    private static final float LINE_ALPHA = 0.6F;
+    /** Y-range around the player where seams are drawn. */
+    private static final int Y_BELOW = 16;
+
+    private static final int Y_ABOVE = 32;
+
+    private static final float LINE_ALPHA = 0.75F;
 
     private final DebugHudState state;
 
@@ -83,30 +85,114 @@ public final class ChunkBorderRenderer {
 
         Vec3 camPos = event.getCamera().getPosition();
         PoseStack poseStack = event.getPoseStack();
-        VertexConsumer consumer = mc.renderBuffers().bufferSource().getBuffer(RenderType.lines());
-        int minY = level.getMinBuildHeight();
-        int maxY = level.getMaxBuildHeight();
+        MultiBufferSource.BufferSource bufferSource = mc.renderBuffers().bufferSource();
+        VertexConsumer consumer = bufferSource.getBuffer(RenderType.lines());
         ChunkPos center = player.chunkPosition();
+
+        double playerY = player.getY();
+        double yLow = Mth.clamp(playerY - Y_BELOW, level.getMinBuildHeight(), level.getMaxBuildHeight());
+        double yHigh = Mth.clamp(playerY + Y_ABOVE, level.getMinBuildHeight(), level.getMaxBuildHeight());
+
+        List<DebugPayload.RegionStat> regions = snapshot.regions();
 
         for (int dx = -RADIUS_CHUNKS; dx <= RADIUS_CHUNKS; dx++) {
             for (int dz = -RADIUS_CHUNKS; dz <= RADIUS_CHUNKS; dz++) {
                 int chunkX = center.x + dx;
                 int chunkZ = center.z + dz;
-                long regionId = pickRegionId(snapshot.regions(), chunkX, chunkZ);
-                float[] rgb = colorFor(regionId);
+                long here = pickRegionId(regions, chunkX, chunkZ);
 
-                double originX = chunkX * 16.0;
-                double originZ = chunkZ * 16.0;
-                Vec3 offset = new Vec3(originX - camPos.x, minY - camPos.y, originZ - camPos.z);
-                AABB local = new AABB(0, 0, 0, 16, maxY - minY, 16);
+                // North seam: this chunk vs. (chunkX, chunkZ - 1).
+                if (dz > -RADIUS_CHUNKS) {
+                    long north = pickRegionId(regions, chunkX, chunkZ - 1);
+                    if (north != here) {
+                        drawSeamZ(poseStack, consumer, camPos, chunkX, chunkZ, yLow, yHigh, here);
+                    }
+                }
 
-                poseStack.pushPose();
-                poseStack.translate(offset.x, offset.y, offset.z);
-                LevelRenderer.renderLineBox(poseStack, consumer, local, rgb[0], rgb[1], rgb[2], LINE_ALPHA);
-                poseStack.popPose();
+                // West seam: this chunk vs. (chunkX - 1, chunkZ).
+                if (dx > -RADIUS_CHUNKS) {
+                    long west = pickRegionId(regions, chunkX - 1, chunkZ);
+                    if (west != here) {
+                        drawSeamX(poseStack, consumer, camPos, chunkX, chunkZ, yLow, yHigh, here);
+                    }
+                }
             }
         }
-        mc.renderBuffers().bufferSource().endBatch(RenderType.lines());
+
+        bufferSource.endBatch(RenderType.lines());
+    }
+
+    /** Vertical wall at the north edge of (chunkX, chunkZ) — from (x, z) to (x+16, z). */
+    private static void drawSeamZ(
+            PoseStack poseStack,
+            VertexConsumer consumer,
+            Vec3 camPos,
+            int chunkX,
+            int chunkZ,
+            double yLow,
+            double yHigh,
+            long regionId) {
+        double x0 = chunkX * 16.0 - camPos.x;
+        double x1 = x0 + 16.0;
+        double z = chunkZ * 16.0 - camPos.z;
+        double y0 = yLow - camPos.y;
+        double y1 = yHigh - camPos.y;
+        float[] rgb = colorFor(regionId);
+        drawLine(poseStack, consumer, x0, y0, z, x1, y0, z, rgb);
+        drawLine(poseStack, consumer, x0, y1, z, x1, y1, z, rgb);
+        drawLine(poseStack, consumer, x0, y0, z, x0, y1, z, rgb);
+        drawLine(poseStack, consumer, x1, y0, z, x1, y1, z, rgb);
+    }
+
+    /** Vertical wall at the west edge of (chunkX, chunkZ) — from (x, z) to (x, z+16). */
+    private static void drawSeamX(
+            PoseStack poseStack,
+            VertexConsumer consumer,
+            Vec3 camPos,
+            int chunkX,
+            int chunkZ,
+            double yLow,
+            double yHigh,
+            long regionId) {
+        double x = chunkX * 16.0 - camPos.x;
+        double z0 = chunkZ * 16.0 - camPos.z;
+        double z1 = z0 + 16.0;
+        double y0 = yLow - camPos.y;
+        double y1 = yHigh - camPos.y;
+        float[] rgb = colorFor(regionId);
+        drawLine(poseStack, consumer, x, y0, z0, x, y0, z1, rgb);
+        drawLine(poseStack, consumer, x, y1, z0, x, y1, z1, rgb);
+        drawLine(poseStack, consumer, x, y0, z0, x, y1, z0, rgb);
+        drawLine(poseStack, consumer, x, y0, z1, x, y1, z1, rgb);
+    }
+
+    private static void drawLine(
+            PoseStack poseStack,
+            VertexConsumer consumer,
+            double x0,
+            double y0,
+            double z0,
+            double x1,
+            double y1,
+            double z1,
+            float[] rgb) {
+        var matrix = poseStack.last().pose();
+        var normal = poseStack.last().normal();
+        float nx = (float) (x1 - x0);
+        float ny = (float) (y1 - y0);
+        float nz = (float) (z1 - z0);
+        float len = (float) Math.sqrt(nx * nx + ny * ny + nz * nz);
+        if (len > 0) {
+            nx /= len;
+            ny /= len;
+            nz /= len;
+        }
+        consumer.addVertex(matrix, (float) x0, (float) y0, (float) z0)
+                .setColor(rgb[0], rgb[1], rgb[2], LINE_ALPHA)
+                .setNormal(normal, nx, ny, nz);
+        consumer.addVertex(matrix, (float) x1, (float) y1, (float) z1)
+                .setColor(rgb[0], rgb[1], rgb[2], LINE_ALPHA)
+                .setNormal(normal, nx, ny, nz);
     }
 
     private static long pickRegionId(List<DebugPayload.RegionStat> regions, int chunkX, int chunkZ) {

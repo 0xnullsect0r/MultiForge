@@ -13,8 +13,6 @@
 package net.multiforge.neoforge.debug;
 
 import java.io.IOException;
-import java.nio.file.Files;
-import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -25,6 +23,7 @@ import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.multiforge.api.world.WorldRef;
+import net.multiforge.neoforge.MultiForgeServerState;
 import net.multiforge.runtime.MultiForge;
 import net.multiforge.runtime.config.MultiForgeConfig;
 import net.multiforge.runtime.diagnostics.emitters.HeartbeatEmitter;
@@ -37,7 +36,6 @@ import net.multiforge.runtime.diagnostics.emitters.ViolationEmitter;
 import net.multiforge.runtime.diagnostics.wire.DebugPacketCodec;
 import net.multiforge.runtime.diagnostics.wire.DebugPacketKind;
 import net.multiforge.runtime.diagnostics.wire.DebugPayload;
-import net.multiforge.runtime.region.pin.RegionPinManager;
 import net.multiforge.runtime.scheduler.MultiForgeRegionizedRuntime;
 import net.multiforge.runtime.scheduler.MultiThreadedSchedulerHost;
 import net.neoforged.bus.api.IEventBus;
@@ -156,8 +154,14 @@ public final class DebugChannelServer {
         INSTALLED.add(() -> heartbeatFuture.cancel(false));
 
         INSTALLED.add(RegionMapEmitter.install(host, DebugChannelServer::broadcast, PermissionFilter.ALWAYS_ALLOW));
+        // v1.3.16: use the shared RegionPinManager instance so
+        // /multiforge region pin mutations propagate to the emitter
+        // within one 4 Hz tick.
         INSTALLED.add(PinListEmitter.install(
-                host, loadPins(server), DebugChannelServer::broadcast, PermissionFilter.ALWAYS_ALLOW));
+                host,
+                MultiForgeServerState.pinManagerFor(server),
+                DebugChannelServer::broadcast,
+                PermissionFilter.ALWAYS_ALLOW));
         INSTALLED.add(ViolationEmitter.install(host, DebugChannelServer::broadcast, PermissionFilter.ALWAYS_ALLOW));
 
         LOGGER.info("multiforge:debug/v1 emitters installed (heartbeat + region-map + pin-list + violations)");
@@ -183,6 +187,9 @@ public final class DebugChannelServer {
         PLAYERS.clear();
         SUBSCRIPTIONS.clear();
         heartbeat = null;
+        // v1.3.16: clear the shared pin manager for this server so the
+        // next GameTestServer instance in the same JVM starts clean.
+        MultiForgeServerState.clear(event.getServer());
     }
 
     private static void onLevelLoad(LevelEvent.Load event) {
@@ -293,6 +300,13 @@ public final class DebugChannelServer {
      * Handle an inbound frame from a client. Per protocol §1 the only
      * frame kind we ever expect here is SUBSCRIBE — a client's opt-in
      * mask.
+     *
+     * <p>v1.3.16: log-level rule. INFO only on the first SUBSCRIBE
+     * from a player, or when the mask actually changes; identical
+     * repeats are silent (a v1.3.15 client bug re-sent SUBSCRIBE_ALL
+     * on every 4 Hz HELLO keepalive, and even after that bug is fixed
+     * client-side, a well-behaved renderer might toggle streams). The
+     * mask is still updated regardless.
      */
     private static void handleClientFrame(net.minecraft.world.entity.player.Player player, byte[] raw) {
         if (!(player instanceof ServerPlayer sp)) return;
@@ -301,11 +315,13 @@ public final class DebugChannelServer {
             if (frame.kind() != DebugPacketKind.SUBSCRIBE) return; // ignore unexpected
             DebugPayload.Subscribe sub = DebugPacketCodec.decodeSubscribe(frame.body());
             int mask = sub.flags() & 0x0F; // strip unknown bits per §5
-            SUBSCRIPTIONS.put(sp.getUUID(), mask);
-            LOGGER.info(
-                    "multiforge:debug/v1 — SUBSCRIBE from {} (mask=0x{})",
-                    sp.getName().getString(),
-                    Integer.toHexString(mask));
+            Integer prev = SUBSCRIPTIONS.put(sp.getUUID(), mask);
+            if (prev == null || prev.intValue() != mask) {
+                LOGGER.info(
+                        "multiforge:debug/v1 — SUBSCRIBE from {} (mask=0x{})",
+                        sp.getName().getString(),
+                        Integer.toHexString(mask));
+            }
         } catch (IOException | RuntimeException t) {
             LOGGER.warn(
                     "multiforge:debug/v1 — dropped malformed inbound frame from {}: {}",
@@ -317,21 +333,6 @@ public final class DebugChannelServer {
     // ------------------------------------------------------------------
     // Helpers
     // ------------------------------------------------------------------
-
-    private static RegionPinManager loadPins(MinecraftServer server) {
-        Path pinsFile = server.getServerDirectory()
-                .toAbsolutePath()
-                .resolve("config")
-                .resolve("multiforge-region-pins.json");
-        try {
-            Files.createDirectories(pinsFile.getParent());
-            return RegionPinManager.load(pinsFile);
-        } catch (IOException e) {
-            LOGGER.warn(
-                    "multiforge:debug/v1 — failed to load {}, using empty pin manager: {}", pinsFile, e.getMessage());
-            return new RegionPinManager(pinsFile);
-        }
-    }
 
     /**
      * Kept for future callers that want to instantiate a fresh

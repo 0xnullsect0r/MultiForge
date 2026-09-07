@@ -1,5 +1,33 @@
 # CHANGELOG
 
+## v1.3.16 — debug-mod UX cleanup (seven bugs surfaced by live testing)
+
+User installed v1.3.14 server + v1.3.15 client and reported seven distinct bugs on a real playthrough. This release fixes all of them in one pass.
+
+### Server console
+
+- **SUBSCRIBE spam gone.** The client's `DebugPayloadRegistration` used to send a `SUBSCRIBE_ALL` frame on *every* incoming HELLO, and v1.3.14's `HeartbeatEmitter` re-broadcasts HELLO at 4 Hz as a keepalive — so the server console logged `SUBSCRIBE from <name> (mask=0xf)` four times per second per connected client. Fix has two halves:
+  - **Client** — `DebugChannelClient` gains a once-per-connection `subscribed` latch. `DebugPayloadRegistration` only fires SUBSCRIBE on the first HELLO now; `DebugSessionHandler` resets the latch on `ClientPlayerNetworkEvent.LoggingOut` so hopping between servers works.
+  - **Server** — `DebugChannelServer.handleClientFrame` only logs INFO when the received mask differs from the stored value; duplicate SUBSCRIBEs are silently applied.
+
+### `/multiforge` commands
+
+- **`/multiforge chunks <world>` now works.** The M9 `ChunkHolderManager` bridge was already installed on the fork; the dispatcher just didn't have a lookup Function into it. `MultiForgeCommandBinder` now uses the 3-arg dispatcher constructor with `world -> host.chunkManagerForOrNull(world)` — the reply now shows real chunk-shadow stats instead of "Chunk-system bridge not installed".
+- **`/multiforge region pin ...` is now visible to the client.** Pre-v1.3.16 the command binder and the debug channel each loaded their own `RegionPinManager` instance from the same JSON, so command-side mutations never reached the debug-side emitter. New `MultiForgeServerState.pinManagerFor(server)` holder returns the same instance to both sides (`WeakHashMap` keyed by `MinecraftServer`, cleared on `ServerStoppingEvent`). Client sees the pin box appear within 250 ms.
+- **`config` and `region mode`/`size` commands warn about restart-required.** Every persisting subcommand reply now appends `(applied on next server restart — live-reload not yet wired; see docs/multiforge-command.md)`. Live-reload of the running `MultiThreadedSchedulerHost` is deferred to M6.
+
+### Client overlays
+
+- **F3-style HUD moved to top-left, always visible.** Previously drew at bottom-left (contradicting `docs/client-mod-guide.md`) AND only when F3 was open (also contradicting the doc). Now: always visible when overlays are enabled and a HELLO frame has arrived.
+- **Chunk-border renderer rewrite — no more pillar farm.** Old code drew a full-height AABB per chunk in a 9×9 grid around the player: 12 edges per cube, 4 vertical pillars per chunk corner, adjacent chunks sharing corners → a forest of vertical beacons following the player, with red/blue flashing at high altitude from Y-depth z-fighting between the full-world-height edges of adjacent chunks. New code walks the seams between adjacent chunks and draws a single line strip on each edge where the neighbours belong to different (hash-picked) regions; Y is clamped to a 48-block band around the player. Operator now sees just the region seams, no corner pillars, no z-fighting above clouds. Real per-chunk region-ownership is a wire-protocol change deferred to v1.4.
+- **`PinRenderer` draws a real bounding box.** Pre-v1.3.16 only rendered a floating text label at the pin's centre — the doc promised a box; code didn't match. Now draws a proper `LevelRenderer.renderLineBox` in the same 48-block Y-band, with the pin's id billboarded above the box's NE-top corner.
+
+### Docs + versioning
+
+- `docs/client-mod-guide.md` §2.1 corrected (HUD position + always-visible); §2.4 corrected (real box + label).
+- `docs/multiforge-command.md` Deferred behaviour section extended to explicitly cover `region size` and `region mode`.
+- `gradle.properties` + `upstream/neoforge-1.21.1/gradle.properties` bumped 1.3.15 → 1.3.16.
+
 ## v1.3.15 — user-configurable keybind toggles the client mod's overlays
 
 Adds a client-side toggle for the whole debug overlay stack (F3-style HUD, chunk borders, tick-cost heatmap, region-pin boxes). Default key: **F6** (unbound in Vanilla). User can remap or clear the binding under **Options → Controls → MultiForge Debug**.

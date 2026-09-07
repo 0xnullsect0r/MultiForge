@@ -18,8 +18,12 @@ import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.Font;
 import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.client.player.LocalPlayer;
+import net.minecraft.client.renderer.LevelRenderer;
 import net.minecraft.client.renderer.LightTexture;
 import net.minecraft.client.renderer.MultiBufferSource;
+import net.minecraft.client.renderer.RenderType;
+import net.minecraft.util.Mth;
+import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.Vec3;
 import net.multiforge.runtime.diagnostics.wire.DebugPayload;
 import net.neoforged.bus.api.SubscribeEvent;
@@ -27,17 +31,23 @@ import net.neoforged.neoforge.client.event.RenderLevelStageEvent;
 import org.joml.Matrix4f;
 
 /**
- * Renders a camera-facing billboard label above each operator-created
- * region pin from {@code PIN_LIST} (protocol §7.4), so pins are visible
- * in the world without opening a separate UI.
- *
- * <p>Positioned at the horizontal centre of the pin's chunk range,
- * following the player's height, using the same billboard technique
- * vanilla uses for entity name tags ({@code EntityRenderer#renderNameTag}):
- * translate to world position relative to the camera, rotate to face
- * the camera, then scale down before drawing text.
+ * Renders each operator-created region pin as a labelled bounding
+ * box in-world. Same 48-block Y-band as {@link ChunkBorderRenderer}
+ * (dodges z-fighting at high altitudes; pre-v1.3.16 code drew only a
+ * floating billboard label with no box at all, and the docs
+ * incorrectly claimed a box was drawn).
  */
 public final class PinRenderer {
+
+    /** Y-range around the player where pin boxes render. */
+    private static final int Y_BELOW = 16;
+
+    private static final int Y_ABOVE = 32;
+
+    private static final float LINE_ALPHA = 0.85F;
+    private static final float BOX_RED = 1.0F;
+    private static final float BOX_GREEN = 0.85F;
+    private static final float BOX_BLUE = 0.2F;
 
     private static final float LABEL_HEIGHT_ABOVE_PLAYER = 3.0F;
     private static final float SCALE = 0.025F;
@@ -75,21 +85,39 @@ public final class PinRenderer {
         Font font = mc.font;
         MultiBufferSource.BufferSource bufferSource = mc.renderBuffers().bufferSource();
 
+        double playerY = player.getY();
+        double yLow = Mth.clamp(playerY - Y_BELOW, level.getMinBuildHeight(), level.getMaxBuildHeight());
+        double yHigh = Mth.clamp(playerY + Y_ABOVE, level.getMinBuildHeight(), level.getMaxBuildHeight());
+
         for (DebugPayload.PinBox pin : pins) {
             if (!pin.worldId().equals(currentWorld)) {
                 continue;
             }
-            double centerChunkX = (pin.fromChunkX() + pin.toChunkX()) / 2.0;
-            double centerChunkZ = (pin.fromChunkZ() + pin.toChunkZ()) / 2.0;
-            double centerX = centerChunkX * 16.0 + 8.0;
-            double centerZ = centerChunkZ * 16.0 + 8.0;
-            double labelY = player.getY() + LABEL_HEIGHT_ABOVE_PLAYER;
+            // Box: chunks (from) through (to) inclusive; (to+1) since chunk edges are exclusive.
+            double x0 = pin.fromChunkX() * 16.0 - camPos.x;
+            double z0 = pin.fromChunkZ() * 16.0 - camPos.z;
+            double x1 = (pin.toChunkX() + 1) * 16.0 - camPos.x;
+            double z1 = (pin.toChunkZ() + 1) * 16.0 - camPos.z;
+            double y0 = yLow - camPos.y;
+            double y1 = yHigh - camPos.y;
+
+            var consumer = bufferSource.getBuffer(RenderType.lines());
+            poseStack.pushPose();
+            LevelRenderer.renderLineBox(
+                    poseStack, consumer, new AABB(x0, y0, z0, x1, y1, z1), BOX_RED, BOX_GREEN, BOX_BLUE, LINE_ALPHA);
+            poseStack.popPose();
+
+            // Billboard label above the box's NE-top corner so it's easy
+            // to correlate the label with the pin's rectangle.
+            double labelX = (pin.toChunkX() + 1) * 16.0;
+            double labelZ = pin.fromChunkZ() * 16.0;
+            double labelY = playerY + LABEL_HEIGHT_ABOVE_PLAYER;
 
             String label = pin.id();
             float halfWidth = font.width(label) / 2.0F;
 
             poseStack.pushPose();
-            poseStack.translate(centerX - camPos.x, labelY - camPos.y, centerZ - camPos.z);
+            poseStack.translate(labelX - camPos.x, labelY - camPos.y, labelZ - camPos.z);
             poseStack.mulPose(event.getCamera().rotation());
             poseStack.scale(SCALE, -SCALE, SCALE);
             Matrix4f matrix = poseStack.last().pose();
@@ -106,6 +134,7 @@ public final class PinRenderer {
                     LightTexture.FULL_BRIGHT);
             poseStack.popPose();
         }
+        bufferSource.endBatch(RenderType.lines());
         bufferSource.endBatch();
     }
 }
