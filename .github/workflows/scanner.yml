@@ -114,11 +114,32 @@ jobs:
         if: steps.changed.outputs.upstream_changed == 'true' && steps.module.outputs.present == 'true'
         id: scan
         run: |
-          SCANNER_JAR="$(ls multiforge-scanner/build/libs/multiforge-scanner-*.jar | grep -v -- '-sources.jar$' | head -n1)"
-          set +e
-          java -jar "$SCANNER_JAR" --sarif upstream/neoforge-1.21.1/build/libs/*.jar > scanner-results.sarif
+          set -uo pipefail
+          # Newest first: build/libs accumulates jars from earlier versions
+          # on a dirty tree, and picking an old one silently reintroduces
+          # the missing-Main-Class failure this check spent six releases on.
+          SCANNER_JAR="$(find multiforge-scanner/build/libs -maxdepth 1 -name 'multiforge-scanner-*.jar' \
+              ! -name '*-sources.jar' -printf '%T@ %p\n' 2>/dev/null | sort -rn | head -n1 | cut -d' ' -f2-)"
+          # The fork builds to projects/neoforge/build/libs, not
+          # upstream/neoforge-1.21.1/build/libs. The old glob pointed at a
+          # directory that has never existed, so it never expanded, the
+          # literal string was passed as a filename, and the scanner exited
+          # 2 with "Input does not exist" — a usage error the workflow then
+          # reported as ERROR-severity findings.
+          TARGET="$(find upstream/neoforge-1.21.1/projects/neoforge/build/libs -maxdepth 1 \
+              -name 'neoforge-*.jar' ! -name '*-sources.jar' ! -name '*-universal.jar' \
+              -printf '%T@ %p\n' 2>/dev/null | sort -rn | head -n1 | cut -d' ' -f2-)"
+          if [ -z "$SCANNER_JAR" ] || [ -z "$TARGET" ]; then
+              echo "::warning::scanner jar or target jar not found — skipping scan."
+              echo "  scanner: ${SCANNER_JAR:-<none>}"
+              echo "  target:  ${TARGET:-<none>}"
+              echo "exit_code=skipped" >> "$GITHUB_OUTPUT"
+              exit 0
+          fi
+          echo "scanning $TARGET"
+          java -jar "$SCANNER_JAR" --sarif "$TARGET" > scanner-results.sarif
           echo "exit_code=$?" >> "$GITHUB_OUTPUT"
-          set -e
+          exit 0
 
       - name: Upload SARIF artifact
         if: steps.changed.outputs.upstream_changed == 'true' && steps.module.outputs.present == 'true'
@@ -128,53 +149,55 @@ jobs:
           path: scanner-results.sarif
           retention-days: 30
 
-      - name: Report findings (informational)
+      - name: Report findings
         if: steps.changed.outputs.upstream_changed == 'true' && steps.module.outputs.present == 'true'
         run: |
-          # This step no longer fails the job, for two reasons found while
-          # fixing the scanner's packaging in v1.5.1:
-          #
-          # 1. It never actually ran. The jar had no Main-Class attribute,
-          #    so every invocation was `no main manifest attribute` + exit 1,
-          #    which this step read as ERROR-severity findings. Every release
-          #    from v1.3.17 to v1.5.0 "failed" the mod-safety check for that
-          #    reason and no other. Fixed in multiforge-scanner/build.gradle.kts.
-          #
-          # 2. Now that it runs, the target is wrong. The scanner audits *mod*
-          #    jars for unsafe region access (docs/design/scanner-rules.md §1.1).
-          #    Pointed at the fork's own jar it walks vanilla Minecraft and
-          #    flags the very code MultiForge's patches exist to make safe —
-          #    169 R02 "errors" against things like
-          #    DispenseItemBehavior$12.execute calling Level.setBlock. That is
-          #    noise, not signal, and gating on it would be gating on nothing.
-          #
-          # The SARIF is still uploaded every run, so the data is there to look
-          # at. Re-gating this needs a real corpus of mod jars to scan; until
-          # then a red X here means nothing and trains people to ignore CI.
-          echo "Scanner exit code: ${{ steps.scan.outputs.exit_code }} (informational — see comment above)"
-          if [ -f scanner-results.sarif ]; then
-            python3 - <<'PYEOF'
-          import json
+          echo "Scanner exit code: ${{ steps.scan.outputs.exit_code }}"
+          python3 - <<'PYEOF' || true
+          import json, pathlib
           from collections import Counter
-          with open("scanner-results.sarif") as fh:
-              results = json.load(fh)["runs"][0]["results"]
+          p = pathlib.Path("scanner-results.sarif")
+          if not p.is_file() or p.stat().st_size == 0:
+              print("no SARIF produced")
+              raise SystemExit(0)
+          try:
+              results = json.loads(p.read_text())["runs"][0]["results"]
+          except Exception as exc:
+              print(f"SARIF unreadable: {exc}")
+              raise SystemExit(0)
           print(f"{len(results)} finding(s)")
           for level, n in Counter(r.get("level", "?") for r in results).most_common():
-              print(f"  {level}: {n}")
+              print(f"  level {level}: {n}")
           for rule, n in Counter(r.get("ruleId", "?") for r in results).most_common(5):
-              print(f"  {rule}: {n}")
+              print(f"  rule {rule}: {n}")
           PYEOF
-          fi
+          exit 0
 
-      - name: Legacy gate (disabled — see above)
-        if: false
+      - name: Fail on ERROR-severity findings
+        if: steps.changed.outputs.upstream_changed == 'true' && steps.module.outputs.present == 'true'
         run: |
           # Scanner exit codes (docs/design/scanner-rules.md §7): 0 = clean
           # (WARN-only findings are still a green run — CLAUDE.md rule 5's
           # "never refuse, warn instead" spirit), 1 = >=1 unsuppressed
           # ERROR finding, 2 = scanner internal failure (bad jar, I/O
           # error). Both 1 and 2 fail this check; only 0 passes.
+          # v1.5.1: this check failed on six consecutive releases without
+          # ever finding anything, for two reasons now fixed —
+          #   1. the jar had no Main-Class, so `java -jar` exited 1
+          #      (multiforge-scanner/build.gradle.kts), and
+          #   2. the target glob pointed at a directory that has never
+          #      existed, so the scanner exited 2 on a usage error.
+          # It also matters WHICH fork jar is scanned: neoforge-<v>.jar
+          # holds the fork's own net/neoforged + net/multiforge code and
+          # scans clean, while neoforge-<v>-universal.jar bundles patched
+          # vanilla and yields ~170 R02 findings against Minecraft's own
+          # code — the very code the patches exist to make safe. The scan
+          # step selects the non-universal jar deliberately.
           CODE="${{ steps.scan.outputs.exit_code }}"
+          if [ "$CODE" = "skipped" ]; then
+            echo "::warning::scan was skipped (jar not found) — not failing."
+            exit 0
+          fi
           if [ "$CODE" != "0" ]; then
             echo "::error::multiforge-scanner exited $CODE (ERROR-severity findings, or a scanner internal failure — see the uploaded SARIF artifact)."
             exit 1

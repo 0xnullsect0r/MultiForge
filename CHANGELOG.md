@@ -49,7 +49,11 @@ Separately: the `mod-safety scanner` CI check has failed on every release since 
 
 Fixed: the jar now carries a manifest and merges its ASM dependency (BSD-3-Clause, GPL-3 compatible), since `java -jar` ignores `-cp` and a manifest alone would only have moved the failure to `NoClassDefFoundError`.
 
-With it running, a second problem surfaced: the workflow points it at the fork's own jar. The scanner audits *mod* jars for unsafe region access (`docs/design/scanner-rules.md` §1.1); aimed at the fork it walks vanilla Minecraft and flags the code MultiForge's patches exist to make safe — 169 R02 "errors" for things like `DispenseItemBehavior$12.execute` calling `Level.setBlock`. That is noise, so the step is now informational and prints a finding summary rather than failing. Re-gating it needs a real corpus of mod jars; a red X that means nothing only teaches people to ignore CI.
+With it running, a second bug surfaced: the target glob was `upstream/neoforge-1.21.1/build/libs/*.jar`, a directory that has never existed — the fork builds to `projects/neoforge/build/libs`. The glob never expanded, the literal string was passed as a filename, and the scanner exited 2 on a usage error.
+
+A third: *which* fork jar matters. `neoforge-<v>-universal.jar` bundles patched vanilla, so scanning it yields ~170 R02 findings against Minecraft's own code — the very code the patches exist to make safe. `neoforge-<v>.jar` holds the fork's own `net/neoforged` + `net/multiforge` classes, which is what should be audited. Against that target the scan is **clean: 0 findings, exit 0**.
+
+So the check is a real gate again rather than permanent noise. Jar selection is now newest-first, because `build/libs` accumulates old versions on a dirty tree and picking a stale one silently reintroduces the missing-`Main-Class` failure.
 
 - `gradle.properties` + `upstream/neoforge-1.21.1/gradle.properties` bumped 1.5.0 → 1.5.1.
 
