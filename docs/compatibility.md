@@ -29,7 +29,26 @@ The fix is a rebase onto current NeoForge. See [§5](#5-the-rebase).
 | **FTB packs** (1.21.1 line) | ❌ Expected not to boot | Untested, but `ftblibrary`, `ftbquests`, `ftbteams`, `ftbchunks`, `ftbessentials` all appear in ATM10 requiring 21.1.0 — those pass. `ftbxmodcompat` needs 21.1.0, also passes. The blockers in an FTB pack will be its content mods, same as ATM10. |
 | **Create-based packs** | ❌ Does not boot | `create` requires 21.1.219. Everything downstream of it (`createaddition` 21.1.219, `create_enchantment_industry`, `create_dragons_plus`) fails with it. |
 | **Vanilla + NeoForge, no mods** | ✅ Boots | Verified: converts and reaches the EULA gate, then runs. |
-| **Small mods targeting `[21.1.0,)`** | ✅ Expected to work | 75 of ATM10's mods fall in this class. Not yet verified in isolation. |
+| **Individual mods within the base** | ✅ Verified | See [§2.1](#21-individually-verified-mods). |
+
+### 2.1 Individually verified mods
+
+Booted on a v1.5.1 dedicated server reporting `21.1.1-multiforge-1.5.1`, reaching `Done`:
+
+| Mod | Build | Requires | Result |
+|---|---|---|---|
+| Cloth Config API | 15.0.140+neoforge | `[21.0.110-beta,)` | ✅ loads |
+| Jade | 15.10.6+neoforge | `[21.0.143,)` | ✅ loads |
+| Sophisticated Core | 1.21.1-1.5.1.2341 | `[21.1.229,)` | ❌ refused, names the version |
+
+The Sophisticated Core result is the *intended* behaviour, not a defect — a clean refusal at load rather than a crash in gameplay.
+
+Note that its Modrinth build requires 21.1.229 while the copy bundled in ATM10 requires only 21.1.0. **A mod's requirement varies by build**, so check the jar you actually have:
+
+```bash
+unzip -p <mod>.jar META-INF/neoforge.mods.toml | grep -A4 'modId = "neoforge"'
+```
+
 
 Numbers are from a real ATM10 boot on v1.5.0 plus the dependency analysis in [§3](#3-what-atm10-actually-needs).
 

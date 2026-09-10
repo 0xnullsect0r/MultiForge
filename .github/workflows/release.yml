@@ -134,6 +134,25 @@ jobs:
           ./gradlew --no-configuration-cache --no-daemon --stacktrace --parallel --build-cache \
             :neoforge:signInstallerJar
 
+      - name: Assert the fork reports a real NeoForge version
+        working-directory: upstream/neoforge-1.21.1
+        # v1.5.0 shipped reporting `1.21.1-v1.5.0.0-beta`, which is not a
+        # NeoForge version: Maven compares its leading `1` against the `21`
+        # in a range like [21.1.152,) and puts it below every floor, so a
+        # MultiForge server refused to load ANY mod. Fail the release here
+        # rather than ship that again.
+        run: |
+          set -euo pipefail
+          VER=$(./gradlew -q --no-daemon :neoforge:properties \
+              | awk '/^NeoForge version /{print $3; exit}')
+          echo "fork reports: $VER"
+          if ! printf '%s' "$VER" | grep -qE '^21\.[0-9]+\.[0-9]+-multiforge-'; then
+              echo "::error::Fork version '$VER' is not <neoforge base>-multiforge-<ver>." \
+                   "Mods resolve their neoforge dependency range against this string;" \
+                   "anything else refuses every mod. See docs/compatibility.md."
+              exit 1
+          fi
+
       - name: Stage fork installer with release-friendly name
         run: |
           set -euo pipefail
