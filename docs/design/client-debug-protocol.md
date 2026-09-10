@@ -4,6 +4,18 @@
 any server-side sender implementation land against this document;
 changes require a Phase 0 amendment and a version bump per §8.
 
+**Amendments**
+
+- **v1.4.0 — protocol version 2.** Adds the `CHUNK_OWNERSHIP` kind
+  (§2, §7.7) and the `F_OWNERSHIP` subscription bit (§5) so the client's
+  chunk-border overlay can draw real region seams instead of an
+  assignment it hash-fabricated from chunk coordinates. Both are
+  backward-compatible additions under §8 — a new kind at a reserved ID,
+  a new bit in the mask — so the channel name is unchanged and a
+  version-1 peer keeps working. Also names `MIN_SUPPORTED_PROTOCOL`
+  (§8, closing the §10 gap) and **changes §6's default grant for
+  `multiforge.debug.view` from operator level 2 to allow-all**.
+
 Cite convention: `file:line` refers to a snippet in the repo at the time
 of freezing. `net.mf.rt.*` = `net.multiforge.runtime.*`; `net.mf.c.*` =
 `net.multiforge.client.*`.
@@ -58,9 +70,9 @@ freely as long as they consume the frozen `DebugPayload` records.
 
 Frozen 1:1 with `DebugPacketKind` (`DebugPacketKind.java:30-52`). Do not
 renumber existing values; new kinds append at the next free ID within
-their direction's block (`0x06`–`0x0F` reserved for future
+their direction's block (`0x07`–`0x0F` reserved for future
 server→client kinds, `0x11`–`0x1F` reserved for future client→server
-kinds).
+kinds; `0x06` was taken by `CHUNK_OWNERSHIP` in v1.4.0).
 
 | Kind | Wire ID | Direction | Purpose |
 |---|---|---|---|
@@ -69,7 +81,8 @@ kinds).
 | `HEATMAP_UPDATE` | `0x03` | server → client | Per-chunk MSPT delta within the client's view radius. Powers the tick-cost heatmap overlay. |
 | `PIN_LIST` | `0x04` | server → client | Full snapshot of every operator-created region pin from `RegionPinManager`, so the client can draw selection boxes. |
 | `VIOLATION_EVENT` | `0x05` | server → client | One ownership-violation / reroute event for the live side panel, sourced from `ViolationLogger`. |
-| `SUBSCRIBE` | `0x10` | client → server | Per-viewer subscription bitmask: which of the four push streams above this client wants. |
+| `CHUNK_OWNERSHIP` | `0x06` | server → client | Which region owns each loaded section of one world. Drives the chunk-border overlay's region seams. **Added in protocol version 2 (v1.4.0).** |
+| `SUBSCRIBE` | `0x10` | client → server | Per-viewer subscription bitmask: which of the five push streams above this client wants. |
 
 Notes on the ID layout:
 
@@ -78,7 +91,7 @@ Notes on the ID layout:
   direction from the ID's high nibble without a lookup table, even though
   today's `DebugPacketCodec` does not enforce it (see §9 for the
   invariant that *is* enforced: unknown-kind rejection).
-- `0x06`–`0x0F` and `0x11`–`0x1F` are reserved, not merely unused. A
+- `0x07`–`0x0F` and `0x11`–`0x1F` are reserved, not merely unused. A
   future packet kind added under `multiforge:debug/v1` (a
   backward-compatible addition per §8) must draw from these ranges.
 
@@ -93,6 +106,7 @@ Notes on the ID layout:
 | `HEATMAP_UPDATE` | 4 Hz (every 250 ms) | Same 250 ms heartbeat tick as `REGION_SNAPSHOT`; independently gated by its own subscription bit so a client can take snapshots without the heatmap or vice versa. |
 | `PIN_LIST` | event-driven | Sent once on subscribe (if `F_PINS` set) and again whenever `RegionPinManager.add`/`remove`/`save` changes the pin set. Not part of the 250 ms tick — a static pin list should not cost bandwidth every quarter-second. |
 | `VIOLATION_EVENT` | event-driven | One frame per `ViolationLogger.warn(...)` call site that actually fires (i.e. one frame per emitted WARN, not per rate-limiter-suppressed call — see §9 and `ViolationLogger.java:61-75`). Fan-out to every subscribed viewer. |
+| `CHUNK_OWNERSHIP` | 4 Hz (every 250 ms) | Same 250 ms heartbeat tick, gated by `F_OWNERSHIP`. Ownership changes only on region merge/split, so most frames repeat the previous one; the cost is bounded by the per-viewer view-radius narrowing described in §7.7. |
 | `SUBSCRIBE` | client-initiated, any time | Sent on connect (to establish the viewer's non-zero mask; see §5) and again whenever the player toggles overlays client-side. No rate limit is placed on this packet by the protocol, but the server MAY apply a generic per-connection payload-channel flood guard as part of its normal NeoForge networking hygiene — that guard is out of scope for this document. |
 
 Rationale for 4 Hz: matches the existing HUD refresh cadence used
@@ -170,7 +184,8 @@ not a target size.
 - **Default is `0`** — a freshly connected viewer is subscribed to
   nothing. The server sends `HELLO` unconditionally (it is not gated by
   the mask — see §3) but must not push any of `REGION_SNAPSHOT`,
-  `HEATMAP_UPDATE`, `PIN_LIST`, or `VIOLATION_EVENT` to a connection
+  `HEATMAP_UPDATE`, `PIN_LIST`, `VIOLATION_EVENT`, or `CHUNK_OWNERSHIP`
+  to a connection
   until that connection has sent a `SUBSCRIBE` with the corresponding
   bit set. This is a hard server-side invariant, not a bandwidth
   optimization — see §9.
@@ -182,17 +197,20 @@ not a target size.
   | `F_HEATMAP` | `0x02` | `HEATMAP_UPDATE` |
   | `F_PINS` | `0x04` | `PIN_LIST` |
   | `F_VIOLATIONS` | `0x08` | `VIOLATION_EVENT` |
+  | `F_OWNERSHIP` | `0x10` | `CHUNK_OWNERSHIP` (protocol 2+) |
 
-  Bits `0x10` and above are reserved for future streams; a server
+  Bits `0x20` and above are reserved for future streams; a server
   receiving an unrecognized bit set MUST ignore that bit (mask it off)
   rather than reject the whole `SUBSCRIBE` — this keeps a newer client
   talking to an older server forward-compatible per §8, at the cost of
-  the newer stream silently not being delivered.
+  the newer stream silently not being delivered. `DebugPayload.Subscribe.F_ALL`
+  is the canonical "every bit this build defines" constant a server
+  should mask against.
 - `Subscribe.wants(int flag)` (`DebugPayload.java:83-85`) is the
   canonical single-bit test: `(flags & flag) == flag`. Server-side
   fan-out logic must use this exact test (or an equivalent bitwise AND)
   per stream, independently — a viewer may subscribe to any subset, in
-  any combination, and the four bits are orthogonal.
+  any combination, and the five bits are orthogonal.
 - **Re-sending `SUBSCRIBE` replaces the mask**, it does not OR into the
   previous value. A client that wants to add a stream while keeping
   existing ones must include all previously-set bits it still wants in
@@ -231,13 +249,26 @@ not a target size.
   missing permission is not an ownership violation, but the same
   token-bucket discipline applies so a client hammering `SUBSCRIBE`
   cannot flood the server log).
-- **Default grant:** consistent with NeoForge's own permission
-  convention (see `NeoForgeMod.USE_SELECTORS_PERMISSION`,
-  `upstream/neoforge-1.21.1/.../NeoForgeMod.java:658-659`, which
-  defaults to `Commands.LEVEL_GAMEMASTERS`), `multiforge.debug.view`
-  defaults to **operator level 2** (`Commands.LEVEL_GAMEMASTERS`) absent
-  a permission-mod override. Servers running a full permission plugin
-  (LuckPerms et al.) can grant it independently of op status.
+- **Default grant (amended v1.4.0):** `multiforge.debug.view` defaults
+  to **allow-all**. Every player who installs the client mod sees the
+  overlays; no op level is required.
+
+  This deliberately departs from NeoForge's own convention (see
+  `NeoForgeMod.USE_SELECTORS_PERMISSION`,
+  `upstream/neoforge-1.21.1/.../NeoForgeMod.java:665-666`, which
+  defaults to `Commands.LEVEL_GAMEMASTERS`) and from this document's
+  original operator-level-2 default. Rationale: the overlays are a
+  diagnostic convenience rather than privileged information — `HELLO`
+  already carries the protocol version and tick rate unconditionally,
+  and region ids, MSPT and pin rectangles reveal nothing about other
+  players — and a player who can see why their base is lagging is more
+  useful to an operator than one who cannot.
+
+  The node is still registered (`DebugPermissions.VIEW`,
+  `upstream/.../neoforge/debug/DebugPermissions.java`) precisely so
+  that servers which disagree can restrict it: any `IPermissionHandler`
+  (LuckPerms et al.) may deny `multiforge.debug.view`, and the gate
+  then takes effect on that player's next `SUBSCRIBE`.
 - **Re-check cadence:** the permission is re-evaluated on every
   `SUBSCRIBE` frame, not cached for the life of the connection. If an
   operator's permission is revoked mid-session, the next `SUBSCRIBE`
@@ -366,19 +397,59 @@ Source: `DebugPacketCodec.encodeSubscribe`/`decodeSubscribe`
 
 ---
 
+### 7.7 `CHUNK_OWNERSHIP` (0x06) — `DebugPayload.OwnershipUpdate`
+
+Added in protocol version 2 (v1.4.0).
+
+| Field | Wire type | Notes |
+|---|---|---|
+| `worldId` | UTF-8 string (int16 length prefix) | Dimension id, e.g. `minecraft:overworld`. Scoped per world exactly like `HEATMAP_UPDATE` (§7.3). |
+| `sectionChunkShift` | `int32` | log2 of the section edge length in chunks. Lets a client map an arbitrary chunk to its section origin without knowing the server's `regionSize` config. Range 0–16; a value outside that is rejected at decode. |
+| `owners` count | `int32` | Number of `SectionOwner` entries. Ceiling `1 << 16`, matching `HEATMAP_UPDATE`'s. |
+| `owners[i].chunkX` | `int32` | The section's **origin chunk** X (`section.x() << shift`), not an arbitrary chunk in it. |
+| `owners[i].chunkZ` | `int32` | The section's origin chunk Z. |
+| `owners[i].regionId` | `int64` | Owning region id, matching `RegionStat.regionId` in §7.2. |
+
+Semantics:
+
+- **Ownership is per-section, and that is the real boundary.**
+  `ThreadedRegionizer` keys ownership by `SectionPos`
+  (`ThreadedRegionizer.java:59`), so every chunk inside a section
+  genuinely shares one owning region. This is not a coarsening of finer
+  data — there is no finer data.
+- **Each frame is a full replacement** for the named world, not a
+  delta. A client must discard its previous map for that world before
+  applying a new frame; a section absent from the frame is unowned or
+  unloaded, not unchanged.
+- **A missing entry is not a seam.** A client drawing region boundaries
+  must treat an unknown neighbour as "no information" rather than "a
+  different region", or it will draw a wall around the edge of the
+  streamed area instead of around a region.
+- **The server narrows this per viewer.** Like `HEATMAP_UPDATE`, the
+  producing emitter is Minecraft-free and builds a whole-world list; the
+  fork's `DebugChannelServer` filters to each subscriber's view radius
+  and re-encodes per viewer, skipping players in other dimensions. The
+  radius is widened by one section width so a section whose body covers
+  the edge of the view still reaches the client — otherwise the client
+  loses the neighbour it needs to detect the outermost seam.
+
 ## 8. Versioning and forward compatibility
 
-- `DebugPacketCodec.PROTOCOL_VERSION` (currently `1`) is carried in
-  every `HELLO` (§7.1) and is the single source of truth for "what
-  version does this server speak." There is no separate per-packet
-  version field — versioning is whole-protocol, not per-kind.
+- `DebugPacketCodec.PROTOCOL_VERSION` (currently `2`, raised from `1`
+  in v1.4.0) is carried in every `HELLO` (§7.1) and is the single source
+  of truth for "what version does this server speak." There is no
+  separate per-packet version field — versioning is whole-protocol, not
+  per-kind.
+- `DebugPacketCodec.MIN_SUPPORTED_PROTOCOL` (currently `1`) is the
+  other end of the range. `DebugPacketCodec.supportsProtocol(int)` is
+  the canonical test; both peers use it. Named in v1.4.0, closing the
+  gap §10 had left open.
 - **Client obligation:** a client mod MUST read `HELLO.protocolVersion`
   before sending `SUBSCRIBE` and MUST NOT send `SUBSCRIBE` (or assume
   any stream will arrive) if it does not understand that version.
 - **Server obligation:** the server defines a `MIN_SUPPORTED_PROTOCOL`
-  floor (not yet a named constant in `DebugPacketCodec` as of this
-  freeze — Track C1 introduces it alongside the first server-side
-  sender). On receiving `SUBSCRIBE`, if the connection's advertised
+  floor (named in `DebugPacketCodec` as of v1.4.0). On receiving
+  `SUBSCRIBE`, if the connection's advertised
   client protocol version (learned out-of-band, e.g. via a client-echo
   mechanism Track C1 defines, or conservatively assumed to be the
   client's own compiled-against `PROTOCOL_VERSION` when no echo exists)
@@ -511,9 +582,11 @@ left to Track C1 or later:
 - The exact NeoForge registration boilerplate (`IPayloadHandler`
   registration, `CustomPacketPayload.Type` wiring) — this is standard
   NeoForge networking API usage, not a MultiForge-specific contract.
-- The concrete `MIN_SUPPORTED_PROTOCOL` constant and how a client's
-  protocol version is learned out-of-band (§8) — named and wired by
-  Track C1.
+- How a client's protocol version is learned out-of-band (§8). Still
+  open: there is no client-echo mechanism, so a server cannot refuse a
+  below-floor client. The reverse direction is closed — v1.4.0 named
+  `MIN_SUPPORTED_PROTOCOL` and the client now refuses to `SUBSCRIBE` to
+  a version it does not understand.
 - Compression of frames at the NeoForge/Netty layer below this
   protocol — NeoForge's own payload channel transport may or may not
   compress; this document only specifies the logical byte layout

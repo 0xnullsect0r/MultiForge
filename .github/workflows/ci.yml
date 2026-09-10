@@ -37,14 +37,12 @@ jobs:
 
       - name: Build + test
         # Enumerate the CI-scoped modules explicitly. `./gradlew build`
-        # at the root pulls in :multiforge-client which needs the
-        # NeoForge `moddev` plugin's compile classpath (a full NeoForge
-        # + officially-mapped Minecraft jar tree) to compile — that dep
-        # is not resolvable from public Maven, so the ordinary build
-        # cannot include the client module. Wiring moddev is deferred
-        # past v1.2.0 per multiforge-client/build.gradle.kts's own
-        # commentary; until then, the client module is verified by
-        # direct javac against the fork's built classes.
+        # at the root also pulls in :multiforge-client, whose moddev
+        # plugin has to materialise a full NeoForm-decompiled Minecraft
+        # tree before it can compile a single file — minutes of work
+        # that most PRs do not need. The client module therefore has its
+        # own job below (`client-build`), gated on paths that can
+        # actually break it.
         run: |
           ./gradlew \
             :multiforge-api:build \
@@ -63,6 +61,59 @@ jobs:
             **/build/reports/tests/
             **/build/reports/spotless/
             **/build/test-results/
+          retention-days: 7
+
+  client-build:
+    name: client mod build + test (multiforge-client)
+    runs-on: ubuntu-latest
+    # moddev's NeoForm decompile dominates; the compile + test itself is
+    # seconds. Only runs when something that can break the client mod
+    # changed — see the `paths` filter on the dorny/paths-filter step.
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dorny/paths-filter@v3
+        id: changes
+        with:
+          filters: |
+            client:
+              - 'multiforge-client/**'
+              - 'multiforge-api/src/main/**'
+              - 'multiforge-runtime/src/main/java/net/multiforge/runtime/diagnostics/**'
+              - 'upstream/neoforge-1.21.1/src/main/java/net/multiforge/neoforge/debug/**'
+              - 'gradle.properties'
+              - '.github/workflows/ci.yml'
+
+      - name: Set up JDK 21
+        if: steps.changes.outputs.client == 'true'
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Set up Gradle
+        if: steps.changes.outputs.client == 'true'
+        uses: gradle/actions/setup-gradle@v3
+        with:
+          cache-read-only: ${{ github.event_name == 'pull_request' }}
+
+      - name: Build + test client mod
+        if: steps.changes.outputs.client == 'true'
+        # 6G matches release.yml — moddev's NeoForm decompile is the
+        # largest step and OOMs at the default heap.
+        env:
+          GRADLE_OPTS: -Xmx6G
+        run: ./gradlew :multiforge-client:build --no-daemon --stacktrace
+
+      - name: Upload test reports on failure
+        if: failure() && steps.changes.outputs.client == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: client-test-reports-${{ github.sha }}
+          path: |
+            multiforge-client/build/reports/tests/
+            multiforge-client/build/test-results/
           retention-days: 7
 
   fork-build:

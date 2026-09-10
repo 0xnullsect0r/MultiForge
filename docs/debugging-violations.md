@@ -97,25 +97,37 @@ default mode becomes a hard crash under `strict`.
 live, in-world view of the same violation stream, without tailing
 server logs:
 
-- **F3 overlay** — one line per region:
+- **Region list panel** — one row per region:
   `region-<id> mspt=X.X/Y.Y owned=N sections=M`. A region whose p95
   MSPT is climbing while nothing else changed is a good place to
   start looking for an off-thread mutation forcing extra reroute work.
-- **Chunk borders** — each region gets a distinct color, so you can
-  see at a glance whether a base straddles a region boundary (a common
-  source of cross-region violations for mods that assume "my base" is
-  a single ownership domain).
-- **Tick-cost heatmap** — per-chunk MSPT tinting; a hot single chunk
-  inside an otherwise normal region often means a block-entity or
-  tile-tick violation is repeatedly rerouting through that chunk.
-- **Violation side panel** — live reroute/warn events, driven by the
-  same `ViolationLogger` subscriber feed `/multiforge warn list` reads
-  from server-side. Each entry shows mod id and site, so you can
-  correlate what you're seeing in-world with the log/command output.
+- **Chunk borders** — coloured seams where two adjacent chunks belong
+  to different regions, so you can see at a glance whether a base
+  straddles a region boundary (a common source of cross-region
+  violations for mods that assume "my base" is a single ownership
+  domain).
+
+  **This is only trustworthy from v1.4.0 onward.** Before that the
+  client had no ownership data — the server never sent any — and
+  hash-fabricated an assignment from chunk coordinates. Seams drawn by
+  a v1.3.x client tell you nothing about ownership; do not use them to
+  diagnose anything. v1.4.0 added the `CHUNK_OWNERSHIP` packet and the
+  overlay now draws the server's real section→region mapping.
+- **Tick-cost heatmap** — per-chunk MSPT tinting. Note the resolution:
+  the server measures cost per *region*, so every chunk in a region
+  shows that region's average. A whole region running hot is the signal
+  here; a single hot chunk is not something this overlay can isolate.
+- **Violation side panel** — live reroute/warn events on the right edge
+  of the screen, driven by the same `ViolationLogger` subscriber feed
+  `/multiforge warn list` reads from server-side. Each entry shows the
+  time, mod id, and site, so you can correlate what you're seeing
+  in-world with the log/command output. **Built in v1.4.0** — earlier
+  releases collected the events and drew only their count.
 
 The server never emits these debug packets unless a connected client
-requests them, so there's no always-on cost to leaving the feature
-available.
+requests them, and since v1.4.0 a client requests only the streams it
+is actually drawing — so there's no always-on cost to leaving the
+feature available.
 
 ## Correlating stack traces to source lines
 
@@ -137,6 +149,8 @@ log. When you need an exact source line:
 3. `/multiforge warn list`'s `detail` string is generated at the
    patched call site and usually already names the offending thread
    and the chunk/region involved — cross-reference that against the
-   HUD's chunk-border overlay to see which region *should* have owned
-   the call, which narrows down whether the bug is "wrong thread" or
-   "wrong region assumption" in the mod's own logic.
+   client mod's chunk-border overlay to see which region *should* have
+   owned the call, which narrows down whether the bug is "wrong thread"
+   or "wrong region assumption" in the mod's own logic. Use a v1.4.0+
+   client for this: earlier versions drew fabricated seams and will
+   send you after the wrong region.

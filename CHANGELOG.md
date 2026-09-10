@@ -1,5 +1,74 @@
 # CHANGELOG
 
+## v1.4.0 — finish the client debug mod: real region seams, the panels it always advertised, per-overlay config
+
+An audit of `multiforge-client` against its own shipped metadata and docs found the mod was not finished. Four things were advertised in `neoforge.mods.toml`, in class javadoc, and in `docs/debugging-violations.md` but did not exist; the chunk-border overlay was drawing fabricated data that another doc told operators to debug with; and three rendering/state bugs were live. This release closes all of it, and raises the debug wire protocol to version 2.
+
+### Bugs
+
+- **The heatmap was drawing ~64 blocks above the player.** `HeatmapRenderer` translated only X and Z into the camera-relative frame that `RenderLevelStageEvent` supplies, leaving Y in absolute world space — so every quad landed at world `Y = camY + playerY`, a sheet of coloured squares over the player's head rather than under their feet. `ChunkBorderRenderer` and `PinRenderer` had always subtracted `camPos.y`; the heatmap now does too. An in-file comment had explicitly rationalised the omission, which is presumably why it survived from v1.3.5.
+- **Client state was never cleared on disconnect.** `DebugSessionHandler` reset only the SUBSCRIBE latch; `DebugHudState` had no `clear()` at all. Leaving a MultiForge server left the HUD drawing that server's build label, region count and TPS indefinitely — and because the heatmap and pin renderers gate only on a world-id *string*, and `minecraft:overworld` matches everywhere, its heat tiles and pin boxes rendered on top of the player's own singleplayer world. New `DebugHudState.clear()` wipes every server-supplied field on `LoggingOut`; the F6 preference deliberately survives, since that is the user's, not the server's.
+- **The client ignored `HELLO.protocolVersion`.** Protocol §8 states a client MUST read it before subscribing and MUST NOT subscribe to a version it does not understand. The client read the field, stored it, and subscribed regardless. `DebugPacketCodec` now names `MIN_SUPPORTED_PROTOCOL` (the constant §10 said Track C1 would introduce and never did) and exposes `supportsProtocol(int)`; the client refuses to subscribe outside the range and says so in the HUD instead of appearing broken.
+
+### Chunk borders now show real ownership — wire protocol 2
+
+From v1.3.5 through v1.3.18 `ChunkBorderRenderer.pickRegionId` hashed each chunk's coordinates modulo the live region count. The seams it drew were an artifact of *how many* regions existed, re-shuffled on every merge/split, and had no relationship to ownership. The class javadoc admitted this while `docs/debugging-violations.md` simultaneously instructed operators to use the overlay to diagnose real cross-region bugs.
+
+The server always had the answer available: `ThreadedRegionizer.regionAtChunk(int, int)` is a lock-free `ConcurrentHashMap` read, documented safe from any thread and already called from main-thread event handlers elsewhere in the fork. Nothing shipped it over the wire.
+
+- **New `CHUNK_OWNERSHIP` packet kind (`0x06`)** carrying `DebugPayload.OwnershipUpdate(worldId, sectionChunkShift, List<SectionOwner>)`. Entries are keyed by section *origin* chunk; the shift travels with the payload so a client can map any chunk to its section without knowing the server's `regionSize`. Ownership is per-section because that is where it genuinely changes — not a coarsening of finer data.
+- **New `F_OWNERSHIP` subscribe bit (`0x10`)**, plus `F_ALL` as the canonical "every stream this build defines" constant. `DebugChannelServer` widened its inbound mask strip from `& 0x0F` accordingly.
+- **New `OwnershipEmitter`** in the runtime, mirroring `TpsHistogramEmitter`'s per-world shape, installed per dimension on `LevelEvent.Load`.
+- **`ChunkBorderRenderer` reads the real mapping** and has no hash fallback. With no ownership frame for the current dimension — overlay off, or a pre-v1.4.0 server — it draws nothing. Inventing a plausible boundary is the defect being fixed. An unknown *neighbour* is likewise not treated as a seam, or the overlay would draw a wall around the edge of the streamed area instead of around a region.
+- `PROTOCOL_VERSION` 1 → 2. Both additions are backward-compatible per §8, so the channel name is unchanged: a v1.4.0 client on a v1.3.x server simply never sets the new bit, and a v1.3.x client on a v1.4.0 server never receives the new kind.
+
+### Panels that were advertised but never built
+
+- **Violation panel** (right edge). Promised in `neoforge.mods.toml`, in `MultiForgeDebugMod`'s and `DebugHudState`'s javadoc, and in `docs/debugging-violations.md` since M6. In reality the events landed in a 200-entry ring and only their *count* was ever drawn. Now renders `HH:mm:ss [modId] site — detail`, newest first, detail ellipsised so one long event cannot push the panel off-screen.
+- **Region list panel** (top-left, under the summary). `DebugHudState.f3Lines()` has produced `region-<id> mspt=X/Y owned=N sections=M` since M6, and `docs/debugging-violations.md` documented that exact format as what the operator sees — but the method was dead outside its own unit test. Now drawn, capped, with a `… N more region(s)` line when truncated.
+- Both panels' line builders are static and pure, which is what makes the new `DebugHudRendererTest` possible without a Minecraft runtime.
+
+### Per-overlay config + a config screen
+
+The mod had exactly one control: F6, all-or-nothing, which hid the overlays while the server kept pushing every stream. The subscription mask had supported per-stream opt-in since the protocol was frozen and nothing used it.
+
+- **New `MultiForgeDebugConfig`** (`ModConfigSpec`, `config/multiforge_debug-client.toml`): individual toggles for all six overlays, row caps for both panels, and the seam/pin render extents that were previously hardcoded constants.
+- **Config screen** via `IConfigScreenFactory` + NeoForge's auto-generated `ConfigurationScreen` — the Mods list now has a working Config button.
+- **New `SubscriptionManager`** replaces v1.3.16's boolean latch with a tracked mask, re-sending SUBSCRIBE only when the desired mask actually changes. Turning an overlay off now stops the server sending that stream. Idle traffic stays zero, so the v1.3.15 SUBSCRIBE-spam bug does not return. This also restores protocol §6's "permission re-evaluated on every SUBSCRIBE" cadence, which the once-per-connection latch had made unreachable.
+
+### Heatmap and ownership are now filtered per viewer
+
+`TpsHistogramEmitter` applied no view-radius filter whatsoever, despite `DebugPayload.HeatmapUpdate`'s javadoc promising "per-chunk heat within the client's view radius" — it broadcast every loaded section in the world to every subscriber at 4 Hz. A player in the Nether received (and discarded client-side) every Overworld frame, and a large world could approach `MAX_FRAME_BYTES`, the codec's ceiling being 65 536 entries.
+
+The producing emitters are Minecraft-free and have no access to a player position, so the narrowing lives fork-side: `DebugChannelServer.broadcast` now routes `HeatmapUpdate` and `OwnershipUpdate` through a per-viewer path that skips players in other dimensions and clips entries to each player's view distance, memoising the encode per chunk position so co-located players share one. Ownership widens the radius by one section so a section covering the edge of the view still reaches the client.
+
+### `multiforge.debug.view` is now enforced — defaulting to allow-all
+
+Protocol §6 named the SUBSCRIBE handler as the sole enforcement point for this node. Nothing enforced it: every emitter was installed with `PermissionFilter.ALWAYS_ALLOW` and the handler performed no check, so any player with the jar received the server's full telemetry.
+
+New `DebugPermissions.VIEW` registers `multiforge.debug.view` on `PermissionGatherEvent.Nodes` and `handleClientFrame` consults it, zeroing the mask and logging (rate-limited per player, 60 s window) on denial. **The default resolver allows everyone**, which is a deliberate amendment to §6's original operator-level-2 default: the overlays are diagnostic convenience rather than privileged information, and a player who can see why their base is lagging is more useful than one who cannot. The node exists so servers that disagree can deny it through any permission handler.
+
+### Docs
+
+- **`docs/design/client-debug-protocol.md`** — Phase 0 amendment: `CHUNK_OWNERSHIP` in §2 and a new §7.7 schema, its cadence in §3, `F_OWNERSHIP` in §5, the allow-all default in §6, `PROTOCOL_VERSION` 2 and `MIN_SUPPORTED_PROTOCOL` in §8, and §10's stale "not yet a named constant" bullet narrowed to what is genuinely still open (there is still no client-version echo).
+- **`docs/client-mod-guide.md`** — §2.2 still described the pre-v1.3.16 renderer ("borders around every chunk", "world-edge Y", "translucent walls") and said nothing about the data being fabricated; rewritten. New §2.6 (violation panel), §2.7 (region list), §2.8 (config table). §3 rewritten for per-stream subscription. §5's "server side is not yet wired" entry has been wrong since v1.3.14 — replaced, along with new entries for unsupported protocol version and permission denial. §6 claimed "No keybindings, no config screen" two sections after documenting the F6 keybind, and invited users to file an issue for a feature that shipped in v1.3.15.
+- **`docs/debugging-violations.md`** — the section telling operators to debug ownership with the chunk-border overlay now says when that overlay can be trusted; the heatmap bullet states its per-region resolution; the violation-panel bullet is finally true.
+- **`docs/README.md`** — `client-mod-guide.md` was not linked from the index at all.
+- **`neoforge.mods.toml`** — description updated to match what the mod now does.
+
+### Tests + CI
+
+- New `DebugHudStateTest` (clear semantics, F6 preference survival, section-shift ownership lookup including negative coordinates, world scoping, replace-not-merge), `DebugHudRendererTest` (all three panels' builders), `SubscriptionManagerTest` (mask changes, idle silence, `F_OWNERSHIP` stripping on a protocol-1 server, reset on disconnect). `DebugPacketCodecTest` and `DebugChannelClientTest` extended for the new kind, the protocol window, and the channel-id pin that keeps the two `DebugFramePayload` copies from diverging.
+- **`:multiforge-client:test` never ran in PR CI.** `ci.yml` enumerated modules explicitly and omitted the client behind a comment claiming moddev was not wired — false since v1.3.5, and `release.yml` has been building the module all along. New `client-build` job runs it, gated by a `paths` filter so the NeoForm decompile cost only lands on PRs that can actually break it.
+
+### Deferred, with reasons
+
+- **Shared `multiforge-wire` module** to dedupe `DebugFramePayload` between the client and the fork. The shared type extends `CustomPacketPayload`, so it needs Minecraft on the classpath and cannot live in the MC-free runtime; a new moddev-enabled module for 54 lines is not worth the fork-build cost. A test now pins the channel-id string on both sides instead.
+- **Sub-section ownership fidelity** via `NewChunkHolder.owningRegion()`. Section granularity is the real boundary; the two differ only for chunks with no holder.
+- **Real per-chunk MSPT instrumentation.** The heatmap value is a region average, as `TpsHistogramEmitter`'s own javadoc has always said. Making it genuinely per-chunk is a scheduler-instrumentation project.
+
+- `gradle.properties` + `upstream/neoforge-1.21.1/gradle.properties` bumped 1.3.18 → 1.4.0.
+
 ## v1.3.18 — JDK 21 preflight in the installer-generated launcher scripts + loud docs warning
 
 User's `~/MultiForge-Test/new-atm10-server.sh` (test harness for MultiForge against the ATM10 modpack) never reached `Done` — every `startserver.sh` cycle crashed at mod-scan with `Unsupported class file major version 70` and `MixinPreProcessorException: Attach error for cryonicconfig.mixins.json:server.MainMixin`. Root cause: the user's system-default `java` was JDK 26 (Oracle HotSpot 26.0.2). SpongeMixin — bundled by cryonicconfig and effectively every other 1.21.1 mod — ships a class-file reader that only understands Java 21 bytecode (major version ≤ 65) and rejects anything newer, crashing before ModLauncher can wire NeoForge. Not a MultiForge bug (upstream SpongeMixin), but the failure mode was completely opaque and MultiForge's own scripts/docs made no attempt to detect a wrong JDK. This release fixes what MultiForge can fix.

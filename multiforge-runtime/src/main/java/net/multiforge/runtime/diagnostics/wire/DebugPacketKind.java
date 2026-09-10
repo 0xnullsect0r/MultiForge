@@ -31,6 +31,9 @@ package net.multiforge.runtime.diagnostics.wire;
  *       boxes.</li>
  *   <li>{@link #VIOLATION_EVENT} — server → client, one line for the
  *       live violation/hop side panel.</li>
+ *   <li>{@link #CHUNK_OWNERSHIP} — server → client, which region owns
+ *       each loaded section of one world. Drives the chunk-border
+ *       overlay's region seams. Added in protocol version 2 (v1.4.0).</li>
  *   <li>{@link #SUBSCRIBE} — client → server, adjust which streams the
  *       client wants pushed to it.</li>
  * </ul>
@@ -41,6 +44,7 @@ public enum DebugPacketKind {
     HEATMAP_UPDATE(0x03),
     PIN_LIST(0x04),
     VIOLATION_EVENT(0x05),
+    CHUNK_OWNERSHIP(0x06),
     SUBSCRIBE(0x10);
 
     private final int wireId;

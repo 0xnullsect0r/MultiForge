@@ -101,4 +101,73 @@ class DebugPacketCodecTest {
         byte[] bad = {(byte) 0xEE, 0, 0, 0, 0};
         assertThatThrownBy(() -> DebugPacketCodec.readFrame(bad)).isInstanceOf(IllegalArgumentException.class);
     }
+
+    @Test
+    void ownershipRoundTrip() throws IOException {
+        DebugPayload.OwnershipUpdate u = new DebugPayload.OwnershipUpdate(
+                "minecraft:overworld",
+                3,
+                List.of(new DebugPayload.SectionOwner(0, 0, 7L), new DebugPayload.SectionOwner(-8, 16, 9L)));
+        byte[] framed = DebugPacketCodec.encodeOwnership(u);
+        DebugPacketCodec.Frame f = DebugPacketCodec.readFrame(framed);
+        assertThat(f.kind()).isEqualTo(DebugPacketKind.CHUNK_OWNERSHIP);
+        assertThat(DebugPacketCodec.decodeOwnership(f.body())).isEqualTo(u);
+    }
+
+    @Test
+    void ownershipWithNoOwnersRoundTrips() throws IOException {
+        DebugPayload.OwnershipUpdate u = new DebugPayload.OwnershipUpdate("minecraft:the_nether", 0, List.of());
+        DebugPayload.OwnershipUpdate back = DebugPacketCodec.decodeOwnership(
+                DebugPacketCodec.readFrame(DebugPacketCodec.encodeOwnership(u)).body());
+        assertThat(back).isEqualTo(u);
+    }
+
+    @Test
+    void ownershipOwnerCountCeilingRejected() {
+        // worldId "" (2 bytes) + shift + count, count above requireLen's 1<<16 ceiling.
+        byte[] body = new byte[10];
+        body[0] = 0;
+        body[1] = 0; // zero-length world id
+        body[5] = 0; // shift = 0 (bytes 2..5)
+        body[6] = 0x00;
+        body[7] = 0x02;
+        body[8] = 0x00;
+        body[9] = 0x01; // count = 0x00020001 > 65536
+        assertThatThrownBy(() -> DebugPacketCodec.decodeOwnership(body)).isInstanceOf(IOException.class);
+    }
+
+    @Test
+    void ownershipRejectsOutOfRangeShift() throws IOException {
+        DebugPayload.OwnershipUpdate u = new DebugPayload.OwnershipUpdate("w", 4, List.of());
+        byte[] framed = DebugPacketCodec.encodeOwnership(u);
+        // Overwrite the shift field with something absurd. Layout is
+        // 5-byte header, then int16 string length + 1 byte of "w", then
+        // the int32 shift.
+        int shiftOffset = 5 + 2 + 1;
+        framed[shiftOffset] = 0x7F;
+        byte[] body = DebugPacketCodec.readFrame(framed).body();
+        assertThatThrownBy(() -> DebugPacketCodec.decodeOwnership(body)).isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    void protocolVersionSupportWindow() {
+        assertThat(DebugPacketCodec.supportsProtocol(DebugPacketCodec.PROTOCOL_VERSION))
+                .isTrue();
+        assertThat(DebugPacketCodec.supportsProtocol(DebugPacketCodec.MIN_SUPPORTED_PROTOCOL))
+                .isTrue();
+        assertThat(DebugPacketCodec.supportsProtocol(DebugPacketCodec.PROTOCOL_VERSION + 1))
+                .isFalse();
+        assertThat(DebugPacketCodec.supportsProtocol(DebugPacketCodec.MIN_SUPPORTED_PROTOCOL - 1))
+                .isFalse();
+    }
+
+    @Test
+    void subscribeAllCoversEveryDefinedStream() {
+        int all = DebugPayload.Subscribe.F_ALL;
+        assertThat(all & DebugPayload.Subscribe.F_REGIONS).isNotZero();
+        assertThat(all & DebugPayload.Subscribe.F_HEATMAP).isNotZero();
+        assertThat(all & DebugPayload.Subscribe.F_PINS).isNotZero();
+        assertThat(all & DebugPayload.Subscribe.F_VIOLATIONS).isNotZero();
+        assertThat(all & DebugPayload.Subscribe.F_OWNERSHIP).isNotZero();
+    }
 }

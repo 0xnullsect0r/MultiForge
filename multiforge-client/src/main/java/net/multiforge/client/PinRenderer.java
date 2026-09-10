@@ -32,17 +32,12 @@ import org.joml.Matrix4f;
 
 /**
  * Renders each operator-created region pin as a labelled bounding
- * box in-world. Same 48-block Y-band as {@link ChunkBorderRenderer}
+ * box in-world. Same configurable Y-band as {@link ChunkBorderRenderer}
  * (dodges z-fighting at high altitudes; pre-v1.3.16 code drew only a
  * floating billboard label with no box at all, and the docs
  * incorrectly claimed a box was drawn).
  */
 public final class PinRenderer {
-
-    /** Y-range around the player where pin boxes render. */
-    private static final int Y_BELOW = 16;
-
-    private static final int Y_ABOVE = 32;
 
     private static final float LINE_ALPHA = 0.85F;
     private static final float BOX_RED = 1.0F;
@@ -62,7 +57,7 @@ public final class PinRenderer {
 
     @SubscribeEvent
     public void onRenderLevelStage(RenderLevelStageEvent event) {
-        if (!state.overlaysEnabled()) {
+        if (!state.overlaysEnabled() || !MultiForgeDebugConfig.PINS.get()) {
             return;
         }
         if (event.getStage() != RenderLevelStageEvent.Stage.AFTER_PARTICLES) {
@@ -86,8 +81,10 @@ public final class PinRenderer {
         MultiBufferSource.BufferSource bufferSource = mc.renderBuffers().bufferSource();
 
         double playerY = player.getY();
-        double yLow = Mth.clamp(playerY - Y_BELOW, level.getMinBuildHeight(), level.getMaxBuildHeight());
-        double yHigh = Mth.clamp(playerY + Y_ABOVE, level.getMinBuildHeight(), level.getMaxBuildHeight());
+        double yLow = Mth.clamp(
+                playerY - MultiForgeDebugConfig.Y_BELOW.get(), level.getMinBuildHeight(), level.getMaxBuildHeight());
+        double yHigh = Mth.clamp(
+                playerY + MultiForgeDebugConfig.Y_ABOVE.get(), level.getMinBuildHeight(), level.getMaxBuildHeight());
 
         for (DebugPayload.PinBox pin : pins) {
             if (!pin.worldId().equals(currentWorld)) {

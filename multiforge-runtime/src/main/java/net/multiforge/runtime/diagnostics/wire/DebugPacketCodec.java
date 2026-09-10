@@ -38,8 +38,36 @@ import java.util.List;
  */
 public final class DebugPacketCodec {
 
-    public static final int PROTOCOL_VERSION = 1;
+    /**
+     * What version of the {@code multiforge:debug/v1} contract this
+     * build speaks, carried in every {@code HELLO} (protocol §7.1).
+     *
+     * <p>v1.4.0 raised this 1 → 2 when {@link
+     * DebugPacketKind#CHUNK_OWNERSHIP} and {@link
+     * DebugPayload.Subscribe#F_OWNERSHIP} were added. Both additions
+     * are backward-compatible per protocol §8 (a new kind at a
+     * reserved id, a new bit in the subscription mask), so the channel
+     * name does not change and a version-1 peer keeps working — it
+     * simply never sets the new bit and therefore never receives the
+     * new kind.
+     */
+    public static final int PROTOCOL_VERSION = 2;
+
+    /**
+     * Oldest protocol version this build can still talk to. Protocol
+     * §8 requires a client to read {@code HELLO.protocolVersion} and
+     * refuse to {@code SUBSCRIBE} to anything it does not understand;
+     * this constant plus {@link #PROTOCOL_VERSION} bound the accepted
+     * range.
+     */
+    public static final int MIN_SUPPORTED_PROTOCOL = 1;
+
     public static final int MAX_FRAME_BYTES = 1 << 20; // 1 MiB
+
+    /** @return whether {@code version} is one this build can speak. */
+    public static boolean supportsProtocol(int version) {
+        return version >= MIN_SUPPORTED_PROTOCOL && version <= PROTOCOL_VERSION;
+    }
 
     private DebugPacketCodec() {}
 
@@ -157,6 +185,33 @@ public final class DebugPacketCodec {
             String site = readString(in);
             String detail = readString(in);
             return new DebugPayload.ViolationEvent(ts, mod, site, detail);
+        }
+    }
+
+    public static byte[] encodeOwnership(DebugPayload.OwnershipUpdate u) {
+        return frame(DebugPacketKind.CHUNK_OWNERSHIP, out -> {
+            writeString(out, u.worldId());
+            out.writeInt(u.sectionChunkShift());
+            out.writeInt(u.owners().size());
+            for (DebugPayload.SectionOwner o : u.owners()) {
+                out.writeInt(o.chunkX());
+                out.writeInt(o.chunkZ());
+                out.writeLong(o.regionId());
+            }
+        });
+    }
+
+    public static DebugPayload.OwnershipUpdate decodeOwnership(byte[] body) throws IOException {
+        try (DataInputStream in = new DataInputStream(new ByteArrayInputStream(body))) {
+            String world = readString(in);
+            int shift = in.readInt();
+            int n = in.readInt();
+            requireLen(n, 1 << 16, "owner count");
+            List<DebugPayload.SectionOwner> owners = new ArrayList<>(n);
+            for (int i = 0; i < n; i++) {
+                owners.add(new DebugPayload.SectionOwner(in.readInt(), in.readInt(), in.readLong()));
+            }
+            return new DebugPayload.OwnershipUpdate(world, shift, owners);
         }
     }
 

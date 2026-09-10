@@ -19,6 +19,7 @@
 
 - [`design/entity-migration.md`](design/entity-migration.md) — CAS state machine, passenger-tree atomicity, border-mid-tick rule, lost-UUID-ref prevention (M4 spec).
 - [`design/global-region.md`](design/global-region.md) — synthetic global region + `GlobalTicker` + `crossRegionEffect` + `TicketType.DRAGON` (M5 spec).
+- [`client-mod-guide.md`](client-mod-guide.md) — installing and using the client debug mod: HUD panels, region seams, tick-cost heatmap, pin boxes, violation feed, per-overlay config.
 - [`design/client-debug-protocol.md`](design/client-debug-protocol.md) — v1 wire codec for the debug HUD (M6 spec).
 - [`design/scanner-rules.md`](design/scanner-rules.md) — 12-rule mod-safety scanner spec (M6).
 - [`design/m12-event-routing.md`](design/m12-event-routing.md) — transparent NeoForge.EVENT_BUS wrapping, dispatch decision tree, ordering semantics (M12 spec).

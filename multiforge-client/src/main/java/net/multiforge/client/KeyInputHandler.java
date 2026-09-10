@@ -27,9 +27,17 @@ import net.neoforged.neoforge.client.event.ClientTickEvent;
 public final class KeyInputHandler {
 
     private final DebugHudState state;
+    private final Runnable onToggled;
 
-    public KeyInputHandler(DebugHudState state) {
+    /**
+     * @param onToggled run after each toggle. v1.4.0 uses it to re-send
+     *     SUBSCRIBE, which both stops server traffic while the overlays
+     *     are hidden and gives protocol §6's permission re-check
+     *     something to fire on.
+     */
+    public KeyInputHandler(DebugHudState state, Runnable onToggled) {
         this.state = Objects.requireNonNull(state, "state");
+        this.onToggled = Objects.requireNonNull(onToggled, "onToggled");
     }
 
     @SubscribeEvent
@@ -39,10 +47,13 @@ public final class KeyInputHandler {
         // user mashes the key several times in one frame.
         while (MultiForgeKeyMappings.TOGGLE_OVERLAYS.consumeClick()) {
             boolean nowEnabled = state.toggleOverlays();
+            onToggled.run();
             Minecraft mc = Minecraft.getInstance();
             if (mc.player != null) {
                 mc.player.displayClientMessage(
-                        Component.literal("MultiForge overlays: " + (nowEnabled ? "on" : "off")), true);
+                        Component.translatable(
+                                nowEnabled ? "multiforge_debug.overlays.on" : "multiforge_debug.overlays.off"),
+                        true);
             }
         }
     }

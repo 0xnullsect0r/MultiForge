@@ -94,4 +94,45 @@ class DebugChannelClientTest {
         assertThat(s.wants(DebugPayload.Subscribe.F_VIOLATIONS)).isTrue();
         assertThat(s.wants(DebugPayload.Subscribe.F_HEATMAP)).isFalse();
     }
+
+    @Test
+    void ownershipFrameLandsInState() throws IOException {
+        DebugHudState state = new DebugHudState();
+        DebugChannelClient client = new DebugChannelClient(state);
+        client.onFrame(DebugPacketCodec.encodeOwnership(new DebugPayload.OwnershipUpdate(
+                "minecraft:overworld", 1, List.of(new DebugPayload.SectionOwner(0, 0, 5L)))));
+
+        assertThat(state.hasOwnershipFor("minecraft:overworld")).isTrue();
+        assertThat(state.regionIdAtChunk(1, 1)).isEqualTo(5L);
+    }
+
+    @Test
+    void serverSentSubscribeIsIgnoredRatherThanThrowing() throws IOException {
+        DebugHudState state = new DebugHudState();
+        DebugChannelClient client = new DebugChannelClient(state);
+        // Protocol §1: the server never sends SUBSCRIBE. Stale or
+        // misdirected traffic must not blow up the network thread.
+        client.onFrame(DebugPacketCodec.encodeSubscribe(new DebugPayload.Subscribe(0xF)));
+        assertThat(state.hello()).isNull();
+    }
+
+    @Test
+    void helloRecordsTheServerProtocolVersion() throws IOException {
+        DebugHudState state = new DebugHudState();
+        DebugChannelClient client = new DebugChannelClient(state);
+        client.onFrame(DebugPacketCodec.encodeHello(new DebugPayload.Hello(2, 20, "test")));
+        assertThat(state.serverProtocol()).isEqualTo(2);
+        assertThat(state.protocolUnsupported()).isFalse();
+    }
+
+    @Test
+    void channelIdMatchesTheForkSideDuplicate() {
+        // DebugFramePayload is deliberately duplicated between this
+        // module and upstream/.../neoforge/debug/DebugFramePayload.java
+        // (the shared type needs Minecraft on the classpath, so it
+        // cannot live in the MC-free runtime). Both sides must agree on
+        // the channel id or the two never negotiate. Pin the string so
+        // a rename here fails loudly instead of silently on a server.
+        assertThat(DebugChannelClient.CHANNEL_ID).isEqualTo("multiforge:debug/v1");
+    }
 }

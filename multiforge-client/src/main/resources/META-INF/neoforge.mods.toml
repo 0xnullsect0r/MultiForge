@@ -12,9 +12,11 @@ modId = "multiforge_debug"
 version = "${version}"
 displayName = "MultiForge Debug Client"
 description = '''
-Client-side debug overlay for MultiForge servers. Shows region ids, MSPT,
-owned entity counts, coloured chunk borders, tick-cost heatmap, pinned
-region selection boxes, and a live reroute/warn violation panel.
+Client-side debug overlay for MultiForge servers. Shows region ids, MSPT
+and owned entity counts, a per-region detail list, real region-ownership
+seams between chunks, a tick-cost heatmap, pinned region selection boxes,
+and a live reroute/warn violation panel. Every overlay is individually
+switchable from the config screen, with F6 as a master toggle.
 Load on any vanilla NeoForge 1.21.x client — the panel stays inert if
 the server does not advertise multiforge:debug/v1.
 '''

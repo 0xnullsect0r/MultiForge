@@ -27,6 +27,11 @@ import net.multiforge.runtime.diagnostics.wire.DebugPayload;
  * the parse pipeline without the client runtime. The M6 patch wires
  * {@code IPayloadHandler} on the NeoForge client bus to call
  * {@link #onFrame(byte[])}.
+ *
+ * <p>v1.4.0 moved the subscription bookkeeping that used to live here
+ * (a boolean "already subscribed" latch) into {@link
+ * SubscriptionManager}, which tracks a mask rather than a flag so the
+ * client can change what it wants mid-connection.
  */
 public final class DebugChannelClient {
 
@@ -34,33 +39,8 @@ public final class DebugChannelClient {
 
     private final DebugHudState state;
 
-    /**
-     * v1.3.16: once-per-connection latch consulted by
-     * {@link DebugPayloadRegistration}'s HELLO handler. Prevents the
-     * SUBSCRIBE-per-HELLO-keepalive spam that showed up in v1.3.15 —
-     * before, we'd send a SUBSCRIBE_ALL frame every 250 ms as long as
-     * the server's HeartbeatEmitter was ticking. Reset by
-     * {@link #resetSubscription()} on client disconnect.
-     */
-    private boolean subscribed = false;
-
     public DebugChannelClient(DebugHudState state) {
         this.state = Objects.requireNonNull(state, "state");
-    }
-
-    /** @return whether we've already replied SUBSCRIBE on this connection. */
-    public boolean hasSubscribed() {
-        return subscribed;
-    }
-
-    /** Called by {@link DebugPayloadRegistration} after it sends SUBSCRIBE. */
-    public void markSubscribed() {
-        this.subscribed = true;
-    }
-
-    /** Called on client disconnect so the next server sends a fresh SUBSCRIBE. */
-    public void resetSubscription() {
-        this.subscribed = false;
     }
 
     public void onFrame(byte[] raw) throws IOException {
@@ -73,6 +53,7 @@ public final class DebugChannelClient {
             case HEATMAP_UPDATE -> state.apply(DebugPacketCodec.decodeHeatmap(body));
             case PIN_LIST -> state.apply(DebugPacketCodec.decodePinList(body));
             case VIOLATION_EVENT -> state.apply(DebugPacketCodec.decodeViolation(body));
+            case CHUNK_OWNERSHIP -> state.apply(DebugPacketCodec.decodeOwnership(body));
             case SUBSCRIBE -> {
                 // Server never sends SUBSCRIBE to a client — ignore politely
                 // rather than throwing on stale/misdirected traffic.
