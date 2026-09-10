@@ -16,6 +16,7 @@ import net.neoforged.bus.api.IEventBus;
 import net.neoforged.fml.ModContainer;
 import net.neoforged.fml.common.Mod;
 import net.neoforged.fml.config.ModConfig;
+import net.neoforged.fml.event.config.ModConfigEvent;
 import net.neoforged.neoforge.client.event.RegisterKeyMappingsEvent;
 import net.neoforged.neoforge.client.gui.ConfigurationScreen;
 import net.neoforged.neoforge.client.gui.IConfigScreenFactory;
@@ -78,6 +79,18 @@ public final class MultiForgeDebugMod {
         modEventBus.addListener((RegisterPayloadHandlersEvent event) ->
                 DebugPayloadRegistration.register(event, channelClient, state, subscriptions));
 
+        // Editing an overlay toggle changes the subscription mask, so push
+        // it immediately rather than waiting for the next thing that
+        // happens to resync. (The server's 4 Hz HELLO keepalive would pick
+        // it up within 250 ms anyway — syncIfChanged is a no-op when the
+        // mask is unchanged — but that depends on the server keepaliving,
+        // which is a v1.3.14-and-later behaviour.)
+        modEventBus.addListener((ModConfigEvent.Reloading event) -> {
+            if (event.getConfig().getSpec() == MultiForgeDebugConfig.SPEC) {
+                resync(state, subscriptions);
+            }
+        });
+
         // v1.3.15: user-configurable keybind (default F6) that toggles
         // every overlay + HUD line via DebugHudState.overlaysEnabled.
         // Keymapping registration is a mod-bus event.
@@ -87,7 +100,7 @@ public final class MultiForgeDebugMod {
         NeoForge.EVENT_BUS.register(new ChunkBorderRenderer(state));
         NeoForge.EVENT_BUS.register(new HeatmapRenderer(state));
         NeoForge.EVENT_BUS.register(new PinRenderer(state));
-        NeoForge.EVENT_BUS.register(new KeyInputHandler(state, enabled -> resync(state, subscriptions)));
+        NeoForge.EVENT_BUS.register(new KeyInputHandler(state, () -> resync(state, subscriptions)));
         // v1.3.16: reset the per-connection subscription on disconnect so
         // hopping between MultiForge servers in one session works.
         // v1.4.0: also wipe the HUD model, so a disconnect stops the old

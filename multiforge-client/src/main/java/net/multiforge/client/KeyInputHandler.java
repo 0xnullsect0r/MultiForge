@@ -13,7 +13,6 @@
 package net.multiforge.client;
 
 import java.util.Objects;
-import java.util.function.Consumer;
 import net.minecraft.client.Minecraft;
 import net.minecraft.network.chat.Component;
 import net.neoforged.bus.api.SubscribeEvent;
@@ -28,15 +27,15 @@ import net.neoforged.neoforge.client.event.ClientTickEvent;
 public final class KeyInputHandler {
 
     private final DebugHudState state;
-    private final Consumer<Boolean> onToggled;
+    private final Runnable onToggled;
 
     /**
-     * @param onToggled notified with the new enabled-state after each
-     *     toggle. v1.4.0 uses it to re-send SUBSCRIBE, which both stops
-     *     server traffic while the overlays are hidden and gives
-     *     protocol §6's permission re-check something to fire on.
+     * @param onToggled run after each toggle. v1.4.0 uses it to re-send
+     *     SUBSCRIBE, which both stops server traffic while the overlays
+     *     are hidden and gives protocol §6's permission re-check
+     *     something to fire on.
      */
-    public KeyInputHandler(DebugHudState state, Consumer<Boolean> onToggled) {
+    public KeyInputHandler(DebugHudState state, Runnable onToggled) {
         this.state = Objects.requireNonNull(state, "state");
         this.onToggled = Objects.requireNonNull(onToggled, "onToggled");
     }
@@ -48,7 +47,7 @@ public final class KeyInputHandler {
         // user mashes the key several times in one frame.
         while (MultiForgeKeyMappings.TOGGLE_OVERLAYS.consumeClick()) {
             boolean nowEnabled = state.toggleOverlays();
-            onToggled.accept(nowEnabled);
+            onToggled.run();
             Minecraft mc = Minecraft.getInstance();
             if (mc.player != null) {
                 mc.player.displayClientMessage(
