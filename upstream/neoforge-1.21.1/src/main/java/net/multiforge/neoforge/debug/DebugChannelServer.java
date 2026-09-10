@@ -330,7 +330,18 @@ public final class DebugChannelServer {
      * is 65 536 entries.
      *
      * <p>Encoding is memoised per chunk position, so players standing
-     * in the same chunk share one encode.
+     * in the same chunk share one encode. The memo key is safe because
+     * every player reaching it has already been filtered to the
+     * payload's dimension, and the radius is server-wide.
+     *
+     * <p><b>Threading.</b> This runs on the shared {@code
+     * mf-diag-emitters} thread, not the main thread — same as the
+     * {@code PacketDistributor.sendToPlayer} calls that have always
+     * happened here. {@code chunkPosition()}, {@code level()} and the
+     * view distance are plain field reads; a torn or one-tick-stale
+     * read just means a heat tile at the very edge of the view arrives
+     * 250 ms late. Nothing blocks, so CLAUDE.md ground rule 4 is not
+     * engaged.
      */
     private static void sendPerViewer(DebugPayload payload, int flag) {
         String worldId = worldIdOf(payload);
