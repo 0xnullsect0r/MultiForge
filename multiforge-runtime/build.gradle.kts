@@ -9,7 +9,7 @@ dependencies {
     implementation(project(":multiforge-api"))
 
     // Slf4j API only. NeoForge already ships the logger binding at runtime.
-    implementation("org.slf4j:slf4j-api:2.0.13")
+    implementation("org.slf4j:slf4j-api:2.0.18")
 
     // TOML parser for multiforge-server.toml.
     implementation("org.tomlj:tomlj:1.1.1")
@@ -27,7 +27,7 @@ dependencies {
 
     testImplementation("org.junit.jupiter:junit-jupiter:5.10.3")
     testImplementation("org.assertj:assertj-core:3.26.3")
-    testImplementation("org.slf4j:slf4j-simple:2.0.13")
+    testImplementation("org.slf4j:slf4j-simple:2.0.18")
     testImplementation("org.awaitility:awaitility:4.2.1")
 }
 
