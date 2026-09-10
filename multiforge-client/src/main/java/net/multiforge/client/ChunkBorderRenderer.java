@@ -15,7 +15,6 @@ package net.multiforge.client;
 import com.mojang.blaze3d.vertex.PoseStack;
 import com.mojang.blaze3d.vertex.VertexConsumer;
 import java.awt.Color;
-import java.util.List;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.client.player.LocalPlayer;
@@ -24,37 +23,40 @@ import net.minecraft.client.renderer.RenderType;
 import net.minecraft.util.Mth;
 import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.phys.Vec3;
-import net.multiforge.runtime.diagnostics.wire.DebugPayload;
 import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.neoforge.client.event.RenderLevelStageEvent;
 
 /**
- * Draws vertical strips only along the seams where two adjacent
- * chunks belong to (hash-picked) different regions. Iterates a 9×9
- * grid around the player, but instead of a full-height AABB per chunk
- * (v1.3.5–v1.3.15 behaviour, which produced corner-pillar farms and
- * z-fighting above clouds), it walks the north+east edge of each
- * chunk and draws a single line strip if the neighbour on that side
- * has a different colour. Y range is clamped to a 48-block band
- * around the player to keep the strips crisp and dodge depth-buffer
- * precision loss at high altitude.
+ * Draws vertical strips along the seams where two adjacent chunks
+ * belong to different regions. Walks a grid around the player and, for
+ * each chunk, draws a line strip on its north and west edge when the
+ * neighbour across that edge has a different owning region. Y is
+ * clamped to a band around the player so the strips stay crisp and
+ * dodge depth-buffer precision loss at high altitude.
  *
- * <p><b>Known limitation:</b> the region-per-chunk assignment is
- * hash-based, not real (protocol §7.2 doesn't carry per-chunk
- * ownership — see the v1.3.5–v1.3.15 Javadoc for the full story).
- * The seam view is still useful for eyeballing region churn, but a
- * seam that appears in-world is a hash artifact, not a truth.
- * Deferred to v1.4: a new packet kind carrying per-chunk region-ids.
+ * <p>As of v1.4.0 the ownership behind those seams is <b>real</b>. From
+ * v1.3.5 through v1.3.18 this class hash-picked a region id from the
+ * chunk coordinates modulo the live region count: the seams it drew
+ * were an artifact of how many regions happened to exist, they
+ * re-shuffled whenever a region merged or split, and they had no
+ * relationship to which region actually owned anything. That was
+ * documented as a known limitation here while {@code
+ * docs/debugging-violations.md} simultaneously told operators to use
+ * the overlay to diagnose real ownership bugs.
+ *
+ * <p>Now the server ships the true section→region mapping over {@code
+ * CHUNK_OWNERSHIP} (protocol §7.7) and this renderer reads it from
+ * {@link DebugHudState#regionIdAtChunk(int, int)}. Ownership is tracked
+ * per section, so seams appear on section boundaries — that is the
+ * genuine ownership boundary, not a coarsening.
+ *
+ * <p>If no ownership frame has arrived for the current dimension —
+ * because the overlay is switched off, or the server predates protocol
+ * version 2 — this draws <b>nothing</b>. There is deliberately no
+ * fallback to the old hash: inventing a plausible-looking boundary is
+ * the defect being fixed.
  */
 public final class ChunkBorderRenderer {
-
-    /** Chunks drawn in each direction from the player; keeps the strip count modest. */
-    private static final int RADIUS_CHUNKS = 4;
-
-    /** Y-range around the player where seams are drawn. */
-    private static final int Y_BELOW = 16;
-
-    private static final int Y_ABOVE = 32;
 
     private static final float LINE_ALPHA = 0.75F;
 
@@ -66,7 +68,7 @@ public final class ChunkBorderRenderer {
 
     @SubscribeEvent
     public void onRenderLevelStage(RenderLevelStageEvent event) {
-        if (!state.overlaysEnabled()) {
+        if (!state.overlaysEnabled() || !MultiForgeDebugConfig.CHUNK_BORDERS.get()) {
             return;
         }
         if (event.getStage() != RenderLevelStageEvent.Stage.AFTER_PARTICLES) {
@@ -78,11 +80,11 @@ public final class ChunkBorderRenderer {
         if (level == null || player == null) {
             return;
         }
-        DebugPayload.RegionSnapshot snapshot = state.latestSnapshot();
-        if (snapshot == null || snapshot.regions().isEmpty()) {
+        if (!state.hasOwnershipFor(level.dimension().location().toString())) {
             return;
         }
 
+        int radius = MultiForgeDebugConfig.BORDER_RADIUS_CHUNKS.get();
         Vec3 camPos = event.getCamera().getPosition();
         PoseStack poseStack = event.getPoseStack();
         MultiBufferSource.BufferSource bufferSource = mc.renderBuffers().bufferSource();
@@ -90,29 +92,33 @@ public final class ChunkBorderRenderer {
         ChunkPos center = player.chunkPosition();
 
         double playerY = player.getY();
-        double yLow = Mth.clamp(playerY - Y_BELOW, level.getMinBuildHeight(), level.getMaxBuildHeight());
-        double yHigh = Mth.clamp(playerY + Y_ABOVE, level.getMinBuildHeight(), level.getMaxBuildHeight());
+        double yLow = Mth.clamp(
+                playerY - MultiForgeDebugConfig.Y_BELOW.get(), level.getMinBuildHeight(), level.getMaxBuildHeight());
+        double yHigh = Mth.clamp(
+                playerY + MultiForgeDebugConfig.Y_ABOVE.get(), level.getMinBuildHeight(), level.getMaxBuildHeight());
 
-        List<DebugPayload.RegionStat> regions = snapshot.regions();
-
-        for (int dx = -RADIUS_CHUNKS; dx <= RADIUS_CHUNKS; dx++) {
-            for (int dz = -RADIUS_CHUNKS; dz <= RADIUS_CHUNKS; dz++) {
+        for (int dx = -radius; dx <= radius; dx++) {
+            for (int dz = -radius; dz <= radius; dz++) {
                 int chunkX = center.x + dx;
                 int chunkZ = center.z + dz;
-                long here = pickRegionId(regions, chunkX, chunkZ);
+                Long here = state.regionIdAtChunk(chunkX, chunkZ);
+                if (here == null) {
+                    // Section not loaded / not owned — no seam to draw.
+                    continue;
+                }
 
                 // North seam: this chunk vs. (chunkX, chunkZ - 1).
-                if (dz > -RADIUS_CHUNKS) {
-                    long north = pickRegionId(regions, chunkX, chunkZ - 1);
-                    if (north != here) {
+                if (dz > -radius) {
+                    Long north = state.regionIdAtChunk(chunkX, chunkZ - 1);
+                    if (differs(here, north)) {
                         drawSeamZ(poseStack, consumer, camPos, chunkX, chunkZ, yLow, yHigh, here);
                     }
                 }
 
                 // West seam: this chunk vs. (chunkX - 1, chunkZ).
-                if (dx > -RADIUS_CHUNKS) {
-                    long west = pickRegionId(regions, chunkX - 1, chunkZ);
-                    if (west != here) {
+                if (dx > -radius) {
+                    Long west = state.regionIdAtChunk(chunkX - 1, chunkZ);
+                    if (differs(here, west)) {
                         drawSeamX(poseStack, consumer, camPos, chunkX, chunkZ, yLow, yHigh, here);
                     }
                 }
@@ -120,6 +126,16 @@ public final class ChunkBorderRenderer {
         }
 
         bufferSource.endBatch(RenderType.lines());
+    }
+
+    /**
+     * A seam exists where the neighbour is owned by a <em>different</em>
+     * region. An unknown neighbour (unloaded, or outside what the server
+     * sent) is not a seam — drawing one there would put a wall around
+     * the edge of the streamed area rather than around a region.
+     */
+    private static boolean differs(Long here, Long neighbour) {
+        return neighbour != null && !neighbour.equals(here);
     }
 
     /** Vertical wall at the north edge of (chunkX, chunkZ) — from (x, z) to (x+16, z). */
@@ -195,13 +211,8 @@ public final class ChunkBorderRenderer {
                 .setNormal(pose, nx, ny, nz);
     }
 
-    private static long pickRegionId(List<DebugPayload.RegionStat> regions, int chunkX, int chunkZ) {
-        int hash = Long.hashCode(((long) chunkX << 32) ^ (chunkZ & 0xFFFFFFFFL));
-        int index = Math.floorMod(hash, regions.size());
-        return regions.get(index).regionId();
-    }
-
-    private static float[] colorFor(long regionId) {
+    /** Stable per-region hue — a region keeps its colour for as long as it exists. */
+    static float[] colorFor(long regionId) {
         int hash = Long.hashCode(regionId * 0x9E3779B97F4A7C15L);
         float hue = (hash & 0xFFFFFF) / (float) 0xFFFFFF;
         int rgb = Color.HSBtoRGB(hue, 0.65F, 1.0F);

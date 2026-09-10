@@ -16,7 +16,6 @@ import java.io.IOException;
 import java.io.UncheckedIOException;
 import net.multiforge.runtime.diagnostics.wire.DebugPacketCodec;
 import net.multiforge.runtime.diagnostics.wire.DebugPacketKind;
-import net.multiforge.runtime.diagnostics.wire.DebugPayload;
 import net.neoforged.neoforge.network.event.RegisterPayloadHandlersEvent;
 import net.neoforged.neoforge.network.registration.PayloadRegistrar;
 import org.slf4j.Logger;
@@ -34,23 +33,22 @@ import org.slf4j.LoggerFactory;
  * NeoForge's payload-type system only needs to move the bytes, not
  * understand them. On this client, the registered handler only ever
  * fires on receipt of a server-to-client frame (HELLO /
- * REGION_SNAPSHOT / HEATMAP_UPDATE / PIN_LIST / VIOLATION_EVENT); per
- * §1 the client only ever <em>sends</em> (never receives) SUBSCRIBE, so
- * there is no ambiguity about which direction a received frame is.
+ * REGION_SNAPSHOT / HEATMAP_UPDATE / PIN_LIST / VIOLATION_EVENT /
+ * CHUNK_OWNERSHIP); per §1 the client only ever <em>sends</em> (never
+ * receives) SUBSCRIBE, so there is no ambiguity about which direction a
+ * received frame is.
  */
 public final class DebugPayloadRegistration {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(DebugPayloadRegistration.class);
 
-    /** All four gated streams -- protocol §5. */
-    private static final int SUBSCRIBE_ALL = DebugPayload.Subscribe.F_REGIONS
-            | DebugPayload.Subscribe.F_HEATMAP
-            | DebugPayload.Subscribe.F_PINS
-            | DebugPayload.Subscribe.F_VIOLATIONS;
-
     private DebugPayloadRegistration() {}
 
-    static void register(RegisterPayloadHandlersEvent event, DebugChannelClient channelClient) {
+    static void register(
+            RegisterPayloadHandlersEvent event,
+            DebugChannelClient channelClient,
+            DebugHudState state,
+            SubscriptionManager subscriptions) {
         // v1.3.13: mark the channel OPTIONAL so a stock NeoForge server
         // (or a MultiForge server that has not yet wired the server side
         // of the channel) does not reject client connections. The client
@@ -80,21 +78,35 @@ public final class DebugPayloadRegistration {
                 // DebugChannelClientTest -- stays untouched per Track C1
                 // scope. Negligible cost at this channel's 4 Hz cadence.
                 channelClient.onFrame(raw);
-            } catch (IOException e) {
+            } catch (IOException | IllegalArgumentException | UncheckedIOException e) {
                 LOGGER.warn("Dropping undecodable multiforge:debug/v1 {} frame: {}", frame.kind(), e.toString());
                 return;
             }
-            if (frame.kind() == DebugPacketKind.HELLO && !channelClient.hasSubscribed()) {
-                // v1.3.16: once-per-connection latch. Pre-v1.3.16 we
-                // sent a SUBSCRIBE_ALL every time a HELLO arrived, but
-                // v1.3.14's HeartbeatEmitter emits HELLO at 4 Hz as a
-                // keepalive, so we were flooding the server with 4
-                // SUBSCRIBEs per second per client. Now we only send
-                // once per connection; hasSubscribed() is reset on
-                // client-side disconnect (see DebugChannelClient).
-                context.reply(new DebugFramePayload(channelClient.encodeSubscribe(SUBSCRIBE_ALL)));
-                channelClient.markSubscribed();
+            if (frame.kind() != DebugPacketKind.HELLO) {
+                return;
             }
+            // v1.4.0 / protocol §8: a client MUST read
+            // HELLO.protocolVersion before sending SUBSCRIBE and MUST
+            // NOT subscribe to a version it does not understand.
+            // Through v1.3.18 the client read the field, stored it, and
+            // subscribed regardless.
+            int serverProtocol = state.hello() == null ? 0 : state.hello().protocolVersion();
+            if (!DebugPacketCodec.supportsProtocol(serverProtocol)) {
+                if (!state.protocolUnsupported()) {
+                    LOGGER.warn(
+                            "multiforge:debug/v1 — server speaks protocol {}; this client supports {}..{}. Not subscribing.",
+                            serverProtocol,
+                            DebugPacketCodec.MIN_SUPPORTED_PROTOCOL,
+                            DebugPacketCodec.PROTOCOL_VERSION);
+                }
+                state.markProtocolUnsupported(serverProtocol);
+                return;
+            }
+            subscriptions.onHello(serverProtocol);
+            // Only sends when the desired mask actually changed, so the
+            // server's 4 Hz HELLO keepalive does not produce SUBSCRIBE
+            // spam (the v1.3.15 bug that v1.3.16's latch was added for).
+            subscriptions.syncIfChanged(bytes -> context.reply(new DebugFramePayload(bytes)));
         });
     }
 }

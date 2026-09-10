@@ -51,7 +51,7 @@ public final class HeatmapRenderer {
 
     @SubscribeEvent
     public void onRenderLevelStage(RenderLevelStageEvent event) {
-        if (!state.overlaysEnabled()) {
+        if (!state.overlaysEnabled() || !MultiForgeDebugConfig.HEATMAP.get()) {
             return;
         }
         if (event.getStage() != RenderLevelStageEvent.Stage.AFTER_PARTICLES) {
@@ -72,13 +72,19 @@ public final class HeatmapRenderer {
         }
 
         Vec3 camPos = event.getCamera().getPosition();
-        // Only X/Z are shifted into the camera-relative frame below; Y is
-        // left in absolute world space, so this stays un-offset by camPos.y.
         float y = (float) (player.getY() - FEET_OFFSET);
 
         PoseStack poseStack = event.getPoseStack();
         poseStack.pushPose();
-        poseStack.translate(-camPos.x, 0, -camPos.z);
+        // v1.4.0: all three axes, not just X/Z. RenderLevelStageEvent's
+        // pose is camera-relative, so a vertex given in absolute world
+        // space has to be offset by the full camera position. Leaving Y
+        // un-translated (v1.3.5–v1.3.18) put every quad at world
+        // Y = camY + playerY — a sheet of coloured squares roughly 64
+        // blocks over the player's head instead of under their feet.
+        // Matches ChunkBorderRenderer and PinRenderer, which always
+        // subtracted camPos.y.
+        poseStack.translate(-camPos.x, -camPos.y, -camPos.z);
         Matrix4f pose = poseStack.last().pose();
 
         VertexConsumer consumer = mc.renderBuffers().bufferSource().getBuffer(RenderType.debugQuads());

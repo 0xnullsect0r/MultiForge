@@ -14,6 +14,7 @@ package net.multiforge.neoforge.debug;
 
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -22,11 +23,13 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.world.level.ChunkPos;
 import net.multiforge.api.world.WorldRef;
 import net.multiforge.neoforge.MultiForgeServerState;
 import net.multiforge.runtime.MultiForge;
 import net.multiforge.runtime.config.MultiForgeConfig;
 import net.multiforge.runtime.diagnostics.emitters.HeartbeatEmitter;
+import net.multiforge.runtime.diagnostics.emitters.OwnershipEmitter;
 import net.multiforge.runtime.diagnostics.emitters.PermissionFilter;
 import net.multiforge.runtime.diagnostics.emitters.PinListEmitter;
 import net.multiforge.runtime.diagnostics.emitters.PlayerRef;
@@ -46,6 +49,8 @@ import net.neoforged.neoforge.event.server.ServerAboutToStartEvent;
 import net.neoforged.neoforge.event.server.ServerStoppingEvent;
 import net.neoforged.neoforge.network.PacketDistributor;
 import net.neoforged.neoforge.network.event.RegisterPayloadHandlersEvent;
+import net.neoforged.neoforge.server.permission.PermissionAPI;
+import net.neoforged.neoforge.server.permission.events.PermissionGatherEvent;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -63,7 +68,7 @@ import org.slf4j.LoggerFactory;
  * <li>Mod-bus hook — registers the payload channel as OPTIONAL (so a
  * client without the mod still connects) and wires an inbound handler
  * for {@code SUBSCRIBE} frames.
- * <li>Game-bus hooks — instantiates the runtime's five emitters on
+ * <li>Game-bus hooks — instantiates the runtime's six emitters on
  * {@code ServerAboutToStart}, tears them down on {@code
  * ServerStopping}, and sends the unconditional {@code HELLO} frame on
  * {@code PlayerLoggedIn}.
@@ -82,7 +87,7 @@ public final class DebugChannelServer {
     private static final AtomicBoolean MOD_BUS_INSTALLED = new AtomicBoolean(false);
     private static final AtomicBoolean GAME_BUS_INSTALLED = new AtomicBoolean(false);
 
-    /** Player UUID → subscription mask (F_REGIONS | F_HEATMAP | F_PINS | F_VIOLATIONS). */
+    /** Player UUID → subscription mask (see {@code DebugPayload.Subscribe.F_*}). */
     private static final Map<UUID, Integer> SUBSCRIPTIONS = new ConcurrentHashMap<>();
 
     /** Player UUID → connection handle. */
@@ -90,6 +95,21 @@ public final class DebugChannelServer {
 
     /** Per-world heatmap emitter — one per active dimension. */
     private static final Map<String, AutoCloseable> HEATMAPS_BY_WORLD = new ConcurrentHashMap<>();
+
+    /** Per-world section→region ownership emitter — one per active dimension. */
+    private static final Map<String, AutoCloseable> OWNERSHIP_BY_WORLD = new ConcurrentHashMap<>();
+
+    /**
+     * Player UUID → last nanoTime we logged a permission denial for
+     * them. Protocol §6 asks for the ViolationLogger token-bucket
+     * *shape* here, not ViolationLogger itself — a missing permission
+     * is not an ownership violation — so this is a plain per-player
+     * window that keeps a client hammering SUBSCRIBE from flooding the
+     * log.
+     */
+    private static final Map<UUID, Long> DENIED_LOG_NANOS = new ConcurrentHashMap<>();
+
+    private static final long DENIED_LOG_WINDOW_NANOS = 60_000_000_000L;
 
     /** All installed emitter handles for the current server instance. */
     private static final List<AutoCloseable> INSTALLED = new ArrayList<>();
@@ -113,6 +133,7 @@ public final class DebugChannelServer {
         NeoForge.EVENT_BUS.addListener(DebugChannelServer::onPlayerLoggedOut);
         NeoForge.EVENT_BUS.addListener(DebugChannelServer::onLevelLoad);
         NeoForge.EVENT_BUS.addListener(DebugChannelServer::onLevelUnload);
+        NeoForge.EVENT_BUS.addListener(DebugPermissions::onGatherNodes);
     }
 
     // ------------------------------------------------------------------
@@ -184,8 +205,13 @@ public final class DebugChannelServer {
             }
         }
         HEATMAPS_BY_WORLD.clear();
+        for (AutoCloseable c : OWNERSHIP_BY_WORLD.values()) {
+            closeQuietly(c);
+        }
+        OWNERSHIP_BY_WORLD.clear();
         PLAYERS.clear();
         SUBSCRIPTIONS.clear();
+        DENIED_LOG_NANOS.clear();
         heartbeat = null;
         // v1.3.16: clear the shared pin manager for this server so the
         // next GameTestServer instance in the same JVM starts clean.
@@ -200,18 +226,26 @@ public final class DebugChannelServer {
         AutoCloseable heatmap = TpsHistogramEmitter.install(
                 host, WorldRef.of(dimId), DebugChannelServer::broadcast, PermissionFilter.ALWAYS_ALLOW);
         HEATMAPS_BY_WORLD.put(dimId, heatmap);
+        // v1.4.0: real section→region ownership, so the client's
+        // chunk-border overlay stops fabricating its seams.
+        AutoCloseable ownership = OwnershipEmitter.install(
+                host, WorldRef.of(dimId), DebugChannelServer::broadcast, PermissionFilter.ALWAYS_ALLOW);
+        OWNERSHIP_BY_WORLD.put(dimId, ownership);
     }
 
     private static void onLevelUnload(LevelEvent.Unload event) {
         if (!(event.getLevel() instanceof ServerLevel level)) return;
         String dimId = level.dimension().location().toString();
-        AutoCloseable prev = HEATMAPS_BY_WORLD.remove(dimId);
-        if (prev != null) {
-            try {
-                prev.close();
-            } catch (Throwable t) {
-                // ignore
-            }
+        closeQuietly(HEATMAPS_BY_WORLD.remove(dimId));
+        closeQuietly(OWNERSHIP_BY_WORLD.remove(dimId));
+    }
+
+    private static void closeQuietly(AutoCloseable c) {
+        if (c == null) return;
+        try {
+            c.close();
+        } catch (Throwable t) {
+            // ignore
         }
     }
 
@@ -242,6 +276,7 @@ public final class DebugChannelServer {
         if (!(event.getEntity() instanceof ServerPlayer player)) return;
         PLAYERS.remove(player.getUUID());
         SUBSCRIPTIONS.remove(player.getUUID());
+        DENIED_LOG_NANOS.remove(player.getUUID());
     }
 
     // ------------------------------------------------------------------
@@ -256,6 +291,15 @@ public final class DebugChannelServer {
     private static void broadcast(DebugPayload payload) {
         int flag = flagFor(payload);
         if (flag == 0) return; // unknown payload type — drop
+
+        // Per-world payloads are narrowed to each viewer (see
+        // #sendPerViewer); everything else is encoded once and fanned
+        // out verbatim.
+        if (payload instanceof DebugPayload.HeatmapUpdate || payload instanceof DebugPayload.OwnershipUpdate) {
+            sendPerViewer(payload, flag);
+            return;
+        }
+
         byte[] frame;
         try {
             frame = encode(payload);
@@ -267,15 +311,127 @@ public final class DebugChannelServer {
         for (Map.Entry<UUID, ServerPlayer> entry : PLAYERS.entrySet()) {
             int mask = SUBSCRIPTIONS.getOrDefault(entry.getKey(), 0);
             if ((mask & flag) == 0 && flag != 0xFF) continue;
-            try {
-                PacketDistributor.sendToPlayer(entry.getValue(), wrapped);
-            } catch (Throwable t) {
-                LOGGER.warn(
-                        "multiforge:debug/v1 — send to {} failed: {}",
-                        entry.getValue().getName().getString(),
-                        t.toString());
-            }
+            sendTo(entry.getValue(), wrapped);
         }
+    }
+
+    /**
+     * Send a per-world payload to each subscriber, skipping players in
+     * other dimensions and narrowing the entry list to the player's
+     * view radius.
+     *
+     * <p>v1.4.0. Before this, {@code TpsHistogramEmitter} produced one
+     * whole-world list — it is Minecraft-free and has no access to a
+     * player position or a view distance — and {@code broadcast} sent
+     * that single frame to everyone. Two problems: a player in the
+     * Nether received (and discarded client-side) every Overworld heat
+     * frame at 4 Hz, and a large loaded world could approach {@code
+     * DebugPacketCodec.MAX_FRAME_BYTES}, since the codec's own ceiling
+     * is 65 536 entries.
+     *
+     * <p>Encoding is memoised per chunk position, so players standing
+     * in the same chunk share one encode.
+     */
+    private static void sendPerViewer(DebugPayload payload, int flag) {
+        String worldId = worldIdOf(payload);
+        if (worldId == null) return;
+
+        Map<Long, DebugFramePayload> byChunk = new HashMap<>();
+        for (Map.Entry<UUID, ServerPlayer> entry : PLAYERS.entrySet()) {
+            int mask = SUBSCRIPTIONS.getOrDefault(entry.getKey(), 0);
+            if ((mask & flag) == 0) continue;
+            ServerPlayer player = entry.getValue();
+            if (!player.level().dimension().location().toString().equals(worldId)) continue;
+
+            ChunkPos at = player.chunkPosition();
+            int radius = viewRadiusChunks(player);
+            long key = ChunkPos.asLong(at.x, at.z);
+            DebugFramePayload wrapped = byChunk.get(key);
+            if (wrapped == null) {
+                DebugPayload narrowed = narrowToRadius(payload, at, radius);
+                try {
+                    wrapped = new DebugFramePayload(encode(narrowed));
+                } catch (Throwable t) {
+                    LOGGER.warn(
+                            "multiforge:debug/v1 — encode failed for {}: {}",
+                            payload.getClass().getSimpleName(),
+                            t.toString());
+                    return;
+                }
+                byChunk.put(key, wrapped);
+            }
+            sendTo(player, wrapped);
+        }
+    }
+
+    /**
+     * Log a {@code multiforge.debug.view} denial at most once per
+     * player per minute. Protocol §6 asks for {@code ViolationLogger}'s
+     * token-bucket discipline here without routing through it, since a
+     * missing permission is not an ownership violation.
+     */
+    private static void logDeniedRateLimited(ServerPlayer player) {
+        long now = System.nanoTime();
+        Long last = DENIED_LOG_NANOS.get(player.getUUID());
+        if (last != null && now - last < DENIED_LOG_WINDOW_NANOS) {
+            return;
+        }
+        DENIED_LOG_NANOS.put(player.getUUID(), now);
+        LOGGER.info(
+                "multiforge:debug/v1 — SUBSCRIBE from {} declined: missing multiforge.debug.view",
+                player.getName().getString());
+    }
+
+    private static void sendTo(ServerPlayer player, DebugFramePayload wrapped) {
+        try {
+            PacketDistributor.sendToPlayer(player, wrapped);
+        } catch (Throwable t) {
+            LOGGER.warn("multiforge:debug/v1 — send to {} failed: {}", player.getName().getString(), t.toString());
+        }
+    }
+
+    private static String worldIdOf(DebugPayload payload) {
+        if (payload instanceof DebugPayload.HeatmapUpdate u) return u.worldId();
+        if (payload instanceof DebugPayload.OwnershipUpdate u) return u.worldId();
+        return null;
+    }
+
+    /**
+     * The player's effective view distance in chunks, plus one section
+     * of slack so seams at the very edge of the view still have a
+     * neighbour to compare against.
+     */
+    private static int viewRadiusChunks(ServerPlayer player) {
+        MinecraftServer server = player.getServer();
+        int view = server == null ? 10 : server.getPlayerList().getViewDistance();
+        return Math.max(2, view) + 2;
+    }
+
+    private static DebugPayload narrowToRadius(DebugPayload payload, ChunkPos at, int radius) {
+        if (payload instanceof DebugPayload.HeatmapUpdate u) {
+            List<DebugPayload.ChunkHeat> kept = new ArrayList<>();
+            for (DebugPayload.ChunkHeat h : u.heats()) {
+                if (withinRadius(h.chunkX(), h.chunkZ(), at, radius)) kept.add(h);
+            }
+            return new DebugPayload.HeatmapUpdate(u.worldId(), kept);
+        }
+        if (payload instanceof DebugPayload.OwnershipUpdate u) {
+            // Entries are section *origins*, so a section whose body
+            // covers the edge of the view can have an origin up to one
+            // section-width further out. Widen by that much or the
+            // client loses the neighbour it needs to detect a seam.
+            int ownerRadius = radius + (1 << u.sectionChunkShift());
+            List<DebugPayload.SectionOwner> kept = new ArrayList<>();
+            for (DebugPayload.SectionOwner o : u.owners()) {
+                if (withinRadius(o.chunkX(), o.chunkZ(), at, ownerRadius)) kept.add(o);
+            }
+            return new DebugPayload.OwnershipUpdate(u.worldId(), u.sectionChunkShift(), kept);
+        }
+        return payload;
+    }
+
+    private static boolean withinRadius(int chunkX, int chunkZ, ChunkPos at, int radius) {
+        return Math.abs(chunkX - at.x) <= radius && Math.abs(chunkZ - at.z) <= radius;
     }
 
     private static int flagFor(DebugPayload payload) {
@@ -284,6 +440,7 @@ public final class DebugChannelServer {
         if (payload instanceof DebugPayload.HeatmapUpdate) return DebugPayload.Subscribe.F_HEATMAP;
         if (payload instanceof DebugPayload.PinList) return DebugPayload.Subscribe.F_PINS;
         if (payload instanceof DebugPayload.ViolationEvent) return DebugPayload.Subscribe.F_VIOLATIONS;
+        if (payload instanceof DebugPayload.OwnershipUpdate) return DebugPayload.Subscribe.F_OWNERSHIP;
         return 0;
     }
 
@@ -293,6 +450,7 @@ public final class DebugChannelServer {
         if (payload instanceof DebugPayload.HeatmapUpdate u) return DebugPacketCodec.encodeHeatmap(u);
         if (payload instanceof DebugPayload.PinList l) return DebugPacketCodec.encodePinList(l);
         if (payload instanceof DebugPayload.ViolationEvent e) return DebugPacketCodec.encodeViolation(e);
+        if (payload instanceof DebugPayload.OwnershipUpdate u) return DebugPacketCodec.encodeOwnership(u);
         throw new IllegalArgumentException("unknown DebugPayload subtype: " + payload.getClass().getName());
     }
 
@@ -314,7 +472,21 @@ public final class DebugChannelServer {
             DebugPacketCodec.Frame frame = DebugPacketCodec.readFrame(raw);
             if (frame.kind() != DebugPacketKind.SUBSCRIBE) return; // ignore unexpected
             DebugPayload.Subscribe sub = DebugPacketCodec.decodeSubscribe(frame.body());
-            int mask = sub.flags() & 0x0F; // strip unknown bits per §5
+            int mask = sub.flags() & DebugPayload.Subscribe.F_ALL; // strip unknown bits per §5
+
+            // Protocol §6: the SUBSCRIBE handler is the sole enforcement
+            // point for multiforge.debug.view, re-evaluated on every
+            // frame rather than cached for the connection. The node
+            // defaults to allow-all (see DebugPermissions), so this only
+            // bites on servers running a permission handler that denies
+            // it. Failure is silent on the wire — there is no NACK kind
+            // in this protocol — and rate-limited in the log.
+            if (!PermissionAPI.getPermission(sp, DebugPermissions.VIEW)) {
+                SUBSCRIPTIONS.put(sp.getUUID(), 0);
+                logDeniedRateLimited(sp);
+                return;
+            }
+
             Integer prev = SUBSCRIPTIONS.put(sp.getUUID(), mask);
             if (prev == null || prev.intValue() != mask) {
                 LOGGER.info(

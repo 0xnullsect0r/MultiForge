@@ -13,9 +13,14 @@
 package net.multiforge.client;
 
 import net.neoforged.bus.api.IEventBus;
+import net.neoforged.fml.ModContainer;
 import net.neoforged.fml.common.Mod;
+import net.neoforged.fml.config.ModConfig;
 import net.neoforged.neoforge.client.event.RegisterKeyMappingsEvent;
+import net.neoforged.neoforge.client.gui.ConfigurationScreen;
+import net.neoforged.neoforge.client.gui.IConfigScreenFactory;
 import net.neoforged.neoforge.common.NeoForge;
+import net.neoforged.neoforge.network.PacketDistributor;
 import net.neoforged.neoforge.network.event.RegisterPayloadHandlersEvent;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -29,11 +34,17 @@ import org.slf4j.LoggerFactory;
  *
  * <ul>
  *   <li>registers the {@code multiforge:debug/v1} payload channel
- *       ({@link DebugPayloadRegistration}) on the mod event bus, and
- *   <li>registers the four overlay renderers ({@link DebugHudRenderer},
- *       {@link ChunkBorderRenderer}, {@link HeatmapRenderer}, {@link
- *       PinRenderer}) on the main NeoForge event bus, all sharing one
- *       {@link DebugHudState} instance fed by {@link DebugChannelClient}.
+ *       ({@link DebugPayloadRegistration}) on the mod event bus,
+ *   <li>registers the per-overlay client config ({@link
+ *       MultiForgeDebugConfig}) and the auto-generated screen that
+ *       edits it from the Mods list,
+ *   <li>registers the overlay keybind ({@link MultiForgeKeyMappings}),
+ *       and
+ *   <li>registers the HUD panel renderer plus the three world
+ *       renderers ({@link ChunkBorderRenderer}, {@link
+ *       HeatmapRenderer}, {@link PinRenderer}) on the main NeoForge
+ *       event bus, all sharing one {@link DebugHudState} instance fed
+ *       by {@link DebugChannelClient}.
  * </ul>
  *
  * <p>The panel stays inert (no lines drawn, no channel traffic) against
@@ -47,12 +58,25 @@ public final class MultiForgeDebugMod {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(MultiForgeDebugMod.class);
 
-    public MultiForgeDebugMod(IEventBus modEventBus) {
+    public MultiForgeDebugMod(IEventBus modEventBus, ModContainer modContainer) {
         DebugHudState state = new DebugHudState();
         DebugChannelClient channelClient = new DebugChannelClient(state);
+        SubscriptionManager subscriptions = new SubscriptionManager(state, MultiForgeDebugConfig::desiredMask);
 
-        modEventBus.addListener(
-                (RegisterPayloadHandlersEvent event) -> DebugPayloadRegistration.register(event, channelClient));
+        // v1.4.0: per-overlay client config + the config screen NeoForge
+        // generates from the spec. Registering the extension point is
+        // what puts the "Config" button on this mod's row in the Mods
+        // list; ConfigurationScreen's (ModContainer, Screen) constructor
+        // is exactly IConfigScreenFactory#createScreen's shape.
+        modContainer.registerConfig(ModConfig.Type.CLIENT, MultiForgeDebugConfig.SPEC);
+        // Bound to a local first: registerExtensionPoint is overloaded on
+        // (Class<T>, T) and (Class<T>, Supplier<T>), and a bare method
+        // reference is ambiguous between them.
+        IConfigScreenFactory configScreen = ConfigurationScreen::new;
+        modContainer.registerExtensionPoint(IConfigScreenFactory.class, configScreen);
+
+        modEventBus.addListener((RegisterPayloadHandlersEvent event) ->
+                DebugPayloadRegistration.register(event, channelClient, state, subscriptions));
 
         // v1.3.15: user-configurable keybind (default F6) that toggles
         // every overlay + HUD line via DebugHudState.overlaysEnabled.
@@ -63,11 +87,28 @@ public final class MultiForgeDebugMod {
         NeoForge.EVENT_BUS.register(new ChunkBorderRenderer(state));
         NeoForge.EVENT_BUS.register(new HeatmapRenderer(state));
         NeoForge.EVENT_BUS.register(new PinRenderer(state));
-        NeoForge.EVENT_BUS.register(new KeyInputHandler(state));
-        // v1.3.16: reset the SUBSCRIBE-once latch on client disconnect
-        // so hopping between MultiForge servers in one session works.
-        NeoForge.EVENT_BUS.register(new DebugSessionHandler(channelClient));
+        NeoForge.EVENT_BUS.register(new KeyInputHandler(state, enabled -> resync(state, subscriptions)));
+        // v1.3.16: reset the per-connection subscription on disconnect so
+        // hopping between MultiForge servers in one session works.
+        // v1.4.0: also wipe the HUD model, so a disconnect stops the old
+        // server's data bleeding into the next world.
+        NeoForge.EVENT_BUS.register(new DebugSessionHandler(state, subscriptions));
 
         LOGGER.info("MultiForge debug client mod initialized (channel {})", DebugChannelClient.CHANNEL_ID);
+    }
+
+    /**
+     * Push the current desired subscription mask to the server, if we
+     * are on a MultiForge server at all.
+     *
+     * <p>The {@code hello() != null} guard matters: on a vanilla or
+     * non-MultiForge server the channel was never negotiated, and
+     * pressing F6 there must not attempt a send.
+     */
+    private static void resync(DebugHudState state, SubscriptionManager subscriptions) {
+        if (state.hello() == null || state.protocolUnsupported()) {
+            return;
+        }
+        subscriptions.syncIfChanged(bytes -> PacketDistributor.sendToServer(new DebugFramePayload(bytes)));
     }
 }
