@@ -308,7 +308,9 @@ For deep observability (region borders, MSPT heatmap, live pin selection) downlo
 
 **"Unsupported class file major version 7X" at mod scan.** Your `java` is a JDK newer than 21 (`70` = JDK 26, `69` = JDK 25, `68` = JDK 24, `67` = JDK 23, `66` = JDK 22). SpongeMixin — bundled by nearly every 1.21.1 mod, including everything in ATM10 / AllTheModsX / most kitchen-sink packs — ships a class-file reader that only understands Java 21 bytecode and rejects anything newer, which crashes mod-loading before MultiForge or NeoForge ever gets a chance to run. Fix: install Temurin 21 (`sudo pacman -S jdk21-temurin` / `apt install temurin-21-jdk` / `brew install temurin@21`), then re-invoke the launcher with an explicit JDK path — for example `JAVA_HOME=/usr/lib/jvm/temurin-21-jdk ./run.sh`. As of v1.3.18 the installer-generated `run.sh` refuses to run on the wrong JDK with this message and a non-zero exit. See Requirements above.
 
-**Server won't boot: `error: cannot find symbol` / `NoClassDefFoundError`.** The runtime jar didn't land on the classpath. Verify `libraries/multiforge/multiforge-runtime.jar` exists and is non-empty (`ls -la libraries/multiforge/`).
+**Mods refuse to load: "Mod X requires neoforge 21.1.NNN or above / Currently, neoforge is 21.1.1-multiforge-…".** MultiForge is forked from NeoForge 21.1.1, so mods needing APIs added after it are refused at load. This is expected and is not fixable by configuration — see [`compatibility.md`](compatibility.md) for which packs this affects and by how much. If instead the line reads `Currently, neoforge is 1.21.1-v…-beta`, you are on v1.5.0 or older, where the reported version was not a NeoForge version at all and *every* mod was refused; upgrade to v1.5.1+.
+
+**Server won't boot: `error: cannot find symbol` / `NoClassDefFoundError`.** The runtime jar didn't land on the classpath. Verify the MultiForge artifacts exist under `libraries/net/neoforged/neoforge/<version>/` and that `run.sh` points at that version's `unix_args.txt`.
 
 **"EULA not accepted" on first boot.** Edit `eula.txt` to `eula=true`.
 
