@@ -50,7 +50,6 @@ import net.neoforged.neoforge.event.server.ServerStoppingEvent;
 import net.neoforged.neoforge.network.PacketDistributor;
 import net.neoforged.neoforge.network.event.RegisterPayloadHandlersEvent;
 import net.neoforged.neoforge.server.permission.PermissionAPI;
-import net.neoforged.neoforge.server.permission.events.PermissionGatherEvent;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 

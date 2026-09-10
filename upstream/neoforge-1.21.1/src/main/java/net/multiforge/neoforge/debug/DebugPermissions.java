@@ -44,7 +44,6 @@ import net.neoforged.neoforge.server.permission.nodes.PermissionTypes;
  * multiforge.debug.view} string the protocol document specifies.
  */
 public final class DebugPermissions {
-
     public static final PermissionNode<Boolean> VIEW = new PermissionNode<>(
             "multiforge", "debug.view", PermissionTypes.BOOLEAN, (player, uuid, contexts) -> true);
 
