@@ -1,5 +1,64 @@
 # CHANGELOG
 
+## v1.5.1 — a MultiForge server refused to load any mod at all
+
+Reported from an ATM10 boot: the server started, then died with **192 mod-dependency failures**, every one of the form
+
+```
+Mod bigreactors requires neoforge 21.1.152 or above
+Currently, neoforge is 1.21.1-v1.5.0.0-beta
+```
+
+Mods that asked for nothing more than `[21.1.0,)` were refused too.
+
+### The version string was not a NeoForge version
+
+`upstream/neoforge-1.21.1/build.gradle` derived the fork's version from `gradleutils`, which in this flat vendored repo resolves `git describe --tags` against the **outer** project's release tag — `v1.5.0.0-beta`. That does not start with a digit, so a guard added during the M9 boot work prepended the Minecraft version, yielding `1.21.1-v1.5.0.0-beta`.
+
+`NeoForgeVersion` reports that string as the `neoforge` mod version, and every mod's dependency range is resolved against it with Maven semantics. Maven compares the leading `1` against the `21` in `[21.1.152,)` and places it below **every** floor. Hence: no mod could ever load on a MultiForge server.
+
+The base version is now declared explicitly (`neoforge_base_version`) and the version is `<base>-multiforge-<runtime version>`, e.g. `21.1.1-multiforge-1.5.1`. Verified against maven-artifact 3.8.5: Maven ranks an unrecognised qualifier *after* the bare release, so this satisfies `[21.1.1,)` and everything below while still ranking under `21.1.2`, and it stays self-identifying in crash reports. The scheme still begins with a digit, preserving the `-<digit>` filename boundary that `ModuleFinder` needs (the M9 constraint the old guard existed for).
+
+### The declared base version was wrong by 89 releases
+
+`gradle.properties` claimed `neoForgeVersion=21.1.90`. Diffing this tree's `src/main/java/net/neoforged` against NeoForge's published sources jars says otherwise:
+
+| Compared against | Identical files (of 905) |
+|---|---|
+| 21.1.1 | **902** |
+| 21.1.9 | 893 |
+| 21.1.20 | 881 |
+| 21.1.90 | 841 |
+| 21.1.234 | 762 |
+
+The base is **21.1.1**, the first 1.21.1 release. The only three files differing from it — `NeoForge.java`, `NeoForgeMod.java`, `ServerLifecycleHooks.java` — are MultiForge's own fork-side edits.
+
+Two pins in that same file corroborate it being stale rather than merely inaccurate: `coremods=6.0.4` and `mergetool=2.0.0` match no published 21.1.x at all (every one ships 7.0.3 / 2.0.3). The source diff is authoritative.
+
+### What this means for modpacks
+
+Fixing the string takes ATM10 from *every* mod refused to **75 of 192** loadable. The remaining 117 need APIs added after 21.1.1 — 84 of them need 21.1.151 or later. Current upstream NeoForge is 21.1.234.
+
+Raising `neoforge_base_version` without actually rebasing the sources would let those mods load and then fail on `NoSuchMethodError` deep in gameplay, which is strictly worse than a clean rejection at load. So it stays at the truth, and the rebase is tracked as its own piece of work — see `docs/compatibility.md`.
+
+Encouragingly, the NeoForm version is byte-identical between 21.1.1 and 21.1.234 (`1.21.1-20240808.144430`), so the decompiled vanilla sources do not move; a rebase is NeoForge-patch and glue work, not a Minecraft-mappings migration.
+
+### The mod-safety scanner never ran
+
+Separately: the `mod-safety scanner` CI check has failed on every release since v1.3.17 that touched `upstream/`. Not because it found anything — because `multiforge-scanner.jar` had no `Main-Class` manifest attribute, so `java -jar` printed `no main manifest attribute` and exited 1, which the workflow read as ERROR-severity findings.
+
+Fixed: the jar now carries a manifest and merges its ASM dependency (BSD-3-Clause, GPL-3 compatible), since `java -jar` ignores `-cp` and a manifest alone would only have moved the failure to `NoClassDefFoundError`.
+
+With it running, two more faults surfaced in the same check. The target glob was `upstream/neoforge-1.21.1/build/libs/*.jar`, a directory that has never existed — the fork builds to `projects/neoforge/build/libs` — so the glob never expanded, the literal string was passed as a filename, and the scanner exited 2 on a usage error. And the step runs under `bash -e`, so a nonzero scanner exit aborted it before `exit_code` was ever recorded, leaving the gate reading an empty value.
+
+With all three fixed the scanner finally runs against the fork jar — and reports 194 findings, 169 of them ERROR, essentially all against **vanilla Minecraft**: `DispenseItemBehavior$12.execute` calling `Level.setBlock`, `WeavingMobEffect.spawnCobweb`, and so on. That is not a MultiForge defect. The scanner audits *mod* jars for unsafe region access (`docs/design/scanner-rules.md` §1.1), and every fork artifact necessarily embeds patched vanilla — `neoforge-<v>.jar` carries 8,274 `net/minecraft` classes. There is no fork jar that would be a fair target.
+
+The step is therefore informational: it runs, prints a finding summary, uploads the SARIF, and does not gate. Re-gating needs either a corpus of real mod jars or an ignore-file scoped to `net/minecraft` (the scanner already has `--ignore-file`). A red X that means nothing only teaches people to ignore CI.
+
+Jar selection is also now newest-first and excludes every derived artifact (`-installer`, `-userdev`, `-universal`, `-unsigned`, `-sources`). Both mattered: `build/libs` accumulates old versions on a dirty tree, and an earlier iteration of this fix accidentally selected the *installer* jar — which has no `net/minecraft` classes at all, so the scan looked clean and briefly suggested the check could stay a gate.
+
+- `gradle.properties` + `upstream/neoforge-1.21.1/gradle.properties` bumped 1.5.0 → 1.5.1.
+
 ## v1.5.0 — the drop-in replacement ZIP now actually converts a server
 
 Reported from a live test: unzip the archive, swap in its launcher, run it, and get

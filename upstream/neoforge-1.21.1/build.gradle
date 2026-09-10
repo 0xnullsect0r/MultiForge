@@ -14,39 +14,51 @@ ext.isPreReleaseVersion = project.minecraft_version.contains('w') || project.min
 if (isPreReleaseVersion) {
     project.version = "${project.neoforge_snapshot_next_stable}.0-alpha.${project.minecraft_version}.${(new Date()).format('yyyyMMdd.HHmmss', TimeZone.getTimeZone('UTC'))}"
 } else {
-    // MultiForge fork note: gradleutils.version requires `git describe --tags`
-    // to find a tag reachable from HEAD, which upstream NeoForge's own repo
-    // always has. MultiForge vendors this fork directly into a single flat
-    // repo (no nested .git, no NeoForge release-tag history), and day-to-day
-    // work happens on `develop`, which does not carry the outer repo's own
-    // release tags (those live on `main`, cut per CLAUDE.md's milestone
-    // workflow). Rather than fabricate a git tag here, fall back to a static,
-    // MultiForge-scoped version string when the lookup fails.
+    // MultiForge fork note: this deliberately does NOT use gradleutils.
+    // That derives a version from `git describe --tags`, which in this
+    // flat vendored repo returns the OUTER project's release tag — a
+    // MultiForge version, not a NeoForge one. Feeding that to mods'
+    // `neoforge` dependency ranges is what caused the bug described
+    // below. The base version is declared explicitly instead.
     //
-    // MultiForge fork addition (M9 boot regression fix): upstream NeoForge
-    // tags start with a digit (e.g. "21.1.100"), so a jar filename like
-    // "neoforge-21.1.100-universal.jar" yields a valid automatic module
-    // name of "neoforge" out of the box — the `-<digit>` sequence is the
-    // version/name boundary Java's ModuleFinder scans for. MultiForge's
-    // own tags start with a letter (e.g. "m9-design-frozen"), so the
-    // computed version "m9-design.NN-beta-develop" gives a filename with
-    // NO `-<digit>` boundary; ModuleFinder then treats the whole filename
-    // as the module name, and a segment like "46" (or "0") fails as
-    // "not a valid Java identifier". Result: cpw's ModuleClassLoader
-    // silently loses class-visibility for the neoforge module — boot
-    // crashes with ClassNotFoundException on the first Vanilla type whose
-    // reflection walk crosses into net.neoforged.neoforge.* (in practice
-    // IHolderLookupProviderExtension). Guard by prepending the Minecraft
-    // version whenever the computed version doesn't already start with a
-    // digit, so the jar filename always carries a valid `-<digit>` version
-    // boundary.
-    try {
-        def guVersion = gradleutils.version.toString()
-        project.version = guVersion ==~ /^\d.*/ ? guVersion : "${project.minecraft_version}-${guVersion}"
-    } catch (Exception e) {
-        project.version = "${project.minecraft_version}-multiforge-fork"
-        logger.warn("gradleutils version calculation failed (${e.message}); using fallback version ${project.version}")
+    // Module-name constraint (M9 boot regression): the jar filename must
+    // carry a `-<digit>` sequence, because that is the version/name
+    // boundary Java's ModuleFinder scans for. A version starting with a
+    // letter produces a filename with no such boundary, ModuleFinder then
+    // treats the whole filename as the module name, and a segment like
+    // "46" fails as "not a valid Java identifier" — cpw's
+    // ModuleClassLoader silently loses class-visibility for the neoforge
+    // module and boot dies with ClassNotFoundException on the first
+    // Vanilla type whose reflection walk crosses into
+    // net.neoforged.neoforge.* (in practice IHolderLookupProviderExtension).
+    // The scheme below always starts with a digit, so this holds.
+    //
+    // The fork reports this as its `neoforge` mod version, and every mod's
+    // `neoforge` dependency range is resolved against it, so it has to be a
+    // real NeoForge version.
+    //
+    // It did not used to be. Through v1.5.0 this took gradleutils' version
+    // ("v1.5.0.0-beta"), saw it did not start with a digit, and prepended
+    // the Minecraft version — yielding "1.21.1-v1.5.0.0-beta". Maven then
+    // compared the leading "1" against the "21" in ranges like
+    // [21.1.152,) and placed it below every floor, so a MultiForge server
+    // refused to load ANY mod: ATM10 died with 192 dependency failures,
+    // including mods asking only for [21.1.0,).
+    //
+    // Shape is `<base>-multiforge-<runtime version>`, e.g.
+    // 21.1.20-multiforge-1.5.0. Verified against maven-artifact 3.8.5:
+    // Maven sorts an unrecognised qualifier AFTER the bare release, so
+    // this satisfies [21.1.20,) as well as everything below it, while
+    // still ranking under 21.1.21 — and it stays self-identifying in
+    // crash reports and `/neoforge version` output.
+    def base = project.findProperty('neoforge_base_version')
+    if (!base) {
+        throw new GradleException(
+                "neoforge_base_version is not set in gradle.properties. It is the upstream " +
+                "NeoForge release this fork was vendored from, and mods' dependency ranges " +
+                "are checked against it.")
     }
+    project.version = "${base}-multiforge-${project.multiforge_runtime_version}"
 }
 
 // Print version, generally useful to know - also appears on CI
