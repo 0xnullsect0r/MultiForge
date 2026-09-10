@@ -15,6 +15,8 @@ Mod <id> requires neoforge <version> or above
 Currently, neoforge is 21.1.1-multiforge-1.5.1
 ```
 
+There is a second, subtler class of incompatibility unique to MultiForge: mixins that target vanilla methods MultiForge has restructured. See [§4](#4-known-errors-and-what-they-mean) under *Critical injection failure*.
+
 **This is not a bug, and raising the reported version would not fix it.** The APIs those mods call genuinely are not present in this tree. Claiming a higher version would let them load and then fail on `NoSuchMethodError` somewhere in gameplay — a far worse failure than a clean refusal at startup.
 
 The fix is a rebase onto current NeoForge. See [§5](#5-the-rebase).
@@ -35,19 +37,54 @@ The fix is a rebase onto current NeoForge. See [§5](#5-the-rebase).
 
 Booted on a v1.5.1 dedicated server reporting `21.1.1-multiforge-1.5.1`, reaching `Done`:
 
-| Mod | Build | Requires | Result |
-|---|---|---|---|
-| Cloth Config API | 15.0.140+neoforge | `[21.0.110-beta,)` | ✅ loads |
-| Jade | 15.10.6+neoforge | `[21.0.143,)` | ✅ loads |
-| Sophisticated Core | 1.21.1-1.5.1.2341 | `[21.1.229,)` | ❌ refused, names the version |
+| Mod | Requires | Result |
+|---|---|---|
+| AppleSkin | `[21.0.0-beta,)` | ✅ loads |
+| Architectury API | `[21.0.110-beta,)` | ✅ loads |
+| Citadel | `[4,)` | ✅ loads |
+| Cloth Config API | `[21.0.110-beta,)` | ✅ loads |
+| Corail Tombstone | `[21.0.0-beta,)` | ✅ loads |
+| Jade | `[21.0.143,)` | ✅ loads |
+| JourneyMap | `[1.0.0,)` | ✅ loads |
+| Waystones | `[21-beta,)` | ✅ range OK — needs `balm` alongside it |
+| Curios | `[21.1.60,)` | ❌ refused |
+| GeckoLib | `[21.1.150,)` | ❌ refused |
+| FastWorkbench (`fastbench`) | `[21.1.187,)` | ❌ refused |
+| Create | `[21.1.219,)` | ❌ refused |
+| Sophisticated Core | `[21.1.229,)` | ❌ refused |
+| Supplementaries | `[21.1.247,]` | ❌ refused |
+
+Of that sample, **8 of 14 load today**; at a rebased 21.1.234, **13 of 14** would.
 
 The Sophisticated Core result is the *intended* behaviour, not a defect — a clean refusal at load rather than a crash in gameplay.
 
 Note that its Modrinth build requires 21.1.229 while the copy bundled in ATM10 requires only 21.1.0. **A mod's requirement varies by build**, so check the jar you actually have:
 
 ```bash
-unzip -p <mod>.jar META-INF/neoforge.mods.toml | grep -A4 'modId = "neoforge"'
+scripts/check-mod-compat.py mods/*.jar
 ```
+
+### 2.2 Checking your own mods before you boot
+
+`scripts/check-mod-compat.py` reports which jars a MultiForge server can load, so you find out in a second rather than after a ten-minute boot ending in a wall of dependency failures:
+
+```
+$ scripts/check-mod-compat.py mods/*.jar
+Loadable on 21.1.1 (8):
+  appleskin.jar                          [21.0.0-beta,)
+  architectury-api.jar                   [21.0.110-beta,)
+  ...
+Refused — needs a newer NeoForge (6):
+  create.jar                             needs 21.1.219      [21.1.219,)
+  geckolib.jar                           needs 21.1.150      [21.1.150,)
+  ...
+```
+
+Pass `--base 21.1.234` to model what a rebase would unlock.
+
+**Do not do this with `grep`.** A `neoforge.mods.toml` carries a dependency block *per mod*, and one jar often bundles several via jarjar — grepping the first `modId = "neoforge"` block reports one mod's requirement and silently misses the rest. That is how `fastworkbench.jar` first appeared unconstrained here when the `fastbench` mod inside it needs 21.1.187. The script walks every nested toml and every dependency block and reports the highest floor.
+
+It does not check dependencies *between* mods. A jar it lists as loadable can still fail because a sibling it needs is absent — `waystones` needs `balm`, `fastbench` needs `placebo`.
 
 
 Numbers are from a real ATM10 boot on v1.5.0 plus the dependency analysis in [§3](#3-what-atm10-actually-needs).
@@ -74,6 +111,46 @@ The distribution matters: there is no useful intermediate target. Rebasing to 21
 
 ## 4. Known errors and what they mean
 
+### `Critical injection failure: … failed injection check, (0/1) succeeded. Scanned 0 target(s)`
+
+A mod's mixin cannot find the code it wants to inject into. **This is the one failure class where MultiForge genuinely differs from stock NeoForge**, and it is worth understanding.
+
+To drive vanilla logic from the regionized scheduler, MultiForge's `08-globals` patches *hollow out* certain vanilla methods: the original body moves into a new `mf…Body()` method, and the original becomes a dispatcher that either delegates to a global-region system or calls the extracted body.
+
+```java
+protected void tickTime() {
+    if (GlobalSystemsBridge.timeHandled(this)) return;   // handled by the global region
+    this.mfTickTimeBody();                                // else: the original body
+}
+
+public void mfTickTimeBody() {
+    if (this.tickTime) { ... }                            // everything that used to be in tickTime()
+}
+```
+
+A mixin targeting an instruction *inside* the original method now finds nothing there — it moved. The mixin still applies to stock NeoForge; it finds zero targets on MultiForge.
+
+Vanilla methods currently hollowed out this way, all by `08-globals`:
+
+| Class | Method | Body moved to |
+|---|---|---|
+| `ServerLevel` | `tickTime` | `mfTickTimeBody` |
+| `ServerLevel` | `advanceWeatherCycle` | `mfAdvanceWeatherCycleBody` |
+| `MinecraftServer` | time synchronisation | `mfSynchronizeTimeBody` |
+| `WorldBorder` | `tick` | `mfTickBody` |
+| `Raids` | `tick` | `mfTickBody` |
+| `EndDragonFight` | `tick` | `mfTickBody` |
+| `Commands` | `performPrefixedCommand` | `mfPerformPrefixedCommandBody` |
+| `ServerFunctionManager` | `execute` | `mfExecuteBody` |
+| `ServerScoreboard` | `onPlayerRemoved` | `mfOnPlayerRemovedBody` |
+| `ServerScoreboard` | `onScoreChanged` | `mfOnScoreChangedBody` |
+
+Mods that mixin into day/night cycle, weather, world border, raids, the dragon fight, command dispatch, functions, or scoreboards are the ones at risk. A mod injecting at the *head* or *return* of these methods usually still works; one targeting a specific call or variable inside the body will not.
+
+Worked example — Citadel 2.7.1's `ServerLevelMixin` injects around the `setDayTime` call, which lives inside `tickTime()`. On MultiForge that call is in `mfTickTimeBody()`, so injection reports `Scanned 0 target(s)`. (Citadel also cannot run on NeoForge 21.1.1 at all — it calls `DeferredRegister.createDataComponents`, which does not exist there — so on stock it gets past mixins and dies at mod construction instead.)
+
+There is no workaround from the server side today. Report it against MultiForge with the mixin name and target class.
+
 ### `Mod X requires neoforge <n> or above / Currently, neoforge is 21.1.1-multiforge-…`
 
 Expected. The mod needs an API added after 21.1.1. Nothing to do but remove the mod or wait for the rebase.
@@ -93,6 +170,12 @@ Not MultiForge. A previous server is still holding port 25565 — commonly a lef
 ### `Could not find or load main class net.multiforge.runtime.bootstrap.Main`
 
 You have a drop-in replacement ZIP from **v1.4.1 or earlier**. That archive shipped a launcher for a class that never existed. Get v1.5.0+ and use `install-multiforge.sh`. See [`install.md` § Method 2](install.md#method-2--drop-in-replacement-zip).
+
+### `NoSuchMethodError` on a NeoForge class at mod construction
+
+The mod calls a NeoForge API that does not exist in 21.1.1 — e.g. `DeferredRegister.createDataComponents`, added later. It slipped past the dependency check because the mod either declares no `neoforge` range or declares one lower than what it actually uses.
+
+Identical on stock NeoForge 21.1.1. Not a MultiForge issue; the mod needs a newer NeoForge than this fork is based on.
 
 ### `Error loading class: net/minecraft/client/...` at mixin apply, on a dedicated server
 

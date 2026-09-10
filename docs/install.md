@@ -316,7 +316,20 @@ For deep observability (region borders, MSPT heatmap, live pin selection) downlo
 
 **"MultiForge cannot start — no region-worker cores available."** Bad `multiforge-server.toml`: `cores` must be ≥ 1. Default is 8 — a value of 0 or a negative number rejects boot.
 
-**Server boots but everything runs single-threaded.** Check the log for `[multiforge]: Region scheduler: N cores × M threads/core = W workers` — if W is 1, your config sets it low. `cores × threads-per-core` should be at most your physical core count.
+**Is MultiForge actually running?** The fork identifies itself in three places at boot:
+
+```
+ModLauncher running: args [..., --fml.neoForgeVersion, 21.1.1-multiforge-<ver>, ...]
+NeoForge mod loading, version 21.1.1-multiforge-<ver>, for MC 1.21.1
+multiforge:debug/v1 emitters installed (heartbeat + region-map + pin-list + violations)
+MultiForge: /multiforge Brigadier tree registered with tab-completion
+```
+
+The `emitters installed` line is the meaningful one — it is only reached when the regionized scheduler host exists, so seeing it proves the runtime is live rather than merely present on the classpath. If instead you see `no scheduler host on ServerAboutToStart; channel disabled this boot`, the runtime did not initialise.
+
+Once running, `/multiforge region list` and `/multiforge config` report live region and worker state from the server console.
+
+**Warnings like `[region-tick.no-regionizer-skip::minecraft:the_nether] … has no materialised regionizer yet — skipping this tick`** are normal at startup: a dimension gets a regionizer when chunks first load there, so dimensions nobody has entered skip their tick until then.
 
 **"Chunk system port failed — falling back to Vanilla ChunkMap."** MultiForge's M9 chunk-system port didn't initialize. Check earlier log lines for a stack trace, and file an issue at [github.com/0xnullsect0r/MultiForge/issues](https://github.com/0xnullsect0r/MultiForge/issues) with the boot log attached.
 
