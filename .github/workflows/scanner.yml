@@ -37,7 +37,7 @@ jobs:
     #     --sarif upstream/neoforge-1.21.1/build/libs/*.jar > out.sarif
     continue-on-error: true
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
