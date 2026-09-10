@@ -20,7 +20,7 @@ dependencies {
     // M12.2) can swap it in for NeoForge.EVENT_BUS. Version pinned to match
     // upstream/neoforge-1.21.1/gradle.properties:eventbus_version so the wrapped
     // instance is binary-compatible with what the vendored NeoForge tree ships.
-    implementation("net.neoforged:bus:8.0.1")
+    implementation("net.neoforged:bus:8.0.5")
 
     // JetBrains annotations for @ApiStatus.Internal etc.
     compileOnly("org.jetbrains:annotations:24.1.0")
