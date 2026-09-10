@@ -32,14 +32,18 @@ Your world, mods, configs, and `server.properties` stay in place. Requires Minec
 
 ```
 # Stop your existing server; back up world/ + mods/ + config/ first.
-curl -LO https://github.com/0xnullsect0r/MultiForge/releases/latest/download/multiforge-replacement.zip
 cd /path/to/your/server
-unzip /path/to/multiforge-replacement.zip
-mv run.sh run.neoforge.sh.bak
-mv run.multiforge.sh run.sh && chmod +x run.sh
-mv config/multiforge-server.toml.example config/multiforge-server.toml
+curl -LO https://github.com/0xnullsect0r/MultiForge/releases/latest/download/multiforge-replacement.zip
+unzip multiforge-replacement.zip
+chmod +x install-multiforge.sh
+./install-multiforge.sh          # needs JDK 21; refuses on anything else
 ./run.sh
 ```
+
+The converter backs up your launcher, runs the MultiForge installer against the
+directory, and leaves a `run.sh` that preflights the JDK. It needs internet on
+first run — the Minecraft server jar comes from Mojang and the patches are
+applied locally, since nothing derived from that jar may be redistributed.
 
 Rollback is documented in [docs/install.md § Rolling back](docs/install.md#rolling-back) — MultiForge's world data is a purely additive `world/multiforge/` subdirectory; your Vanilla world stays byte-compatible with upstream NeoForge.
 

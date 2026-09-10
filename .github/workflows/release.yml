@@ -66,27 +66,11 @@ jobs:
               echo "::warning::multiforge-client jar not found under multiforge-client/build/libs — client debug mod will not ship in this release."
           fi
 
-          # Pure-Java installer jar (used ONLY by the build-zip subcommand
-          # below to synthesize the drop-in replacement ZIP — never shipped
-          # as a release asset since v1.3.3 because the fork installer
-          # (built by the build-fork-installer job) is the real installer.
-          # The stable-alias multiforge-installer.jar copy that used to live
-          # here is now created by the build-fork-installer job so users
-          # who follow README's `curl` command get the working fork jar.)
-          INSTALLER_JAR=$(find multiforge-installer/build/libs -maxdepth 1 -type f \
-              -name 'multiforge-installer-*.jar' ! -name '*-sources.jar' | head -1)
-
-          # Replacement zip — overlay onto an existing NeoForge server.
-          # v1.3.17: also ship a stable-alias multiforge-replacement.zip
-          # (matches multiforge-installer.jar's stable-alias pattern) so
-          # docs can link .../releases/latest/download/multiforge-replacement.zip
-          # without a version bump every release.
-          if [ -n "$INSTALLER_JAR" ]; then
-              java -jar "$INSTALLER_JAR" build-zip \
-                  --out "$RELEASE_DIR/multiforge-${VER}-replacement.zip"
-              cp "$RELEASE_DIR/multiforge-${VER}-replacement.zip" \
-                  "$RELEASE_DIR/multiforge-replacement.zip"
-          fi
+          # The drop-in replacement ZIP is NOT built here. It embeds the
+          # fork installer, which only exists after the
+          # build-fork-installer job runs — so the ZIP is assembled there
+          # instead. See that job's "Assemble drop-in replacement ZIP"
+          # step.
 
           # Pelican Panel / Pterodactyl egg (v1.3.2 E.3). Kept at repo
           # root but attached to every release so panel users can grab
@@ -174,6 +158,32 @@ jobs:
           cp "$FORK_JAR" "release/multiforge-installer.jar"
           ls -l release/
 
+      - name: Assemble drop-in replacement ZIP
+        shell: bash
+        run: |
+          set -euo pipefail
+          VER="${GITHUB_REF_NAME#v}"
+          # The ZIP embeds the fork installer and a converter script that
+          # runs it in place against an existing NeoForge server dir. It
+          # cannot ship a finished server: that tree is ~180 MB and
+          # contains Mojang's server jar plus the patched derivatives,
+          # none of which may be redistributed. Hence the installer.
+          ./gradlew :multiforge-installer:jar --no-daemon --stacktrace
+          BUILDER=$(find multiforge-installer/build/libs -maxdepth 1 -type f \
+              -name 'multiforge-installer-*.jar' ! -name '*-sources.jar' | head -1)
+          if [ -z "$BUILDER" ]; then
+              echo "::error::replacement-archive builder jar not found"
+              exit 1
+          fi
+          java -jar "$BUILDER" build-zip \
+              --out "release/multiforge-${VER}-replacement.zip" \
+              --installer "release/multiforge-installer.jar"
+          # Stable alias so docs can link
+          # .../releases/latest/download/multiforge-replacement.zip
+          cp "release/multiforge-${VER}-replacement.zip" \
+              "release/multiforge-replacement.zip"
+          ls -l release/
+
       - name: Upload fork installer artifact
         uses: actions/upload-artifact@v4
         with:
@@ -181,6 +191,8 @@ jobs:
           path: |
             release/multiforge-*-installer.jar
             release/multiforge-installer.jar
+            release/multiforge-*-replacement.zip
+            release/multiforge-replacement.zip
           retention-days: 30
 
       - name: Upload fork test/build reports on failure
@@ -238,7 +250,9 @@ jobs:
               standard NeoForge installer CLI. See [docs/install.md § Method 1](https://github.com/${{ github.repository }}/blob/main/docs/install.md#method-1--fresh-installer-jar).
             - **Drop-in replacement ZIP: `multiforge-*-replacement.zip`**
               (stable alias: [multiforge-replacement.zip](https://github.com/${{ github.repository }}/releases/latest/download/multiforge-replacement.zip))
-              Overlay onto an existing NeoForge 1.21.1 server — see
+              Unzip into an existing NeoForge 1.21.1 server directory and run
+              `./install-multiforge.sh` (Windows: `install-multiforge.bat`) to
+              convert it in place — world, mods and configs untouched. See
               [docs/install.md § Method 2](https://github.com/${{ github.repository }}/blob/main/docs/install.md#method-2--drop-in-replacement-zip).
             - Runtime library (for mod authors): `multiforge-runtime-*.jar`
             - **Client debug mod: `multiforge-client-*.jar`**
