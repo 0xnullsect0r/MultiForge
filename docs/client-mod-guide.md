@@ -116,7 +116,11 @@ That's the region id, its p50/p95 tick cost in milliseconds, how many entities i
 
 Every overlay above can be switched on and off independently, and switching one off actually **stops the server sending that data** rather than just hiding it — the mod re-sends its subscription whenever the setting changes.
 
-To edit: **Mods** → **MultiForge Debug Client** → **Config**. Or edit `config/multiforge_debug-client.toml` directly.
+**To open it:** from the main menu or the in-game pause menu, click **Mods**, select **MultiForge Debug Client** in the list, then click **Config**. The settings are grouped into *Overlays*, *HUD panels*, and *World rendering*; changes apply as soon as you leave the screen — no restart, no reconnect.
+
+There is no keybind for the config screen. F6 is the overlay master toggle (§2.5), not a way in here.
+
+The same settings live in `config/multiforge_debug-client.toml`, created on first launch, if you would rather edit text.
 
 | Setting | Default | What it controls |
 |---|---|---|

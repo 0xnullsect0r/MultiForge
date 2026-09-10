@@ -57,37 +57,61 @@ public final class MultiForgeDebugConfig {
     public static final ModConfigSpec.IntValue Y_BELOW;
     public static final ModConfigSpec.IntValue Y_ABOVE;
 
+    /** Root of every translation key this spec declares. */
+    private static final String LANG = "multiforge_debug.configuration.";
+
     static {
         ModConfigSpec.Builder b = new ModConfigSpec.Builder();
 
+        // Every value and group gets an explicit translation key.
+        // Without one, NeoForge's ConfigurationScreen falls back to
+        // `<modId>.configuration.<leaf key>` (ConfigurationScreen:539) —
+        // which is ambiguous here, because the boolean `overlays.hud`
+        // and the group `hud` share the leaf name `hud` and would
+        // resolve to the same key.
         b.comment("Which overlays to draw. Turning one off also stops the server sending its data stream.")
+                .translation(LANG + "group.overlays")
                 .push("overlays");
         HUD = b.comment("Top-left summary block: server build, region count, worst region MSPT.")
+                .translation(LANG + "overlays.hud")
                 .define("hud", true);
         REGION_LIST = b.comment("Top-left per-region detail rows, under the summary block.")
+                .translation(LANG + "overlays.regionList")
                 .define("regionList", true);
         VIOLATIONS = b.comment("Right-hand panel of live reroute/ownership warnings.")
+                .translation(LANG + "overlays.violations")
                 .define("violations", true);
         CHUNK_BORDERS = b.comment("In-world seams where two adjacent chunks belong to different regions.")
+                .translation(LANG + "overlays.chunkBorders")
                 .define("chunkBorders", true);
-        HEATMAP =
-                b.comment("Translucent per-chunk tick-cost tint on the ground.").define("heatmap", true);
-        PINS = b.comment("Wireframe boxes around operator-created region pins.").define("pins", true);
+        HEATMAP = b.comment("Translucent per-chunk tick-cost tint on the ground.")
+                .translation(LANG + "overlays.heatmap")
+                .define("heatmap", true);
+        PINS = b.comment("Wireframe boxes around operator-created region pins.")
+                .translation(LANG + "overlays.pins")
+                .define("pins", true);
         b.pop();
 
-        b.comment("HUD panel sizing.").push("hud");
+        b.comment("HUD panel sizing.").translation(LANG + "group.hud").push("hud");
         REGION_LIST_MAX_ROWS = b.comment("Maximum region rows to draw before truncating.")
+                .translation(LANG + "hud.regionListMaxRows")
                 .defineInRange("regionListMaxRows", 8, 1, 64);
         VIOLATION_MAX_ROWS = b.comment("Maximum violation rows to draw. The client retains 200 regardless.")
+                .translation(LANG + "hud.violationMaxRows")
                 .defineInRange("violationMaxRows", 8, 1, 64);
         b.pop();
 
-        b.comment("In-world rendering extents.").push("render");
+        b.comment("In-world rendering extents.")
+                .translation(LANG + "group.render")
+                .push("render");
         BORDER_RADIUS_CHUNKS = b.comment("Chunks in each direction from the player to test for region seams.")
+                .translation(LANG + "render.borderRadiusChunks")
                 .defineInRange("borderRadiusChunks", 4, 1, 16);
         Y_BELOW = b.comment("Blocks below the player that seams and pin boxes extend.")
+                .translation(LANG + "render.yBelow")
                 .defineInRange("yBelow", 16, 0, 256);
         Y_ABOVE = b.comment("Blocks above the player that seams and pin boxes extend.")
+                .translation(LANG + "render.yAbove")
                 .defineInRange("yAbove", 32, 0, 256);
         b.pop();
 
