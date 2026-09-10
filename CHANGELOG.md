@@ -43,6 +43,14 @@ Raising `neoforge_base_version` without actually rebasing the sources would let 
 
 Encouragingly, the NeoForm version is byte-identical between 21.1.1 and 21.1.234 (`1.21.1-20240808.144430`), so the decompiled vanilla sources do not move; a rebase is NeoForge-patch and glue work, not a Minecraft-mappings migration.
 
+### The mod-safety scanner never ran
+
+Separately: the `mod-safety scanner` CI check has failed on every release since v1.3.17 that touched `upstream/`. Not because it found anything — because `multiforge-scanner.jar` had no `Main-Class` manifest attribute, so `java -jar` printed `no main manifest attribute` and exited 1, which the workflow read as ERROR-severity findings.
+
+Fixed: the jar now carries a manifest and merges its ASM dependency (BSD-3-Clause, GPL-3 compatible), since `java -jar` ignores `-cp` and a manifest alone would only have moved the failure to `NoClassDefFoundError`.
+
+With it running, a second problem surfaced: the workflow points it at the fork's own jar. The scanner audits *mod* jars for unsafe region access (`docs/design/scanner-rules.md` §1.1); aimed at the fork it walks vanilla Minecraft and flags the code MultiForge's patches exist to make safe — 169 R02 "errors" for things like `DispenseItemBehavior$12.execute` calling `Level.setBlock`. That is noise, so the step is now informational and prints a finding summary rather than failing. Re-gating it needs a real corpus of mod jars; a red X that means nothing only teaches people to ignore CI.
+
 - `gradle.properties` + `upstream/neoforge-1.21.1/gradle.properties` bumped 1.5.0 → 1.5.1.
 
 ## v1.5.0 — the drop-in replacement ZIP now actually converts a server
