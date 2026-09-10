@@ -49,11 +49,13 @@ Separately: the `mod-safety scanner` CI check has failed on every release since 
 
 Fixed: the jar now carries a manifest and merges its ASM dependency (BSD-3-Clause, GPL-3 compatible), since `java -jar` ignores `-cp` and a manifest alone would only have moved the failure to `NoClassDefFoundError`.
 
-With it running, a second bug surfaced: the target glob was `upstream/neoforge-1.21.1/build/libs/*.jar`, a directory that has never existed — the fork builds to `projects/neoforge/build/libs`. The glob never expanded, the literal string was passed as a filename, and the scanner exited 2 on a usage error.
+With it running, two more faults surfaced in the same check. The target glob was `upstream/neoforge-1.21.1/build/libs/*.jar`, a directory that has never existed — the fork builds to `projects/neoforge/build/libs` — so the glob never expanded, the literal string was passed as a filename, and the scanner exited 2 on a usage error. And the step runs under `bash -e`, so a nonzero scanner exit aborted it before `exit_code` was ever recorded, leaving the gate reading an empty value.
 
-A third: *which* fork jar matters. `neoforge-<v>-universal.jar` bundles patched vanilla, so scanning it yields ~170 R02 findings against Minecraft's own code — the very code the patches exist to make safe. `neoforge-<v>.jar` holds the fork's own `net/neoforged` + `net/multiforge` classes, which is what should be audited. Against that target the scan is **clean: 0 findings, exit 0**.
+With all three fixed the scanner finally runs against the fork jar — and reports 194 findings, 169 of them ERROR, essentially all against **vanilla Minecraft**: `DispenseItemBehavior$12.execute` calling `Level.setBlock`, `WeavingMobEffect.spawnCobweb`, and so on. That is not a MultiForge defect. The scanner audits *mod* jars for unsafe region access (`docs/design/scanner-rules.md` §1.1), and every fork artifact necessarily embeds patched vanilla — `neoforge-<v>.jar` carries 8,274 `net/minecraft` classes. There is no fork jar that would be a fair target.
 
-So the check is a real gate again rather than permanent noise. Jar selection is now newest-first, because `build/libs` accumulates old versions on a dirty tree and picking a stale one silently reintroduces the missing-`Main-Class` failure.
+The step is therefore informational: it runs, prints a finding summary, uploads the SARIF, and does not gate. Re-gating needs either a corpus of real mod jars or an ignore-file scoped to `net/minecraft` (the scanner already has `--ignore-file`). A red X that means nothing only teaches people to ignore CI.
+
+Jar selection is also now newest-first and excludes every derived artifact (`-installer`, `-userdev`, `-universal`, `-unsigned`, `-sources`). Both mattered: `build/libs` accumulates old versions on a dirty tree, and an earlier iteration of this fix accidentally selected the *installer* jar — which has no `net/minecraft` classes at all, so the scan looked clean and briefly suggested the check could stay a gate.
 
 - `gradle.properties` + `upstream/neoforge-1.21.1/gradle.properties` bumped 1.5.0 → 1.5.1.
 
