@@ -222,7 +222,27 @@ Rebasing onto NeoForge ~21.1.234 is the single change that unblocks modpack supp
 
 The 17-file conflict surface is the hard part — `ServerLevel`, `MinecraftServer`, `ChunkMap`, `DistanceManager`, `Entity`, `Level`, `LevelChunk`, `PlayerList`, `Connection` and friends are patched by NeoForge *and* by MultiForge's ownership, region-tick, chunk-system and globals groups.
 
-One thing works in our favour: **the NeoForm version is identical between 21.1.1 and 21.1.234** (`1.21.1-20240808.144430`). The decompiled vanilla sources do not move at all, so this is NeoForge-patch and glue work — not a Minecraft mappings migration.
+Two things work in our favour.
+
+**The NeoForm version is identical between 21.1.1 and 21.1.234** (`1.21.1-20240808.144430`). The decompiled vanilla sources do not move at all, so this is NeoForge-patch and glue work, not a Minecraft mappings migration.
+
+**Every input is publicly downloadable.** NeoForge does not tag releases in git, which initially looked like a blocker for obtaining a specific version's patch set. It is not — the published artifacts carry everything:
+
+| Need | Source |
+|---|---|
+| `src/main/java/net/neoforged/**` (1,069 files) | `neoforge-<v>-sources.jar` |
+| `patches/**` (763 vanilla patches) | `neoforge-<v>-userdev.jar` |
+| Dependency pins | `neoforge-<v>.pom` |
+
+```bash
+V=21.1.234
+B=https://maven.neoforged.net/releases/net/neoforged/neoforge/$V/neoforge-$V
+curl -sfLO $B-sources.jar    # net/neoforged sources
+curl -sfLO $B-userdev.jar    # patches/ + ats/
+curl -sfLO $B.pom            # fml, modlauncher, eventbus, … versions
+```
+
+So the mechanical part — replacing the NeoForge sources, the vanilla patch set, and the dependency pins — is scriptable. The work that remains is genuine: re-applying MultiForge's 35 patches across the 17-file conflict surface, and fixing the fork-side glue against 233 releases of NeoForge API drift.
 
 ---
 
