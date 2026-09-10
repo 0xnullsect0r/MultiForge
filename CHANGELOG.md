@@ -1,5 +1,19 @@
 # CHANGELOG
 
+## v1.4.1 — the config screen's labels were wrong
+
+v1.4.0 shipped the per-overlay config screen with translation keys that matched nothing NeoForge looks up, so the screen rendered raw key strings and, worse, one wrong label. Found while answering "how do I open the config UI" — the screen opened fine, but nothing in it was named correctly.
+
+Two separate mistakes:
+
+- **The group headings used invented keys.** `multiforge_debug.configuration.section.overlays` and friends resolve to nothing. `ConfigurationScreen` derives a subsection's title from `getTranslationKey(key)` and its button from that plus `.button` (`ConfigurationScreen.java:906-908`) — a different shape entirely. Its own `.section.` scheme (`:310`) is keyed by config *filename*, not by group.
+- **A leaf-name collision.** With no explicit `translation(...)`, the screen falls back to `<modId>.configuration.<leaf key>` (`:539`) — the *leaf*, not the path. The boolean `overlays.hud` and the group `hud` both have the leaf name `hud`, so both resolved to `multiforge_debug.configuration.hud` and the group inherited the boolean's label.
+
+Fix: every value and group now carries an explicit `.translation(...)` key (`Builder#translation` before `push` sets the group's, `ModConfigSpec.java:853-854`), namespaced by path — `configuration.overlays.hud` for the setting, `configuration.group.hud` for the group. `en_us.json` rewritten to match, with labels, tooltips, and subsection button text.
+
+- **New `MultiForgeDebugConfigTest`** cross-checks the spec's declared keys against the lang file in both directions: every declared key has a label, every setting has a tooltip, every group has a button label, no duplicates, and no orphaned `configuration.*` entries left in the lang file. Verified non-vacuous by introducing a typo and watching two of its assertions fail. It compares the files as text because moddev only puts the NeoForge classpath on `main`, so a test cannot load `ModConfigSpec` — enough for the failure mode being guarded.
+- **`docs/client-mod-guide.md` §2.8** now spells out how to reach the screen (Mods → MultiForge Debug Client → Config), notes that changes apply on close with no restart, and says plainly that F6 is not a way into it.
+
 ## v1.4.0 — finish the client debug mod: real region seams, the panels it always advertised, per-overlay config
 
 An audit of `multiforge-client` against its own shipped metadata and docs found the mod was not finished. Four things were advertised in `neoforge.mods.toml`, in class javadoc, and in `docs/debugging-violations.md` but did not exist; the chunk-border overlay was drawing fabricated data that another doc told operators to debug with; and three rendering/state bugs were live. This release closes all of it, and raises the debug wire protocol to version 2.
