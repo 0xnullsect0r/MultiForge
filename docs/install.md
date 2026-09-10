@@ -5,7 +5,7 @@ MultiForge ships three install methods, each suited to a different starting poin
 | Method | Best for | Starts from | Migration effort |
 |---|---|---|---|
 | **[Fresh installer JAR](#method-1--fresh-installer-jar)** | New MultiForge servers on bare-metal Linux/Windows/macOS, systemd deployments | Empty directory | ~10 min |
-| **[Drop-in replacement ZIP](#method-2--drop-in-replacement-zip)** | Existing NeoForge 1.21.1 servers with an already-loved world, mods, configs | Working NeoForge server | ~5 min (overlay) + your usual restart |
+| **[Drop-in replacement ZIP](#method-2--drop-in-replacement-zip)** | Existing NeoForge 1.21.1 servers with an already-loved world, mods, configs | Working NeoForge server | ~10 min (converts in place) + your usual restart |
 | **[Pelican Panel / Pterodactyl egg](#method-3--pelican-panel--pterodactyl-egg)** | Anyone hosting via a panel — Pelican, Pterodactyl, or any fork | Panel install + egg import | ~2 min (import) + normal panel server-create flow |
 
 All three land the same runtime + patched NeoForge fork. Post-install steps (EULA, `multiforge-server.toml`, mods, world) are the same regardless of how you installed.
@@ -123,7 +123,11 @@ journalctl -u multiforge -f
 
 ## Method 2 — Drop-in replacement ZIP
 
-Overlay MultiForge onto an existing NeoForge 1.21.1 server directory without touching your world, mods, or configs. Best for servers already running vanilla NeoForge that want to try MultiForge without rebuilding from scratch.
+Convert an existing NeoForge 1.21.1 server directory to MultiForge in place, without touching your world, mods, or configs. Best for servers already running stock NeoForge.
+
+> **What this archive is.** It carries the MultiForge installer plus a converter script — not a finished server. A completed install is ~180 MB and includes Mojang's `server-1.21.1.jar` along with the patched derivatives built from it, and none of that may be redistributed. So the archive downloads from Mojang and applies MultiForge's patches on your machine, exactly as the NeoForge installer does. Expect ~10 MB down, ~180 MB in `libraries/` after.
+>
+> Versions before v1.5.0 shipped a ~320 KB archive containing only `multiforge-runtime.jar` and a launcher for `net.multiforge.runtime.bootstrap.Main` — a class that never existed. It failed at startup with `Could not find or load main class`. If you have one of those, discard it.
 
 ### Steps
 
@@ -142,63 +146,68 @@ Overlay MultiForge onto an existing NeoForge 1.21.1 server directory without tou
    tar czf backup-$(date +%F).tgz world/ mods/ config/ server.properties eula.txt
    ```
 
-3. **Download the drop-in ZIP** from the [latest release](https://github.com/0xnullsect0r/MultiForge/releases/latest):
+3. **Download and unzip into the server directory:**
 
    ```
    curl -LO https://github.com/0xnullsect0r/MultiForge/releases/latest/download/multiforge-replacement.zip
-   ```
-
-   Or build it yourself from the installer JAR (Method 1's `build-zip` subcommand):
-
-   ```
-   java -jar multiforge-installer.jar build-zip --out multiforge-replacement.zip
-   ```
-
-4. **Overlay onto your server directory:**
-
-   ```
    unzip multiforge-replacement.zip
    ```
 
    Adds:
 
    ```
-   libraries/multiforge/multiforge-runtime.jar
-   run.multiforge.sh                             # rename to run.sh after backing up yours
-   run.multiforge.bat                            # rename to run.bat after backing up yours
-   config/multiforge-server.toml.example         # rename to .toml
+   multiforge/multiforge-installer.jar     # the MultiForge installer
+   install-multiforge.sh                   # Linux/macOS converter
+   install-multiforge.bat                  # Windows converter
+   config/multiforge-server.toml.example
    README-MULTIFORGE.txt
    ```
 
-   Nothing under `world/`, `mods/`, `config/` (other than the new example file), `server.properties`, or `eula.txt` is touched.
-
-5. **Swap the launcher:**
+4. **Run the converter:**
 
    ```
-   mv run.sh run.neoforge.sh.bak                 # keep the old one aside
-   mv run.multiforge.sh run.sh
-   chmod +x run.sh
+   chmod +x install-multiforge.sh
+   ./install-multiforge.sh
    ```
 
-   (On Windows: `run.bat` / `run.neoforge.bat.bak` / `run.multiforge.bat`.)
+   (Windows: `install-multiforge.bat`.)
 
-6. **Configure MultiForge** (default is 8 cores × 2 threads-per-core; adjust to your box):
+   It refuses to run on anything but JDK 21, naming the version it found. If your default JDK is wrong, point it at the right one:
 
    ```
-   mv config/multiforge-server.toml.example config/multiforge-server.toml
+   JAVA_HOME=/usr/lib/jvm/temurin-21-jdk ./install-multiforge.sh
+   ```
+
+   What it does, in order: preflights the JDK, backs up `run.sh` / `run.bat` / `user_jvm_args.txt` to `*.pre-multiforge-<timestamp>.bak`, runs the installer against the current directory, rewrites `run.sh` to carry the same JDK-21 preflight, and writes `config/multiforge-server.toml` and `eula.txt` if they are absent.
+
+   Needs internet the first time — it downloads the Minecraft server jar and the NeoForge libraries.
+
+5. **Configure MultiForge** (default is 8 cores × 2 threads-per-core; adjust to your box):
+
+   ```
    $EDITOR config/multiforge-server.toml
    ```
 
-7. **Start the server:**
+6. **Start the server:**
 
    ```
    ./run.sh
    ```
 
+### What changed on disk
+
+| Path | Change |
+|---|---|
+| `libraries/` | NeoForge + MultiForge + Minecraft artifacts added |
+| `run.sh`, `run.bat`, `user_jvm_args.txt` | regenerated; originals kept as `*.pre-multiforge-<timestamp>.bak` |
+| `config/multiforge-server.toml` | written if absent |
+| `eula.txt` | written if absent, as `eula=false` |
+
+Nothing under `world/`, `mods/`, or the rest of `config/` is touched.
+
 ### Rolling back
 
-MultiForge writes only to:
-- `libraries/multiforge/*.jar`
+Beyond the launcher and `libraries/`, MultiForge writes only to:
 - `world/multiforge/` (per-region journal WAL, autosave metadata)
 - `config/multiforge-server.toml`
 - `logs/multiforge-*.log`
@@ -206,12 +215,14 @@ MultiForge writes only to:
 Your Vanilla world files, mod configs, and NeoForge configs are untouched — MultiForge's world data is a purely additive `world/multiforge/` subdirectory. To roll back:
 
 ```
-./run.sh                            # if running, /stop
-mv run.sh run.multiforge.sh.bak
-mv run.neoforge.sh.bak run.sh
-rm -rf libraries/multiforge/ world/multiforge/ config/multiforge-server.toml
-./run.sh                            # back on stock NeoForge
+# /stop the server first
+mv run.sh.pre-multiforge-*.bak run.sh              # restore the stock launcher
+mv user_jvm_args.txt.pre-multiforge-*.bak user_jvm_args.txt
+rm -rf world/multiforge/ config/multiforge-server.toml
+./run.sh                                           # back on stock NeoForge
 ```
+
+The MultiForge artifacts left under `libraries/net/neoforged/neoforge/1.21.1-v*/` are inert once the launcher no longer points at them; delete that directory too if you want the space back.
 
 Your existing `world/` remains byte-compatible with upstream NeoForge (this is a MultiForge invariant — see [docs/design/entity-migration.md](design/entity-migration.md) and the M9 vanilla-parity verdict at [docs/verification/m9/](verification/m9/)).
 

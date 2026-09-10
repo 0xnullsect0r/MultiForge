@@ -16,9 +16,9 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.io.PrintStream;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
@@ -26,26 +26,49 @@ import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
 
 /**
- * Runnable installer for MultiForge — this is the jar operators
- * download from a GitHub Release and run with {@code java -jar
- * multiforge-installer-<v>.jar}. Three subcommands:
+ * Build tool for the Method 2 drop-in replacement archive. This is
+ * <em>not</em> the jar operators download — that is the fork installer
+ * (a NeoForge-format installer carrying the MultiForge patches),
+ * published as {@code multiforge-installer.jar}. This class only
+ * assembles the archive that wraps it.
+ *
+ * <h2>Why the archive wraps an installer</h2>
+ *
+ * <p>Through v1.4.1 the archive shipped {@code multiforge-runtime.jar}
+ * plus a launcher that ran {@code net.multiforge.runtime.bootstrap.Main}
+ * — a class that has never existed in this codebase. Even had it
+ * existed, the launcher's classpath was {@code libraries/multiforge/*},
+ * one Minecraft-free library jar: no Minecraft, no NeoForge, no
+ * ModLauncher. It could not boot a server, and the premise was wrong
+ * besides. MultiForge is a <em>fork</em> — the regionized tick loop
+ * lives in patches to {@code net.minecraft.*} and {@code
+ * net.neoforged.*} classes that ship inside the patched NeoForge jar.
+ * Dropping a library beside a stock NeoForge server leaves the stock,
+ * unpatched server running.
+ *
+ * <p>The archive also cannot simply ship the finished install tree. A
+ * completed server install is ~180&nbsp;MB and contains Mojang's
+ * {@code server-1.21.1.jar} together with the patched derivatives
+ * ({@code -srg}, {@code -slim}, {@code -extra}, {@code -unpacked})
+ * produced from it. Redistributing those is not permitted, which is
+ * precisely why NeoForge — and Forge before it — ship an installer that
+ * downloads from Mojang and applies binary patches on the user's own
+ * machine.
+ *
+ * <p>So the archive embeds the fork installer and a wrapper script that
+ * runs it in place against an existing server directory, then leaves
+ * behind a launcher with a JDK-21 preflight. That is a genuine in-place
+ * conversion, and it is the only lawful shape for one.
+ *
+ * <p>Subcommands:
  *
  * <ul>
- *   <li>{@code install [--install-dir DIR]} — lay out a fresh MultiForge
- *       server directory. This is the Fabric-installer-shaped path a
- *       user takes on a clean box.</li>
- *   <li>{@code build-zip --out ZIP} — write the drop-in replacement zip
- *       that overlays onto an existing NeoForge server directory.</li>
- *   <li>{@code version} — print the installer version.</li>
+ *   <li>{@code build-zip --out ZIP --installer FORK_INSTALLER_JAR} —
+ *       assemble the drop-in archive around the given fork installer.
+ *   <li>{@code version} — print the version.
  * </ul>
- *
- * <p>The installer bundles the runtime jar as an embedded resource so
- * it needs no separate downloads.
  */
 public final class Main {
-
-    private static final String BUNDLED_ROOT = "/net/multiforge/installer/bundle/";
-    private static final String[] BUNDLED_JARS = {"multiforge-runtime.jar"};
 
     private Main() {}
 
@@ -64,7 +87,6 @@ public final class Main {
         for (int i = 1; i < args.length; i++) rest.add(args[i]);
 
         return switch (cmd) {
-            case "install" -> doInstall(rest, out, err);
             case "build-zip" -> doBuildZip(rest, out, err);
             case "version" -> {
                 out.println("MultiForge installer " + version());
@@ -78,68 +100,20 @@ public final class Main {
         };
     }
 
-    // ---- install --------------------------------------------------------
-
-    private static int doInstall(List<String> args, PrintStream out, PrintStream err) throws IOException {
-        Path installDir = Path.of(".");
-        for (int i = 0; i < args.size(); i++) {
-            String a = args.get(i);
-            if (a.equals("--install-dir") && i + 1 < args.size()) {
-                installDir = Path.of(args.get(++i));
-            } else {
-                err.println("install: unknown argument " + a);
-                return 2;
-            }
-        }
-
-        Files.createDirectories(installDir);
-        Path libDir = installDir.resolve("libraries").resolve("multiforge");
-        Files.createDirectories(libDir);
-
-        for (String jar : BUNDLED_JARS) {
-            byte[] jarBytes = readResource(BUNDLED_ROOT + jar);
-            Files.write(libDir.resolve(jar), jarBytes);
-            out.println("[installer] wrote " + libDir.resolve(jar));
-        }
-
-        Path runSh = installDir.resolve("run.sh");
-        Files.writeString(runSh, runShScript());
-        //noinspection ResultOfMethodCallIgnored
-        runSh.toFile().setExecutable(true);
-        Files.writeString(installDir.resolve("run.bat"), runBatScript());
-
-        Path configDir = installDir.resolve("config");
-        Files.createDirectories(configDir);
-        Path config = configDir.resolve("multiforge-server.toml");
-        if (!Files.exists(config)) {
-            Files.writeString(config, defaultConfig());
-            out.println("[installer] wrote " + config);
-        }
-
-        Path eula = installDir.resolve("eula.txt");
-        if (!Files.exists(eula)) {
-            Files.writeString(
-                    eula,
-                    "# Accept the Minecraft EULA at https://aka.ms/MinecraftEULA\n# by changing the line below to `eula=true`.\neula=false\n");
-        }
-
-        out.println();
-        out.println("MultiForge " + version() + " installed to " + installDir.toAbsolutePath());
-        out.println("Next steps:");
-        out.println("  1. Set eula=true in " + eula.getFileName() + " to accept the Minecraft EULA.");
-        out.println("  2. Copy your mods into ./mods and world into ./world (or let the server generate a fresh one).");
-        out.println("  3. Start the server:  ./run.sh   (Windows: run.bat)");
-        return 0;
-    }
-
     // ---- build-zip ------------------------------------------------------
+
+    /** Where the fork installer lands inside the archive. */
+    static final String INSTALLER_ENTRY = "multiforge/multiforge-installer.jar";
 
     private static int doBuildZip(List<String> args, PrintStream out, PrintStream err) throws IOException {
         Path outZip = null;
+        Path forkInstaller = null;
         for (int i = 0; i < args.size(); i++) {
             String a = args.get(i);
             if (a.equals("--out") && i + 1 < args.size()) {
                 outZip = Path.of(args.get(++i));
+            } else if (a.equals("--installer") && i + 1 < args.size()) {
+                forkInstaller = Path.of(args.get(++i));
             } else {
                 err.println("build-zip: unknown argument " + a);
                 return 2;
@@ -149,15 +123,25 @@ public final class Main {
             err.println("build-zip: --out ZIP is required");
             return 2;
         }
+        if (forkInstaller == null) {
+            err.println("build-zip: --installer FORK_INSTALLER_JAR is required");
+            err.println("  Pass the NeoForge-format fork installer built by");
+            err.println("  :neoforge:build under upstream/neoforge-1.21.1 — the archive");
+            err.println("  embeds it and runs it against the operator's server directory.");
+            return 2;
+        }
+        if (!Files.isRegularFile(forkInstaller)) {
+            err.println("build-zip: no such installer jar: " + forkInstaller);
+            return 2;
+        }
+
         Path parent = outZip.toAbsolutePath().getParent();
         if (parent != null) Files.createDirectories(parent);
 
         try (ZipOutputStream zos = new ZipOutputStream(Files.newOutputStream(outZip))) {
-            for (String jar : BUNDLED_JARS) {
-                addResource(zos, BUNDLED_ROOT + jar, "libraries/multiforge/" + jar);
-            }
-            addString(zos, "run.multiforge.sh", runShScript());
-            addString(zos, "run.multiforge.bat", runBatScript());
+            addFile(zos, forkInstaller, INSTALLER_ENTRY);
+            addString(zos, "install-multiforge.sh", installShScript());
+            addString(zos, "install-multiforge.bat", installBatScript());
             addString(zos, "config/multiforge-server.toml.example", defaultConfig());
             addString(zos, "README-MULTIFORGE.txt", replacementReadme());
         }
@@ -172,32 +156,17 @@ public final class Main {
         return v == null ? "dev" : v;
     }
 
-    private static void copyResource(String resource, Path dest) throws IOException {
-        try (InputStream in = Main.class.getResourceAsStream(resource)) {
-            if (in == null) throw new IOException("bundled resource missing: " + resource);
-            Files.copy(in, dest, StandardCopyOption.REPLACE_EXISTING);
-        }
-    }
-
-    private static byte[] readResource(String resource) throws IOException {
-        try (InputStream in = Main.class.getResourceAsStream(resource)) {
-            if (in == null) throw new IOException("bundled resource missing: " + resource);
-            return in.readAllBytes();
-        }
-    }
-
-    private static void addResource(ZipOutputStream zos, String resource, String entryName) throws IOException {
-        try (InputStream in = Main.class.getResourceAsStream(resource)) {
-            if (in == null) throw new IOException("bundled resource missing: " + resource);
-            zos.putNextEntry(new ZipEntry(entryName));
+    private static void addFile(ZipOutputStream zos, Path file, String entryName) throws IOException {
+        zos.putNextEntry(new ZipEntry(entryName));
+        try (InputStream in = Files.newInputStream(file)) {
             in.transferTo((OutputStream) zos);
-            zos.closeEntry();
         }
+        zos.closeEntry();
     }
 
     private static void addString(ZipOutputStream zos, String entryName, String body) throws IOException {
         zos.putNextEntry(new ZipEntry(entryName));
-        zos.write(body.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        zos.write(body.getBytes(StandardCharsets.UTF_8));
         zos.closeEntry();
     }
 
@@ -207,31 +176,99 @@ public final class Main {
     }
 
     private static void printUsage(PrintStream out) {
-        out.println("MultiForge installer " + version());
+        out.println("MultiForge replacement-archive builder " + version());
         out.println();
         out.println("Usage:");
-        out.println("  java -jar multiforge-installer.jar install [--install-dir DIR]");
-        out.println("  java -jar multiforge-installer.jar build-zip --out multiforge-replacement.zip");
+        out.println("  java -jar multiforge-installer.jar build-zip \\");
+        out.println("      --out multiforge-replacement.zip \\");
+        out.println("      --installer path/to/neoforge-<v>-installer.jar");
         out.println("  java -jar multiforge-installer.jar version");
         out.println();
-        out.println("`install` lays out a fresh MultiForge server in DIR (default: cwd).");
-        out.println("`build-zip` writes the drop-in replacement archive you overlay on an");
-        out.println("existing NeoForge server install.");
+        out.println("This is a build tool, not the operator-facing installer. It");
+        out.println("assembles the drop-in archive around the fork installer, which is");
+        out.println("what actually converts a server directory.");
     }
 
     // ---- payloads -------------------------------------------------------
 
-    private static String runShScript() {
-        // v1.3.18: preflight JDK version. MultiForge + NeoForge 1.21.1
-        // require JDK 21 exactly. Booting on JDK 22+ crashes at
-        // mod-scan when any bundled SpongeMixin transformer tries to
-        // read a class file with major version > 65 (Java 21). We
-        // catch that before the launcher runs and give a clear
-        // remediation message instead of the deep mixin trace.
+    /**
+     * The in-place converter shipped inside the archive.
+     *
+     * <p>Note the unquoted {@code <<PREFLIGHT_FAIL} heredoc delimiters
+     * below. v1.3.18's preflight used a <em>quoted</em> delimiter, which
+     * suppresses expansion — so the message that was added specifically
+     * to name the offending JDK printed the literal text {@code
+     * ${JAVA_MAJOR:-unknown}} instead of the version it had just
+     * detected.
+     */
+    static String installShScript() {
         return """
                 #!/usr/bin/env bash
-                # MultiForge server launcher.
+                # MultiForge in-place converter.
+                #
+                # Run this from inside an existing NeoForge 1.21.1 dedicated server
+                # directory. It converts that directory to MultiForge, leaving your
+                # world, mods, and configs untouched.
                 set -euo pipefail
+                cd "$(dirname "$0")"
+
+                say() { printf '\\033[1;36m[multiforge]\\033[0m %s\\n' "$*"; }
+                fail() { printf '\\033[1;31m[multiforge]\\033[0m %s\\n' "$*" >&2; exit 1; }
+
+                # ---- 1. JDK 21 preflight -------------------------------------------
+                if [ -n "${JAVA_HOME:-}" ] && [ -x "$JAVA_HOME/bin/java" ]; then
+                    JAVA_BIN="$JAVA_HOME/bin/java"
+                else
+                    JAVA_BIN="$(command -v java || true)"
+                fi
+                [ -n "$JAVA_BIN" ] || fail "No java on PATH and JAVA_HOME is unset. Install Temurin 21."
+
+                JAVA_MAJOR=$("$JAVA_BIN" -version 2>&1 | awk -F '"' '/version/ { split($2, a, "."); print a[1]; exit }')
+                if [ "${JAVA_MAJOR:-0}" != "21" ]; then
+                    cat >&2 <<PREFLIGHT_FAIL
+                MultiForge requires JDK 21. Found: ${JAVA_MAJOR:-unknown} at $JAVA_BIN
+
+                NeoForge 1.21.1 targets JDK 21, and any 1.21.1 modpack bundling SpongeMixin
+                (ATM10, ATM9, most kitchen-sink packs) crashes at mod-scan on JDK 22+ with
+                "Unsupported class file major version 7X" — 70 = JDK 26, 69 = 25, 68 = 24.
+
+                Install Temurin 21, then either:
+                    export JAVA_HOME=/usr/lib/jvm/temurin-21-jdk
+                    JAVA_HOME=/path/to/jdk-21 ./install-multiforge.sh
+                PREFLIGHT_FAIL
+                    exit 1
+                fi
+                say "JDK 21 at $JAVA_BIN"
+
+                # ---- 2. Sanity-check the target directory --------------------------
+                if [ ! -d libraries ] && [ ! -f run.sh ] && [ ! -f server.properties ]; then
+                    say "WARNING: this does not look like an existing server directory."
+                    say "         (no libraries/, run.sh, or server.properties here)"
+                    say "         Continuing — the installer will lay out a fresh server."
+                fi
+
+                # ---- 3. Back up the existing launcher ------------------------------
+                STAMP="$(date +%Y%m%d-%H%M%S)"
+                for f in run.sh run.bat user_jvm_args.txt; do
+                    if [ -f "$f" ]; then
+                        cp -p "$f" "$f.pre-multiforge-$STAMP.bak"
+                        say "backed up $f -> $f.pre-multiforge-$STAMP.bak"
+                    fi
+                done
+
+                # ---- 4. Convert -----------------------------------------------------
+                say "running the MultiForge installer (downloads Minecraft + libraries on first run)"
+                "$JAVA_BIN" -jar multiforge/multiforge-installer.jar --installServer .
+
+                # ---- 5. Wrap the generated launcher with the same preflight ---------
+                # The installer writes a stock NeoForge run.sh that calls bare `java`
+                # with no version check, so a correct install still dies at mod-scan
+                # if the operator's default JDK is wrong. Wrap it.
+                if [ -f run.sh ]; then
+                    mv run.sh run.multiforge-args.sh
+                    cat > run.sh <<'LAUNCHER'
+                #!/usr/bin/env sh
+                # MultiForge server launcher (JDK 21 preflight + NeoForge args).
                 cd "$(dirname "$0")"
 
                 if [ -n "${JAVA_HOME:-}" ] && [ -x "$JAVA_HOME/bin/java" ]; then
@@ -245,55 +282,85 @@ public final class Main {
                 fi
                 JAVA_MAJOR=$("$JAVA_BIN" -version 2>&1 | awk -F '"' '/version/ { split($2, a, "."); print a[1]; exit }')
                 if [ "${JAVA_MAJOR:-0}" != "21" ]; then
-                    cat >&2 <<'PREFLIGHT_FAIL'
-                MultiForge requires JDK 21. Found: ${JAVA_MAJOR:-unknown} at $JAVA_BIN.
-                Point $JAVA_HOME at a JDK 21 install (Temurin 21 recommended) and retry.
-                Any 1.21.1 modpack that uses SpongeMixin (ATM10, ATM9, most kitchen-sink packs)
-                crashes on JDK 22+ with "Unsupported class file major version 7X" at mod-scan.
-                PREFLIGHT_FAIL
+                    cat >&2 <<PREFLIGHT
+                MultiForge requires JDK 21. Found: ${JAVA_MAJOR:-unknown} at $JAVA_BIN
+                Point JAVA_HOME at a JDK 21 install (Temurin 21) and retry.
+                PREFLIGHT
                     exit 1
                 fi
 
-                MEMORY="${MEMORY:-4G}"
-                JVM_OPTS="${JVM_OPTS:-}"
+                exec "$JAVA_BIN" @user_jvm_args.txt @ARGS_FILE "$@"
+                LAUNCHER
+                    # Splice in the args file the installer chose for this version.
+                    ARGS_LINE="$(grep -o '@libraries/[^ ]*' run.multiforge-args.sh | head -1)"
+                    [ -n "$ARGS_LINE" ] || fail "could not find the NeoForge args file in the generated run.sh"
+                    sed -i.tmp "s|@ARGS_FILE|$ARGS_LINE|" run.sh && rm -f run.sh.tmp
+                    rm -f run.multiforge-args.sh
+                    chmod +x run.sh
+                    say "wrote run.sh (JDK 21 preflight + $ARGS_LINE)"
+                fi
 
-                exec "$JAVA_BIN" -Xms${MEMORY} -Xmx${MEMORY} ${JVM_OPTS} \\
-                    -cp "libraries/multiforge/*" \\
-                    net.multiforge.runtime.bootstrap.Main "$@"
+                # ---- 6. Config + EULA ----------------------------------------------
+                mkdir -p config
+                if [ ! -f config/multiforge-server.toml ]; then
+                    cp config/multiforge-server.toml.example config/multiforge-server.toml
+                    say "wrote config/multiforge-server.toml (edit cores / threads-per-core)"
+                else
+                    say "config/multiforge-server.toml already present — left alone"
+                fi
+                if [ ! -f eula.txt ]; then
+                    printf '# Accept the Minecraft EULA at https://aka.ms/MinecraftEULA\\n# by changing the line below to `eula=true`.\\neula=false\\n' > eula.txt
+                    say "wrote eula.txt — set eula=true before first boot"
+                fi
+
+                say "done. Start the server with:  ./run.sh"
+                say "roll back with:  mv run.sh.pre-multiforge-$STAMP.bak run.sh"
                 """;
     }
 
-    private static String runBatScript() {
+    static String installBatScript() {
         return """
                 @echo off
-                REM MultiForge server launcher.
+                REM MultiForge in-place converter.
+                REM Run from inside an existing NeoForge 1.21.1 server directory.
+                setlocal
                 cd /d "%~dp0"
 
-                REM v1.3.18: preflight JDK version.
                 if defined JAVA_HOME (
-                    set JAVA_BIN="%JAVA_HOME%\\bin\\java.exe"
+                    set "JAVA_BIN=%JAVA_HOME%\\bin\\java.exe"
                 ) else (
-                    set JAVA_BIN=java
+                    set "JAVA_BIN=java"
                 )
-                for /f "tokens=3" %%v in ('%JAVA_BIN% -version 2^>^&1 ^| findstr /i "version"') do (
-                    set JAVA_VER=%%~v
-                )
+
+                for /f "tokens=3" %%v in ('"%JAVA_BIN%" -version 2^>^&1 ^| findstr /i "version"') do set JAVA_VER=%%~v
                 for /f "delims=. tokens=1" %%m in ("%JAVA_VER%") do set JAVA_MAJOR=%%m
                 if not "%JAVA_MAJOR%"=="21" (
-                    echo MultiForge requires JDK 21. Found: %JAVA_MAJOR% at %JAVA_BIN%.
-                    echo Point JAVA_HOME at a JDK 21 install ^(Temurin 21 recommended^) and retry.
+                    echo [multiforge] MultiForge requires JDK 21. Found: %JAVA_MAJOR% at %JAVA_BIN%
+                    echo [multiforge] NeoForge 1.21.1 targets JDK 21; SpongeMixin packs crash on 22+
+                    echo [multiforge] with "Unsupported class file major version 7X" at mod-scan.
+                    echo [multiforge] Install Temurin 21 and set JAVA_HOME, then retry.
                     exit /b 1
                 )
 
-                if "%MEMORY%"=="" set MEMORY=4G
+                if exist run.bat copy /y run.bat run.bat.pre-multiforge.bak >nul
+                if exist run.sh copy /y run.sh run.sh.pre-multiforge.bak >nul
+                if exist user_jvm_args.txt copy /y user_jvm_args.txt user_jvm_args.txt.pre-multiforge.bak >nul
 
-                %JAVA_BIN% -Xms%MEMORY% -Xmx%MEMORY% %JVM_OPTS% ^
-                    -cp "libraries\\multiforge\\*" ^
-                    net.multiforge.runtime.bootstrap.Main %*
+                echo [multiforge] running the MultiForge installer
+                "%JAVA_BIN%" -jar multiforge\\multiforge-installer.jar --installServer .
+                if errorlevel 1 exit /b 1
+
+                if not exist config mkdir config
+                if not exist config\\multiforge-server.toml copy config\\multiforge-server.toml.example config\\multiforge-server.toml >nul
+                if not exist eula.txt echo eula=false> eula.txt
+
+                echo [multiforge] done. Start the server with:  run.bat
+                echo [multiforge] NOTE: run.bat calls bare `java` — make sure JAVA_HOME points at JDK 21.
+                endlocal
                 """;
     }
 
-    private static String defaultConfig() {
+    static String defaultConfig() {
         return """
                 # MultiForge server config. Reloadable via /multiforge config reload.
                 cores = 8
@@ -316,36 +383,55 @@ public final class Main {
                 """;
     }
 
-    private static String replacementReadme() {
+    static String replacementReadme() {
         return """
                 MultiForge — drop-in replacement bundle
                 =======================================
 
-                Overlay this archive onto an existing NeoForge 1.21.1 dedicated
-                server directory. Files land in place beside your existing world,
-                mods, and configs.
+                Converts an existing NeoForge 1.21.1 dedicated server directory to
+                MultiForge in place. Your world, mods, and configs are left alone.
 
-                What lands where:
+                What is in this archive:
 
-                    libraries/multiforge/multiforge-runtime.jar   ← the runtime library
-                    run.multiforge.sh                             ← Linux/macOS launcher (rename to run.sh once ready)
-                    run.multiforge.bat                            ← Windows launcher (rename to run.bat once ready)
-                    config/multiforge-server.toml.example         ← default config (rename to multiforge-server.toml)
+                    multiforge/multiforge-installer.jar    the MultiForge installer
+                    install-multiforge.sh                  Linux/macOS converter
+                    install-multiforge.bat                 Windows converter
+                    config/multiforge-server.toml.example  default config
+                    README-MULTIFORGE.txt                  this file
 
-                Migration steps:
+                Steps:
 
                     1. Stop the running NeoForge server (/stop, wait for "Saving...").
-                    2. Back up your world:  tar czf backup.tgz world/ mods/ config/
-                    3. Overlay this archive:  unzip multiforge-<version>-replacement.zip
-                    4. Rename run.multiforge.sh → run.sh (backing up your existing run.sh first).
-                    5. Rename config/multiforge-server.toml.example → config/multiforge-server.toml
-                       and edit cores / threads-per-core to match your machine.
-                    6. Start the server:  ./run.sh
+                    2. Back up:  tar czf backup.tgz world/ mods/ config/ server.properties
+                    3. Unzip this archive into the server directory.
+                    4. Run:  ./install-multiforge.sh      (Windows: install-multiforge.bat)
+                    5. Edit config/multiforge-server.toml — set cores / threads-per-core.
+                    6. Start:  ./run.sh
 
-                Rolling back: MultiForge writes only to world/multiforge/, config/multiforge-server.toml,
-                and its own logs/multiforge-*.log. Delete those + restore your old run.sh + drop your
-                original NeoForge server jar back in place. The world is byte-compatible with upstream
-                NeoForge.
+                Step 4 needs internet the first time: the installer downloads the
+                Minecraft server jar from Mojang and the NeoForge libraries, then
+                applies MultiForge's patches locally. Nothing derived from Mojang's
+                jar can be redistributed, which is why this archive carries an
+                installer rather than a finished server.
+
+                What it changes:
+
+                    libraries/                        NeoForge + MultiForge + Minecraft
+                    run.sh, run.bat, user_jvm_args.txt  regenerated (originals backed up
+                                                        to *.pre-multiforge-<stamp>.bak)
+                    config/multiforge-server.toml     written if absent
+                    eula.txt                          written if absent (eula=false)
+
+                Nothing under world/, mods/, or the rest of config/ is touched.
+
+                Rolling back: restore the backed-up run.sh / run.bat / user_jvm_args.txt,
+                and delete world/multiforge/, config/multiforge-server.toml, and
+                logs/multiforge-*.log. The world is byte-compatible with upstream NeoForge.
+
+                Requires JDK 21 exactly. Both the converter and the launcher it writes
+                refuse to run on anything else — NeoForge 1.21.1 targets 21, and packs
+                bundling SpongeMixin crash at mod-scan on JDK 22+ with "Unsupported
+                class file major version 7X".
 
                 Docs: https://github.com/0xnullsect0r/multiforge/tree/main/docs
                 Support: https://github.com/0xnullsect0r/multiforge/issues

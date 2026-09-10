@@ -1,5 +1,57 @@
 # CHANGELOG
 
+## v1.5.0 — the drop-in replacement ZIP now actually converts a server
+
+Reported from a live test: unzip the archive, swap in its launcher, run it, and get
+
+```
+Error: Could not find or load main class net.multiforge.runtime.bootstrap.Main
+```
+
+Method 2 has never worked. Three independent reasons, any one of them fatal:
+
+1. **`net.multiforge.runtime.bootstrap.Main` does not exist.** Not in the runtime jar, not anywhere in this repo — `grep -rn "package net.multiforge.runtime.bootstrap"` returns nothing. It was named only by the two launcher templates the archive shipped.
+2. **The classpath could not have booted a server anyway.** `-cp "libraries/multiforge/*"` resolved to one 348 KB Minecraft-free library jar: no Minecraft, no NeoForge, no ModLauncher, no mods.
+3. **The premise was wrong.** MultiForge is a *fork* — the regionized tick loop lives in patches to `net.minecraft.*` and `net.neoforged.*` classes inside the patched NeoForge jar. Dropping a library beside a stock NeoForge server leaves the stock, unpatched server running.
+
+The archive also cannot simply ship a finished install: that tree is ~180 MB and contains Mojang's `server-1.21.1.jar` plus the `-srg` / `-slim` / `-extra` / `-unpacked` derivatives built from it. Redistributing those is not permitted — which is exactly why NeoForge, and Forge before it, ship an installer that downloads from Mojang and patches locally.
+
+So the archive now embeds the fork installer and a converter that runs it in place. That is a genuine in-place conversion and the only lawful shape for one.
+
+### The archive
+
+```
+multiforge/multiforge-installer.jar     the MultiForge installer
+install-multiforge.sh / .bat            the converter
+config/multiforge-server.toml.example
+README-MULTIFORGE.txt
+```
+
+~9.8 MB, up from ~320 KB. `install-multiforge.sh` preflights JDK 21, backs up `run.sh` / `run.bat` / `user_jvm_args.txt` to `*.pre-multiforge-<timestamp>.bak`, runs `--installServer .`, rewrites `run.sh` to carry the same preflight, and writes `config/multiforge-server.toml` and `eula.txt` if absent. Nothing under `world/`, `mods/`, or the rest of `config/` is touched.
+
+### The launcher operators actually get had no JDK preflight
+
+v1.3.18 added a JDK-21 preflight and claimed "the launcher scripts refuse to run on the wrong JDK". It went into `run.multiforge.sh` — the launcher that could never run. The `run.sh` the fork installer writes is stock NeoForge's, calling bare `java` with no version check, so the JDK-26 failure that release set out to prevent was still fully reachable through Method 1. The converter now rewrites `run.sh` with the preflight.
+
+### The preflight message never printed the version it detected
+
+v1.3.18's script used `cat >&2 <<'PREFLIGHT_FAIL'` — a *quoted* heredoc delimiter, which suppresses expansion. The message added specifically to name the offending JDK printed the literal text `${JAVA_MAJOR:-unknown}` and `$JAVA_BIN`. Unquoted now, and verified against a faked JDK 26: `MultiForge requires JDK 21. Found: 26 at /path/to/java`.
+
+### Other removals and fixes
+
+- **`install` subcommand deleted** from the `multiforge-installer` module. It laid out a directory whose `run.sh` had the same nonexistent main class, so it could never work either. `build-zip` now requires `--installer <fork installer jar>` and refuses without one — the archive cannot be built empty again.
+- **The module no longer bundles `multiforge-runtime.jar`.** Embedding it is what produced an archive that looked plausible and booted nothing. The jar drops from ~315 KB to ~8 KB; it is a build tool, not an operator download.
+- **`scripts/install.sh` rewritten.** It called the deleted `install` subcommand with the wrong argument shape, and prompted for a `license.key` plus ran a `multiforge-license-cli verify` — license gating that CLAUDE.md ground rule 2 records as removed on 2026-09-06. It now wraps the fork installer and preflights JDK 21.
+- **`release.yml`** builds the archive in `build-fork-installer` rather than `build-jars`, since it now needs the fork installer as an input. If that job fails, no archive ships — correct, as an archive without an installer is inert.
+
+### Verified end-to-end
+
+Not just built — run. A simulated stock NeoForge directory (world, mods, configs, `run.sh`, `user_jvm_args.txt`) was converted with the real archive, and the result booted a MultiForge-patched server to `You need to agree to the EULA`, with `--fml.neoForgeVersion 1.21.1-v1.4.1.0-beta` in the ModLauncher banner. World, mods, and configs verified byte-intact; backups verified present. Both preflights verified against a faked JDK 26.
+
+`MainTest` rewritten accordingly. The old tests asserted only that files were *created*, which is how a launcher naming a nonexistent class survived six releases; the new ones assert what the scripts say — that nothing references `net.multiforge.runtime.bootstrap`, that the converter runs `--installServer`, that the heredoc is unquoted, and that the README keeps the redistribution rationale so nobody "simplifies" the archive back into being unlawful.
+
+- `gradle.properties` + `upstream/neoforge-1.21.1/gradle.properties` bumped 1.4.1 → 1.5.0.
+
 ## v1.4.1 — the config screen's labels were wrong
 
 v1.4.0 shipped the per-overlay config screen with translation keys that matched nothing NeoForge looks up, so the screen rendered raw key strings and, worse, one wrong label. Found while answering "how do I open the config UI" — the screen opened fine, but nothing in it was named correctly.
