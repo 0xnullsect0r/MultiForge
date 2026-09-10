@@ -56,6 +56,27 @@ Booted on a v1.5.1 dedicated server reporting `21.1.1-multiforge-1.5.1`, reachin
 
 Of that sample, **8 of 14 load today**; at a rebased 21.1.234, **13 of 14** would.
 
+### 2.2a Parity against stock NeoForge
+
+To separate "MultiForge broke it" from "this mod needs a newer NeoForge", results are checked against a **stock NeoForge 21.1.1** control running the identical mod set.
+
+AppleSkin + Architectury API + Cloth Config + Jade + JourneyMap:
+
+| Server | Result |
+|---|---|
+| MultiForge `21.1.1-multiforge-1.5.1` | ✅ `Done (0.676s)` |
+| Stock NeoForge `21.1.1` | ✅ `Done (2.540s)` |
+
+Same set, same outcome. Two mods excluded from that run fail on **both**: Citadel (see *Critical injection failure* in §4) and Corail Tombstone (mixin into `supportsEnchantment`, absent in 21.1.1). Neither is a MultiForge regression.
+
+Run the control yourself before reporting a compatibility bug:
+
+```bash
+curl -sfL -o nf.jar https://maven.neoforged.net/releases/net/neoforged/neoforge/21.1.1/neoforge-21.1.1-installer.jar
+java -jar nf.jar --installServer stock-control
+# same mods/, same JDK 21, then compare
+```
+
 The Sophisticated Core result is the *intended* behaviour, not a defect — a clean refusal at load rather than a crash in gameplay.
 
 Note that its Modrinth build requires 21.1.229 while the copy bundled in ATM10 requires only 21.1.0. **A mod's requirement varies by build**, so check the jar you actually have:
