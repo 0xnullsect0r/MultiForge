@@ -99,3 +99,4 @@ node_modules/
 
 # Claude Code session state (subagent worktrees, plans, etc.).
 .claude/
+.kotlin/
