@@ -23,7 +23,7 @@
          this.registryAccess = p_270200_;
          this.damageSources = new DamageSources(p_270200_);
      }
-@@ -539,6 +544,33 @@ public abstract class Level extends net.neoforged.neoforge.attachment.Attachment
+@@ -539,28 +544,79 @@ public abstract class Level extends net.neoforged.neoforge.attachment.Attachment
  
      public void addBlockEntityTicker(TickingBlockEntity p_151526_) {
          (this.tickingBlockEntities ? this.pendingBlockEntityTickers : this.blockEntityTickers).add(p_151526_);
@@ -57,29 +57,75 @@
      }
  
      public void addFreshBlockEntities(java.util.Collection<BlockEntity> beList) {
-@@ -550,6 +582,21 @@ public abstract class Level extends net.neoforged.neoforge.attachment.Attachment
+-        if (this.tickingBlockEntities) {
+-            this.pendingFreshBlockEntities.addAll(beList);
+-        } else {
+-            this.freshBlockEntities.addAll(beList);
++        // MultiForge (multiforge-patches/02-region-tick/): a region worker placing a
++        // block entity lands here concurrently with others; the lists are guarded.
++        synchronized (this.freshBlockEntities) {
++            if (this.tickingBlockEntities) {
++                this.pendingFreshBlockEntities.addAll(beList);
++            } else {
++                this.freshBlockEntities.addAll(beList);
++            }
+         }
      }
  
      protected void tickBlockEntities() {
 +        // MultiForge (multiforge-patches/02-region-tick/): once the
 +        // per-region BLOCK_ENTITIES phase body
 +        // (net.multiforge.runtime.region.BlockEntityTickRunner, B3.4) has
-+        // claimed this world's block entities, skip the inline
-+        // per-level iteration entirely -- ticking it here too would
-+        // double-tick every block entity in the world. See
-+        // RegionizedTickCoordinator.regionsHandleBlockEntities's javadoc
-+        // for the exact readiness conditions. Falls through to the
-+        // original body below (unchanged) whenever the runtime hasn't
-+        // claimed this world yet -- bootstrap, no regionizer, or the
-+        // M9 wiring not installed -- preserving Vanilla single-threaded
-+        // parity exactly as before this patch.
-+        if (net.multiforge.neoforge.RegionizedTickCoordinator.regionsHandleBlockEntities(this)) {
-+            return;
-+        }
++        // claimed this world's block entities, only NeoForge's onLoad pass
++        // for freshly added block entities runs here; the ticker iteration
++        // is skipped (ticking here too would double-tick every block
++        // entity). See RegionizedTickCoordinator.regionsHandleBlockEntities
++        // for the exact readiness conditions. Whenever the runtime has not
++        // claimed this world, the original body runs unchanged.
          ProfilerFiller profilerfiller = this.getProfiler();
          profilerfiller.push("blockEntities");
-         if (!this.pendingFreshBlockEntities.isEmpty()) {
-@@ -1174,6 +1221,11 @@ public abstract class Level extends net.neoforged.neoforge.attachment.Attachment
+-        if (!this.pendingFreshBlockEntities.isEmpty()) {
+-            this.freshBlockEntities.addAll(this.pendingFreshBlockEntities);
+-            this.pendingFreshBlockEntities.clear();
+-        }
+-        this.tickingBlockEntities = true;
+-        if (!this.freshBlockEntities.isEmpty()) {
+-            this.freshBlockEntities.forEach(BlockEntity::onLoad);
++        java.util.List<BlockEntity> mf$fresh;
++        synchronized (this.freshBlockEntities) {
++            if (!this.pendingFreshBlockEntities.isEmpty()) {
++                this.freshBlockEntities.addAll(this.pendingFreshBlockEntities);
++                this.pendingFreshBlockEntities.clear();
++            }
++            this.tickingBlockEntities = true;
++            mf$fresh = java.util.List.copyOf(this.freshBlockEntities);
+             this.freshBlockEntities.clear();
+         }
++        // NeoForge's onLoad pass always runs here, on the server thread, even when
++        // regions tick the block entities (they tick after this method returns).
++        mf$fresh.forEach(BlockEntity::onLoad);
++        if (net.multiforge.neoforge.RegionizedTickCoordinator.regionsHandleBlockEntities(this)) {
++            synchronized (this.freshBlockEntities) {
++                this.tickingBlockEntities = false;
++            }
++            profilerfiller.pop();
++            return;
++        }
+         if (!this.pendingBlockEntityTickers.isEmpty()) {
+             this.blockEntityTickers.addAll(this.pendingBlockEntityTickers);
+             this.pendingBlockEntityTickers.clear();
+@@ -578,7 +634,9 @@ public abstract class Level extends net.neoforged.neoforge.attachment.Attachment
+             }
+         }
+ 
+-        this.tickingBlockEntities = false;
++        synchronized (this.freshBlockEntities) {
++            this.tickingBlockEntities = false;
++        }
+         profilerfiller.pop();
+     }
+ 
+@@ -1174,6 +1232,11 @@ public abstract class Level extends net.neoforged.neoforge.attachment.Attachment
      }
  
      public ProfilerFiller getProfiler() {
