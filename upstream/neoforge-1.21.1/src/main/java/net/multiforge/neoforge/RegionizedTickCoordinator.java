@@ -17,7 +17,6 @@ import net.minecraft.world.level.Level;
 import net.multiforge.api.world.WorldRef;
 import net.multiforge.runtime.diagnostics.ProbeRegistry;
 import net.multiforge.runtime.diagnostics.ViolationLogger;
-import net.multiforge.runtime.region.Region;
 import net.multiforge.runtime.region.RegionTickWatchdog;
 import net.multiforge.runtime.region.TickRegionScheduler;
 import net.multiforge.runtime.scheduler.LevelTickDispatchProbes;
@@ -40,20 +39,20 @@ import net.multiforge.runtime.scheduler.MultiThreadedSchedulerHost;
  *
  * <ol>
  * <li>{@link #dispatchLevelTick} for the first level ticked (the
- *     overworld) first drives the synthetic global region once — weather,
- *     time, world border, scoreboard, boss bars, raids, dragon fight and
- *     command dispatch (docs/design/global-region.md).</li>
+ * overworld) first drives the synthetic global region once — weather,
+ * time, world border, scoreboard, boss bars, raids, dragon fight and
+ * command dispatch (docs/design/global-region.md).</li>
  * <li>Vanilla's {@code ServerLevel.tick} then runs on the server thread.
- *     The patched body skips exactly the work that regions own: scheduled
- *     block/fluid ticks, entity ticking and block-entity ticking (see
- *     {@link #regionsHandleBlockFluidTicks}, {@link #regionsHandleEntityTicks},
- *     {@link #regionsHandleBlockEntities}); everything else (chunk system,
- *     random ticks, spawning, block events, raids) runs as in Vanilla.</li>
+ * The patched body skips exactly the work that regions own: scheduled
+ * block/fluid ticks, entity ticking and block-entity ticking (see
+ * {@link #regionsHandleBlockFluidTicks}, {@link #regionsHandleEntityTicks},
+ * {@link #regionsHandleBlockEntities}); everything else (chunk system,
+ * random ticks, spawning, block events, raids) runs as in Vanilla.</li>
  * <li>Every region of the level then ticks once, in parallel on the worker
- *     pool, and this method returns only after all of them finished
- *     ({@link MultiThreadedSchedulerHost#driveRegions}). While waiting, the
- *     server thread services main-thread chunk requests a region worker
- *     is blocked on (see {@link net.multiforge.neoforge.chunk.MainThreadHandoff}).</li>
+ * pool, and this method returns only after all of them finished
+ * ({@link MultiThreadedSchedulerHost#driveRegions}). While waiting, the
+ * server thread services main-thread chunk requests a region worker
+ * is blocked on (see {@link net.multiforge.neoforge.chunk.MainThreadHandoff}).</li>
  * </ol>
  *
  * <p>Because region work and server-thread work never overlap, running
@@ -104,9 +103,9 @@ public final class RegionizedTickCoordinator {
      * RegionDispatchOverrunException} after the barrier completed;
      * otherwise it is a probe bump plus a rate-limited warning.
      *
-     * @param level the level being ticked
+     * @param level    the level being ticked
      * @param haveTime Vanilla's "time left in this tick" supplier, passed
-     *     through to {@code ServerLevel.tick}
+     *                 through to {@code ServerLevel.tick}
      */
     public static void dispatchLevelTick(ServerLevel level, java.util.function.BooleanSupplier haveTime) {
         MultiThreadedSchedulerHost host = MultiForgeRegionizedRuntime.current();

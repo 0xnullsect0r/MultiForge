@@ -37,7 +37,7 @@ public final class ViolationLogger {
     private static final Logger LOG = LoggerFactory.getLogger("multiforge.violation");
     private static final long WINDOW_NANOS = 60L * 1_000_000_000L;
     private static final long DEFAULT_PER_MIN = 5L;
-    private static final long PER_MIN = parsePerMin(System.getProperty("multiforge.violations.warn-per-min"));
+    private static volatile long perMin = parsePerMin(System.getProperty("multiforge.violations.warn-per-min"));
 
     /**
      * Robust parse that never throws at class-init time — an invalid
@@ -59,6 +59,18 @@ public final class ViolationLogger {
     }
 
     private static final ConcurrentMap<String, Bucket> BUCKETS = new ConcurrentHashMap<>();
+
+    /**
+     * Set the per-key budget from {@code [violations] warnPerMin} (0 silences
+     * every warning, as {@code policy = "reroute-only"} does). The {@code
+     * -Dmultiforge.violations.warn-per-min} system property, when set, wins.
+     * Existing buckets are dropped so the new budget applies immediately.
+     */
+    public static void configure(long warnPerMin) {
+        String prop = System.getProperty("multiforge.violations.warn-per-min");
+        perMin = prop != null && !prop.isBlank() ? parsePerMin(prop) : Math.max(0L, warnPerMin);
+        BUCKETS.clear();
+    }
 
     // Track C1 (M6): subscribers driving VIOLATION_EVENT frames on the
     // multiforge:debug/v1 channel (see ViolationEmitter). CopyOnWriteArrayList
@@ -89,7 +101,7 @@ public final class ViolationLogger {
      */
     public static void warn(String modId, String site, String detail) {
         String key = modId == null ? site : (modId + "::" + site);
-        Bucket b = BUCKETS.computeIfAbsent(key, k -> new Bucket(PER_MIN, WINDOW_NANOS));
+        Bucket b = BUCKETS.computeIfAbsent(key, k -> new Bucket(perMin, WINDOW_NANOS));
         long dropped = b.tryConsume();
         if (dropped == 0L) {
             LOG.warn("[{}] {}", site, detail);

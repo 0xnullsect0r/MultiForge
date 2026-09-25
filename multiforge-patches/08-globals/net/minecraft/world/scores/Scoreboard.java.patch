@@ -85,7 +85,7 @@
 +                                flag1 = true;
 +                            }
 +                        }
-+    
++
 +                        if (p_313831_ != score.value()) {
 +                            score.value(p_313831_);
                              flag1 = true;
@@ -99,7 +99,7 @@
 -
 -                    if (flag1) {
 -                        this.sendScoreToPlayers();
-+    
++
 +                        if (flag1) {
 +                            this.sendScoreToPlayers();
 +                        }
@@ -160,7 +160,7 @@
 +                    if (mutableboolean.isTrue()) {
 +                        this.sendScoreToPlayers();
 +                    }
-+    
++
 +                    Scoreboard.this.onScoreLockChanged(p_313717_, p_83473_);
                  }
 -

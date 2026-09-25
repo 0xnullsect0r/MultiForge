@@ -17,12 +17,12 @@ import java.util.List;
 import java.util.Objects;
 import java.util.UUID;
 import java.util.function.Consumer;
-import javax.annotation.Nullable;
 import net.minecraft.util.AbortableIterationConsumer;
 import net.minecraft.world.level.entity.EntityAccess;
 import net.minecraft.world.level.entity.EntityTypeTest;
 import net.minecraft.world.level.entity.LevelEntityGetter;
 import net.minecraft.world.phys.AABB;
+import org.jetbrains.annotations.Nullable;
 
 /**
  * A {@link LevelEntityGetter} that reads the level's entity storage under

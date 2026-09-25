@@ -68,6 +68,7 @@ import net.multiforge.runtime.region.RegionizedTaskQueue;
 import net.multiforge.runtime.region.ScheduledTickRunner;
 import net.multiforge.runtime.region.ThreadedRegionizer;
 import net.multiforge.runtime.region.TickRegionScheduler;
+import net.multiforge.runtime.region.pin.RegionPinManager;
 import net.multiforge.runtime.shutdown.RegionShutdownCoordinator;
 
 /**
@@ -85,10 +86,8 @@ import net.multiforge.runtime.shutdown.RegionShutdownCoordinator;
 public final class MultiThreadedSchedulerHost implements SchedulerHost, AutoCloseable {
 
     private static final long TICK_MS = 50L;
-    private static final int GLOBAL_REGION_INBOX_BATCH = 4096;
-    // Vanilla's default: autosave every 6000 ticks (5 minutes at 20 TPS).
-    // Kept as a constant for parity — a config knob can be added later
-    // when operators need to tune it.
+    // Vanilla's default: autosave every 6000 ticks (5 minutes at 20 TPS);
+    // the live interval is MultiForgeConfig.autosaveTicks().
     static final long DEFAULT_AUTOSAVE_INTERVAL_TICKS = 6000L;
     // Per-tick budget knobs for the Phase 5 wiring. Bounded so that
     // pollFullLoadUpdate / ChunkTaskScheduler.drainInto / AutoSaveRunner
@@ -131,6 +130,8 @@ public final class MultiThreadedSchedulerHost implements SchedulerHost, AutoClos
     private volatile RegionShutdownCoordinator shutdownCoordinator;
     private volatile RegionJournalLifecycle journalLifecycle;
     private volatile Path journalDir;
+    private volatile RegionPinManager pins;
+    private volatile AutoCloseable pinSubscription;
 
     // Phase 5 wave B wiring: pluggable chunk-payload serializer for
     // AutoSaveRunner. Defaults to the phase-6 stub (empty payload) so
@@ -472,6 +473,32 @@ public final class MultiThreadedSchedulerHost implements SchedulerHost, AutoClos
         return globalRegion;
     }
 
+    /**
+     * Honour {@code pinManager}'s region pins in every world's regionizer,
+     * current and future, and re-apply them whenever a pin is added or
+     * removed. Server thread, between ticks.
+     */
+    public void bindPins(RegionPinManager pinManager) {
+        Objects.requireNonNull(pinManager, "pinManager");
+        AutoCloseable previous = this.pinSubscription;
+        if (previous != null) {
+            try {
+                previous.close();
+            } catch (Exception ignored) {
+                // CopyOnWriteArrayList removal; cannot fail
+            }
+        }
+        this.pins = pinManager;
+        for (ThreadedRegionizer r : regionizers.values()) {
+            if (r != globalRegionizer) r.setPins(pinManager::all);
+        }
+        this.pinSubscription = pinManager.addChangeListener(() -> {
+            for (ThreadedRegionizer r : regionizers.values()) {
+                if (r != globalRegionizer) r.refreshPins();
+            }
+        });
+    }
+
     public ThreadedRegionizer regionizerFor(WorldRef world) {
         return regionizers.computeIfAbsent(world.dimensionId(), id -> {
             ThreadedRegionizer r = regionizerFactory.apply(world);
@@ -494,6 +521,8 @@ public final class MultiThreadedSchedulerHost implements SchedulerHost, AutoClos
             // tick body can route Region → ChunkHolderManager without
             // linear-scanning every world's manager.
             r.addListener(newRegionWorldTracker(world));
+            RegionPinManager boundPins = this.pins;
+            if (boundPins != null) r.setPins(boundPins::all);
             // Phase 5.4/5.5 wiring: when installM9WiredTickBody has run,
             // every subsequently-created world's regionizer also gets
             // the journal lifecycle listener. Worlds materialised
@@ -643,8 +672,8 @@ public final class MultiThreadedSchedulerHost implements SchedulerHost, AutoClos
      *       its 50 ms tick target (CLAUDE.md rule 4).</li>
      *   <li><b>{@link PhasedRegionTickBody.Phase#FLUSH_OUTBOUND}</b> —
      *       appends {@link AutoSaveRunner#runOnce(Region)} (task 5.3),
-     *       gated so autosave runs at most every {@link
-     *       #DEFAULT_AUTOSAVE_INTERVAL_TICKS} region ticks (Vanilla
+     *       gated so autosave runs at most every {@code
+     *       config.autosaveTicks()} region ticks (Vanilla
      *       parity: 6000 ticks = 5 minutes at 20 TPS).</li>
      * </ol>
      *
@@ -851,7 +880,7 @@ public final class MultiThreadedSchedulerHost implements SchedulerHost, AutoClos
 
     /**
      * FLUSH_OUTBOUND phase body — run the region's per-tick autosave
-     * slice, but only every {@link #DEFAULT_AUTOSAVE_INTERVAL_TICKS}
+     * slice, but only every {@code config.autosaveTicks()}
      * region ticks (Vanilla parity). The AutoSaveRunner itself has a
      * bounded per-call chunk count + deadline; it degrades gracefully
      * on a slow disk by simply saving fewer chunks per call.
@@ -859,7 +888,7 @@ public final class MultiThreadedSchedulerHost implements SchedulerHost, AutoClos
     private void phaseAutoSave(Region region) {
         long now = region.currentTick();
         Long last = lastAutosaveTick.get(region.id());
-        if (last != null && now - last < DEFAULT_AUTOSAVE_INTERVAL_TICKS) return;
+        if (last != null && now - last < config.autosaveTicks()) return;
         AutoSaveRunner runner = autoSaveRunnerFor(region);
         if (runner == null) return; // journal never opened for this region — skip
         try {
@@ -954,9 +983,48 @@ public final class MultiThreadedSchedulerHost implements SchedulerHost, AutoClos
         regionizer.removeChunk(new ChunkPos(chunkX, chunkZ));
     }
 
+    /**
+     * Run every task still waiting in a region mailbox on the calling thread,
+     * until none remain (tasks may enqueue more). For server stop: called on
+     * the server thread after the last tick barrier, while no region runs, and
+     * before the world is saved, so rerouted mutations are not lost.
+     *
+     * @return the number of tasks run
+     */
+    public int drainMailboxesOnCaller() {
+        int total = 0;
+        for (int pass = 0; pass < 16; pass++) {
+            int ran = 0;
+            for (ThreadedRegionizer regionizer : regionizers.values()) {
+                for (Region region : regionizer.regions()) ran += taskQueue.drain(region, Integer.MAX_VALUE);
+            }
+            total += ran;
+            if (ran == 0) break;
+        }
+        return total;
+    }
+
     @Override
     public void close() {
         OwnershipEnforcer.unbindPositionRouter();
+        AutoCloseable pinSub = this.pinSubscription;
+        if (pinSub != null) {
+            try {
+                pinSub.close();
+            } catch (Exception ignored) {
+                // CopyOnWriteArrayList removal; cannot fail
+            }
+        }
+        RegionShutdownCoordinator coordinator = this.shutdownCoordinator;
+        if (coordinator != null) {
+            try {
+                // No drain wait: in BARRIER mode mailboxes only drain when the
+                // server thread drives a tick, and drainMailboxesOnCaller already ran.
+                coordinator.shutdown(java.time.Duration.ZERO);
+            } catch (IOException | IllegalStateException e) {
+                ViolationLogger.warn("MultiThreadedSchedulerHost.close", "closing region journals failed: " + e);
+            }
+        }
         scheduler.close();
         delayedExec.shutdownNow();
         asyncExec.shutdownNow();
@@ -1315,12 +1383,5 @@ public final class MultiThreadedSchedulerHost implements SchedulerHost, AutoClos
         } finally {
             handle.prepareNextIteration();
         }
-    }
-
-    @SuppressWarnings("unused")
-    private static int globalBatchNoise(int inboxSize) {
-        // Placeholder to silence the constant-only compiler warning
-        // without wiring the batch value into a config listener yet.
-        return Math.min(GLOBAL_REGION_INBOX_BATCH, inboxSize);
     }
 }

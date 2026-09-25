@@ -48,17 +48,13 @@ public final class ConfigCodec {
         int tpc = intOr(r, "mtserver.threadsPerCore", d.threadsPerCore());
         MultiForgeConfig.Mode mode = enumOr(r, "mtserver.mode", MultiForgeConfig.Mode.class, d.mode());
         int regionSize = intOr(r, "region.size", d.regionSize());
-        MultiForgeConfig.RegionMode regionMode =
-                enumOr(r, "region.mode", MultiForgeConfig.RegionMode.class, d.regionMode(), s -> s.replace('-', '_')
-                        .toUpperCase(Locale.ROOT));
-        double splitT = doubleOr(r, "region.msptSplitThreshold", d.msptSplitThreshold());
-        double mergeT = doubleOr(r, "region.msptMergeThreshold", d.msptMergeThreshold());
         MultiForgeConfig.ViolationPolicy vp = enumOr(
                 r, "violations.policy", MultiForgeConfig.ViolationPolicy.class, d.violationPolicy(), s -> s.replace(
                                 '-', '_')
                         .toUpperCase(Locale.ROOT));
         int warnPerMin = intOr(r, "violations.warnPerMin", d.warnPerMin());
-        return new MultiForgeConfig(cores, tpc, mode, regionSize, regionMode, splitT, mergeT, vp, warnPerMin);
+        long autosaveTicks = Math.max(1L, longOr(r, "persistence.autosaveTicks", d.autosaveTicks()));
+        return new MultiForgeConfig(cores, tpc, mode, regionSize, vp, warnPerMin, autosaveTicks);
     }
 
     public static String render(MultiForgeConfig c) {
@@ -72,17 +68,14 @@ public final class ConfigCodec {
         sb.append("threadsPerCore = ").append(c.threadsPerCore()).append("\n");
         sb.append("mode = \"").append(c.mode().name().toLowerCase(Locale.ROOT)).append("\"\n\n");
         sb.append("[region]\n");
-        sb.append("size = ").append(c.regionSize()).append("\n");
-        sb.append("mode = \"")
-                .append(c.regionMode().name().toLowerCase(Locale.ROOT).replace('_', '-'))
-                .append("\"\n");
-        sb.append("msptSplitThreshold = ").append(c.msptSplitThreshold()).append("\n");
-        sb.append("msptMergeThreshold = ").append(c.msptMergeThreshold()).append("\n\n");
+        sb.append("size = ").append(c.regionSize()).append("\n\n");
         sb.append("[violations]\n");
         sb.append("policy = \"")
                 .append(c.violationPolicy().name().toLowerCase(Locale.ROOT).replace('_', '-'))
                 .append("\"\n");
-        sb.append("warnPerMin = ").append(c.warnPerMin()).append("\n");
+        sb.append("warnPerMin = ").append(c.warnPerMin()).append("\n\n");
+        sb.append("[persistence]\n");
+        sb.append("autosaveTicks = ").append(c.autosaveTicks()).append("\n");
         return sb.toString();
     }
 
@@ -97,11 +90,9 @@ public final class ConfigCodec {
         return v == null ? fallback : Math.toIntExact(v);
     }
 
-    private static double doubleOr(TomlParseResult r, String key, double fallback) {
-        Double d = r.getDouble(key);
-        if (d != null) return d;
-        Long l = r.getLong(key);
-        return l == null ? fallback : l.doubleValue();
+    private static long longOr(TomlParseResult r, String key, long fallback) {
+        Long v = r.getLong(key);
+        return v == null ? fallback : v;
     }
 
     private static <E extends Enum<E>> E enumOr(TomlParseResult r, String key, Class<E> type, E fallback) {

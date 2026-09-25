@@ -51,7 +51,6 @@ import net.multiforge.runtime.region.pin.RegionPinManager;
  *   /multiforge config cores &lt;n&gt;
  *   /multiforge config threads &lt;n&gt;
  *   /multiforge region size &lt;chunks&gt;
- *   /multiforge region mode player-only|full-world
  *   /multiforge region pin &lt;id&gt; &lt;world&gt; &lt;fromCX&gt; &lt;fromCZ&gt; &lt;toCX&gt; &lt;toCZ&gt;
  *   /multiforge region unpin &lt;id&gt;
  *   /multiforge region list
@@ -186,9 +185,8 @@ public final class MultiForgeCommandDispatcher {
         output.accept("Region topology:");
         output.accept("  /multiforge region list            — show materialized regions + owners");
         output.accept("  /multiforge region size <chunks>   — square region edge in chunks (power of 2, 1..256)");
-        output.accept("  /multiforge region mode <m>        — m = player-only | full-world");
         output.accept("  /multiforge region pin <id> <world> <fromCX> <fromCZ> <toCX> <toCZ>");
-        output.accept("                                     — pin a rectangle to prevent auto merge/split");
+        output.accept("                                     — tick a rectangle's loaded chunks as one region");
         output.accept("  /multiforge region unpin <id>      — release a pinned region");
         output.accept("");
         output.accept("Diagnostics:");
@@ -316,12 +314,11 @@ public final class MultiForgeCommandDispatcher {
 
     private boolean handleRegion(String[] args, Consumer<String> output) {
         if (args.length < 2) {
-            output.accept("Usage: /multiforge region <size|mode|pin|unpin|list> ...");
+            output.accept("Usage: /multiforge region <size|pin|unpin|list> ...");
             return false;
         }
         return switch (args[1]) {
             case "size" -> handleRegionSize(args, output);
-            case "mode" -> handleRegionMode(args, output);
             case "pin" -> handlePin(args, output);
             case "unpin" -> handleUnpin(args, output);
             case "list" -> handleList(output);
@@ -352,29 +349,6 @@ public final class MultiForgeCommandDispatcher {
         try {
             configStore.update(c -> c.withRegionSize(shift));
             output.accept("Region size set to " + chunks + " chunks per side (shift=" + shift + ")");
-            output.accept(RESTART_HINT);
-            return true;
-        } catch (IOException e) {
-            output.accept("Failed to persist: " + e.getMessage());
-            return false;
-        }
-    }
-
-    private boolean handleRegionMode(String[] args, Consumer<String> output) {
-        if (args.length < 3) {
-            output.accept("Usage: /multiforge region mode player-only|full-world");
-            return false;
-        }
-        MultiForgeConfig.RegionMode mode;
-        try {
-            mode = MultiForgeConfig.RegionMode.valueOf(args[2].replace('-', '_').toUpperCase(Locale.ROOT));
-        } catch (IllegalArgumentException e) {
-            output.accept("Unknown mode: " + args[2] + " (accepted: player-only, full-world)");
-            return false;
-        }
-        try {
-            configStore.update(c -> c.withRegionMode(mode));
-            output.accept("Region mode set to " + args[2]);
             output.accept(RESTART_HINT);
             return true;
         } catch (IOException e) {

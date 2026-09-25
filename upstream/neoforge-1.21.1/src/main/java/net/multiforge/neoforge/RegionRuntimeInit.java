@@ -40,8 +40,7 @@ import net.neoforged.neoforge.event.level.LevelEvent;
  * RegionizedTickCoordinator}).
  */
 public final class RegionRuntimeInit {
-    private static final java.util.concurrent.atomic.AtomicBoolean LEVEL_LISTENERS_INSTALLED =
-            new java.util.concurrent.atomic.AtomicBoolean();
+    private static final java.util.concurrent.atomic.AtomicBoolean LEVEL_LISTENERS_INSTALLED = new java.util.concurrent.atomic.AtomicBoolean();
 
     private RegionRuntimeInit() {}
 

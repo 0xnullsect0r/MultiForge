@@ -13,12 +13,12 @@
 package net.multiforge.neoforge.world;
 
 import java.util.function.Supplier;
-import javax.annotation.Nullable;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.redstone.NeighborUpdater;
+import org.jetbrains.annotations.Nullable;
 
 /**
  * A {@link NeighborUpdater} with one delegate per thread.

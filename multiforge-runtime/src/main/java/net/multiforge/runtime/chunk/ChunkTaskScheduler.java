@@ -21,7 +21,6 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedDeque;
 import java.util.concurrent.ConcurrentMap;
-import java.util.function.BiConsumer;
 import net.multiforge.api.world.ChunkPos;
 import net.multiforge.api.world.WorldRef;
 import net.multiforge.runtime.region.Region;
@@ -167,24 +166,6 @@ public final class ChunkTaskScheduler implements RegionListener {
             ChunkPositionedTask r;
             while ((r = e.getValue().pollFirst()) != null) tgtQ.addLast(r);
         }
-    }
-
-    /**
-     * For split events: move tasks matching {@code shouldLeave} into
-     * {@code target}'s queues. Task deque is treated in insertion
-     * order — callers get FIFO within each priority.
-     *
-     * <p>Note: retained for API compatibility with the RegionId-typed
-     * legacy overload. Prefer the {@link RegionListener} overload
-     * that takes {@code Region} instances — the regionizer's fire path
-     * already invokes it under the write lock with the child region's
-     * section membership implicitly available via
-     * {@link Region#sections()}.
-     */
-    public void onRegionSplit(RegionId source, RegionId target, BiConsumer<RegionId, Runnable> reroute) {
-        // Deferred: callers using the RegionId-typed overload must
-        // provide their own position → predicate mapping. Production
-        // fires via the RegionListener overload below.
     }
 
     private ConcurrentLinkedDeque<ChunkPositionedTask> priorityDeque(RegionId region, ChunkTaskPriority priority) {

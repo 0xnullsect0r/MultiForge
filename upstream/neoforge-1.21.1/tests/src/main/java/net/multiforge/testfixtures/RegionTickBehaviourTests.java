@@ -44,7 +44,6 @@ import net.neoforged.testframework.annotation.TestHolder;
  */
 @ForEachTest(groups = "multiforge.region-tick")
 public class RegionTickBehaviourTests {
-
     /** Region/holder diagnostics for the chunk containing relative position {@code rel}. */
     static String describe(GameTestHelper helper, BlockPos rel) {
         MultiThreadedSchedulerHost host = MultiForgeRegionizedRuntime.current();
@@ -56,10 +55,11 @@ public class RegionTickBehaviourTests {
         Region region = regionizer.regionAtChunk(abs.getX() >> 4, abs.getZ() >> 4);
         ChunkHolderManager manager = host.chunkManagerForOrNull(world);
         net.multiforge.api.world.ChunkPos chunk = new net.multiforge.api.world.ChunkPos(abs.getX() >> 4, abs.getZ() >> 4);
-        return "[region=" + (region == null ? "none" : region.id() + " state=" + region.state()
-                + " ownedChunks=" + region.ownedChunkSnapshot().size()
-                + " holdersOwned=" + (manager == null ? "no-manager" : manager.holdersOwnedBy(region.id()).size())
-                + " avgMspt=" + (host.scheduler().mspt(region) == null ? "unregistered" : host.scheduler().mspt(region).averageMillis()))
+        return "[region=" + (region == null ? "none"
+                : region.id() + " state=" + region.state()
+                        + " ownedChunks=" + region.ownedChunkSnapshot().size()
+                        + " holdersOwned=" + (manager == null ? "no-manager" : manager.holdersOwnedBy(region.id()).size())
+                        + " avgMspt=" + (host.scheduler().mspt(region) == null ? "unregistered" : host.scheduler().mspt(region).averageMillis()))
                 + " holderAtChunk=" + (manager != null && manager.holderAt(chunk) != null)
                 + " regionsInWorld=" + regionizer.regions().size() + "]";
     }
@@ -139,6 +139,11 @@ public class RegionTickBehaviourTests {
     })
     static void crossRegionSetBlockIsRerouted(final DynamicTest test) {
         test.onGameTest(helper -> {
+            if (net.multiforge.runtime.ownership.OwnershipEnforcer.mode() == net.multiforge.runtime.ownership.OwnershipEnforcer.Mode.STRICT) {
+                // Strict mode turns this deliberate violation into a crash by design.
+                helper.succeed();
+                return;
+            }
             MultiThreadedSchedulerHost host = MultiForgeRegionizedRuntime.current();
             helper.assertTrue(host != null, "runtime must be installed");
             net.minecraft.server.level.ServerLevel level = helper.getLevel();

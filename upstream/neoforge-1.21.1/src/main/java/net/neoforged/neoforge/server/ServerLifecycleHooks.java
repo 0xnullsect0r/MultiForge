@@ -137,10 +137,18 @@ public class ServerLifecycleHooks {
         boolean freshInstall = true;
         net.multiforge.runtime.config.MultiForgeConfig mfConfig = net.multiforge.neoforge.MultiForgeServerState.loadConfig(server);
         net.multiforge.runtime.config.MultiForgeConfig.Mode mfMode = mfConfig.effectiveMode();
-        if (mfMode == net.multiforge.runtime.config.MultiForgeConfig.Mode.STRICT) {
-            net.multiforge.runtime.ownership.OwnershipEnforcer.setMode(net.multiforge.runtime.ownership.OwnershipEnforcer.Mode.STRICT);
-            net.multiforge.runtime.region.RegionTickWatchdog.setMode(net.multiforge.runtime.region.RegionTickWatchdog.Mode.STRICT);
-        }
+        boolean mfStrict = mfMode == net.multiforge.runtime.config.MultiForgeConfig.Mode.STRICT;
+        net.multiforge.runtime.ownership.OwnershipEnforcer.setMode(
+                mfStrict || mfConfig.violationPolicy() == net.multiforge.runtime.config.MultiForgeConfig.ViolationPolicy.FAIL
+                        ? net.multiforge.runtime.ownership.OwnershipEnforcer.Mode.STRICT
+                        : net.multiforge.runtime.ownership.OwnershipEnforcer.Mode.REROUTE);
+        net.multiforge.runtime.region.RegionTickWatchdog.setMode(mfStrict
+                ? net.multiforge.runtime.region.RegionTickWatchdog.Mode.STRICT
+                : net.multiforge.runtime.region.RegionTickWatchdog.Mode.WARN);
+        net.multiforge.runtime.diagnostics.ViolationLogger.configure(
+                mfConfig.violationPolicy() == net.multiforge.runtime.config.MultiForgeConfig.ViolationPolicy.REROUTE_ONLY
+                        ? 0L
+                        : mfConfig.warnPerMin());
         if (mfMode == net.multiforge.runtime.config.MultiForgeConfig.Mode.OFF) {
             // mode = "off": no regionized runtime. Every MultiForge guard falls
             // through and RegionizedTickCoordinator runs Vanilla's level tick
@@ -209,6 +217,9 @@ public class ServerLifecycleHooks {
                     server.getWorldPath(net.minecraft.world.level.storage.LevelResource.ROOT)
                             .resolve("multiforge")
                             .resolve("journal"));
+            // Region pins (/multiforge region pin): keep each pinned area's
+            // loaded chunks in one region.
+            mfHost.bindPins(net.multiforge.neoforge.MultiForgeServerState.pinManagerFor(server));
         }
 
         // MultiForge v1.3.5-1.3.9 hook point moved to handleServerStarting
@@ -258,6 +269,11 @@ public class ServerLifecycleHooks {
 
     public static void handleServerStopping(final MinecraftServer server) {
         NeoForge.EVENT_BUS.post(new ServerStoppingEvent(server));
+        // MultiForge: the tick loop has ended and no region runs; apply every
+        // rerouted mutation still waiting in a region mailbox before the
+        // world is saved.
+        net.multiforge.runtime.scheduler.MultiThreadedSchedulerHost mfHost = net.multiforge.runtime.scheduler.MultiForgeRegionizedRuntime.current();
+        if (mfHost != null) mfHost.drainMailboxesOnCaller();
     }
 
     public static void expectServerStopped() {

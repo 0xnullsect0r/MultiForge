@@ -124,17 +124,12 @@ conservative **name/signature heuristic** instead of true reachability:
 
 ### 1.5 The `@RegionThread` marker
 
-This spec assumes `multiforge-api` grows a
-`net.multiforge.api.annotation.RegionThread` marker annotation (`RUNTIME`
-retention, `METHOD` target) before Track C2 lands — it does not exist in
-the runtime today (no `@interface RegionThread` anywhere in the tree as
-of this freeze). Its introduction is **not** part of this task; it is a
-Phase 1/Track A dependency Track C2 blocks on. The scanner reads it
-purely as a bytecode-visible descriptor string
-(`Lnet/multiforge/api/annotation/RegionThread;`) and never loads the
-annotation class, so it has no runtime dependency on `multiforge-api`
-either — consistent with the "no Minecraft, no MultiForge runtime"
-constraint in §1.1.
+`multiforge-api` ships the `net.multiforge.api.RegionThread` marker
+annotation (`RUNTIME` retention, `METHOD` and `TYPE` targets). The scanner
+reads it purely as a bytecode-visible descriptor string
+(`Lnet/multiforge/api/RegionThread;`) and never loads the annotation class,
+so it has no runtime dependency on `multiforge-api` either — consistent with
+the "no Minecraft, no MultiForge runtime" constraint in §1.1.
 
 ---
 

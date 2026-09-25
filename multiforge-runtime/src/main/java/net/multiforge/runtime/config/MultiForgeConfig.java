@@ -30,14 +30,14 @@ import org.slf4j.LoggerFactory;
  *   mode = "hybrid"         # off | hybrid | strict
  *
  *   [region]
- *   size = 16               # chunks per section side (2^n where 0..8)
- *   mode = "player-only"    # player-only | full-world
- *   msptSplitThreshold = 35.0
- *   msptMergeThreshold = 5.0
+ *   size = 4                # log2 of chunks per section side (0..8); 4 = 16 chunks
  *
  *   [violations]
  *   policy = "warn"         # warn | reroute-only | fail
- *   warnPerMin = 5
+ *   warnPerMin = 5          # warnings per minute per violation site
+ *
+ *   [persistence]
+ *   autosaveTicks = 6000    # per-region journal autosave interval, in ticks
  * </pre>
  */
 public record MultiForgeConfig(
@@ -45,11 +45,9 @@ public record MultiForgeConfig(
         int threadsPerCore,
         Mode mode,
         int regionSize,
-        RegionMode regionMode,
-        double msptSplitThreshold,
-        double msptMergeThreshold,
         ViolationPolicy violationPolicy,
-        int warnPerMin) {
+        int warnPerMin,
+        long autosaveTicks) {
 
     public enum Mode {
         OFF,
@@ -57,14 +55,16 @@ public record MultiForgeConfig(
         STRICT
     }
 
-    public enum RegionMode {
-        PLAYER_ONLY,
-        FULL_WORLD
-    }
-
+    /**
+     * What happens when code on a region worker mutates a chunk its region
+     * does not own (see {@code OwnershipEnforcer}).
+     */
     public enum ViolationPolicy {
+        /** Reroute the mutation to the owning region and log a rate-limited warning. */
         WARN,
+        /** Reroute silently (the probe counter still records it). */
         REROUTE_ONLY,
+        /** Throw — the same as {@code mode = "strict"} for ownership. */
         FAIL
     }
 
@@ -147,76 +147,37 @@ public record MultiForgeConfig(
                 1,
                 Mode.HYBRID,
                 4, // 2^4 = 16 chunks per section side (Folia default)
-                RegionMode.PLAYER_ONLY,
-                35.0,
-                5.0,
                 ViolationPolicy.WARN,
-                5);
+                5,
+                6000L); // Vanilla's autosave cadence: 5 minutes at 20 TPS
     }
 
     /** Builder-style with-methods so /multiforge commands can produce a new snapshot. */
     public MultiForgeConfig withCores(int v) {
-        return new MultiForgeConfig(
-                v,
-                threadsPerCore,
-                mode,
-                regionSize,
-                regionMode,
-                msptSplitThreshold,
-                msptMergeThreshold,
-                violationPolicy,
-                warnPerMin);
+        return new MultiForgeConfig(v, threadsPerCore, mode, regionSize, violationPolicy, warnPerMin, autosaveTicks);
     }
 
     public MultiForgeConfig withThreadsPerCore(int v) {
-        return new MultiForgeConfig(
-                cores,
-                v,
-                mode,
-                regionSize,
-                regionMode,
-                msptSplitThreshold,
-                msptMergeThreshold,
-                violationPolicy,
-                warnPerMin);
+        return new MultiForgeConfig(cores, v, mode, regionSize, violationPolicy, warnPerMin, autosaveTicks);
     }
 
     public MultiForgeConfig withMode(Mode v) {
-        return new MultiForgeConfig(
-                cores,
-                threadsPerCore,
-                v,
-                regionSize,
-                regionMode,
-                msptSplitThreshold,
-                msptMergeThreshold,
-                violationPolicy,
-                warnPerMin);
+        return new MultiForgeConfig(cores, threadsPerCore, v, regionSize, violationPolicy, warnPerMin, autosaveTicks);
     }
 
     public MultiForgeConfig withRegionSize(int v) {
-        return new MultiForgeConfig(
-                cores,
-                threadsPerCore,
-                mode,
-                v,
-                regionMode,
-                msptSplitThreshold,
-                msptMergeThreshold,
-                violationPolicy,
-                warnPerMin);
+        return new MultiForgeConfig(cores, threadsPerCore, mode, v, violationPolicy, warnPerMin, autosaveTicks);
     }
 
-    public MultiForgeConfig withRegionMode(RegionMode v) {
-        return new MultiForgeConfig(
-                cores,
-                threadsPerCore,
-                mode,
-                regionSize,
-                v,
-                msptSplitThreshold,
-                msptMergeThreshold,
-                violationPolicy,
-                warnPerMin);
+    public MultiForgeConfig withViolationPolicy(ViolationPolicy v) {
+        return new MultiForgeConfig(cores, threadsPerCore, mode, regionSize, v, warnPerMin, autosaveTicks);
+    }
+
+    public MultiForgeConfig withWarnPerMin(int v) {
+        return new MultiForgeConfig(cores, threadsPerCore, mode, regionSize, violationPolicy, v, autosaveTicks);
+    }
+
+    public MultiForgeConfig withAutosaveTicks(long v) {
+        return new MultiForgeConfig(cores, threadsPerCore, mode, regionSize, violationPolicy, warnPerMin, v);
     }
 }

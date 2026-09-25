@@ -27,8 +27,10 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 import java.util.function.Consumer;
+import java.util.function.Supplier;
 import net.multiforge.api.world.ChunkPos;
 import net.multiforge.api.world.WorldRef;
+import net.multiforge.runtime.region.pin.RegionPin;
 
 /**
  * Per-world regionizer: maintains the section→region map and enforces
@@ -75,6 +77,9 @@ public final class ThreadedRegionizer {
     private final ReentrantReadWriteLock rwLock = new ReentrantReadWriteLock();
 
     private final List<RegionListener> listeners = new CopyOnWriteArrayList<>();
+
+    /** Every pin of every world; filtered to this world on use. Empty until {@link #setPins}. */
+    private volatile Supplier<? extends Collection<RegionPin>> pins = List::of;
 
     public ThreadedRegionizer(WorldRef world, int sectionChunkShift) {
         if (sectionChunkShift < 0 || sectionChunkShift > 8) {
@@ -170,6 +175,7 @@ public final class ThreadedRegionizer {
                 target.markReady(); // safe: transient → ready
                 fireRegionCreated(target);
             }
+            for (RegionPin pin : pinsOverlapping(section)) mergePin(pin, target);
             return target;
         } finally {
             rwLock.writeLock().unlock();
@@ -273,6 +279,100 @@ public final class ThreadedRegionizer {
         }
     }
 
+    /**
+     * Supply the region pins (see {@link RegionPin}) this regionizer honours,
+     * then apply them to the current regions. Pins of other worlds are ignored.
+     */
+    public void setPins(Supplier<? extends Collection<RegionPin>> pins) {
+        this.pins = Objects.requireNonNull(pins, "pins");
+        refreshPins();
+    }
+
+    /**
+     * Re-apply the pins after one was added or removed: merge the regions
+     * holding sections of each pin, then split every region whose sections
+     * are no longer connected (by adjacency or a shared pin).
+     */
+    public void refreshPins() {
+        rwLock.writeLock().lock();
+        try {
+            for (RegionPin pin : worldPins()) mergePin(pin, null);
+            for (Region region : regions()) {
+                if (region.state() != RegionState.DEAD) splitIfDisconnected(region);
+            }
+        } finally {
+            rwLock.writeLock().unlock();
+        }
+    }
+
+    private List<RegionPin> worldPins() {
+        Collection<RegionPin> all = pins.get();
+        if (all.isEmpty()) return List.of();
+        List<RegionPin> out = new ArrayList<>(all.size());
+        for (RegionPin p : all) {
+            if (p.world().dimensionId().equals(world.dimensionId())) out.add(p);
+        }
+        return out;
+    }
+
+    private List<RegionPin> pinsOverlapping(SectionPos section) {
+        List<RegionPin> worldPins = worldPins();
+        if (worldPins.isEmpty()) return List.of();
+        int minX = section.x() << sectionChunkShift;
+        int minZ = section.z() << sectionChunkShift;
+        int maxX = minX + (1 << sectionChunkShift) - 1;
+        int maxZ = minZ + (1 << sectionChunkShift) - 1;
+        List<RegionPin> out = new ArrayList<>(1);
+        for (RegionPin p : worldPins) {
+            if (p.fromChunkX() <= maxX && p.toChunkX() >= minX && p.fromChunkZ() <= maxZ && p.toChunkZ() >= minZ) {
+                out.add(p);
+            }
+        }
+        return out;
+    }
+
+    /**
+     * Invoke {@code visitor} for every section of {@code candidates} that
+     * overlaps {@code pin} — walking the pin's section range or the
+     * candidates, whichever is smaller.
+     */
+    private void forEachPinSection(RegionPin pin, Set<SectionPos> candidates, Consumer<SectionPos> visitor) {
+        int fromX = pin.fromChunkX() >> sectionChunkShift;
+        int toX = pin.toChunkX() >> sectionChunkShift;
+        int fromZ = pin.fromChunkZ() >> sectionChunkShift;
+        int toZ = pin.toChunkZ() >> sectionChunkShift;
+        long span = (long) (toX - fromX + 1) * (toZ - fromZ + 1);
+        if (span > candidates.size()) {
+            for (SectionPos s : List.copyOf(candidates)) {
+                if (s.x() >= fromX && s.x() <= toX && s.z() >= fromZ && s.z() <= toZ) visitor.accept(s);
+            }
+            return;
+        }
+        for (int x = fromX; x <= toX; x++) {
+            for (int z = fromZ; z <= toZ; z++) {
+                SectionPos s = new SectionPos(x, z);
+                if (candidates.contains(s)) visitor.accept(s);
+            }
+        }
+    }
+
+    /**
+     * Merge every live region holding a section of {@code pin} into one —
+     * into {@code into} when non-null, else into the largest. Caller holds
+     * the write lock.
+     */
+    private void mergePin(RegionPin pin, Region into) {
+        Set<Region> holders = new HashSet<>();
+        forEachPinSection(pin, sectionToRegion.keySet(), s -> {
+            Region r = sectionToRegion.get(s);
+            if (r != null && r.state() != RegionState.DEAD) holders.add(r);
+        });
+        if (holders.isEmpty()) return;
+        Region target = into != null && into.state() != RegionState.DEAD ? into : pickAnchor(holders);
+        holders.remove(target);
+        for (Region other : holders) mergeInto(target, other);
+    }
+
     private Set<Region> neighbouringRegions(SectionPos section) {
         Set<Region> out = new HashSet<>(4);
         for (int[] delta : NEIGHBOURS) {
@@ -358,16 +458,28 @@ public final class ThreadedRegionizer {
         }
     }
 
+    /**
+     * Sections of {@code universe} reachable from {@code start}, where two
+     * sections are connected when they touch (8-neighbourhood) or overlap
+     * the same pin.
+     */
     private Set<SectionPos> floodFill(Set<SectionPos> universe, SectionPos start) {
         Set<SectionPos> reached = new HashSet<>();
         ArrayDeque<SectionPos> stack = new ArrayDeque<>();
         stack.push(start);
         reached.add(start);
+        Set<RegionPin> pinsVisited = new HashSet<>();
         while (!stack.isEmpty()) {
             SectionPos p = stack.pop();
             for (int[] delta : NEIGHBOURS) {
                 SectionPos n = new SectionPos(p.x() + delta[0], p.z() + delta[1]);
                 if (universe.contains(n) && reached.add(n)) stack.push(n);
+            }
+            for (RegionPin pin : pinsOverlapping(p)) {
+                if (!pinsVisited.add(pin)) continue;
+                forEachPinSection(pin, universe, n -> {
+                    if (reached.add(n)) stack.push(n);
+                });
             }
         }
         return reached;

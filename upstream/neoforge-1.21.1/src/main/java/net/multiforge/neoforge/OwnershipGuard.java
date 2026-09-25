@@ -99,8 +99,7 @@ public final class OwnershipGuard {
         if (target.isClientSide()) return false;
         if (target != entity.level()) {
             if (!(entity instanceof net.minecraft.server.level.ServerPlayer)
-                    || net.multiforge.runtime.ownership.OwnerToken.current().domain()
-                            != net.multiforge.runtime.ownership.Domain.REGION) {
+                    || net.multiforge.runtime.ownership.OwnerToken.current().domain() != net.multiforge.runtime.ownership.Domain.REGION) {
                 return false;
             }
             net.multiforge.runtime.diagnostics.ProbeRegistry.bump(site + ":deferred-player-dimension-change");
@@ -127,8 +126,7 @@ public final class OwnershipGuard {
      * @return {@code true} if deferred and the caller must return
      */
     public static boolean deferToServerThread(String site, Runnable work) {
-        if (net.multiforge.runtime.ownership.OwnerToken.current().domain()
-                != net.multiforge.runtime.ownership.Domain.REGION) {
+        if (net.multiforge.runtime.ownership.OwnerToken.current().domain() != net.multiforge.runtime.ownership.Domain.REGION) {
             return false;
         }
         net.multiforge.runtime.diagnostics.ProbeRegistry.bump(site + ":deferred-to-server-thread");
@@ -138,8 +136,8 @@ public final class OwnershipGuard {
 
     /**
      * @return whether the calling thread is ticking the world on MultiForge's
-     *     behalf right now — a region worker or the global region. Vanilla
-     *     code that only serves "the level's own thread" (e.g. {@code
+     *         behalf right now — a region worker or the global region. Vanilla
+     *         code that only serves "the level's own thread" (e.g. {@code
      *     Level.getBlockEntity}) must serve these threads too.
      */
     public static boolean isTickDomain() {

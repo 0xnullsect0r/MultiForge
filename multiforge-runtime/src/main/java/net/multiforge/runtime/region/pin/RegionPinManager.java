@@ -21,25 +21,26 @@ import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.CopyOnWriteArrayList;
 import net.multiforge.api.world.ChunkPos;
 import net.multiforge.api.world.WorldRef;
 
 /**
- * Operator-facing store of pinned region rectangles. Persisted to
- * {@code multiforge-regions.toml} next to the server config. The
- * adaptive sizer consults {@link #pinContaining(WorldRef, ChunkPos)}
- * before merge/split — a chunk covered by a pin is exempt from
- * automatic topology changes.
+ * Operator-facing store of pinned region rectangles, persisted to
+ * {@code config/multiforge-region-pins.json}. The regionizer keeps the
+ * loaded chunks of each pin in a single region (see {@link RegionPin});
+ * {@link #addChangeListener} lets it re-apply pins when one is added or
+ * removed.
  *
  * <p>Thread-safe for concurrent {@code add}/{@code remove}/{@code
  * pinContaining}; the {@link #save()} method serializes the current
- * snapshot atomically. Callers that want live-update behavior should
- * subscribe via a {@code MultiForgeConfigStore}-shaped hook (M6).
+ * snapshot atomically.
  */
 public final class RegionPinManager {
 
     private final Path file;
     private final ConcurrentMap<String, RegionPin> byId = new ConcurrentHashMap<>();
+    private final List<Runnable> changeListeners = new CopyOnWriteArrayList<>();
 
     public RegionPinManager(Path file) {
         this.file = Objects.requireNonNull(file, "file");
@@ -58,11 +59,24 @@ public final class RegionPinManager {
         Objects.requireNonNull(pin, "pin");
         RegionPin prev = byId.putIfAbsent(pin.id(), pin);
         if (prev != null) throw new IllegalStateException("pin id already in use: " + pin.id());
+        fireChanged();
         return pin;
     }
 
     public RegionPin remove(String id) {
-        return byId.remove(id);
+        RegionPin removed = byId.remove(id);
+        if (removed != null) fireChanged();
+        return removed;
+    }
+
+    /** Run {@code listener} after every successful {@link #add} / {@link #remove}, on the calling thread. */
+    public AutoCloseable addChangeListener(Runnable listener) {
+        changeListeners.add(Objects.requireNonNull(listener, "listener"));
+        return () -> changeListeners.remove(listener);
+    }
+
+    private void fireChanged() {
+        for (Runnable l : changeListeners) l.run();
     }
 
     public RegionPin byId(String id) {

@@ -31,8 +31,7 @@ import net.minecraft.world.level.levelgen.RandomSupport;
 public final class PerThreadRandomSource implements RandomSource {
     private final Thread owner;
     private final RandomSource primary;
-    private final ThreadLocal<RandomSource> others =
-            ThreadLocal.withInitial(() -> RandomSource.create(RandomSupport.generateUniqueSeed()));
+    private final ThreadLocal<RandomSource> others = ThreadLocal.withInitial(() -> RandomSource.create(RandomSupport.generateUniqueSeed()));
 
     private PerThreadRandomSource(RandomSource primary) {
         this.owner = Thread.currentThread();
