@@ -56,6 +56,51 @@ class MultiForgeCommandDispatcherTest {
     }
 
     @Test
+    void configModePolicyAndWarnRateAreStoredAndNotifySubscribers(@TempDir Path tmp) throws IOException {
+        MultiForgeConfigStore store = new MultiForgeConfigStore(tmp.resolve("mf.toml"), MultiForgeConfig.defaults());
+        MultiForgeCommandDispatcher d =
+                new MultiForgeCommandDispatcher(store, new RegionPinManager(tmp.resolve("pins.toml")));
+        List<MultiForgeConfig> seen = new ArrayList<>();
+        store.subscribe(seen::add);
+        List<String> out = new ArrayList<>();
+        assertThat(d.dispatch(new String[] {"config", "mode", "strict"}, out::add))
+                .isTrue();
+        assertThat(d.dispatch(new String[] {"config", "policy", "reroute-only"}, out::add))
+                .isTrue();
+        assertThat(d.dispatch(new String[] {"config", "warnPerMin", "0"}, out::add))
+                .isTrue();
+        assertThat(store.get().mode()).isEqualTo(MultiForgeConfig.Mode.STRICT);
+        assertThat(store.get().violationPolicy()).isEqualTo(MultiForgeConfig.ViolationPolicy.REROUTE_ONLY);
+        assertThat(store.get().warnPerMin()).isZero();
+        assertThat(seen).hasSize(4); // initial snapshot + three updates
+        assertThat(out).anyMatch(l -> l.contains("Mode strict is active"));
+        assertThat(java.nio.file.Files.readString(tmp.resolve("mf.toml"))).contains("mode = \"strict\"");
+
+        out.clear();
+        assertThat(d.dispatch(new String[] {"config", "mode", "off"}, out::add)).isTrue();
+        assertThat(out).anyMatch(l -> l.contains("next server start"));
+        out.clear();
+        assertThat(d.dispatch(new String[] {"config", "policy", "bogus"}, out::add))
+                .isFalse();
+        assertThat(out).anyMatch(l -> l.contains("reroute-only"));
+    }
+
+    @Test
+    void configReloadRereadsTheFile(@TempDir Path tmp) throws IOException {
+        Path file = tmp.resolve("mf.toml");
+        MultiForgeConfigStore store = new MultiForgeConfigStore(file, MultiForgeConfig.defaults());
+        MultiForgeCommandDispatcher d =
+                new MultiForgeCommandDispatcher(store, new RegionPinManager(tmp.resolve("pins.toml")));
+        java.nio.file.Files.writeString(file, "[mtserver]\ncores = 3\nthreadsPerCore = 2\n");
+        List<String> out = new ArrayList<>();
+        assertThat(d.dispatch(new String[] {"config", "reload"}, out::add)).isTrue();
+        assertThat(store.get().tickWorkerCount()).isEqualTo(6);
+        out.clear();
+        assertThat(d.dispatch(new String[] {"config", "show"}, out::add)).isTrue();
+        assertThat(out.get(0)).contains("cores = 3").contains("threadsPerCore = 2");
+    }
+
+    @Test
     void regionSizePowerOfTwoOnly(@TempDir Path tmp) throws IOException {
         MultiForgeCommandDispatcher d = make(tmp);
         List<String> out = new ArrayList<>();

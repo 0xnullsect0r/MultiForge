@@ -216,12 +216,18 @@ public final class DebugPacketCodec {
     }
 
     public static byte[] encodeSubscribe(DebugPayload.Subscribe s) {
-        return frame(DebugPacketKind.SUBSCRIBE, out -> out.writeInt(s.flags()));
+        return frame(DebugPacketKind.SUBSCRIBE, out -> {
+            out.writeInt(s.flags());
+            out.writeInt(s.clientProtocol());
+        });
     }
 
+    /** A body without the trailing protocol field came from a protocol-1 client. */
     public static DebugPayload.Subscribe decodeSubscribe(byte[] body) throws IOException {
         try (DataInputStream in = new DataInputStream(new ByteArrayInputStream(body))) {
-            return new DebugPayload.Subscribe(in.readInt());
+            int flags = in.readInt();
+            int clientProtocol = in.available() >= 4 ? in.readInt() : 1;
+            return new DebugPayload.Subscribe(flags, clientProtocol);
         }
     }
 

@@ -14,16 +14,12 @@ package net.multiforge.runtime.event;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-import java.util.List;
-import java.util.Optional;
-import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicInteger;
 import net.multiforge.api.event.DispatchDomain;
 import net.multiforge.api.event.DispatchDomainKind;
 import net.multiforge.runtime.diagnostics.ProbeRegistry;
 import net.multiforge.runtime.diagnostics.ViolationLogger;
 import net.multiforge.runtime.ownership.OwnerToken;
-import net.multiforge.runtime.region.RegionId;
 import net.neoforged.bus.api.BusBuilder;
 import net.neoforged.bus.api.Event;
 import net.neoforged.bus.api.SubscribeEvent;
@@ -58,7 +54,7 @@ class LazyDispatchingEventBusTest {
     void preAttachDispatchRunsInlineForARegionDomainListenerWithNoBoundOwnerToken() {
         LazyDispatchingEventBus bus =
                 new LazyDispatchingEventBus(BusBuilder.builder().build());
-        RegionRoutedListener listener = new RegionRoutedListener();
+        GlobalAnnotatedListener listener = new GlobalAnnotatedListener();
         bus.register(listener);
 
         // Mirrors the real pre-attach window (mod construction, FMLCommonSetupEvent, ...):
@@ -69,32 +65,28 @@ class LazyDispatchingEventBusTest {
 
         assertThat(listener.calls.get()).isEqualTo(1);
         assertThat(ProbeRegistry.get("event.dispatch.inline")).isEqualTo(1);
-        assertThat(ProbeRegistry.get("event.dispatch.region")).isZero();
-        assertThat(ProbeRegistry.get("event.dispatch.global")).isZero();
+        assertThat(ProbeRegistry.get("event.dispatch.serial")).isZero();
     }
 
     @Test
     void attachExecutorSwitchesAlreadyRegisteredListenersToRealRouting() {
         LazyDispatchingEventBus bus =
                 new LazyDispatchingEventBus(BusBuilder.builder().build());
-        RegionRoutedListener listener = new RegionRoutedListener();
+        GlobalAnnotatedListener listener = new GlobalAnnotatedListener();
         bus.register(listener); // registered BEFORE attach — mirrors mod registration before ServerAboutToStart
 
-        RegionId target = RegionId.next();
         RecordingDispatchExecutor executor = new RecordingDispatchExecutor();
-        executor.location = Optional.of(target);
 
         boolean attached = bus.attachExecutor(executor);
         assertThat(attached).isTrue();
         assertThat(bus.isAttached()).isTrue();
 
-        // Caller is a different region than the event resolves to -> expect a real hand-off,
-        // proving the already-registered listener now routes through the attached executor
-        // with no re-registration needed.
-        OwnerToken.runAs(OwnerToken.forRegion(target.value() + 1), () -> bus.post(new TestEvent()));
+        // Posted from a region worker, the GLOBAL listener now uses the attached
+        // executor's serial lane, with no re-registration needed.
+        OwnerToken.runAs(OwnerToken.forRegion(5L), () -> bus.post(new TestEvent()));
 
         assertThat(listener.calls.get()).isEqualTo(1);
-        assertThat(executor.regionEnqueues).containsExactly(target);
+        assertThat(executor.serial.get()).isEqualTo(1);
     }
 
     @Test
@@ -108,35 +100,33 @@ class LazyDispatchingEventBusTest {
         assertThat(bus.attachExecutor(second)).isFalse(); // no-op — first attach wins
         assertThat(bus.isAttached()).isTrue();
 
-        RegionRoutedListener listener = new RegionRoutedListener();
+        GlobalAnnotatedListener listener = new GlobalAnnotatedListener();
         bus.register(listener);
-        first.location = Optional.of(RegionId.next());
         OwnerToken.runAs(OwnerToken.forRegion(999L), () -> bus.post(new TestEvent()));
 
         // Routed through the first-attached executor, never the second.
-        assertThat(first.regionEnqueues).isNotEmpty();
-        assertThat(second.regionEnqueues).isEmpty();
+        assertThat(first.serial.get()).isEqualTo(1);
+        assertThat(second.serial.get()).isZero();
     }
 
     private static final class TestEvent extends Event {}
 
-    private static final class RegionRoutedListener {
+    private static final class GlobalAnnotatedListener {
         final AtomicInteger calls = new AtomicInteger();
 
         @SubscribeEvent
-        @DispatchDomain(DispatchDomainKind.REGION)
+        @DispatchDomain(DispatchDomainKind.GLOBAL)
         void onEvent(TestEvent event) {
             calls.incrementAndGet();
         }
     }
 
     private static final class RecordingDispatchExecutor implements DispatchExecutor {
-        final List<RegionId> regionEnqueues = new CopyOnWriteArrayList<>();
-        volatile Optional<RegionId> location = Optional.empty();
+        final AtomicInteger serial = new AtomicInteger();
 
         @Override
-        public void enqueueRegion(RegionId destination, Runnable task) {
-            regionEnqueues.add(destination);
+        public void runSerial(Runnable task) {
+            serial.incrementAndGet();
             task.run();
         }
 
@@ -148,11 +138,6 @@ class LazyDispatchingEventBusTest {
         @Override
         public void enqueueAsync(Runnable task) {
             task.run();
-        }
-
-        @Override
-        public Optional<RegionId> resolveEventLocation(Object event) {
-            return location;
         }
     }
 }

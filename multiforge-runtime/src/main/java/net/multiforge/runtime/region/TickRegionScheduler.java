@@ -18,7 +18,6 @@ import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
-import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.PriorityBlockingQueue;
 import java.util.concurrent.TimeUnit;
@@ -66,8 +65,11 @@ public final class TickRegionScheduler implements AutoCloseable, RegionListener 
 
     private static final long TICK_NANOS = 50L * 1_000_000L; // 20 TPS
 
-    private final int workerCount;
-    private final ExecutorService pool;
+    private volatile int workerCount;
+    // FREE_RUNNING only: worker loops currently running; loops beyond
+    // workerCount exit after a shrink.
+    private final AtomicInteger liveLoops = new AtomicInteger();
+    private final java.util.concurrent.ThreadPoolExecutor pool;
     private final PriorityBlockingQueue<ScheduleEntry> queue = new PriorityBlockingQueue<>();
     private final ConcurrentMap<RegionId, RegionState_> perRegion = new ConcurrentHashMap<>();
     // Volatile so a mid-run swap via setBody() publishes to every worker
@@ -97,18 +99,45 @@ public final class TickRegionScheduler implements AutoCloseable, RegionListener 
         this.taskQueue = Objects.requireNonNull(taskQueue, "taskQueue");
         this.mailboxDrainBatch = mailboxDrainBatch;
         AtomicInteger seq = new AtomicInteger();
-        this.pool = Executors.newFixedThreadPool(workerCount, r -> {
+        this.pool = (java.util.concurrent.ThreadPoolExecutor) Executors.newFixedThreadPool(workerCount, r -> {
             Thread t = new Thread(r, "multiforge-tick-" + seq.incrementAndGet());
             t.setDaemon(true);
             return t;
         });
         if (mode == Mode.FREE_RUNNING) {
-            for (int i = 0; i < workerCount; i++) pool.execute(this::runWorker);
+            for (int i = 0; i < workerCount; i++) startWorkerLoop();
         }
     }
 
     public int workerCount() {
         return workerCount;
+    }
+
+    /**
+     * Change the number of worker threads. In {@link Mode#BARRIER} call it
+     * between ticks (the server thread, outside {@link #driveTick}); the next
+     * tick uses the new size. Idle surplus threads exit on their own.
+     */
+    public synchronized void resize(int newWorkerCount) {
+        if (newWorkerCount < 1) throw new IllegalArgumentException("workerCount must be >= 1");
+        int old = this.workerCount;
+        if (newWorkerCount == old) return;
+        if (newWorkerCount > old) {
+            pool.setMaximumPoolSize(newWorkerCount);
+            pool.setCorePoolSize(newWorkerCount);
+        } else {
+            pool.setCorePoolSize(newWorkerCount);
+            pool.setMaximumPoolSize(newWorkerCount);
+        }
+        this.workerCount = newWorkerCount;
+        if (mode == Mode.FREE_RUNNING) {
+            for (int i = old; i < newWorkerCount; i++) startWorkerLoop();
+        }
+    }
+
+    private void startWorkerLoop() {
+        liveLoops.incrementAndGet();
+        pool.execute(this::runWorker);
     }
 
     public Mode mode() {
@@ -365,6 +394,8 @@ public final class TickRegionScheduler implements AutoCloseable, RegionListener 
 
     private void runWorker() {
         while (running.get()) {
+            int live = liveLoops.get();
+            if (live > workerCount && liveLoops.compareAndSet(live, live - 1)) return; // pool shrank
             ScheduleEntry entry;
             try {
                 entry = queue.poll(50, TimeUnit.MILLISECONDS);

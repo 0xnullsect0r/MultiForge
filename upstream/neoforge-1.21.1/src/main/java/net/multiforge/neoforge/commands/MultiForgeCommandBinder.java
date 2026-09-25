@@ -93,12 +93,25 @@ public final class MultiForgeCommandBinder {
 
     private static LiteralArgumentBuilder<CommandSourceStack> configSubtree(MultiForgeCommandDispatcher dispatcher) {
         return Commands.literal("config")
+                .then(Commands.literal("show").executes(ctx -> run(dispatcher, ctx, "config", "show")))
+                .then(Commands.literal("reload").executes(ctx -> run(dispatcher, ctx, "config", "reload")))
                 .then(Commands.literal("cores")
-                        .then(Commands.argument("n", IntegerArgumentType.integer(1, 128))
+                        .then(Commands.argument("n", IntegerArgumentType.integer(1, 4096))
                                 .executes(ctx -> run(dispatcher, ctx, "config", "cores", intArg(ctx, "n")))))
                 .then(Commands.literal("threads")
-                        .then(Commands.argument("n", IntegerArgumentType.integer(1, 8))
-                                .executes(ctx -> run(dispatcher, ctx, "config", "threads", intArg(ctx, "n")))));
+                        .then(Commands.argument("n", IntegerArgumentType.integer(1, 64))
+                                .executes(ctx -> run(dispatcher, ctx, "config", "threads", intArg(ctx, "n")))))
+                .then(Commands.literal("mode")
+                        .then(Commands.argument("mode", StringArgumentType.word())
+                                .suggests((ctx, b) -> SharedSuggestionProvider.suggest(Stream.of("hybrid", "strict", "off"), b))
+                                .executes(ctx -> run(dispatcher, ctx, "config", "mode", strArg(ctx, "mode")))))
+                .then(Commands.literal("policy")
+                        .then(Commands.argument("policy", StringArgumentType.word())
+                                .suggests((ctx, b) -> SharedSuggestionProvider.suggest(Stream.of("warn", "reroute-only", "fail"), b))
+                                .executes(ctx -> run(dispatcher, ctx, "config", "policy", strArg(ctx, "policy")))))
+                .then(Commands.literal("warnPerMin")
+                        .then(Commands.argument("n", IntegerArgumentType.integer(0, 100000))
+                                .executes(ctx -> run(dispatcher, ctx, "config", "warnPerMin", intArg(ctx, "n")))));
     }
 
     private static LiteralArgumentBuilder<CommandSourceStack> regionSubtree(MultiForgeCommandDispatcher dispatcher) {
@@ -107,11 +120,6 @@ public final class MultiForgeCommandBinder {
                 .then(Commands.literal("size")
                         .then(Commands.argument("chunks", IntegerArgumentType.integer(1, 256))
                                 .executes(ctx -> run(dispatcher, ctx, "region", "size", intArg(ctx, "chunks")))))
-                .then(Commands.literal("mode")
-                        .then(Commands.argument("mode", StringArgumentType.word())
-                                .suggests((ctx, b) -> SharedSuggestionProvider.suggest(
-                                        Stream.of("player-only", "full-world"), b))
-                                .executes(ctx -> run(dispatcher, ctx, "region", "mode", strArg(ctx, "mode")))))
                 .then(pinSubtree(dispatcher))
                 .then(Commands.literal("unpin")
                         .then(Commands.argument("id", StringArgumentType.word())

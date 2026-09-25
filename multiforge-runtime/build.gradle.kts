@@ -27,6 +27,10 @@ dependencies {
     // instance is binary-compatible with what the vendored NeoForge tree ships.
     implementation("net.neoforged:bus:8.0.2")
 
+    // Event-type resolution for lambda listeners, as the bus itself does it.
+    // Apache-2.0; NeoForge ships the same version (typetools_version).
+    implementation("net.jodah:typetools:0.6.3")
+
     // JetBrains annotations for @ApiStatus.Internal etc.
     compileOnly("org.jetbrains:annotations:24.1.0")
 

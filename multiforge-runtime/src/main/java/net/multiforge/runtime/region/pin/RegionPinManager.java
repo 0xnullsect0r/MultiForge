@@ -27,7 +27,7 @@ import net.multiforge.api.world.WorldRef;
 
 /**
  * Operator-facing store of pinned region rectangles, persisted to
- * {@code config/multiforge-region-pins.json}. The regionizer keeps the
+ * {@code config/multiforge-region-pins.toml}. The regionizer keeps the
  * loaded chunks of each pin in a single region (see {@link RegionPin});
  * {@link #addChangeListener} lets it re-apply pins when one is added or
  * removed.

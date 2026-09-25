@@ -102,6 +102,10 @@ public class ServerLifecycleHooks {
         // wires a real per-region RegionizedTaskQueue (see
         // docs/blueprint.md M7/M8).
         net.multiforge.runtime.ownership.OwnershipEnforcer.bindTickThread(Thread.currentThread());
+        // The serial event lane runs on the server thread, pumped at the tick barrier.
+        net.multiforge.runtime.event.SerialLane.bind(Thread.currentThread());
+        // Per-mod listener safety (config/multiforge-mods.toml, mods' declarations).
+        net.multiforge.neoforge.event.ModSafetyClassifier.bind(server);
         // Wrap server::execute in a RejectedExecutionException-catching
         // adapter so the reroute target is no-throw even after server
         // shutdown. /67 round-2 finding: the fundamental race (a caller
@@ -136,18 +140,7 @@ public class ServerLifecycleHooks {
         boolean freshInstall = true;
         net.multiforge.runtime.config.MultiForgeConfig mfConfig = net.multiforge.neoforge.MultiForgeServerState.loadConfig(server);
         net.multiforge.runtime.config.MultiForgeConfig.Mode mfMode = mfConfig.effectiveMode();
-        boolean mfStrict = mfMode == net.multiforge.runtime.config.MultiForgeConfig.Mode.STRICT;
-        net.multiforge.runtime.ownership.OwnershipEnforcer.setMode(
-                mfStrict || mfConfig.violationPolicy() == net.multiforge.runtime.config.MultiForgeConfig.ViolationPolicy.FAIL
-                        ? net.multiforge.runtime.ownership.OwnershipEnforcer.Mode.STRICT
-                        : net.multiforge.runtime.ownership.OwnershipEnforcer.Mode.REROUTE);
-        net.multiforge.runtime.region.RegionTickWatchdog.setMode(mfStrict
-                ? net.multiforge.runtime.region.RegionTickWatchdog.Mode.STRICT
-                : net.multiforge.runtime.region.RegionTickWatchdog.Mode.WARN);
-        net.multiforge.runtime.diagnostics.ViolationLogger.configure(
-                mfConfig.violationPolicy() == net.multiforge.runtime.config.MultiForgeConfig.ViolationPolicy.REROUTE_ONLY
-                        ? 0L
-                        : mfConfig.warnPerMin());
+        net.multiforge.neoforge.MultiForgeServerState.applyConfig(mfConfig);
         if (mfMode == net.multiforge.runtime.config.MultiForgeConfig.Mode.OFF) {
             // mode = "off": no regionized runtime. Every MultiForge guard falls
             // through and RegionizedTickCoordinator runs Vanilla's level tick
@@ -196,6 +189,16 @@ public class ServerLifecycleHooks {
             // Region pins (/multiforge region pin): keep each pinned area's
             // loaded chunks in one region.
             mfHost.bindPins(net.multiforge.neoforge.MultiForgeServerState.pinManagerFor(server));
+        }
+        if (mfHost != null) {
+            // /multiforge config changes apply live: pool size, region size,
+            // ownership mode and violation logging. Fires once now, syncing a
+            // host reused across GameTest server instances to this server's config.
+            final net.multiforge.runtime.scheduler.MultiThreadedSchedulerHost mfLiveHost = mfHost;
+            net.multiforge.neoforge.MultiForgeServerState.configStoreFor(server).subscribe(cfg -> {
+                net.multiforge.neoforge.MultiForgeServerState.applyConfig(cfg);
+                mfLiveHost.applyConfig(cfg);
+            });
         }
 
         // MultiForge v1.3.5-1.3.9 hook point moved to handleServerStarting
@@ -262,6 +265,7 @@ public class ServerLifecycleHooks {
         // GameTestServer between test runs, so a fresh install can
         // happen next boot.
         try {
+            net.multiforge.runtime.event.SerialLane.unbind();
             net.multiforge.runtime.scheduler.MultiForgeRegionizedRuntime.shutdown();
             // B3.4 teardown: drop the per-world "installed" bridge state
             // (docs/design/m13-b3-region-tick.md §5.3), for the

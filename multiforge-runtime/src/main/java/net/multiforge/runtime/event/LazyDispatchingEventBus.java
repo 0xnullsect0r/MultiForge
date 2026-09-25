@@ -13,9 +13,7 @@
 package net.multiforge.runtime.event;
 
 import java.util.Objects;
-import java.util.Optional;
 import java.util.concurrent.atomic.AtomicReference;
-import net.multiforge.runtime.region.RegionId;
 import net.neoforged.bus.api.IEventBus;
 
 /**
@@ -37,7 +35,7 @@ import net.neoforged.bus.api.IEventBus;
  * {@link InlineDispatchExecutor} below).
  *
  * <p>Once the real {@code MultiThreadedSchedulerHost} exists — in practice,
- * from {@code MultiForgeGlobalSystemsInit.install(...)}, called at {@code
+ * from {@code RegionRuntimeInit.install(...)}, called at {@code
  * ServerAboutToStart} — the fork bridge ({@code
  * net.multiforge.neoforge.event.EventBusBridge#attach}) calls {@link
  * #attachExecutor(DispatchExecutor)} exactly once, swapping in the real
@@ -101,8 +99,8 @@ public final class LazyDispatchingEventBus extends DispatchingEventBus {
         }
 
         @Override
-        public void enqueueRegion(RegionId destination, Runnable task) {
-            executorRef.get().enqueueRegion(destination, task);
+        public void runSerial(Runnable task) {
+            executorRef.get().runSerial(task);
         }
 
         @Override
@@ -113,11 +111,6 @@ public final class LazyDispatchingEventBus extends DispatchingEventBus {
         @Override
         public void enqueueAsync(Runnable task) {
             executorRef.get().enqueueAsync(task);
-        }
-
-        @Override
-        public Optional<RegionId> resolveEventLocation(Object event) {
-            return executorRef.get().resolveEventLocation(event);
         }
     }
 
@@ -132,7 +125,7 @@ public final class LazyDispatchingEventBus extends DispatchingEventBus {
      */
     private static final class InlineDispatchExecutor implements DispatchExecutor {
         @Override
-        public void enqueueRegion(RegionId destination, Runnable task) {
+        public void runSerial(Runnable task) {
             task.run();
         }
 
@@ -144,11 +137,6 @@ public final class LazyDispatchingEventBus extends DispatchingEventBus {
         @Override
         public void enqueueAsync(Runnable task) {
             task.run();
-        }
-
-        @Override
-        public Optional<RegionId> resolveEventLocation(Object event) {
-            return Optional.empty();
         }
     }
 }

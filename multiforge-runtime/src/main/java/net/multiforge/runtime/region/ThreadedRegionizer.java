@@ -207,6 +207,26 @@ public final class ThreadedRegionizer {
     }
 
     /**
+     * Remove every chunk: each live region dies ({@link
+     * RegionListener#onRegionDied}) and the regionizer is empty. Used to
+     * re-partition a world with a different section size.
+     */
+    public void clear() {
+        rwLock.writeLock().lock();
+        try {
+            Collection<Region> live = regions();
+            sectionToRegion.clear();
+            for (Region region : live) {
+                region.drainSections();
+                region.markDead();
+                fireRegionDied(region);
+            }
+        } finally {
+            rwLock.writeLock().unlock();
+        }
+    }
+
+    /**
      * Force a merge of {@code other} into {@code target}. Package-private for
      * {@link Region} tests.
      *

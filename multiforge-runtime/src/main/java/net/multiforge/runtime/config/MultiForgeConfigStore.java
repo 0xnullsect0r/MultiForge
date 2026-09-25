@@ -21,9 +21,8 @@ import java.util.function.Consumer;
 
 /**
  * Thread-safe holder for the current {@link MultiForgeConfig} plus a
- * subscribe/notify path for subsystems (scheduler pool size, region
- * sizer thresholds, violation logger budget) that need to react to
- * live changes.
+ * subscribe/notify path for subsystems (worker pool size, region size,
+ * ownership mode, violation logging) that react to live changes.
  *
  * <p>Every mutation atomically publishes a fresh snapshot and fires
  * every registered listener with that snapshot. Listeners run on the
@@ -68,6 +67,14 @@ public final class MultiForgeConfigStore {
         MultiForgeConfig next = Objects.requireNonNull(mutator.apply(current.get()), "mutator returned null");
         current.set(next);
         ConfigCodec.save(file, next);
+        for (Consumer<MultiForgeConfig> l : listeners) l.accept(next);
+        return next;
+    }
+
+    /** Re-read the file (edited by hand) and notify subscribers. */
+    public synchronized MultiForgeConfig reload() throws IOException {
+        MultiForgeConfig next = ConfigCodec.load(file);
+        current.set(next);
         for (Consumer<MultiForgeConfig> l : listeners) l.accept(next);
         return next;
     }

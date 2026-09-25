@@ -39,6 +39,7 @@ import net.multiforge.api.world.ChunkPos;
 import net.multiforge.api.world.WorldRef;
 import net.multiforge.runtime.chunk.ChunkHolderManager;
 import net.multiforge.runtime.chunk.NewChunkHolder;
+import net.multiforge.runtime.chunk.TickingBlockEntityRef;
 import net.multiforge.runtime.config.MultiForgeConfig;
 import net.multiforge.runtime.diagnostics.ProbeRegistry;
 import net.multiforge.runtime.diagnostics.ViolationLogger;
@@ -77,7 +78,7 @@ public final class MultiThreadedSchedulerHost implements SchedulerHost, AutoClos
     /** The synthetic world holding the global region; not a Minecraft level. */
     public static final WorldRef GLOBAL_WORLD = WorldRef.of("multiforge:global");
 
-    private final MultiForgeConfig config;
+    private volatile MultiForgeConfig config;
     private final ConcurrentMap<String, ThreadedRegionizer> regionizers = new ConcurrentHashMap<>();
     private final ConcurrentMap<String, ChunkHolderManager> chunkManagers = new ConcurrentHashMap<>();
     private final Function<WorldRef, ThreadedRegionizer> regionizerFactory;
@@ -100,7 +101,7 @@ public final class MultiThreadedSchedulerHost implements SchedulerHost, AutoClos
     // before — the fork's ScheduledTickRunnerBridge (net.multiforge.
     // neoforge.tick) swaps this for the real Vanilla-backed
     // implementation via setBlockFluidRunner, registered from
-    // MultiForgeGlobalSystemsInit on ServerAboutToStart. Until a real
+    // RegionRuntimeInit on ServerAboutToStart. Until a real
     // runner is registered, Vanilla's own inline blockTicks/fluidTicks
     // drain (guarded by RegionizedTickCoordinator.regionsHandleBlockFluidTicks)
     // stays the fallback, so this default never silently drops ticks
@@ -113,7 +114,7 @@ public final class MultiThreadedSchedulerHost implements SchedulerHost, AutoClos
 
     // B3.3 (docs/design/m13-b3-region-tick.md §5.2): the Vanilla-backed
     // per-region ENTITY_AI implementation, bound by the fork's
-    // MultiForgeGlobalSystemsInit.install on a fresh runtime install
+    // RegionRuntimeInit.install on a fresh runtime install
     // (net.multiforge.neoforge.tick.EntityTickRunnerBridge). Defaults
     // to a no-op so tests and any pre-fork-wiring boot window keep
     // working exactly as before install — matches the {@link
@@ -160,7 +161,7 @@ public final class MultiThreadedSchedulerHost implements SchedulerHost, AutoClos
      */
     public MultiThreadedSchedulerHost(MultiForgeConfig config, RegionTickBody body, TickRegionScheduler.Mode mode) {
         this.config = Objects.requireNonNull(config, "config");
-        this.regionizerFactory = world -> new ThreadedRegionizer(world, config.regionSize());
+        this.regionizerFactory = world -> new ThreadedRegionizer(world, this.config.regionSize());
         this.taskQueue = new RegionizedTaskQueue(
                 (w, x, z) -> {
                     // Use regionizerForOrNull here (not regionizerFor): OwnerLookup's
@@ -257,7 +258,7 @@ public final class MultiThreadedSchedulerHost implements SchedulerHost, AutoClos
      * BLOCK_FLUID_TICKS} phase body ({@link #phaseBlockFluidTicksTick})
      * invokes (docs/design/m13-b3-region-tick.md §5.1). Idempotent —
      * safe to call more than once (e.g. a server restart re-registering
-     * from {@code MultiForgeGlobalSystemsInit}); the last-registered
+     * from {@code RegionRuntimeInit}); the last-registered
      * runner wins and every already-wired {@code phaseBlockFluidTicksTick}
      * body re-reads this volatile field on every invocation, so a
      * mid-life swap takes effect immediately.
@@ -294,7 +295,7 @@ public final class MultiThreadedSchedulerHost implements SchedulerHost, AutoClos
     /**
      * Replace the {@link EntityTickRunner} the {@code ENTITY_AI} phase
      * body ({@link #phaseEntityAiTick}) invokes. Bound once by the
-     * fork's {@code MultiForgeGlobalSystemsInit.install} on a fresh
+     * fork's {@code RegionRuntimeInit.install} on a fresh
      * runtime install ({@code net.multiforge.neoforge.tick.
      * EntityTickRunnerBridge}) — see docs/design/m13-b3-region-tick.md
      * §5.2. Before this is called (or in any test that never calls it),
@@ -363,6 +364,59 @@ public final class MultiThreadedSchedulerHost implements SchedulerHost, AutoClos
      */
     public Region globalRegion() {
         return globalRegion;
+    }
+
+    public MultiForgeConfig config() {
+        return config;
+    }
+
+    /**
+     * Apply a changed configuration live: resize the worker pool and, if the
+     * region size changed, re-partition every world. Server thread, between
+     * ticks (commands run there; region workers defer them to it).
+     */
+    public void applyConfig(MultiForgeConfig next) {
+        Objects.requireNonNull(next, "next");
+        MultiForgeConfig prev = this.config;
+        this.config = next;
+        if (next.tickWorkerCount() != scheduler.workerCount()) scheduler.resize(next.tickWorkerCount());
+        if (next.regionSize() != prev.regionSize()) repartition();
+    }
+
+    /**
+     * Rebuild every world's regions with the current section size: mailboxes
+     * are drained first (no rerouted work is lost), each world's regions are
+     * dissolved, its loaded chunks re-added, and every block-entity ticker
+     * moved to the region now owning its chunk.
+     */
+    private void repartition() {
+        drainMailboxesOnCaller();
+        for (ThreadedRegionizer old : List.copyOf(regionizers.values())) {
+            if (old == globalRegionizer) continue;
+            WorldRef world = old.world();
+            ChunkHolderManager manager = chunkManagers.get(world.dimensionId());
+            List<ChunkPos> loaded = new ArrayList<>();
+            List<TickingBlockEntityRef> tickers = new ArrayList<>();
+            if (manager != null) {
+                for (NewChunkHolder h : manager.holders()) loaded.add(h.position());
+                for (Region region : old.regions()) {
+                    tickers.addAll(manager.regionData(region.id()).snapshotBlockEntityTickers());
+                }
+            }
+            old.clear();
+            regionizers.remove(world.dimensionId(), old);
+            ThreadedRegionizer fresh = regionizerFor(world);
+            for (ChunkPos pos : loaded) {
+                Region region = fresh.addChunk(pos);
+                scheduler.register(region);
+                manager.createHolder(pos, region.id());
+            }
+            for (TickingBlockEntityRef ticker : tickers) {
+                if (ticker.isRemoved()) continue;
+                Region region = fresh.regionAtChunk(ticker.pos().toChunkPos());
+                if (region != null) manager.regionData(region.id()).addBlockEntityTicker(ticker);
+            }
+        }
     }
 
     /**

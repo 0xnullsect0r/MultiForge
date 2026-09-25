@@ -56,7 +56,7 @@ public final class MultiForgeServerState {
 
     /**
      * Return the {@link RegionPinManager} for {@code server}, loading
-     * it from {@code <serverDir>/config/multiforge-region-pins.json}
+     * it from {@code <serverDir>/config/multiforge-region-pins.toml}
      * on first call. Later callers get the same instance so mutations
      * from one caller are visible to another.
      */
@@ -66,13 +66,14 @@ public final class MultiForgeServerState {
         if (cached != null) {
             return cached;
         }
-        Path pinsFile = server.getServerDirectory()
-                .toAbsolutePath()
-                .resolve("config")
-                .resolve("multiforge-region-pins.json");
+        Path configDir = server.getServerDirectory().toAbsolutePath().resolve("config");
+        Path pinsFile = configDir.resolve("multiforge-region-pins.toml");
+        // Through v1.5 the same TOML content was written under a .json name.
+        Path legacyFile = configDir.resolve("multiforge-region-pins.json");
         RegionPinManager loaded;
         try {
-            Files.createDirectories(pinsFile.getParent());
+            Files.createDirectories(configDir);
+            if (!Files.exists(pinsFile) && Files.isRegularFile(legacyFile)) Files.move(legacyFile, pinsFile);
             loaded = RegionPinManager.load(pinsFile);
         } catch (IOException e) {
             LOGGER.warn("failed to load {} — using empty pin manager: {}", pinsFile, e.getMessage());
@@ -109,6 +110,26 @@ public final class MultiForgeServerState {
         }
         CONFIGS.put(server, loaded);
         return loaded;
+    }
+
+    /**
+     * Apply the parts of {@code config} that live in process-wide state:
+     * ownership enforcement (strict for {@code mode = "strict"} or {@code
+     * policy = "fail"}), the tick watchdog, and the violation-warning budget
+     * ({@code policy = "reroute-only"} silences it). {@code mode = "off"} only
+     * matters at server start, where it skips installing the runtime.
+     */
+    public static void applyConfig(MultiForgeConfig config) {
+        boolean strict = config.effectiveMode() == MultiForgeConfig.Mode.STRICT;
+        net.multiforge.runtime.ownership.OwnershipEnforcer.setMode(
+                strict || config.violationPolicy() == MultiForgeConfig.ViolationPolicy.FAIL
+                        ? net.multiforge.runtime.ownership.OwnershipEnforcer.Mode.STRICT
+                        : net.multiforge.runtime.ownership.OwnershipEnforcer.Mode.REROUTE);
+        net.multiforge.runtime.region.RegionTickWatchdog.setMode(strict
+                ? net.multiforge.runtime.region.RegionTickWatchdog.Mode.STRICT
+                : net.multiforge.runtime.region.RegionTickWatchdog.Mode.WARN);
+        net.multiforge.runtime.diagnostics.ViolationLogger.configure(
+                config.violationPolicy() == MultiForgeConfig.ViolationPolicy.REROUTE_ONLY ? 0L : config.warnPerMin());
     }
 
     /** The current config snapshot for {@code server} — see {@link #configStoreFor}. */

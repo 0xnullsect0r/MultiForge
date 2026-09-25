@@ -31,6 +31,7 @@ import java.util.regex.Pattern;
 import net.multiforge.api.world.WorldRef;
 import net.multiforge.runtime.chunk.ChunkHolderManager;
 import net.multiforge.runtime.chunk.NewChunkHolder;
+import net.multiforge.runtime.config.ConfigCodec;
 import net.multiforge.runtime.config.MultiForgeConfig;
 import net.multiforge.runtime.config.MultiForgeConfigStore;
 import net.multiforge.runtime.diagnostics.ProbeRegistry;
@@ -51,8 +52,10 @@ import net.multiforge.runtime.scheduler.MultiThreadedSchedulerHost;
  * <p>Supported grammar:
  *
  * <pre>
- *   /multiforge config cores &lt;n&gt;
- *   /multiforge config threads &lt;n&gt;
+ *   /multiforge config show | reload
+ *   /multiforge config cores &lt;n&gt; | threads &lt;n&gt;
+ *   /multiforge config mode &lt;hybrid|strict|off&gt; | policy &lt;warn|reroute-only|fail&gt;
+ *   /multiforge config warnPerMin &lt;n&gt;
  *   /multiforge region size &lt;chunks&gt;
  *   /multiforge region pin &lt;id&gt; &lt;world&gt; &lt;fromCX&gt; &lt;fromCZ&gt; &lt;toCX&gt; &lt;toCZ&gt;
  *   /multiforge region unpin &lt;id&gt;
@@ -179,9 +182,14 @@ public final class MultiForgeCommandDispatcher {
     private void printHelp(Consumer<String> output) {
         output.accept("=== MultiForge commands (op only) ===");
         output.accept("");
-        output.accept("Worker pool + region sizing (persists to config/multiforge-server.toml):");
-        output.accept("  /multiforge config cores <n>       — worker-pool cores (1..N-1 physical)");
+        output.accept("Configuration (applied live, persisted to config/multiforge-server.toml):");
+        output.accept("  /multiforge config show            — print the active configuration");
+        output.accept("  /multiforge config reload          — re-read config/multiforge-server.toml");
+        output.accept("  /multiforge config cores <n>       — worker-pool cores");
         output.accept("  /multiforge config threads <n>     — threads per core (1 or 2 typical)");
+        output.accept("  /multiforge config mode <hybrid|strict|off>");
+        output.accept("  /multiforge config policy <warn|reroute-only|fail>");
+        output.accept("  /multiforge config warnPerMin <n>  — violation warnings per minute per site");
         output.accept("");
         output.accept("Region topology:");
         output.accept("  /multiforge region list            — show materialized regions + owners");
@@ -268,34 +276,71 @@ public final class MultiForgeCommandDispatcher {
     }
 
     private boolean handleConfig(String[] args, Consumer<String> output) {
+        if (args.length == 2 && args[1].equals("show")) {
+            output.accept(ConfigCodec.render(configStore.get()).strip());
+            return true;
+        }
+        if (args.length == 2 && args[1].equals("reload")) {
+            try {
+                MultiForgeConfig before = configStore.get();
+                MultiForgeConfig next = configStore.reload();
+                output.accept(
+                        "Reloaded config/multiforge-server.toml (worker pool " + next.tickWorkerCount() + " threads)");
+                if (next.effectiveMode() != before.effectiveMode())
+                    reportModeChange(before.effectiveMode(), next.effectiveMode(), output);
+                return true;
+            } catch (IOException | IllegalArgumentException e) {
+                output.accept("Failed to reload config: " + e.getMessage());
+                return false;
+            }
+        }
         if (args.length < 3) {
-            output.accept("Usage: /multiforge config <cores|threads> <n>");
+            output.accept("Usage: /multiforge config <show|reload|cores|threads|mode|policy|warnPerMin> [value]");
             return false;
         }
-        int n;
+        String key = args[1];
+        String value = args[2];
         try {
-            n = Integer.parseInt(args[2]);
-        } catch (NumberFormatException e) {
-            output.accept("Not a number: " + args[2]);
-            return false;
-        }
-        if (n < 1 || n > 4096) {
-            output.accept("Value out of range: " + n);
-            return false;
-        }
-        try {
-            MultiForgeConfig next =
-                    switch (args[1]) {
-                        case "cores" -> configStore.update(c -> c.withCores(n));
-                        case "threads" -> configStore.update(c -> c.withThreadsPerCore(n));
+            java.util.function.UnaryOperator<MultiForgeConfig> change =
+                    switch (key) {
+                        case "cores", "threads", "warnPerMin" -> {
+                            int n;
+                            try {
+                                n = Integer.parseInt(value);
+                            } catch (NumberFormatException e) {
+                                output.accept("Not a number: " + value);
+                                yield null;
+                            }
+                            int min = key.equals("warnPerMin") ? 0 : 1;
+                            if (n < min || n > 100_000) {
+                                output.accept("Value out of range: " + n);
+                                yield null;
+                            }
+                            yield switch (key) {
+                                case "cores" -> c -> c.withCores(n);
+                                case "threads" -> c -> c.withThreadsPerCore(n);
+                                default -> c -> c.withWarnPerMin(n);
+                            };
+                        }
+                        case "mode" -> {
+                            MultiForgeConfig.Mode mode = parseEnum(MultiForgeConfig.Mode.class, value, output);
+                            yield mode == null ? null : c -> c.withMode(mode);
+                        }
+                        case "policy" -> {
+                            MultiForgeConfig.ViolationPolicy policy =
+                                    parseEnum(MultiForgeConfig.ViolationPolicy.class, value, output);
+                            yield policy == null ? null : c -> c.withViolationPolicy(policy);
+                        }
                         default -> {
-                            output.accept("Unknown config key: " + args[1]);
+                            output.accept("Unknown config key: " + key);
                             yield null;
                         }
                     };
-            if (next == null) return false;
-            output.accept("Set " + args[1] + " = " + n + " (worker pool now " + next.tickWorkerCount() + " threads)");
-            output.accept(RESTART_HINT);
+            if (change == null) return false;
+            MultiForgeConfig before = configStore.get();
+            MultiForgeConfig next = configStore.update(change);
+            output.accept("Set " + key + " = " + value + " (worker pool " + next.tickWorkerCount() + " threads)");
+            if (key.equals("mode")) reportModeChange(before.effectiveMode(), next.effectiveMode(), output);
             return true;
         } catch (IOException e) {
             output.accept("Failed to persist config: " + e.getMessage());
@@ -303,9 +348,31 @@ public final class MultiForgeCommandDispatcher {
         }
     }
 
-    /** v1.3.16: shown after every config-persisting subcommand reply. */
-    private static final String RESTART_HINT =
-            "(applied on next server restart — live-reload not yet wired; see docs/multiforge-command.md)";
+    /**
+     * Hybrid and strict switch live; switching to or from {@code off}
+     * installs or removes the whole regionized runtime, which only happens
+     * at server start.
+     */
+    private static void reportModeChange(
+            MultiForgeConfig.Mode from, MultiForgeConfig.Mode to, Consumer<String> output) {
+        if (from == MultiForgeConfig.Mode.OFF || to == MultiForgeConfig.Mode.OFF) {
+            output.accept("Mode " + to.name().toLowerCase(Locale.ROOT) + " takes effect at the next server start.");
+        } else {
+            output.accept("Mode " + to.name().toLowerCase(Locale.ROOT) + " is active.");
+        }
+    }
+
+    private static <E extends Enum<E>> E parseEnum(Class<E> type, String value, Consumer<String> output) {
+        try {
+            return Enum.valueOf(type, value.replace('-', '_').toUpperCase(Locale.ROOT));
+        } catch (IllegalArgumentException e) {
+            output.accept("Unknown value '" + value + "'; expected one of "
+                    + java.util.Arrays.stream(type.getEnumConstants())
+                            .map(v -> v.name().toLowerCase(Locale.ROOT).replace('_', '-'))
+                            .toList());
+            return null;
+        }
+    }
 
     private boolean handleRegion(String[] args, Consumer<String> output) {
         if (args.length < 2) {
@@ -343,8 +410,8 @@ public final class MultiForgeCommandDispatcher {
         int shift = Integer.numberOfTrailingZeros(chunks);
         try {
             configStore.update(c -> c.withRegionSize(shift));
-            output.accept("Region size set to " + chunks + " chunks per side (shift=" + shift + ")");
-            output.accept(RESTART_HINT);
+            output.accept(
+                    "Region size set to " + chunks + " chunks per side (shift=" + shift + "); regions re-partitioned");
             return true;
         } catch (IOException e) {
             output.accept("Failed to persist: " + e.getMessage());

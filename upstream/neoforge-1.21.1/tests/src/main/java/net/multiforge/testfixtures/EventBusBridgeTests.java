@@ -33,7 +33,7 @@ import net.neoforged.testframework.annotation.TestHolder;
 /**
  * GameTest fixtures for M12.2 (docs/design/m12-event-routing.md §2.1/§12):
  * prove the {@code 09-events/NeoForge.java.patch} hunk plus {@code
- * MultiForgeGlobalSystemsInit.install}'s {@code EventBusBridge.attach}
+ * RegionRuntimeInit.install}'s {@code EventBusBridge.attach}
  * call actually wire proactive event routing onto the live {@code
  * NeoForge.EVENT_BUS} in a running server — not just in the
  * {@code multiforge-runtime} unit tests (see {@code
@@ -57,7 +57,7 @@ public class EventBusBridgeTests {
             LazyDispatchingEventBus lazy = (LazyDispatchingEventBus) NeoForge.EVENT_BUS;
             helper.assertTrue(
                     lazy.isAttached(),
-                    "expected MultiForgeGlobalSystemsInit.install's EventBusBridge.attach call to have "
+                    "expected RegionRuntimeInit.install's EventBusBridge.attach call to have "
                             + "swapped in a real SchedulerBackedDispatchExecutor by ServerAboutToStart");
             helper.succeed();
         });
@@ -66,9 +66,8 @@ public class EventBusBridgeTests {
     @GameTest(template = TestsMod.TEMPLATE_3x3)
     @TestHolder(description = {
             "A @DispatchDomain(REGION)-annotated listener registered on the live NeoForge.EVENT_BUS",
-            "actually fires when the event is posted from inside the GameTest's own (region-owning)",
-            "worker context, and the dispatch is recorded via ProbeRegistry — proving the listener",
-            "went through DomainDispatcher's real routing path, not a bypassed/raw bus."
+            "fires, and the dispatch is recorded via ProbeRegistry — proving the listener went",
+            "through DomainDispatcher, not a bypassed/raw bus."
     })
     static void regionAnnotatedListenerFiresAndIsProbeRecorded(final DynamicTest test) {
         test.onGameTest(helper -> {
@@ -76,28 +75,14 @@ public class EventBusBridgeTests {
             helper.assertTrue(host != null, "runtime must be installed");
 
             long inlineBefore = ProbeRegistry.get("event.dispatch.inline");
-            long regionBefore = ProbeRegistry.get("event.dispatch.region");
-            long globalBefore = ProbeRegistry.get("event.dispatch.global");
 
             RegionAnnotatedListener listener = new RegionAnnotatedListener();
             NeoForge.EVENT_BUS.register(listener);
             try {
-                // GameTest ticks are driven from the level's owning region worker, so this
-                // caller already carries a REGION OwnerToken. ProbeEvent has no derivable
-                // location (resolveEventLocation returns empty for it), so DomainDispatcher
-                // falls back to global-region routing (event.dispatch.global) rather than
-                // resolving same-region inline — either outcome proves real M12 routing ran,
-                // not a bypassed/raw bus, which is all this fixture needs to demonstrate.
+                // Posted from the server thread (this test body): every listener runs inline.
                 NeoForge.EVENT_BUS.post(new ProbeEvent());
-
-                long inlineAfter = ProbeRegistry.get("event.dispatch.inline");
-                long regionAfter = ProbeRegistry.get("event.dispatch.region");
-                long globalAfter = ProbeRegistry.get("event.dispatch.global");
-                boolean movedThroughDispatcher = inlineAfter > inlineBefore || regionAfter > regionBefore || globalAfter > globalBefore;
-                helper.assertTrue(
-                        movedThroughDispatcher,
-                        "expected ProbeEvent's dispatch to bump one of event.dispatch.{inline,region,global} — "
-                                + "none moved, so the listener likely bypassed DomainDispatcher entirely");
+                helper.assertTrue(ProbeRegistry.get("event.dispatch.inline") > inlineBefore,
+                        "ProbeEvent's dispatch did not go through DomainDispatcher (event.dispatch.inline unchanged)");
                 helper.assertTrue(listener.calls.get() == 1, "listener must have fired exactly once");
             } finally {
                 NeoForge.EVENT_BUS.unregister(listener);
@@ -105,6 +90,45 @@ public class EventBusBridgeTests {
             helper.succeed();
         });
     }
+
+    @GameTest(template = TestsMod.TEMPLATE_3x3, timeoutTicks = 100)
+    @TestHolder(description = {
+            "An unannotated lambda listener of a cancellable event, posted from a region worker,",
+            "runs on the serial lane (the server thread) and its cancellation reaches the poster."
+    })
+    static void legacyListenerRunsOnTheSerialLaneAndItsCancellationIsKept(final DynamicTest test) {
+        test.onGameTest(helper -> {
+            MultiThreadedSchedulerHost host = MultiForgeRegionizedRuntime.current();
+            helper.assertTrue(host != null, "runtime must be installed");
+            Thread serverThread = helper.getLevel().getServer().getRunningThread();
+            java.util.concurrent.atomic.AtomicReference<Thread> listenerThread = new java.util.concurrent.atomic.AtomicReference<>();
+            java.util.concurrent.atomic.AtomicReference<Boolean> canceledSeenByPoster = new java.util.concurrent.atomic.AtomicReference<>();
+            java.util.concurrent.atomic.AtomicReference<String> posterThread = new java.util.concurrent.atomic.AtomicReference<>();
+            java.util.function.Consumer<CancellableProbeEvent> listener = (CancellableProbeEvent event) -> {
+                listenerThread.set(Thread.currentThread());
+                event.setCanceled(true);
+            };
+            NeoForge.EVENT_BUS.addListener(listener);
+            net.minecraft.core.BlockPos pos = helper.absolutePos(net.minecraft.core.BlockPos.ZERO);
+            host.taskQueue().queueChunkTask(helper.getLevel().mfWorldRef(), pos.getX() >> 4, pos.getZ() >> 4, () -> {
+                posterThread.set(Thread.currentThread().getName());
+                canceledSeenByPoster.set(NeoForge.EVENT_BUS.post(new CancellableProbeEvent()).isCanceled());
+            });
+            helper.startSequence()
+                    .thenWaitUntil(() -> helper.assertTrue(canceledSeenByPoster.get() != null, "region task has not run yet"))
+                    .thenExecute(() -> {
+                        NeoForge.EVENT_BUS.unregister(listener);
+                        helper.assertTrue(posterThread.get().startsWith("multiforge-tick-"),
+                                "event posted on " + posterThread.get() + ", not a region worker");
+                        helper.assertTrue(listenerThread.get() == serverThread,
+                                "listener ran on " + listenerThread.get() + ", not the server thread");
+                        helper.assertTrue(canceledSeenByPoster.get(), "the listener's cancellation was lost");
+                    })
+                    .thenSucceed();
+        });
+    }
+
+    public static final class CancellableProbeEvent extends Event implements net.neoforged.bus.api.ICancellableEvent {}
 
     /**
      * Unit-shaped (no boot-time flag dependency) check of the {@code
@@ -145,16 +169,16 @@ public class EventBusBridgeTests {
                 RegionAnnotatedListener listener = new RegionAnnotatedListener();
                 bus.register(listener);
 
-                long regionBefore = ProbeRegistry.get("event.dispatch.region");
+                long serialBefore = ProbeRegistry.get("event.dispatch.serial");
                 long globalBefore = ProbeRegistry.get("event.dispatch.global");
                 bus.post(new ProbeEvent());
-                long regionAfter = ProbeRegistry.get("event.dispatch.region");
+                long serialAfter = ProbeRegistry.get("event.dispatch.serial");
                 long globalAfter = ProbeRegistry.get("event.dispatch.global");
 
                 helper.assertTrue(listener.calls.get() == 1, "listener must still fire with the flag off");
                 helper.assertTrue(
-                        regionAfter == regionBefore && globalAfter == globalBefore,
-                        "expected no region/global hand-off counters to move — matches raw-bus "
+                        serialAfter == serialBefore && globalAfter == globalBefore,
+                        "expected no serial/global hand-off counters to move — matches raw-bus "
                                 + "(fully inline, no cross-thread dispatch) behavior");
             } finally {
                 if (prior == null) {

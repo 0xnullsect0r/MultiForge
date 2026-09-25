@@ -19,8 +19,9 @@ import net.minecraft.server.level.ServerLevel;
 import net.multiforge.runtime.diagnostics.ProbeRegistry;
 
 /**
- * Lets the server thread service Vanilla main-thread chunk requests while it
- * waits at the region tick barrier.
+ * Lets the server thread service Vanilla main-thread chunk requests, and the
+ * serial event lane ({@link net.multiforge.runtime.event.SerialLane}), while
+ * it waits at the region tick barrier.
  *
  * <p>Vanilla's {@code ServerChunkCache.getChunk} called off the server
  * thread for a chunk that is not already loaded hands the load to the
@@ -67,8 +68,9 @@ public final class MainThreadHandoff {
      */
     public static BooleanSupplier pumpFor(MinecraftServer server) {
         return () -> {
-            if (WAITING.get() == 0) return false;
-            boolean ran = false;
+            // Event listeners region workers handed to the serial lane.
+            boolean ran = net.multiforge.runtime.event.SerialLane.drain();
+            if (WAITING.get() == 0) return ran;
             for (ServerLevel level : server.getAllLevels()) {
                 ran |= level.getChunkSource().pollTask();
             }
