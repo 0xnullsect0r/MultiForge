@@ -308,7 +308,7 @@ For deep observability (region borders, MSPT heatmap, live pin selection) downlo
 
 **"Unsupported class file major version 7X" at mod scan.** Your `java` is a JDK newer than 21 (`70` = JDK 26, `69` = JDK 25, `68` = JDK 24, `67` = JDK 23, `66` = JDK 22). SpongeMixin — bundled by nearly every 1.21.1 mod, including everything in ATM10 / AllTheModsX / most kitchen-sink packs — ships a class-file reader that only understands Java 21 bytecode and rejects anything newer, which crashes mod-loading before MultiForge or NeoForge ever gets a chance to run. Fix: install Temurin 21 (`sudo pacman -S jdk21-temurin` / `apt install temurin-21-jdk` / `brew install temurin@21`), then re-invoke the launcher with an explicit JDK path — for example `JAVA_HOME=/usr/lib/jvm/temurin-21-jdk ./run.sh`. As of v1.3.18 the installer-generated `run.sh` refuses to run on the wrong JDK with this message and a non-zero exit. See Requirements above.
 
-**Mods refuse to load: "Mod X requires neoforge 21.1.NNN or above / Currently, neoforge is 21.1.1-multiforge-…".** MultiForge is forked from NeoForge 21.1.1, so mods needing APIs added after it are refused at load. This is expected and is not fixable by configuration — see [`compatibility.md`](compatibility.md) for which packs this affects and by how much. If instead the line reads `Currently, neoforge is 1.21.1-v…-beta`, you are on v1.5.0 or older, where the reported version was not a NeoForge version at all and *every* mod was refused; upgrade to v1.5.1+.
+**Mods refuse to load: "Mod X requires neoforge 21.1.NNN or above / Currently, neoforge is 21.1.251-multiforge-…".** MultiForge is based on NeoForge 21.1.251, the latest 1.21.1 release; a mod needing something newer is refused by stock NeoForge 21.1.251 too. See [`compatibility.md`](compatibility.md). If instead the line reads `Currently, neoforge is 1.21.1-v…-beta`, you are on v1.5.0 or older, where the reported version was not a NeoForge version at all and *every* mod was refused; upgrade to v1.5.1+.
 
 **Server won't boot: `error: cannot find symbol` / `NoClassDefFoundError`.** The runtime jar didn't land on the classpath. Verify the MultiForge artifacts exist under `libraries/net/neoforged/neoforge/<version>/` and that `run.sh` points at that version's `unix_args.txt`.
 
@@ -319,8 +319,8 @@ For deep observability (region borders, MSPT heatmap, live pin selection) downlo
 **Is MultiForge actually running?** The fork identifies itself in three places at boot:
 
 ```
-ModLauncher running: args [..., --fml.neoForgeVersion, 21.1.1-multiforge-<ver>, ...]
-NeoForge mod loading, version 21.1.1-multiforge-<ver>, for MC 1.21.1
+ModLauncher running: args [..., --fml.neoForgeVersion, 21.1.251-multiforge-<ver>, ...]
+NeoForge mod loading, version 21.1.251-multiforge-<ver>, for MC 1.21.1
 multiforge:debug/v1 emitters installed (heartbeat + region-map + pin-list + violations)
 MultiForge: /multiforge Brigadier tree registered with tab-completion
 ```

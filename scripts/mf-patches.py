@@ -196,10 +196,10 @@ def cmd_export(_):
 
 
 def _normalise(text):
-    # Only the added/removed lines are the patch's meaning; hunk headers,
-    # context whitespace and context extent vary between generators.
+    # Hunk line numbers shift whenever the base moves; everything else —
+    # context lines included, since `git apply` needs them to match — counts.
     return [l.rstrip() for l in text.splitlines()
-            if l.startswith(("+", "-")) and not l.startswith(("+++", "---"))]
+            if l.startswith((" ", "+", "-")) and not l.startswith(("+++", "---"))]
 
 
 def main():

@@ -89,6 +89,9 @@ public final class MultiThreadedSchedulerHost implements SchedulerHost, AutoClos
     // Vanilla's default: autosave every 6000 ticks (5 minutes at 20 TPS);
     // the live interval is MultiForgeConfig.autosaveTicks().
     static final long DEFAULT_AUTOSAVE_INTERVAL_TICKS = 6000L;
+
+    /** The synthetic world holding the global region; not a Minecraft level. */
+    public static final WorldRef GLOBAL_WORLD = WorldRef.of("multiforge:global");
     // Per-tick budget knobs for the Phase 5 wiring. Bounded so that
     // pollFullLoadUpdate / ChunkTaskScheduler.drainInto / AutoSaveRunner
     // can never block a region worker thread past its 50 ms tick target
@@ -242,7 +245,7 @@ public final class MultiThreadedSchedulerHost implements SchedulerHost, AutoClos
         // the regionizers map BEFORE calling addChunk so
         // `taskQueue.queueChunkTask(GLOBAL_WORLD, ...)` reaches the same
         // regionizer as `globalRegionizer` here.
-        WorldRef globalWorld = WorldRef.of("multiforge:global");
+        WorldRef globalWorld = GLOBAL_WORLD;
         this.globalRegionizer = new ThreadedRegionizer(globalWorld, 0);
         // Wire the scheduler+taskQueue as listeners BEFORE publishing to
         // regionizers so any future addChunk/removeChunk on the global

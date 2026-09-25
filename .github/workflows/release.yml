@@ -91,7 +91,7 @@ jobs:
     runs-on: ubuntu-latest
     # 40 minutes: :setup ~5 min, apply patches ~5s, fork installer build ~10 min,
     # + Gradle warm-up + cache miss slack. Longer than ci.yml's fork-compile
-    # (30min) because we also run generateServerBinaryPatches + signInstallerJar.
+    # (30min) because we also generate binary patches and build the installer jar.
     timeout-minutes: 40
     # Required: the patched server installer is the product. A release without
     # it is not published (gh-release needs this job to succeed).
@@ -125,7 +125,7 @@ jobs:
         # safe whether or not setup just regenerated the sources.
         run: |
           ./gradlew --no-configuration-cache --no-daemon --stacktrace setup
-          ./gradlew --no-configuration-cache --no-daemon --stacktrace :neoforge:signInstallerJar
+          ./gradlew --no-configuration-cache --no-daemon --stacktrace :neoforge:installerJar
 
       - name: Assert the fork reports a real NeoForge version
         working-directory: upstream/neoforge-1.21.1
@@ -151,17 +151,12 @@ jobs:
           set -euo pipefail
           VER="${GITHUB_REF_NAME#v}"
           mkdir -p release
-          # Fork installer output path (from gradleutils version-derivation):
-          # projects/neoforge/build/distributions/neoforge-<version>-installer[-unsigned].jar
-          # Prefer the signed one if present.
-          FORK_JAR=$(find upstream/neoforge-1.21.1/projects/neoforge/build/distributions \
-              -maxdepth 1 -name 'neoforge-*-installer.jar' ! -name '*-unsigned.jar' 2>/dev/null | head -1)
+          # Fork installer output path (NeoDev's installerJar task):
+          # projects/neoforge/build/libs/neoforge-<version>-installer.jar
+          FORK_JAR=$(find upstream/neoforge-1.21.1/projects/neoforge/build/libs \
+              -maxdepth 1 -name 'neoforge-*-installer.jar' 2>/dev/null | head -1)
           if [ -z "$FORK_JAR" ]; then
-              FORK_JAR=$(find upstream/neoforge-1.21.1/projects/neoforge/build/distributions \
-                  -maxdepth 1 -name 'neoforge-*-installer-unsigned.jar' 2>/dev/null | head -1)
-          fi
-          if [ -z "$FORK_JAR" ]; then
-              echo "::error::No fork installer jar found under upstream/neoforge-1.21.1/projects/neoforge/build/distributions"
+              echo "::error::No fork installer jar found under upstream/neoforge-1.21.1/projects/neoforge/build/libs"
               exit 1
           fi
           cp "$FORK_JAR" "release/multiforge-${VER}-installer.jar"

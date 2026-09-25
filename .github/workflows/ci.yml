@@ -162,10 +162,10 @@ jobs:
 
       - name: Apply MultiForge patches + compile the fork
         # compileJava runs :neoforge:applyMultiforgePatches, which resets every
-        # patched file to its pristine copy and applies all groups in order,
-        # so it is safe in the same invocation as setup or after it.
+        # patched file to its pristine copy and applies all groups in order.
+        # It runs after `setup` (a separate invocation above).
         working-directory: upstream/neoforge-1.21.1
-        run: ./gradlew --no-configuration-cache --stacktrace :neoforge:compileJava spotlessCheck licenseCheck
+        run: ./gradlew --no-configuration-cache --stacktrace :neoforge:compileJava immaculateCheck licenseCheck
 
       - name: GameTest server (NeoForge suite + MultiForge region-tick tests)
         # Boots the patched dedicated server with the regionized runtime and

@@ -230,7 +230,7 @@
      @Override
      public boolean shouldTickBlocksAt(long p_184059_) {
          return this.chunkSource.chunkMap.getDistanceManager().inBlockTickingRange(p_184059_);
-@@ -1066,7 +1174,7 @@ public class ServerLevel extends Level implements WorldGenLevel {
+@@ -1069,7 +1177,7 @@ public class ServerLevel extends Level implements WorldGenLevel {
  
      @Override
      public void sendBlockUpdated(BlockPos p_8755_, BlockState p_8756_, BlockState p_8757_, int p_8758_) {
@@ -239,7 +239,7 @@
              String s = "recursive call to sendBlockUpdated";
              Util.logAndPauseIfInIde("recursive call to sendBlockUpdated", new IllegalStateException("recursive call to sendBlockUpdated"));
          }
-@@ -1079,6 +1187,13 @@ public class ServerLevel extends Level implements WorldGenLevel {
+@@ -1082,6 +1190,13 @@ public class ServerLevel extends Level implements WorldGenLevel {
              List<PathNavigation> list = new ObjectArrayList<>();
  
              for (Mob mob : this.navigatingMobs) {
@@ -253,7 +253,7 @@
                  PathNavigation pathnavigation = mob.getNavigation();
                  if (pathnavigation.shouldRecomputePath(p_8755_)) {
                      list.add(pathnavigation);
-@@ -1086,13 +1201,13 @@ public class ServerLevel extends Level implements WorldGenLevel {
+@@ -1089,13 +1204,13 @@ public class ServerLevel extends Level implements WorldGenLevel {
              }
  
              try {
@@ -269,7 +269,7 @@
              }
          }
      }
-@@ -1183,11 +1298,63 @@ public class ServerLevel extends Level implements WorldGenLevel {
+@@ -1186,11 +1301,63 @@ public class ServerLevel extends Level implements WorldGenLevel {
  
      @Override
      public void blockEvent(BlockPos p_8746_, Block p_8747_, int p_8748_, int p_8749_) {
@@ -333,7 +333,7 @@
  
          while (!this.blockEvents.isEmpty()) {
              BlockEventData blockeventdata = this.blockEvents.removeFirst();
-@@ -1226,6 +1393,40 @@ public class ServerLevel extends Level implements WorldGenLevel {
+@@ -1229,6 +1396,40 @@ public class ServerLevel extends Level implements WorldGenLevel {
          return this.fluidTicks;
      }
  
@@ -374,7 +374,7 @@
      @Nonnull
      @Override
      public MinecraftServer getServer() {
-@@ -1567,6 +1768,7 @@ public class ServerLevel extends Level implements WorldGenLevel {
+@@ -1570,6 +1771,7 @@ public class ServerLevel extends Level implements WorldGenLevel {
      @VisibleForTesting
      public void clearBlockEvents(BoundingBox p_8723_) {
          this.blockEvents.removeIf(p_207568_ -> p_8723_.isInside(p_207568_.pos()));
@@ -382,7 +382,7 @@
      }
  
      @Override
-@@ -1750,7 +1952,7 @@ public class ServerLevel extends Level implements WorldGenLevel {
+@@ -1753,7 +1955,7 @@ public class ServerLevel extends Level implements WorldGenLevel {
              }
  
              if (p_143371_ instanceof Mob mob) {
@@ -391,7 +391,7 @@
                      String s = "onTrackingStart called during navigation iteration";
                      Util.logAndPauseIfInIde(
                          "onTrackingStart called during navigation iteration", new IllegalStateException("onTrackingStart called during navigation iteration")
-@@ -1777,7 +1979,7 @@ public class ServerLevel extends Level implements WorldGenLevel {
+@@ -1780,7 +1982,7 @@ public class ServerLevel extends Level implements WorldGenLevel {
              }
  
              if (p_143375_ instanceof Mob mob) {
@@ -400,7 +400,7 @@
                      String s = "onTrackingStart called during navigation iteration";
                      Util.logAndPauseIfInIde(
                                "onTrackingStart called during navigation iteration", new IllegalStateException("onTrackingStart called during navigation iteration")
-@@ -1806,7 +2008,10 @@ public class ServerLevel extends Level implements WorldGenLevel {
+@@ -1809,7 +2011,10 @@ public class ServerLevel extends Level implements WorldGenLevel {
  
      @Override
      public java.util.Collection<net.neoforged.neoforge.entity.PartEntity<?>> getPartEntities() {
@@ -411,4 +411,4 @@
 +        }
      }
  
-     private final net.neoforged.neoforge.capabilities.CapabilityListenerHolder capListenerHolder = new net.neoforged.neoforge.capabilities.CapabilityListenerHolder();
+     @Override

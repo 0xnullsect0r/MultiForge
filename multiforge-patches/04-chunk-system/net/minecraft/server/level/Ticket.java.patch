@@ -1,10 +1,9 @@
 --- a/net/minecraft/server/level/Ticket.java
 +++ b/net/minecraft/server/level/Ticket.java
-@@ -61,6 +61,17 @@
-     protected void setCreatedTick(long p_9430_) {
+@@ -62,6 +62,17 @@ public final class Ticket<T> implements Comparable<Ticket<?>> {
          this.createdTick = p_9430_;
      }
-
+ 
 +    // MultiForge (multiforge-patches/04-chunk-system/): public accessor
 +    // for the Vanilla-set creation tick. Read by
 +    // net.multiforge.neoforge.DistanceManagerBridge#toMultiForgeTicket so

@@ -1,6 +1,6 @@
 --- a/net/minecraft/server/level/ChunkMap.java
 +++ b/net/minecraft/server/level/ChunkMap.java
-@@ -1094,11 +1094,24 @@ public class ChunkMap extends ChunkStorage implements ChunkHolder.PlayerProvider
+@@ -1095,11 +1095,24 @@ public class ChunkMap extends ChunkStorage implements ChunkHolder.PlayerProvider
              int i = entitytype.clientTrackingRange() * 16;
              if (i != 0) {
                  int j = entitytype.updateInterval();
@@ -28,7 +28,7 @@
                      chunkmap$trackedentity.updatePlayers(this.level.players());
                      if (p_140200_ instanceof ServerPlayer serverplayer) {
                          this.updatePlayerStatus(serverplayer, true);
-@@ -1123,7 +1136,10 @@ public class ChunkMap extends ChunkStorage implements ChunkHolder.PlayerProvider
+@@ -1124,7 +1137,10 @@ public class ChunkMap extends ChunkStorage implements ChunkHolder.PlayerProvider
              }
          }
  
@@ -40,7 +40,7 @@
          if (chunkmap$trackedentity1 != null) {
              chunkmap$trackedentity1.broadcastRemoved();
          }
-@@ -1164,14 +1180,20 @@ public class ChunkMap extends ChunkStorage implements ChunkHolder.PlayerProvider
+@@ -1165,14 +1181,20 @@ public class ChunkMap extends ChunkStorage implements ChunkHolder.PlayerProvider
      }
  
      public void broadcast(Entity p_140202_, Packet<?> p_140203_) {
@@ -63,3 +63,15 @@
          if (chunkmap$trackedentity != null) {
              chunkmap$trackedentity.broadcastAndSend(p_140335_);
          }
+@@ -1222,7 +1244,10 @@ public class ChunkMap extends ChunkStorage implements ChunkHolder.PlayerProvider
+ 
+     // Neo: Getter for players watching an entity.
+     public List<ServerPlayer> getPlayersWatching(Entity entity) {
+-        var trackedEntity = entityMap.get(entity.getId());
++        ChunkMap.TrackedEntity trackedEntity;
++        synchronized (this.entityMap) { // MultiForge: attachment syncs call this from region workers
++            trackedEntity = entityMap.get(entity.getId());
++        }
+         if (trackedEntity != null) {
+             var ret = new java.util.ArrayList<ServerPlayer>(trackedEntity.seenBy.size());
+             for (var connection : trackedEntity.seenBy) {

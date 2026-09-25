@@ -12,13 +12,14 @@
  */
 package net.multiforge.runtime.config;
 
+import com.electronwill.nightconfig.core.UnmodifiableConfig;
+import com.electronwill.nightconfig.core.io.ParsingException;
+import com.electronwill.nightconfig.toml.TomlParser;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Locale;
-import org.tomlj.Toml;
-import org.tomlj.TomlParseResult;
 
 /**
  * TOML read/write for {@link MultiForgeConfig}. Deliberately minimal —
@@ -38,11 +39,7 @@ public final class ConfigCodec {
     }
 
     public static MultiForgeConfig parse(String toml) {
-        TomlParseResult r = Toml.parse(toml);
-        if (r.hasErrors()) {
-            String err = r.errors().stream().map(Object::toString).findFirst().orElse("<unknown>");
-            throw new IllegalArgumentException("Invalid multiforge-server.toml: " + err);
-        }
+        UnmodifiableConfig r = parseToml(toml, "multiforge-server.toml");
         MultiForgeConfig d = MultiForgeConfig.defaults();
         int cores = intOr(r, "mtserver.cores", d.cores());
         int tpc = intOr(r, "mtserver.threadsPerCore", d.threadsPerCore());
@@ -85,28 +82,50 @@ public final class ConfigCodec {
         Files.writeString(file, render(c), StandardCharsets.UTF_8);
     }
 
-    private static int intOr(TomlParseResult r, String key, int fallback) {
-        Long v = r.getLong(key);
-        return v == null ? fallback : Math.toIntExact(v);
+    /**
+     * Parse TOML with night-config — the TOML library NeoForge itself ships, so
+     * the runtime adds no parser of its own to the server.
+     */
+    static UnmodifiableConfig parseToml(String toml, String fileName) {
+        try {
+            return new TomlParser().parse(toml);
+        } catch (ParsingException e) {
+            throw new IllegalArgumentException("Invalid " + fileName + ": " + e.getMessage(), e);
+        }
     }
 
-    private static long longOr(TomlParseResult r, String key, long fallback) {
-        Long v = r.getLong(key);
-        return v == null ? fallback : v;
+    private static Number number(UnmodifiableConfig r, String key) {
+        Object v = r.get(key);
+        if (v == null) return null;
+        if (v instanceof Number n && !(v instanceof Double) && !(v instanceof Float)) return n;
+        throw new IllegalArgumentException("Key '" + key + "' must be an integer, got: " + v);
     }
 
-    private static <E extends Enum<E>> E enumOr(TomlParseResult r, String key, Class<E> type, E fallback) {
+    private static int intOr(UnmodifiableConfig r, String key, int fallback) {
+        Number v = number(r, key);
+        return v == null ? fallback : Math.toIntExact(v.longValue());
+    }
+
+    private static long longOr(UnmodifiableConfig r, String key, long fallback) {
+        Number v = number(r, key);
+        return v == null ? fallback : v.longValue();
+    }
+
+    private static <E extends Enum<E>> E enumOr(UnmodifiableConfig r, String key, Class<E> type, E fallback) {
         return enumOr(r, key, type, fallback, s -> s.toUpperCase(Locale.ROOT));
     }
 
     private static <E extends Enum<E>> E enumOr(
-            TomlParseResult r,
+            UnmodifiableConfig r,
             String key,
             Class<E> type,
             E fallback,
             java.util.function.Function<String, String> norm) {
-        String s = r.getString(key);
-        if (s == null) return fallback;
+        Object raw = r.get(key);
+        if (raw == null) return fallback;
+        if (!(raw instanceof String s)) {
+            throw new IllegalArgumentException("Key '" + key + "' must be a string, got: " + raw);
+        }
         try {
             return Enum.valueOf(type, norm.apply(s));
         } catch (IllegalArgumentException e) {

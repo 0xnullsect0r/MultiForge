@@ -18,62 +18,33 @@ import java.util.ArrayList;
 import java.util.List;
 import net.multiforge.runtime.diagnostics.ProbeRegistry;
 import net.multiforge.runtime.diagnostics.ViolationLogger;
-import org.junit.jupiter.api.AfterEach;
-import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 /**
- * {@link LevelTickDispatchProbes}: the operator-visible counter and
- * warn-once behaviour for a level that ticks inline because it has no
- * regionizer yet.
+ * {@link LevelTickDispatchProbes}: a level that ticks inline because it has no
+ * regionizer (no loaded chunk) is counted, overall and per world, and is not
+ * reported as a violation.
  */
 class DispatchLevelTickTest {
 
-    @BeforeEach
-    @AfterEach
-    void resetPerWorldWarnOnceState() {
-        LevelTickDispatchProbes.resetForTesting();
-        ViolationLogger.resetForTesting();
-        ViolationLogger.clearSubscribersForTesting();
-    }
-
     @Test
-    void everyInlineTickIsCountedButWarnedOncePerWorld() throws Exception {
-        long before = ProbeRegistry.get(LevelTickDispatchProbes.NO_REGIONIZER_INLINE_PROBE);
+    void everyInlineTickIsCountedPerWorldWithoutAViolation() throws Exception {
+        String probe = LevelTickDispatchProbes.NO_REGIONIZER_INLINE_PROBE;
+        long total = ProbeRegistry.get(probe);
+        long end = ProbeRegistry.get(probe + ".minecraft:the_end");
+        long nether = ProbeRegistry.get(probe + ".minecraft:the_nether");
         List<ViolationLogger.ViolationEvent> received = new ArrayList<>();
         AutoCloseable subscription = ViolationLogger.subscribe(received::add);
         try {
-            for (int i = 0; i < 5; i++) {
-                LevelTickDispatchProbes.noRegionizerInline("minecraft:the_end");
-            }
-        } finally {
-            subscription.close();
-        }
-
-        assertThat(ProbeRegistry.get(LevelTickDispatchProbes.NO_REGIONIZER_INLINE_PROBE) - before)
-                .isEqualTo(5L);
-        assertThat(received)
-                .extracting(ViolationLogger.ViolationEvent::site)
-                .containsExactly(LevelTickDispatchProbes.NO_REGIONIZER_INLINE_PROBE + "::minecraft:the_end");
-    }
-
-    @Test
-    void distinctWorldsGetDistinctWarnings() throws Exception {
-        List<ViolationLogger.ViolationEvent> received = new ArrayList<>();
-        AutoCloseable subscription = ViolationLogger.subscribe(received::add);
-        try {
+            for (int i = 0; i < 5; i++) LevelTickDispatchProbes.noRegionizerInline("minecraft:the_end");
             LevelTickDispatchProbes.noRegionizerInline("minecraft:the_nether");
-            LevelTickDispatchProbes.noRegionizerInline("minecraft:the_end");
-            LevelTickDispatchProbes.noRegionizerInline("minecraft:custom_dim");
         } finally {
             subscription.close();
         }
 
-        assertThat(received)
-                .extracting(ViolationLogger.ViolationEvent::site)
-                .containsExactlyInAnyOrder(
-                        LevelTickDispatchProbes.NO_REGIONIZER_INLINE_PROBE + "::minecraft:the_nether",
-                        LevelTickDispatchProbes.NO_REGIONIZER_INLINE_PROBE + "::minecraft:the_end",
-                        LevelTickDispatchProbes.NO_REGIONIZER_INLINE_PROBE + "::minecraft:custom_dim");
+        assertThat(ProbeRegistry.get(probe) - total).isEqualTo(6L);
+        assertThat(ProbeRegistry.get(probe + ".minecraft:the_end") - end).isEqualTo(5L);
+        assertThat(ProbeRegistry.get(probe + ".minecraft:the_nether") - nether).isEqualTo(1L);
+        assertThat(received).isEmpty();
     }
 }

@@ -23,6 +23,10 @@ import org.jetbrains.annotations.Nullable;
  * @param <T> the type of registry entries
  */
 public interface IRegistryExtension<T> {
+    private Registry<T> self() {
+        return (Registry<T>) this;
+    }
+
     /**
      * {@return whether this registry should be synced to clients}
      */
@@ -67,6 +71,8 @@ public interface IRegistryExtension<T> {
      *
      * @param from the source registry name to alias from
      * @param to   the target registry name to alias to
+     * @throws IllegalArgumentException if an alias already exists for the source registry name that does not point to the
+     *                                  same target registry name, or if the alias would cause a resolution loop
      */
     void addAlias(ResourceLocation from, ResourceLocation to);
 
@@ -135,4 +141,16 @@ public interface IRegistryExtension<T> {
      * @param <A> the data type
      */
     <A> Map<ResourceKey<T>, A> getDataMap(DataMapType<T, A> type);
+
+    /**
+     * {@return the key of the element, or null if it is not present in this registry}
+     *
+     * @apiNote This method is different from {@link Registry#getKey(Object)} as it does not return the default key for
+     *          {@link net.minecraft.core.DefaultedRegistry defaulted registries}
+     */
+    @Nullable
+    default ResourceLocation getKeyOrNull(T element) {
+        //Note: We override the cases when getKey would return the default rather than just going via getResourceKey to find it
+        return self().getKey(element);
+    }
 }

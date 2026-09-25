@@ -23,7 +23,7 @@
          this.registryAccess = p_270200_;
          this.damageSources = new DamageSources(p_270200_);
      }
-@@ -538,29 +543,80 @@ public abstract class Level extends net.neoforged.neoforge.attachment.Attachment
+@@ -538,34 +543,85 @@ public abstract class Level extends net.neoforged.neoforge.attachment.Attachment
      }
  
      public void addBlockEntityTicker(TickingBlockEntity p_151526_) {
@@ -75,10 +75,6 @@
 -        if (!this.pendingFreshBlockEntities.isEmpty()) {
 -            this.freshBlockEntities.addAll(this.pendingFreshBlockEntities);
 -            this.pendingFreshBlockEntities.clear();
--        }
--        this.tickingBlockEntities = true;
--        if (!this.freshBlockEntities.isEmpty()) {
--            this.freshBlockEntities.forEach(BlockEntity::onLoad);
 +        java.util.List<BlockEntity> mf$fresh;
 +        synchronized (this.freshBlockEntities) {
 +            if (!this.pendingFreshBlockEntities.isEmpty()) {
@@ -87,11 +83,24 @@
 +            }
 +            this.tickingBlockEntities = true;
 +            mf$fresh = java.util.List.copyOf(this.freshBlockEntities);
-             this.freshBlockEntities.clear();
++            this.freshBlockEntities.clear();
          }
+-        this.tickingBlockEntities = true;
+-        if (!this.freshBlockEntities.isEmpty()) {
+-            this.freshBlockEntities.forEach(blockEntity -> {
+-                // Only call onLoad() on BEs which have been fully added to the level, prevents crashes with BEs that
+-                // were discarded due to incompatibility with the BlockState at their position
+-                if (!blockEntity.isRemoved() && blockEntity.hasLevel()) {
+-                    blockEntity.onLoad();
 +        // NeoForge's onLoad pass always runs here, on the server thread, even when
 +        // regions tick the block entities (they tick after this method returns).
-+        mf$fresh.forEach(BlockEntity::onLoad);
++        mf$fresh.forEach(blockEntity -> {
++            // Only call onLoad() on BEs which have been fully added to the level, prevents crashes with BEs that
++            // were discarded due to incompatibility with the BlockState at their position
++            if (!blockEntity.isRemoved() && blockEntity.hasLevel()) {
++                blockEntity.onLoad();
++            }
++        });
 +        if (net.multiforge.neoforge.RegionizedTickCoordinator.regionsHandleBlockEntities(this)) {
 +            // Route the tickers this level still holds into their regions; those whose
 +            // chunk is not regionized yet stay here for the next tick.
@@ -108,15 +117,16 @@
 +                        (net.minecraft.server.level.ServerLevel) this, mf$held);
 +                synchronized (this.freshBlockEntities) {
 +                    this.blockEntityTickers.addAll(mf$left);
-+                }
+                 }
+-            });
+-            this.freshBlockEntities.clear();
 +            }
 +            profilerfiller.pop();
 +            return;
-+        }
+         }
          if (!this.pendingBlockEntityTickers.isEmpty()) {
              this.blockEntityTickers.addAll(this.pendingBlockEntityTickers);
-             this.pendingBlockEntityTickers.clear();
-@@ -578,7 +634,9 @@ public abstract class Level extends net.neoforged.neoforge.attachment.Attachment
+@@ -584,7 +640,9 @@ public abstract class Level extends net.neoforged.neoforge.attachment.Attachment
              }
          }
  
@@ -127,7 +137,7 @@
          profilerfiller.pop();
      }
  
-@@ -784,7 +842,10 @@ public abstract class Level extends net.neoforged.neoforge.attachment.Attachment
+@@ -790,7 +848,10 @@ public abstract class Level extends net.neoforged.neoforge.attachment.Attachment
          if (this.isOutsideBuildHeight(p_46716_)) {
              return null;
          } else {
@@ -139,7 +149,7 @@
                  ? null
                  : this.getChunkAt(p_46716_).getBlockEntity(p_46716_, LevelChunk.EntityCreationType.IMMEDIATE);
          }
-@@ -1174,6 +1235,11 @@ public abstract class Level extends net.neoforged.neoforge.attachment.Attachment
+@@ -1185,6 +1246,11 @@ public abstract class Level extends net.neoforged.neoforge.attachment.Attachment
      }
  
      public ProfilerFiller getProfiler() {

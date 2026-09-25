@@ -1,6 +1,6 @@
 --- a/net/minecraft/server/level/ChunkGenerationTask.java
 +++ b/net/minecraft/server/level/ChunkGenerationTask.java
-@@ -34,7 +34,10 @@
+@@ -34,7 +34,10 @@ public class ChunkGenerationTask {
          StaticCache2D<GenerationChunkHolder> staticcache2d = StaticCache2D.create(
              p_347630_.x, p_347630_.z, i, (p_347569_, p_347704_) -> p_347575_.acquireGeneration(ChunkPos.asLong(p_347569_, p_347704_))
          );
@@ -10,13 +10,13 @@
 +                mfTask, p_347630_, ChunkPyramid.GENERATION_PYRAMID.getStepTo(p_347556_));
 +        return mfTask;
      }
-
+ 
      @Nullable
-@@ -47,6 +50,7 @@
-
+@@ -47,6 +50,7 @@ public class ChunkGenerationTask {
+ 
              if (this.markedForCancellation || this.scheduledStatus == this.targetStatus) {
                  this.releaseClaim();
 +                net.multiforge.neoforge.chunk.GenerationBridge.observeTaskComplete(this, this.pos);
                  return null;
              }
-
+ 

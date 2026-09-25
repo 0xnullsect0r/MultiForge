@@ -8,11 +8,16 @@ description = "MultiForge runtime — region manager, schedulers, diagnostics."
 dependencies {
     implementation(project(":multiforge-api"))
 
-    // Slf4j API only. NeoForge already ships the logger binding at runtime.
-    implementation("org.slf4j:slf4j-api:2.0.13")
+    // Slf4j API only. Minecraft ships slf4j-api (pinned strictly to 2.0.9) and
+    // the logger binding; depend on the same version so the fork's classpath
+    // resolves.
+    implementation("org.slf4j:slf4j-api:2.0.9")
 
-    // TOML parser for multiforge-server.toml.
-    implementation("org.tomlj:tomlj:1.1.1")
+    // TOML parser for multiforge-server.toml and the region pin file:
+    // night-config (LGPL-3.0), the library NeoForge itself ships and loads its
+    // own configs with, so the server gets no extra parser. Version matches
+    // upstream/neoforge-1.21.1/gradle.properties:nightconfig_version.
+    implementation("com.electronwill.night-config:toml:3.8.3")
 
     // net.neoforged:bus — the standalone event-bus library NeoForge itself uses
     // (net.neoforged.bus.api.*), not a Minecraft dependency. M12's DispatchingEventBus
@@ -20,14 +25,14 @@ dependencies {
     // M12.2) can swap it in for NeoForge.EVENT_BUS. Version pinned to match
     // upstream/neoforge-1.21.1/gradle.properties:eventbus_version so the wrapped
     // instance is binary-compatible with what the vendored NeoForge tree ships.
-    implementation("net.neoforged:bus:8.0.1")
+    implementation("net.neoforged:bus:8.0.2")
 
     // JetBrains annotations for @ApiStatus.Internal etc.
     compileOnly("org.jetbrains:annotations:24.1.0")
 
     testImplementation("org.junit.jupiter:junit-jupiter:5.10.3")
     testImplementation("org.assertj:assertj-core:3.26.3")
-    testImplementation("org.slf4j:slf4j-simple:2.0.13")
+    testImplementation("org.slf4j:slf4j-simple:2.0.9")
     testImplementation("org.awaitility:awaitility:4.2.1")
 }
 

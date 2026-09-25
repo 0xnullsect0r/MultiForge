@@ -165,7 +165,7 @@ public class FullPotsAccessorDemo {
 
         public DioriteFlowerPotBlockEntity(BlockPos pos, BlockState state) {
             super(DIORITE_POT_BLOCK_ENTITY.get(), pos, state);
-            modelData = ModelData.builder().with(PLANT_PROPERTY, plant).build();
+            modelData = ModelData.of(PLANT_PROPERTY, plant);
         }
 
         public void setPlant(Block plant) {
@@ -222,7 +222,7 @@ public class FullPotsAccessorDemo {
         }
     }
 
-    @EventBusSubscriber(modid = MOD_ID, value = Dist.CLIENT, bus = EventBusSubscriber.Bus.MOD)
+    @EventBusSubscriber(modid = MOD_ID, value = Dist.CLIENT)
     private static class ClientHandler {
         @SubscribeEvent
         public static void registerLoader(final ModelEvent.RegisterGeometryLoaders event) {

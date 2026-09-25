@@ -12,14 +12,13 @@
  */
 package net.multiforge.runtime.region.pin;
 
+import com.electronwill.nightconfig.core.UnmodifiableConfig;
+import com.electronwill.nightconfig.core.io.ParsingException;
+import com.electronwill.nightconfig.toml.TomlParser;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
 import net.multiforge.api.world.WorldRef;
-import org.tomlj.Toml;
-import org.tomlj.TomlArray;
-import org.tomlj.TomlParseResult;
-import org.tomlj.TomlTable;
 
 /**
  * TOML codec for {@link RegionPin} — round-trips through
@@ -38,30 +37,39 @@ public final class PinCodec {
     private PinCodec() {}
 
     public static List<RegionPin> parse(String contents) {
-        TomlParseResult r = Toml.parse(contents);
-        if (r.hasErrors()) {
-            String err = r.errors().stream().map(Object::toString).findFirst().orElse("<unknown>");
-            throw new IllegalArgumentException("Invalid multiforge-regions.toml: " + err);
+        UnmodifiableConfig r;
+        try {
+            r = new TomlParser().parse(contents);
+        } catch (ParsingException e) {
+            throw new IllegalArgumentException("Invalid region pin file: " + e.getMessage(), e);
         }
-        TomlArray pins = r.getArray("pins");
-        if (pins == null) return List.of();
+        Object pinsRaw = r.get("pins");
+        if (pinsRaw == null) return List.of();
+        if (!(pinsRaw instanceof List<?> pins)) throw new IllegalArgumentException("'pins' must be an array of tables");
         List<RegionPin> out = new ArrayList<>(pins.size());
-        for (int i = 0; i < pins.size(); i++) {
-            TomlTable t = pins.getTable(i);
+        for (Object entry : pins) {
+            if (!(entry instanceof UnmodifiableConfig t)) {
+                throw new IllegalArgumentException("'pins' must be an array of tables");
+            }
             String id = requireString(t, "id");
             WorldRef world = WorldRef.of(requireString(t, "world"));
-            TomlArray from = t.getArray("from");
-            TomlArray to = t.getArray("to");
-            if (from == null || to == null || from.size() != 2 || to.size() != 2) {
-                throw new IllegalArgumentException("pin '" + id + "' needs from = [x,z] and to = [x,z]");
+            int[] from = pair(t, "from", id);
+            int[] to = pair(t, "to", id);
+            out.add(new RegionPin(id, world, from[0], from[1], to[0], to[1]));
+        }
+        return out;
+    }
+
+    private static int[] pair(UnmodifiableConfig t, String key, String id) {
+        if (!(t.get(key) instanceof List<?> xs) || xs.size() != 2) {
+            throw new IllegalArgumentException("pin '" + id + "' needs from = [x,z] and to = [x,z]");
+        }
+        int[] out = new int[2];
+        for (int i = 0; i < 2; i++) {
+            if (!(xs.get(i) instanceof Number n) || xs.get(i) instanceof Double || xs.get(i) instanceof Float) {
+                throw new IllegalArgumentException("pin '" + id + "': " + key + " must hold two integers");
             }
-            out.add(new RegionPin(
-                    id,
-                    world,
-                    Math.toIntExact(from.getLong(0)),
-                    Math.toIntExact(from.getLong(1)),
-                    Math.toIntExact(to.getLong(0)),
-                    Math.toIntExact(to.getLong(1))));
+            out[i] = Math.toIntExact(n.longValue());
         }
         return out;
     }
@@ -89,9 +97,10 @@ public final class PinCodec {
         return sb.toString();
     }
 
-    private static String requireString(TomlTable t, String key) {
-        String s = t.getString(key);
-        if (s == null || s.isBlank()) throw new IllegalArgumentException("pin missing required key: " + key);
+    private static String requireString(UnmodifiableConfig t, String key) {
+        if (!(t.get(key) instanceof String s) || s.isBlank()) {
+            throw new IllegalArgumentException("pin missing required key: " + key);
+        }
         return s;
     }
 

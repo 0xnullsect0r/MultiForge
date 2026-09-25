@@ -25,10 +25,12 @@
          servergamepacketlistenerimpl.send(new ClientboundUpdateRecipesPacket(this.server.getRecipeManager().getOrderedRecipes()));
          this.sendPlayerPermissionLevel(p_11263_);
          p_11263_.getStats().markAllDirty();
-@@ -265,6 +_,7 @@
+@@ -265,6 +_,9 @@
          }
  
          p_11263_.initInventoryMenu();
++
++        net.neoforged.neoforge.attachment.AttachmentSync.syncInitialPlayerAttachments(p_11263_);
 +        net.neoforged.neoforge.event.EventHooks.firePlayerLoggedIn( p_11263_ );
      }
  
@@ -79,10 +81,11 @@
              serverplayer.copyRespawnPosition(p_11237_);
          }
  
-@@ -477,6 +_,7 @@
+@@ -477,6 +_,8 @@
          this.playersByUUID.put(serverplayer.getUUID(), serverplayer);
          serverplayer.initInventoryMenu();
          serverplayer.setHealth(serverplayer.getHealth());
++        net.neoforged.neoforge.attachment.AttachmentSync.syncInitialPlayerAttachments(serverplayer);
 +        net.neoforged.neoforge.event.EventHooks.firePlayerRespawnEvent(serverplayer, p_11238_);
          if (!p_11238_) {
              BlockPos blockpos = BlockPos.containing(dimensiontransition.pos());
@@ -116,6 +119,14 @@
          p_11230_.connection.send(new ClientboundSetDefaultSpawnPositionPacket(p_11231_.getSharedSpawnPos(), p_11231_.getSharedSpawnAngle()));
          if (p_11231_.isRaining()) {
              p_11230_.connection.send(new ClientboundGameEventPacket(ClientboundGameEventPacket.START_RAINING, 0.0F));
+@@ -693,6 +_,7 @@
+ 
+         p_11230_.connection.send(new ClientboundGameEventPacket(ClientboundGameEventPacket.LEVEL_CHUNKS_LOAD_START, 0.0F));
+         this.server.tickRateManager().updateJoiningPlayer(p_11230_);
++        net.neoforged.neoforge.attachment.AttachmentSync.syncInitialLevelAttachments(p_11231_, p_11230_);
+     }
+ 
+     public void sendAllPlayerInfo(ServerPlayer p_11293_) {
 @@ -808,13 +_,6 @@
          if (serverstatscounter == null) {
              File file1 = this.server.getWorldPath(LevelResource.PLAYER_STATS_DIR).toFile();
@@ -130,15 +141,19 @@
  
              serverstatscounter = new ServerStatsCounter(this.server, file2);
              this.stats.put(uuid, serverstatscounter);
-@@ -832,6 +_,8 @@
-             this.advancements.put(uuid, playeradvancements);
-         }
- 
-+        // Forge: don't overwrite active player with a fake one.
-+        if (!(p_11297_ instanceof net.neoforged.neoforge.common.util.FakePlayer))
-         playeradvancements.setPlayer(p_11297_);
-         return playeradvancements;
+@@ -824,6 +_,12 @@
      }
+ 
+     public PlayerAdvancements getPlayerAdvancements(ServerPlayer p_11297_) {
++        // Neo: return a no-op PlayerAdvancements for fake players to avoid leaking CriteriaTrigger entries (#1487)
++        if (p_11297_.isFakePlayer()) {
++            Path path = this.server.getWorldPath(LevelResource.PLAYER_ADVANCEMENTS_DIR).resolve("_fake.json");
++            return new net.neoforged.neoforge.common.util.FakePlayer.FakePlayerAdvancements(
++                    this.server.getFixerUpper(), this, this.server.getAdvancements(), path, p_11297_);
++        }
+         UUID uuid = p_11297_.getUUID();
+         PlayerAdvancements playeradvancements = this.advancements.get(uuid);
+         if (playeradvancements == null) {
 @@ -859,7 +_,7 @@
      }
  

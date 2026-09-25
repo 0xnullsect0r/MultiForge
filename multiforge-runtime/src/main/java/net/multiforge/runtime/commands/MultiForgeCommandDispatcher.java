@@ -36,8 +36,12 @@ import net.multiforge.runtime.config.MultiForgeConfig;
 import net.multiforge.runtime.config.MultiForgeConfigStore;
 import net.multiforge.runtime.diagnostics.ProbeRegistry;
 import net.multiforge.runtime.diagnostics.ViolationLogger;
+import net.multiforge.runtime.region.Region;
+import net.multiforge.runtime.region.ThreadedRegionizer;
 import net.multiforge.runtime.region.pin.RegionPin;
 import net.multiforge.runtime.region.pin.RegionPinManager;
+import net.multiforge.runtime.scheduler.MultiForgeRegionizedRuntime;
+import net.multiforge.runtime.scheduler.MultiThreadedSchedulerHost;
 
 /**
  * Pure-Java argument parser + dispatcher for the /multiforge tree.
@@ -409,6 +413,25 @@ public final class MultiForgeCommandDispatcher {
     }
 
     private boolean handleList(Consumer<String> output) {
+        MultiThreadedSchedulerHost host = MultiForgeRegionizedRuntime.current();
+        if (host == null) {
+            output.accept("Regionized runtime not installed (mode = off).");
+        } else {
+            java.util.Map<String, ThreadedRegionizer> byWorld = new java.util.TreeMap<>(host.regionizers());
+            byWorld.remove(MultiThreadedSchedulerHost.GLOBAL_WORLD.dimensionId());
+            if (byWorld.isEmpty()) output.accept("No regions (no chunks loaded).");
+            for (java.util.Map.Entry<String, ThreadedRegionizer> e : byWorld.entrySet()) {
+                List<Region> regions = new java.util.ArrayList<>(e.getValue().regions());
+                regions.sort(
+                        java.util.Comparator.comparingInt(Region::sectionCount).reversed());
+                int sectionChunks = 1 << (2 * e.getValue().sectionChunkShift());
+                output.accept(e.getKey() + ": " + regions.size() + " region(s)");
+                for (Region r : regions) {
+                    output.accept("  region " + r.id() + " — " + r.sectionCount() + " section(s), up to "
+                            + (long) r.sectionCount() * sectionChunks + " chunks, " + r.state());
+                }
+            }
+        }
         List<RegionPin> all = List.copyOf(pins.all());
         if (all.isEmpty()) {
             output.accept("No pinned regions.");

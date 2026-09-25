@@ -12,21 +12,19 @@
  */
 package net.multiforge.runtime.scheduler;
 
-import java.util.concurrent.ConcurrentHashMap;
 import net.multiforge.runtime.diagnostics.ProbeRegistry;
-import net.multiforge.runtime.diagnostics.ViolationLogger;
 
 /**
  * Operator visibility for {@code RegionizedTickCoordinator.dispatchLevelTick}
  * (fork module) — kept here, MC-free, so it is unit-testable.
  *
  * <p>The only non-regionized path left in a level tick is a level with no
- * materialised regionizer yet (no chunk of it loaded): its Vanilla level
- * tick then runs everything inline on the server thread, because the
- * {@code regionsHandle*} guards report {@code false} for it. That is correct
- * behaviour, not a failure, but worth seeing: {@link #noRegionizerInline}
- * counts every occurrence under {@link #NO_REGIONIZER_INLINE_PROBE} and warns
- * once per world.
+ * materialised regionizer (no chunk of it loaded — an empty Nether or End):
+ * its Vanilla level tick then runs inline on the server thread, because the
+ * {@code regionsHandle*} guards report {@code false} for it. With no chunks
+ * there is nothing a region could tick, so this is normal, not a violation;
+ * {@link #noRegionizerInline} only counts it under {@link
+ * #NO_REGIONIZER_INLINE_PROBE}.
  */
 public final class LevelTickDispatchProbes {
 
@@ -35,27 +33,9 @@ public final class LevelTickDispatchProbes {
     /** Probe key bumped each tick a level runs inline for lack of a regionizer. */
     public static final String NO_REGIONIZER_INLINE_PROBE = "region-tick.no-regionizer-inline";
 
-    /** World ids that already warned — one warning per world, ever. */
-    private static final ConcurrentHashMap<String, Boolean> warnedNoRegionizer = new ConcurrentHashMap<>();
-
-    /**
-     * {@code worldId}'s level ticked with no materialised regionizer, so it
-     * ran inline on the server thread. Bumps {@link #NO_REGIONIZER_INLINE_PROBE}
-     * every time; warns once per world (site {@code
-     * NO_REGIONIZER_INLINE_PROBE + "::" + worldId}, so distinct worlds never
-     * share a rate-limit bucket).
-     */
+    /** {@code worldId}'s level ticked with no materialised regionizer, so it ran inline on the server thread. */
     public static void noRegionizerInline(String worldId) {
         ProbeRegistry.bump(NO_REGIONIZER_INLINE_PROBE);
-        if (warnedNoRegionizer.putIfAbsent(worldId, Boolean.TRUE) == null) {
-            ViolationLogger.warn(
-                    NO_REGIONIZER_INLINE_PROBE + "::" + worldId,
-                    "level " + worldId + " has no regionizer yet — ticking it inline on the server thread");
-        }
-    }
-
-    /** Test-only: forget which worlds already warned. */
-    public static void resetForTesting() {
-        warnedNoRegionizer.clear();
+        ProbeRegistry.bump(NO_REGIONIZER_INLINE_PROBE + "." + worldId);
     }
 }
