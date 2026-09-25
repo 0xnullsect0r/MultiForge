@@ -27,6 +27,7 @@ import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.BiFunction;
+import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
 import java.util.function.Function;
 import net.multiforge.api.entity.EntityRef;
@@ -62,6 +63,7 @@ import net.multiforge.runtime.journal.RegionJournal;
 import net.multiforge.runtime.journal.RegionJournalLifecycle;
 import net.multiforge.runtime.ownership.Domain;
 import net.multiforge.runtime.ownership.OwnerToken;
+import net.multiforge.runtime.ownership.OwnershipEnforcer;
 import net.multiforge.runtime.region.BlockEntityTickRunner;
 import net.multiforge.runtime.region.EntityTickRunner;
 import net.multiforge.runtime.region.PhasedRegionTickBody;
@@ -224,6 +226,16 @@ public final class MultiThreadedSchedulerHost implements SchedulerHost, AutoClos
     }
 
     public MultiThreadedSchedulerHost(MultiForgeConfig config, RegionTickBody body) {
+        this(config, body, TickRegionScheduler.Mode.FREE_RUNNING);
+    }
+
+    /**
+     * @param mode {@link TickRegionScheduler.Mode#BARRIER} on a NeoForge
+     *     server (the server thread drives each tick via {@link
+     *     #driveRegions}/{@link #driveGlobalTick}); {@link
+     *     TickRegionScheduler.Mode#FREE_RUNNING} for headless runtime use.
+     */
+    public MultiThreadedSchedulerHost(MultiForgeConfig config, RegionTickBody body, TickRegionScheduler.Mode mode) {
         this.config = Objects.requireNonNull(config, "config");
         this.regionizerFactory = world -> new ThreadedRegionizer(world, config.regionSize());
         this.taskQueue = new RegionizedTaskQueue(
@@ -246,7 +258,7 @@ public final class MultiThreadedSchedulerHost implements SchedulerHost, AutoClos
                     ThreadedRegionizer r = regionizerForOrNull(w);
                     return r == null ? null : r.readLock();
                 });
-        this.scheduler = new TickRegionScheduler(config.tickWorkerCount(), body, taskQueue, 128);
+        this.scheduler = new TickRegionScheduler(config.tickWorkerCount(), body, taskQueue, 128, mode);
         this.chunkTaskScheduler = new ChunkTaskScheduler(taskQueue, (w, x, z) -> {
             ThreadedRegionizer r = regionizerForOrNull(w);
             return r == null ? null : r.regionAtChunk(x, z);
@@ -324,7 +336,29 @@ public final class MultiThreadedSchedulerHost implements SchedulerHost, AutoClos
     /** Install as the {@link ServerDomains} binding. */
     public void install() {
         ServerDomains.install(this);
+        OwnershipEnforcer.bindPositionRouter(positionRouter);
     }
+
+    /**
+     * Chunk-ownership lookups for {@link OwnershipEnforcer#canMutateAt}:
+     * the owner of a chunk is the region its regionizer section maps to,
+     * and a rerouted mutation is queued on that region's mailbox.
+     */
+    private final OwnershipEnforcer.PositionRouter positionRouter = new OwnershipEnforcer.PositionRouter() {
+        @Override
+        public long ownerOf(WorldRef world, int chunkX, int chunkZ) {
+            ThreadedRegionizer r = regionizerForOrNull(world);
+            Region owner = r == null ? null : r.regionAtChunk(chunkX, chunkZ);
+            return owner == null ? UNOWNED : owner.id().value();
+        }
+
+        @Override
+        public boolean queueOnOwner(WorldRef world, int chunkX, int chunkZ, Runnable mutation) {
+            if (ownerOf(world, chunkX, chunkZ) == UNOWNED) return false;
+            taskQueue.queueChunkTask(world, chunkX, chunkZ, mutation);
+            return true;
+        }
+    };
 
     /**
      * Replace the chunk-payload serializer every {@link
@@ -476,6 +510,30 @@ public final class MultiThreadedSchedulerHost implements SchedulerHost, AutoClos
 
     public TickRegionScheduler scheduler() {
         return scheduler;
+    }
+
+    /**
+     * {@link TickRegionScheduler.Mode#BARRIER} entry point for one level's
+     * tick: run every live region of {@code world} once, in parallel, and
+     * return when all finished. {@code pump} runs on the calling (server)
+     * thread while it waits — see {@link TickRegionScheduler#driveTick}.
+     * Returns an empty result when {@code world} has no regionizer yet.
+     */
+    public TickRegionScheduler.TickAllResult driveRegions(WorldRef world, long deadlineNanos, BooleanSupplier pump) {
+        ThreadedRegionizer regionizer = regionizerForOrNull(world);
+        if (regionizer == null) return scheduler.driveTick(List.of(), deadlineNanos, pump);
+        return scheduler.driveTick(regionizer.regions(), deadlineNanos, pump);
+    }
+
+    /**
+     * {@link TickRegionScheduler.Mode#BARRIER} entry point for the synthetic
+     * global region (weather, time, world border, scoreboard, raids, command
+     * dispatch — docs/design/global-region.md). Called once per server tick,
+     * before any level's regions, so global state a region reads this tick
+     * is already this tick's.
+     */
+    public TickRegionScheduler.TickAllResult driveGlobalTick(long deadlineNanos, BooleanSupplier pump) {
+        return scheduler.driveTick(List.of(globalRegion), deadlineNanos, pump);
     }
 
     /**
@@ -1142,6 +1200,7 @@ public final class MultiThreadedSchedulerHost implements SchedulerHost, AutoClos
 
     @Override
     public void close() {
+        OwnershipEnforcer.unbindPositionRouter();
         scheduler.close();
         entityRegistry.close();
         delayedExec.shutdownNow();

@@ -14,6 +14,7 @@ package net.multiforge.runtime.ownership;
 
 import java.util.Locale;
 import java.util.Objects;
+import net.multiforge.api.world.WorldRef;
 import net.multiforge.runtime.diagnostics.ProbeRegistry;
 import net.multiforge.runtime.diagnostics.ViolationLogger;
 
@@ -25,13 +26,24 @@ import net.multiforge.runtime.diagnostics.ViolationLogger;
  * to decide whether to run inline or hand off elsewhere — see CLAUDE.md
  * rule 5 ("auto-reroute + warn is the default").
  *
- * <p><b>M7 scope note:</b> until M2 wires {@link
- * net.multiforge.runtime.region.RegionizedTaskQueue} to real {@code
- * ServerLevel}s, the only real reroute target is the pre-existing
- * single-threaded main-server executor (bound via {@link
- * #bindRerouteTarget}). {@link #reroute} is written against the {@link
- * RerouteTarget} interface specifically so M2 can swap that binding for a
- * real per-region mailbox without touching any patched call site again.
+ * <p>Two checks exist:
+ *
+ * <ul>
+ * <li>{@link #canMutate} — a thread-level check: is the caller a region
+ *     worker, the global region, or the server tick thread at all? Used by
+ *     sites that have no position (entity removal by identity).</li>
+ * <li>{@link #canMutateAt} — the positional check: is the chunk being
+ *     written owned by the region whose worker is calling? A region worker
+ *     writing into a chunk another region owns is a cross-region mutation
+ *     and is handed to the owner's mailbox via {@link #rerouteAt}, which
+ *     runs it on the owner's worker during that region's next task drain.
+ *     Mutations with no owning region (chunk not regionized) go to the
+ *     server-thread {@link RerouteTarget}.</li>
+ * </ul>
+ *
+ * <p>The positional lookups are supplied by the running host through
+ * {@link #bindPositionRouter}; with none bound, {@link #canMutateAt}
+ * degrades to {@link #canMutate}.
  */
 public final class OwnershipEnforcer {
 
@@ -51,7 +63,31 @@ public final class OwnershipEnforcer {
         void reroute(Runnable mutation);
     }
 
+    /**
+     * Resolves chunk ownership and delivers rerouted mutations to the owning
+     * region. Implemented by {@code MultiThreadedSchedulerHost}.
+     */
+    public interface PositionRouter {
+        /** Sentinel for "no region owns this chunk". */
+        long UNOWNED = -1L;
+
+        /**
+         * @return the owning region's id value, or {@link #UNOWNED}. Must be
+         *     non-blocking and safe to call from any thread.
+         */
+        long ownerOf(WorldRef world, int chunkX, int chunkZ);
+
+        /**
+         * Queue {@code mutation} on the region owning the chunk.
+         *
+         * @return {@code false} if no region owns it (the caller falls back
+         *     to the server-thread target)
+         */
+        boolean queueOnOwner(WorldRef world, int chunkX, int chunkZ, Runnable mutation);
+    }
+
     private static final String MODE_PROP = "multiforge.ownership.mode";
+    private static volatile PositionRouter positionRouter;
 
     private static volatile Mode mode = parseMode(System.getProperty(MODE_PROP, "reroute"));
     private static volatile Thread tickThread;
@@ -160,6 +196,67 @@ public final class OwnershipEnforcer {
     public static void reroute(String site, Runnable mutation) {
         Objects.requireNonNull(site, "site");
         Objects.requireNonNull(mutation, "mutation");
+        rerouteTarget.reroute(mutation);
+    }
+
+    /** Bind the host's ownership lookups (see {@link PositionRouter}). */
+    public static void bindPositionRouter(PositionRouter router) {
+        positionRouter = Objects.requireNonNull(router, "router");
+    }
+
+    /** Unbind the position router — the host is shutting down. */
+    public static void unbindPositionRouter() {
+        positionRouter = null;
+    }
+
+    /**
+     * Positional ownership check for a mutation of chunk ({@code chunkX},
+     * {@code chunkZ}) in {@code world}.
+     *
+     * <ul>
+     * <li>Mode {@link Mode#OFF}, the global region, and the server tick
+     *     thread: allowed. In the barrier tick model these never run
+     *     concurrently with region workers.</li>
+     * <li>A region worker: allowed iff its region owns the chunk. Otherwise
+     *     the probe {@code <site>:cross-region} is bumped, a rate-limited
+     *     warning logged ({@link Mode#STRICT} throws instead), and
+     *     {@code false} returned so the call site reroutes via
+     *     {@link #rerouteAt}.</li>
+     * <li>Any other thread: as {@link #canMutate}.</li>
+     * </ul>
+     */
+    public static boolean canMutateAt(String site, WorldRef world, int chunkX, int chunkZ) {
+        Objects.requireNonNull(site, "site");
+        if (mode == Mode.OFF) return true;
+        OwnerToken tok = OwnerToken.current();
+        if (tok.domain() != Domain.REGION) return canMutate(site);
+        PositionRouter router = positionRouter;
+        if (router == null || world == null) return true;
+        long owner = router.ownerOf(world, chunkX, chunkZ);
+        if (owner == tok.regionId()) return true;
+        ProbeRegistry.bump(site + ":cross-region");
+        String msg = "cross-region mutation of chunk [" + chunkX + ", " + chunkZ + "] in " + world.dimensionId()
+                + " from region " + tok.regionId() + " (owner="
+                + (owner == PositionRouter.UNOWNED ? "none" : Long.toString(owner)) + ") — rerouted to owner";
+        ViolationLogger.warn(site, msg);
+        if (mode == Mode.STRICT) {
+            throw new OwnershipViolationException(site, Thread.currentThread(), tok.domain());
+        }
+        return false;
+    }
+
+    /**
+     * Hand a mutation refused by {@link #canMutateAt} to the owner of the
+     * chunk, or to the server-thread {@link RerouteTarget} when the chunk
+     * has no owning region.
+     */
+    public static void rerouteAt(String site, WorldRef world, int chunkX, int chunkZ, Runnable mutation) {
+        Objects.requireNonNull(site, "site");
+        Objects.requireNonNull(mutation, "mutation");
+        PositionRouter router = positionRouter;
+        if (router != null && world != null && router.queueOnOwner(world, chunkX, chunkZ, mutation)) {
+            return;
+        }
         rerouteTarget.reroute(mutation);
     }
 
