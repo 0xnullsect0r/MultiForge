@@ -23,37 +23,25 @@
          this.registryAccess = p_270200_;
          this.damageSources = new DamageSources(p_270200_);
      }
-@@ -539,28 +544,79 @@ public abstract class Level extends net.neoforged.neoforge.attachment.Attachment
+@@ -538,29 +543,80 @@ public abstract class Level extends net.neoforged.neoforge.attachment.Attachment
+     }
  
      public void addBlockEntityTicker(TickingBlockEntity p_151526_) {
-         (this.tickingBlockEntities ? this.pendingBlockEntityTickers : this.blockEntityTickers).add(p_151526_);
-+        // MultiForge (multiforge-patches/02-region-tick/): route the newly
-+        // added ticker into the owning region's HolderManagerRegionData
-+        // slice (docs/design/m13-b3-region-tick.md section 4.2/5.3) so the
-+        // per-region BLOCK_ENTITIES phase body
-+        // (net.multiforge.runtime.region.BlockEntityTickRunner, B3.4) can
-+        // tick it. Guarded on RegionizedTickCoordinator
-+        // .regionsHandleBlockEntities so a fresh boot, a not-yet-installed
-+        // runtime, or a non-server Level (client side) is a safe no-op --
-+        // the vanilla-inline tickBlockEntities() body below still ticks
-+        // this.blockEntityTickers directly until B3.5 removes that
-+        // fallback.
-+        if (net.multiforge.neoforge.RegionizedTickCoordinator.regionsHandleBlockEntities(this)) {
-+            net.multiforge.neoforge.tick.BlockEntityTickerBridge.onTickerAdded(this, p_151526_);
+-        (this.tickingBlockEntities ? this.pendingBlockEntityTickers : this.blockEntityTickers).add(p_151526_);
++        // MultiForge (multiforge-patches/02-region-tick/): once regions tick this
++        // level's block entities (RegionizedTickCoordinator.regionsHandleBlockEntities),
++        // a new ticker goes straight to its owning region's HolderManagerRegionData
++        // slice (docs/design/m13-b3-region-tick.md section 5.3). One whose chunk is not
++        // regionized yet stays on this level's own list, and tickBlockEntities routes
++        // it on a later tick. Region workers add tickers concurrently, so the level's
++        // lists are guarded by the same monitor as the fresh-block-entity lists.
++        if (net.multiforge.neoforge.RegionizedTickCoordinator.regionsHandleBlockEntities(this)
++                && net.multiforge.neoforge.tick.BlockEntityTickerBridge.onTickerAdded(this, p_151526_)) {
++            return;
 +        }
-+    }
-+
-+    // MultiForge (multiforge-patches/02-region-tick/): read-only snapshot
-+    // accessor for BlockEntityTickerBridge.installOnLevel's one-time
-+    // backfill pass (docs/design/m13-b3-region-tick.md section 5.3) --
-+    // tickers already registered before this level's per-region wiring
-+    // came up (e.g. chunks loaded during an early boot window) still need
-+    // to be routed into their owning region's HolderManagerRegionData
-+    // once wiring is ready, or they would silently stop ticking forever
-+    // once tickBlockEntities() starts skipping this level's inline
-+    // iteration.
-+    public java.util.List<TickingBlockEntity> mfBlockEntityTickersSnapshot() {
-+        return java.util.List.copyOf(this.blockEntityTickers);
++        synchronized (this.freshBlockEntities) {
++            (this.tickingBlockEntities ? this.pendingBlockEntityTickers : this.blockEntityTickers).add(p_151526_);
++        }
      }
  
      public void addFreshBlockEntities(java.util.Collection<BlockEntity> beList) {
@@ -105,8 +93,22 @@
 +        // regions tick the block entities (they tick after this method returns).
 +        mf$fresh.forEach(BlockEntity::onLoad);
 +        if (net.multiforge.neoforge.RegionizedTickCoordinator.regionsHandleBlockEntities(this)) {
++            // Route the tickers this level still holds into their regions; those whose
++            // chunk is not regionized yet stay here for the next tick.
++            java.util.List<TickingBlockEntity> mf$held;
 +            synchronized (this.freshBlockEntities) {
++                mf$held = new java.util.ArrayList<>(this.blockEntityTickers);
++                mf$held.addAll(this.pendingBlockEntityTickers);
++                this.blockEntityTickers.clear();
++                this.pendingBlockEntityTickers.clear();
 +                this.tickingBlockEntities = false;
++            }
++            if (!mf$held.isEmpty()) {
++                java.util.List<TickingBlockEntity> mf$left = net.multiforge.neoforge.tick.BlockEntityTickerBridge.routePending(
++                        (net.minecraft.server.level.ServerLevel) this, mf$held);
++                synchronized (this.freshBlockEntities) {
++                    this.blockEntityTickers.addAll(mf$left);
++                }
 +            }
 +            profilerfiller.pop();
 +            return;
@@ -125,7 +127,19 @@
          profilerfiller.pop();
      }
  
-@@ -1174,6 +1232,11 @@ public abstract class Level extends net.neoforged.neoforge.attachment.Attachment
+@@ -784,7 +842,10 @@ public abstract class Level extends net.neoforged.neoforge.attachment.Attachment
+         if (this.isOutsideBuildHeight(p_46716_)) {
+             return null;
+         } else {
+-            return !this.isClientSide && Thread.currentThread() != this.thread
++            // MultiForge (multiforge-patches/02-region-tick/): Vanilla answers null off the
++            // level's own thread; region workers (and the global region) tick this level's
++            // blocks and must see its block entities, as they already see its block states.
++            return !this.isClientSide && Thread.currentThread() != this.thread && !net.multiforge.neoforge.OwnershipGuard.isTickDomain()
+                 ? null
+                 : this.getChunkAt(p_46716_).getBlockEntity(p_46716_, LevelChunk.EntityCreationType.IMMEDIATE);
+         }
+@@ -1174,6 +1235,11 @@ public abstract class Level extends net.neoforged.neoforge.attachment.Attachment
      }
  
      public ProfilerFiller getProfiler() {

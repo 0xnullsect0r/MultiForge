@@ -135,4 +135,16 @@ public final class OwnershipGuard {
         OwnershipEnforcer.reroute(site, work);
         return true;
     }
+
+    /**
+     * @return whether the calling thread is ticking the world on MultiForge's
+     *     behalf right now — a region worker or the global region. Vanilla
+     *     code that only serves "the level's own thread" (e.g. {@code
+     *     Level.getBlockEntity}) must serve these threads too.
+     */
+    public static boolean isTickDomain() {
+        net.multiforge.runtime.ownership.Domain domain = net.multiforge.runtime.ownership.OwnerToken.current().domain();
+        return domain == net.multiforge.runtime.ownership.Domain.REGION
+                || domain == net.multiforge.runtime.ownership.Domain.GLOBAL;
+    }
 }

@@ -25,7 +25,11 @@ upstream/neoforge-1.21.1):
   $EDITOR build/mf-patches/work/net/minecraft/...   # edit the fully-patched files
   scripts/mf-patches.py fixup 02-region-tick        # fold the edit into that group
   scripts/mf-patches.py export                      # rewrite multiforge-patches/*
-  scripts/mf-patches.py sync                        # copy HEAD back into the fork tree
+
+Then build as usual: :neoforge:applyMultiforgePatches (run by compileJava) resets
+every target to its pristine copy and applies the exported patches. Never copy
+work-repo files into the fork tree by hand — the applier would take them for
+freshly generated pristine sources.
 
 `add FILE` starts tracking a Vanilla file no patch touched yet (run it before
 editing that file). Only net/minecraft/** is handled here; patches against the
@@ -198,13 +202,6 @@ def _normalise(text):
             if l.startswith(("+", "-")) and not l.startswith(("+++", "---"))]
 
 
-def cmd_sync(_):
-    files = git("ls-files", capture=True).stdout.split()
-    for t in files:
-        shutil.copyfile(WORK / t, TREE / t)
-    print(f"synced {len(files)} files into {TREE.relative_to(ROOT)}")
-
-
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -215,9 +212,8 @@ def main():
     f.add_argument("group")
     f.add_argument("files", nargs="*", help="work-repo paths to fold in (default: every change)")
     sub.add_parser("export")
-    sub.add_parser("sync")
     args = ap.parse_args()
-    {"init": cmd_init, "add": cmd_add, "fixup": cmd_fixup, "export": cmd_export, "sync": cmd_sync}[args.cmd](args)
+    {"init": cmd_init, "add": cmd_add, "fixup": cmd_fixup, "export": cmd_export}[args.cmd](args)
 
 
 if __name__ == "__main__":

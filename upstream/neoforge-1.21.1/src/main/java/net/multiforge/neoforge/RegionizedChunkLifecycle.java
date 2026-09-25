@@ -166,6 +166,12 @@ public final class RegionizedChunkLifecycle {
             }
         }
         host.unregisterChunk(world, pos.x, pos.z);
+        // The chunk is gone: drop its holder unless a ticket already waits for
+        // its next load. A holder left behind would keep a stale owning region
+        // and grow the holder table for every chunk ever visited.
+        if (manager != null) {
+            manager.dropHolderIfUnticketed(new net.multiforge.api.world.ChunkPos(pos.x, pos.z));
+        }
     }
 
     /**

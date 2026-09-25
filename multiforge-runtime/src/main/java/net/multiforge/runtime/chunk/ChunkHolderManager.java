@@ -96,6 +96,10 @@ public final class ChunkHolderManager implements RegionListener {
     private final ConcurrentMap<ChunkPos, NewChunkHolder> byChunk = new ConcurrentHashMap<>();
     private final ConcurrentMap<RegionId, HolderManagerRegionData> perRegion = new ConcurrentHashMap<>();
     private final ConcurrentMap<RegionId, PerRegionTicketMap> ticketsByRegion = new ConcurrentHashMap<>();
+    // Holder positions indexed by owning region, kept in step with every owner
+    // change made through this manager, so holdersOwnedBy (read by every region
+    // phase, every tick) costs O(region's chunks), not O(every chunk).
+    private final ConcurrentMap<RegionId, Set<ChunkPos>> byRegion = new ConcurrentHashMap<>();
 
     /**
      * Lazy accessor for this world's regionizer. Non-null in production
@@ -145,11 +149,22 @@ public final class ChunkHolderManager implements RegionListener {
     }
 
     public NewChunkHolder createHolder(ChunkPos pos, RegionId owner) {
-        return byChunk.computeIfAbsent(pos, p -> {
-            NewChunkHolder h = new NewChunkHolder(world, p);
-            h.setOwningRegion(owner);
-            return h;
-        });
+        // An existing holder is re-owned: a chunk that unloaded and loads again
+        // may belong to a different region than when its holder was made.
+        NewChunkHolder h = byChunk.computeIfAbsent(pos, p -> new NewChunkHolder(world, p));
+        assignOwner(h, owner);
+        return h;
+    }
+
+    /** Set {@code holder}'s owner and move it in {@link #byRegion}. */
+    private void assignOwner(NewChunkHolder holder, RegionId owner) {
+        RegionId prev = holder.owningRegion();
+        if (!holder.setOwningRegion(owner)) return;
+        if (prev != null) {
+            Set<ChunkPos> prevSet = byRegion.get(prev);
+            if (prevSet != null) prevSet.remove(holder.position());
+        }
+        byRegion.computeIfAbsent(owner, r -> ConcurrentHashMap.newKeySet()).add(holder.position());
     }
 
     /**
@@ -258,11 +273,8 @@ public final class ChunkHolderManager implements RegionListener {
         if (readLock != null) readLock.lock();
         try {
             RegionId actualOwner = resolveActualOwner(regionizer, pos, owner);
-            NewChunkHolder holder = byChunk.computeIfAbsent(pos, p -> {
-                NewChunkHolder h = new NewChunkHolder(world, p);
-                h.setOwningRegion(actualOwner);
-                return h;
-            });
+            NewChunkHolder holder = byChunk.computeIfAbsent(pos, p -> new NewChunkHolder(world, p));
+            assignOwner(holder, actualOwner);
             PerRegionTicketMap tickets = ticketsFor(actualOwner);
             boolean added = tickets.addTicket(pos, ticket);
             if (!added) return false;
@@ -346,8 +358,12 @@ public final class ChunkHolderManager implements RegionListener {
         if (sourceData != null) regionData(target).merge(sourceData);
         PerRegionTicketMap sourceTickets = ticketsByRegion.remove(source);
         if (sourceTickets != null) ticketsFor(target).merge(sourceTickets);
-        for (NewChunkHolder h : byChunk.values()) {
-            if (source.equals(h.owningRegion())) h.setOwningRegion(target);
+        Set<ChunkPos> moved = byRegion.remove(source);
+        if (moved != null) {
+            for (ChunkPos pos : moved) {
+                NewChunkHolder h = byChunk.get(pos);
+                if (h != null && source.equals(h.owningRegion())) assignOwner(h, target);
+            }
         }
     }
 
@@ -360,8 +376,13 @@ public final class ChunkHolderManager implements RegionListener {
         if (src != null) regionData(target).merge(src.split(h -> shouldLeave.test(h.position()), shouldLeave));
         PerRegionTicketMap srcTickets = ticketsByRegion.get(source);
         if (srcTickets != null) ticketsFor(target).merge(srcTickets.split(shouldLeave));
-        for (NewChunkHolder h : byChunk.values()) {
-            if (source.equals(h.owningRegion()) && shouldLeave.test(h.position())) h.setOwningRegion(target);
+        Set<ChunkPos> sourceChunks = byRegion.get(source);
+        if (sourceChunks != null) {
+            for (ChunkPos pos : List.copyOf(sourceChunks)) {
+                if (!shouldLeave.test(pos)) continue;
+                NewChunkHolder h = byChunk.get(pos);
+                if (h != null && source.equals(h.owningRegion())) assignOwner(h, target);
+            }
         }
     }
 
@@ -428,9 +449,12 @@ public final class ChunkHolderManager implements RegionListener {
      * returns.
      */
     public List<NewChunkHolder> holdersOwnedBy(RegionId region) {
-        List<NewChunkHolder> out = new ArrayList<>();
-        for (NewChunkHolder h : byChunk.values()) {
-            if (region.equals(h.owningRegion())) out.add(h);
+        Set<ChunkPos> chunks = byRegion.get(region);
+        if (chunks == null) return List.of();
+        List<NewChunkHolder> out = new ArrayList<>(chunks.size());
+        for (ChunkPos pos : chunks) {
+            NewChunkHolder h = byChunk.get(pos);
+            if (h != null && region.equals(h.owningRegion())) out.add(h);
         }
         return List.copyOf(out);
     }
@@ -441,7 +465,29 @@ public final class ChunkHolderManager implements RegionListener {
      * {@link #byChunk} from growing unbounded over a server's lifetime.
      */
     public NewChunkHolder dropHolder(ChunkPos pos) {
-        return byChunk.remove(pos);
+        NewChunkHolder h = byChunk.remove(pos);
+        if (h != null && h.owningRegion() != null) {
+            Set<ChunkPos> set = byRegion.get(h.owningRegion());
+            if (set != null) set.remove(pos);
+        }
+        return h;
+    }
+
+    /**
+     * Drop the holder at {@code pos} if no ticket keeps it — its chunk
+     * unloaded. A holder that still carries tickets (a ticket added ahead of
+     * the chunk's next load) is kept.
+     *
+     * @return whether a holder was dropped
+     */
+    public boolean dropHolderIfUnticketed(ChunkPos pos) {
+        NewChunkHolder h = byChunk.get(pos);
+        if (h == null) return false;
+        RegionId owner = h.owningRegion();
+        PerRegionTicketMap tickets = owner == null ? null : ticketsByRegion.get(owner);
+        PerChunkTickets at = tickets == null ? null : tickets.ticketsAt(pos);
+        if (at != null && !at.isEmpty()) return false;
+        return dropHolder(pos) != null;
     }
 
     // === RegionListener ===
@@ -484,5 +530,6 @@ public final class ChunkHolderManager implements RegionListener {
     public void onRegionDied(Region region) {
         perRegion.remove(region.id());
         ticketsByRegion.remove(region.id());
+        byRegion.remove(region.id());
     }
 }
