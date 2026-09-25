@@ -93,12 +93,8 @@ jobs:
     # + Gradle warm-up + cache miss slack. Longer than ci.yml's fork-compile
     # (30min) because we also run generateServerBinaryPatches + signInstallerJar.
     timeout-minutes: 40
-    # Fork build has historically been GHA-preempted on ubuntu-latest during
-    # neoFormDecompile (see ci.yml fork-compile comments). This job is retained
-    # as best-effort — the release still ships from build-jars alone if this
-    # job fails. Operator falls back to the local-build procedure in
-    # RELEASING.md if this happens.
-    continue-on-error: true
+    # Required: the patched server installer is the product. A release without
+    # it is not published (gh-release needs this job to succeed).
     needs: build-jars
     steps:
       - uses: actions/checkout@v4
@@ -122,17 +118,14 @@ jobs:
             :multiforge-runtime:publishToMavenLocal \
             --no-daemon --stacktrace
 
-      - name: Setup + apply MultiForge patches + build fork installer
+      - name: Setup + build fork installer
         working-directory: upstream/neoforge-1.21.1
-        # Two invocations for the pre-existing Gradle task-graph quirk
-        # (combined invocation wipes patches back to pristine before
-        # compileJava runs — see B3.2 flag).
+        # applyMultiforgePatches (run by compileJava) is idempotent: it resets
+        # every patched file to its pristine copy before applying, so it is
+        # safe whether or not setup just regenerated the sources.
         run: |
-          ./gradlew --no-configuration-cache --no-daemon --stacktrace --parallel --build-cache \
-            setup \
-            :neoforge:applyMultiforgePatches
-          ./gradlew --no-configuration-cache --no-daemon --stacktrace --parallel --build-cache \
-            :neoforge:signInstallerJar
+          ./gradlew --no-configuration-cache --no-daemon --stacktrace setup
+          ./gradlew --no-configuration-cache --no-daemon --stacktrace :neoforge:signInstallerJar
 
       - name: Assert the fork reports a real NeoForge version
         working-directory: upstream/neoforge-1.21.1
@@ -228,11 +221,6 @@ jobs:
     name: create GitHub release
     runs-on: ubuntu-latest
     needs: [build-jars, build-fork-installer]
-    # Explicit `needs: build-fork-installer` here would block gh-release
-    # if the advisory fork build fails. Split into a conditional:
-    # gh-release runs after build-jars regardless; if build-fork-installer
-    # succeeded, its artifact is also downloaded.
-    if: always() && needs.build-jars.result == 'success'
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
@@ -243,12 +231,11 @@ jobs:
           name: jars-${{ github.ref_name }}
           path: release/
 
-      - name: Download fork installer (optional)
+      - name: Download fork installer
         uses: actions/download-artifact@v4
         with:
           name: fork-installer-${{ github.ref_name }}
           path: release/
-        continue-on-error: true
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
