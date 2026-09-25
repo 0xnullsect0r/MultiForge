@@ -186,4 +186,69 @@ public class RegionTickBehaviourTests {
                     .thenSucceed();
         });
     }
+
+    @GameTest(template = TestsMod.TEMPLATE_3x3, timeoutTicks = 300)
+    @TestHolder(description = {
+            "A rerouted setBlock / addFreshEntity returns what Vanilla would have:",
+            "true when the block changes or the entity is added, false otherwise."
+    })
+    static void reroutedCallsReturnVanillaResults(final DynamicTest test) {
+        test.onGameTest(helper -> {
+            if (net.multiforge.runtime.ownership.OwnershipEnforcer.mode() == net.multiforge.runtime.ownership.OwnershipEnforcer.Mode.STRICT) {
+                helper.succeed();
+                return;
+            }
+            MultiThreadedSchedulerHost host = MultiForgeRegionizedRuntime.current();
+            helper.assertTrue(host != null, "runtime must be installed");
+            net.minecraft.server.level.ServerLevel level = helper.getLevel();
+            BlockPos here = helper.absolutePos(new BlockPos(1, 1, 1));
+            BlockPos far = here.offset(-2000, 0, 0);
+            BlockPos farSky = new BlockPos(far.getX(), level.getMaxBuildHeight() - 1, far.getZ());
+            BlockPos farOutside = new BlockPos(far.getX(), level.getMaxBuildHeight() + 10, far.getZ());
+            int farChunkX = far.getX() >> 4;
+            int farChunkZ = far.getZ() >> 4;
+            level.setChunkForced(farChunkX, farChunkZ, true);
+            Pig pig = EntityType.PIG.create(level);
+            helper.assertTrue(pig != null, "pig");
+            pig.moveTo(far.getX() + 0.5, far.getY(), far.getZ() + 0.5, 0, 0);
+            pig.setNoAi(true);
+            pig.setNoGravity(true);
+            java.util.concurrent.ConcurrentHashMap<String, Boolean> results = new java.util.concurrent.ConcurrentHashMap<>();
+            Runnable onNearWorker = () -> host.taskQueue().queueChunkTask(level.mfWorldRef(), here.getX() >> 4, here.getZ() >> 4, () -> {
+                results.put("gold", level.setBlock(far, Blocks.GOLD_BLOCK.defaultBlockState(), 3));
+                results.put("sameState", level.setBlock(farSky, Blocks.AIR.defaultBlockState(), 3));
+                results.put("outside", level.setBlock(farOutside, Blocks.STONE.defaultBlockState(), 3));
+                results.put("pig", level.addFreshEntity(pig));
+            });
+            helper.startSequence()
+                    .thenWaitUntil(() -> helper.assertTrue(
+                            level.hasChunk(farChunkX, farChunkZ)
+                                    && host.regionizerFor(level.mfWorldRef()).regionAtChunk(farChunkX, farChunkZ) != null,
+                            "far chunk not loaded and regionized yet"))
+                    .thenExecute(() -> level.setBlock(far, Blocks.AIR.defaultBlockState(), 3))
+                    .thenExecute(onNearWorker)
+                    .thenWaitUntil(() -> helper.assertTrue(results.containsKey("pig"), "worker task has not run yet"))
+                    .thenWaitUntil(() -> helper.assertTrue(
+                            level.getBlockState(far).is(Blocks.GOLD_BLOCK) && level.getEntity(pig.getUUID()) != null,
+                            "rerouted block and entity have not landed yet"))
+                    .thenExecute(() -> {
+                        helper.assertTrue(results.get("gold"), "rerouted setBlock that changes a block returned false");
+                        helper.assertFalse(results.get("sameState"), "rerouted setBlock of the existing state returned true");
+                        helper.assertFalse(results.get("outside"), "rerouted setBlock outside the build height returned true");
+                        helper.assertTrue(results.get("pig"), "rerouted addFreshEntity of a new entity returned false");
+                        results.clear();
+                    })
+                    // Adding the same entity again: Vanilla refuses a UUID the level already holds.
+                    .thenExecute(() -> host.taskQueue().queueChunkTask(level.mfWorldRef(), here.getX() >> 4, here.getZ() >> 4,
+                            () -> results.put("pigAgain", level.addFreshEntity(pig))))
+                    .thenWaitUntil(() -> helper.assertTrue(results.containsKey("pigAgain"), "worker task has not run yet"))
+                    .thenExecute(() -> {
+                        helper.assertFalse(results.get("pigAgain"), "rerouted addFreshEntity of a present UUID returned true");
+                        pig.discard();
+                        level.setBlock(far, Blocks.AIR.defaultBlockState(), 3);
+                        level.setChunkForced(farChunkX, farChunkZ, false);
+                    })
+                    .thenSucceed();
+        });
+    }
 }

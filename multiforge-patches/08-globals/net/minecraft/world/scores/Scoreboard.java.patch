@@ -73,6 +73,7 @@
 -                        Component component = p_313717_.getDisplayName();
 -                        if (component != null && !component.equals(score.display())) {
 -                            score.display(component);
+-                            flag1 = true;
 +                synchronized (Scoreboard.this) {
 +                    if (!flag) {
 +                        throw new IllegalStateException("Cannot modify read-only score");
@@ -84,22 +85,20 @@
 +                                score.display(component);
 +                                flag1 = true;
 +                            }
-+                        }
-+
-+                        if (p_313831_ != score.value()) {
-+                            score.value(p_313831_);
-                             flag1 = true;
                          }
 -                    }
--
+ 
 -                    if (p_313831_ != score.value()) {
 -                        score.value(p_313831_);
 -                        flag1 = true;
 -                    }
--
++                        if (p_313831_ != score.value()) {
++                            score.value(p_313831_);
++                            flag1 = true;
++                        }
+ 
 -                    if (flag1) {
 -                        this.sendScoreToPlayers();
-+
 +                        if (flag1) {
 +                            this.sendScoreToPlayers();
 +                        }
@@ -155,16 +154,16 @@
 -                score.setLocked(p_313822_);
 -                if (mutableboolean.isTrue()) {
 -                    this.sendScoreToPlayers();
+-                }
 +                synchronized (Scoreboard.this) {
 +                    score.setLocked(p_313822_);
 +                    if (mutableboolean.isTrue()) {
 +                        this.sendScoreToPlayers();
 +                    }
-+
-+                    Scoreboard.this.onScoreLockChanged(p_313717_, p_83473_);
-                 }
--
+ 
 -                Scoreboard.this.onScoreLockChanged(p_313717_, p_83473_);
++                    Scoreboard.this.onScoreLockChanged(p_313717_, p_83473_);
++                }
              }
  
              private void sendScoreToPlayers() {

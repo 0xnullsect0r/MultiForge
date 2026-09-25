@@ -80,6 +80,61 @@ public final class OwnershipGuard {
     }
 
     /**
+     * Reroute a {@code Level.setBlock} the caller may not run here, and return
+     * what Vanilla's {@code setBlock} would have returned: whether the block
+     * changes. Callers use that value (to consume an item, play a sound, count
+     * a placement), so answering {@code false} for every rerouted write would
+     * silently change their behaviour. The prediction reads the target chunk
+     * without its owner's cooperation, so it can be stale; when the owner
+     * applies the write, a differing result is counted under {@code
+     * reroute.Level.setBlock.mismatch} and logged.
+     */
+    public static boolean rerouteSetBlock(
+            Level level, BlockPos pos, net.minecraft.world.level.block.state.BlockState state, java.util.function.BooleanSupplier apply) {
+        boolean predicted = predictSetBlock(level, pos, state);
+        rerouteChecked("Level.setBlock", level, pos, predicted, apply);
+        return predicted;
+    }
+
+    static boolean predictSetBlock(Level level, BlockPos pos, net.minecraft.world.level.block.state.BlockState state) {
+        if (level.isOutsideBuildHeight(pos) || level.isDebug()) return false;
+        net.minecraft.world.level.chunk.LevelChunk chunk = level instanceof net.minecraft.server.level.ServerLevel serverLevel
+                ? serverLevel.getChunkSource().getChunkNow(pos.getX() >> 4, pos.getZ() >> 4)
+                : null;
+        // Not loaded: the owner loads it and writes, which changes the block
+        // unless it already held this state; assume it did not.
+        if (chunk == null) return true;
+        return chunk.getBlockState(pos) != state;
+    }
+
+    /**
+     * Reroute a {@code ServerLevel.addFreshEntity} the caller may not run here,
+     * and return what Vanilla would have: {@code false} for an entity that is
+     * already removed or whose UUID the level already holds, else {@code true}.
+     * Mismatches with the owner's actual result are counted and logged, as for
+     * {@link #rerouteSetBlock}.
+     */
+    public static boolean rerouteAddFreshEntity(
+            net.minecraft.server.level.ServerLevel level, net.minecraft.world.entity.Entity entity, java.util.function.BooleanSupplier apply) {
+        boolean predicted = !entity.isRemoved() && level.getEntity(entity.getUUID()) == null;
+        rerouteChecked("ServerLevel.addFreshEntity", level, entity.blockPosition(), predicted, apply);
+        return predicted;
+    }
+
+    private static void rerouteChecked(String site, Level level, BlockPos pos, boolean predicted, java.util.function.BooleanSupplier apply) {
+        rerouteAt(site, level, pos, () -> {
+            boolean actual = apply.getAsBoolean();
+            if (actual != predicted) {
+                net.multiforge.runtime.diagnostics.ProbeRegistry.bump("reroute." + site + ".mismatch");
+                net.multiforge.runtime.diagnostics.ViolationLogger.warn(
+                        site + ".mismatch",
+                        "rerouted " + site + " at " + pos + " returned " + predicted + " to its caller but " + actual
+                                + " when applied by the owner (the target changed in between)");
+            }
+        });
+    }
+
+    /**
      * Defer an entity move that would take {@code entity} into a chunk of
      * {@code target} owned by another region. Called at the top of the
      * teleport entry points. On a region worker, moving an entity into a

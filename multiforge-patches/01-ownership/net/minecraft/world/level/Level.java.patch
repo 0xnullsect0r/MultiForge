@@ -14,18 +14,18 @@
 +            final BlockState multiforge$state = p_46606_;
 +            final int multiforge$flags = p_46607_;
 +            final int multiforge$recursionLeft = p_46608_;
-+            net.multiforge.neoforge.OwnershipGuard.rerouteAt(
-+                    "Level.setBlock",
++            // Returns whether the block will change, as Vanilla would.
++            return net.multiforge.neoforge.OwnershipGuard.rerouteSetBlock(
 +                    this,
 +                    multiforge$pos,
++                    multiforge$state,
 +                    () -> this.setBlock(multiforge$pos, multiforge$state, multiforge$flags, multiforge$recursionLeft));
-+            return false;
 +        }
 +
          if (this.isOutsideBuildHeight(p_46605_)) {
              return false;
          } else if (!this.isClientSide && this.isDebug()) {
-@@ -1113,6 +1131,21 @@ public abstract class Level extends net.neoforged.neoforge.attachment.Attachment
+@@ -1124,6 +1142,21 @@ public abstract class Level extends net.neoforged.neoforge.attachment.Attachment
          return this.dimension;
      }
  
