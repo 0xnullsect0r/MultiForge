@@ -29,6 +29,16 @@ dependencyResolutionManagement {
         // so :multiforge-client can resolve its runtime dep without
         // needing to re-publish through Maven Central.
         mavenLocal()
+        // multiforge-bench's protocol bots: MCProtocolLib (MIT) and the two
+        // artifacts of its dependency tree that are not on Maven Central.
+        maven("https://repo.opencollab.dev/main") {
+            name = "OpenCollab"
+            content {
+                includeGroup("org.geysermc.mcprotocollib")
+                includeGroup("com.nukkitx.fastutil")
+                includeGroup("org.cloudburstmc.math")
+            }
+        }
     }
 }
 

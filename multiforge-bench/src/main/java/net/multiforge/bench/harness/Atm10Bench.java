@@ -12,6 +12,7 @@
  */
 package net.multiforge.bench.harness;
 
+import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
@@ -21,98 +22,92 @@ import java.util.Map;
 import java.util.stream.Stream;
 
 /**
- * Entry point for {@code :multiforge-bench:atm10} — the Phase 7.4 ATM10
- * modpack bench profile.
+ * Entry point for {@code :multiforge-bench:atm10} — a large-modpack MSPT
+ * profile (named for All the Mods 10, the pack the milestone gate names).
  *
- * <p>ATM10 is a ~500 MB / ~500-mod modpack. Downloading it as part of a
- * bench task would be expensive and fragile (network flake, CurseForge
- * auth walls, license terms on redistribution), so this task never
- * fetches it itself. Instead it takes a user-provided, already-prepared
- * ATM10-formatted server directory via {@code -PmodpackDir=<path>} — one
- * containing {@code mods/} and (optionally) {@code config/}
- * subdirectories, e.g. the unzipped server pack — copies those into a
- * fresh MultiForge dev-server run directory, boots, and runs the same
- * sprint-based MSPT capture {@link VanillaBench} uses.
+ * <p>The pack comes from either
  *
- * <p>Without a usable {@code -PmodpackDir}, this prints setup
- * instructions and exits with status 2: a bench that measured nothing must
- * not look like a passing run.
+ * <ul>
+ *   <li>{@code bench.modpackDir} — an unpacked server pack (a directory
+ *       holding {@code mods/} and usually {@code config/}), or</li>
+ *   <li>{@code bench.modpackUrl} plus {@code bench.modpackSha256} — a server
+ *       pack zip fetched, verified and unpacked by {@link ModpackFetcher}
+ *       into {@code bench.cacheDir} (reused while the digest matches).</li>
+ * </ul>
+ *
+ * <p>Its {@code mods/} and {@code config/} are copied into the installed
+ * server ({@link BenchSetup}), which boots and sprints {@code bench.ticks}
+ * ticks like {@link VanillaBench}. With no pack given, this prints how to
+ * supply one and exits with status 2: a bench that measured nothing must not
+ * look like a passing run.
  */
 public final class Atm10Bench {
 
     private static final String HELP_MESSAGE =
             """
-            Atm10Bench: no modpack directory given.
+            Atm10Bench: no modpack given. Either point at an unpacked server pack:
 
-            Point this task at a prepared ATM10-formatted server directory
-            (one containing a mods/ subdirectory, and usually a config/
-            subdirectory too — e.g. the unzipped server pack from the ATM10
-            CurseForge/Modrinth release) via:
+              ./gradlew :multiforge-bench:atm10 -PmodpackDir=/path/to/server-pack
 
-              ./gradlew :multiforge-bench:atm10 -PmodpackDir=/path/to/atm10-server
+            or at a server-pack zip and its SHA-256 (downloaded once, verified):
 
-            Optional: -Pticks=<n> (default 12000 = 10 game-minutes) and
-            -Pworkers=<n> (default 4).
+              ./gradlew :multiforge-bench:atm10 -PmodpackUrl=https://.../ServerFiles.zip \\
+                  -PmodpackSha256=<hex>
 
-            See docs/design/m9-phase7-runbook.md §5 for the full Phase 7.4
-            bench-harness scope and pass criteria. This task intentionally
-            does not download the ATM10 pack itself — that is fragile and
-            expensive to do inside a bench task, so it is left as an
-            operator-provided input.
+            Optional: -Pticks=<n> (default 12000), -Pworkers=<n> (default 4),
+            -Pserver=stock for the plain NeoForge control.
             """;
 
     public static void main(String[] args) throws Exception {
-        String modpackDirProp = System.getProperty("bench.modpackDir", "").trim();
-        if (modpackDirProp.isEmpty()) {
+        Path modpackDir;
+        try {
+            modpackDir = resolveModpack();
+        } catch (IOException e) {
+            System.err.println("Atm10Bench: " + e.getMessage() + "\n\n" + HELP_MESSAGE);
+            System.exit(2);
+            return;
+        }
+        if (modpackDir == null) {
             System.err.println(HELP_MESSAGE);
             System.exit(2);
-        }
-
-        Path modpackDir = Path.of(modpackDirProp);
-        if (!Files.isDirectory(modpackDir)) {
-            System.out.println("Atm10Bench: -PmodpackDir=" + modpackDirProp
-                    + " does not exist or is not a directory.\n\n" + HELP_MESSAGE);
-            System.exit(2);
+            return;
         }
         Path modsDir = modpackDir.resolve("mods");
         Path configDir = modpackDir.resolve("config");
-        if (!Files.isDirectory(modsDir)) {
-            System.out.println("Atm10Bench: expected a mods/ subdirectory under " + modpackDir
-                    + " — is this an ATM10-formatted server dir?\n\n" + HELP_MESSAGE);
-            System.exit(2);
-        }
 
         long ticks = Long.getLong("bench.ticks", 12000L);
         int workers = Integer.getInteger("bench.workers", 4);
-        Path workspaceDir = Path.of(System.getProperty("bench.workspaceDir", "upstream/neoforge-1.21.1"));
-        Path outputFile =
-                Path.of(System.getProperty("bench.outputFile", "docs/verification/m9/7.4/atm10/patched.json"));
-        Path bootLog = Path.of(System.getProperty("bench.bootLog", "multiforge-bench/build/bench-logs/atm10-boot.log"));
+        String flavour = BenchSetup.flavour();
+        Path outputFile = Path.of(System.getProperty(
+                "bench.outputFile",
+                "docs/verification/m9/7.4/atm10/" + (flavour.equals("stock") ? "baseline" : "patched") + ".json"));
+        Path bootLog = Path.of(System.getProperty(
+                "bench.bootLog", "multiforge-bench/build/bench-logs/atm10-" + flavour + "-boot.log"));
 
         long modJarCount;
         try (Stream<Path> s = Files.list(modsDir)) {
             modJarCount = s.filter(p -> p.toString().endsWith(".jar")).count();
         }
-        System.out.println("Atm10Bench: modpackDir=" + modpackDir.toAbsolutePath() + " (" + modJarCount
-                + " mod jars) workers=" + workers + " ticks=" + ticks);
+        System.out.println("Atm10Bench: modpack=" + modpackDir.toAbsolutePath() + " (" + modJarCount
+                + " mod jars) server=" + flavour + " workers=" + workers + " ticks=" + ticks);
 
-        HeadlessServerRunner.Config config = new HeadlessServerRunner.Config(
-                workspaceDir, workers, "1234567890", 20, modsDir, Files.isDirectory(configDir) ? configDir : null, "");
+        HeadlessServerRunner.Config config = HeadlessServerRunner.Config.of(BenchSetup.install(), workers, "1234567890")
+                .withMods(modsDir, Files.isDirectory(configDir) ? configDir : null);
         MetricsCollector metrics = new MetricsCollector();
         Instant start = Instant.now();
 
         Map<String, Object> extra = new LinkedHashMap<>();
-        extra.put("modpack_dir", modpackDir.toAbsolutePath().toString());
+        extra.put("server", flavour);
+        extra.put("pacing", "sprint");
+        extra.put("modpack", modpackDir.toAbsolutePath().toString());
         extra.put("mod_jar_count", modJarCount);
 
         try (HeadlessServerRunner runner = new HeadlessServerRunner(config, bootLog)) {
-            boolean bootOk = runner.boot(metrics);
-            if (!bootOk) {
+            if (!runner.boot(metrics)) {
                 System.err.println(
                         "Atm10Bench: server failed to boot within timeout with the given modpack — see " + bootLog);
-                BenchResult failure =
-                        BenchResult.from("atm10", workers, ticks, elapsedMs(start), metrics, 0, false, false, extra);
-                failure.writeTo(outputFile);
+                BenchResult.from("atm10", workers, ticks, elapsedMs(start), metrics, 0, false, false, extra)
+                        .writeTo(outputFile);
                 System.exit(1);
                 return;
             }
@@ -121,12 +116,29 @@ public final class Atm10Bench {
             boolean cleanStop = runner.shutdown(Duration.ofSeconds(3));
 
             BenchResult result = BenchResult.from(
-                    "atm10", workers, ticks, elapsedMs(start), metrics, runner.heapPeakMb(), true, cleanStop, extra);
+                    "atm10", workers, ticks, elapsedMs(start), metrics, runner.rssPeakMb(), true, cleanStop, extra);
             Files.createDirectories(outputFile.toAbsolutePath().getParent());
             result.writeTo(outputFile);
             System.out.println(result.toJson());
             System.out.println("Atm10Bench: wrote " + outputFile.toAbsolutePath());
         }
+    }
+
+    /** The unpacked pack's server root, or null when neither property is set. */
+    private static Path resolveModpack() throws IOException {
+        String dir = System.getProperty("bench.modpackDir", "").trim();
+        if (!dir.isEmpty()) {
+            Path p = Path.of(dir);
+            if (!Files.isDirectory(p)) throw new IOException("modpackDir " + dir + " is not a directory");
+            return ModpackFetcher.findServerRoot(p);
+        }
+        String url = System.getProperty("bench.modpackUrl", "").trim();
+        if (url.isEmpty()) return null;
+        String sha = System.getProperty("bench.modpackSha256", "").trim();
+        Path cache = Path.of(System.getProperty("bench.cacheDir", "multiforge-bench/build"));
+        String source = url.contains("://") ? url : Path.of(url).toUri().toString();
+        return ModpackFetcher.findServerRoot(
+                ModpackFetcher.ensureDownloaded(cache, source, sha.isEmpty() ? null : sha));
     }
 
     private static long elapsedMs(Instant start) {

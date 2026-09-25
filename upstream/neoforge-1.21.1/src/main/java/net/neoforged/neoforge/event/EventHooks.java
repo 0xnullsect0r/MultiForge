@@ -1017,6 +1017,7 @@ public class EventHooks {
      * @param server   The current server
      */
     public static void fireServerTickPost(BooleanSupplier haveTime, MinecraftServer server) {
+        net.multiforge.runtime.diagnostics.TickStats.record(server.getTickTimesNanos()[server.getTickCount() % 100], System.nanoTime());
         NeoForge.EVENT_BUS.post(new ServerTickEvent.Post(haveTime, server));
     }
 

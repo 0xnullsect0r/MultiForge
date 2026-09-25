@@ -23,112 +23,174 @@ import java.util.Map;
 import java.util.Random;
 
 /**
- * Entry point for {@code :multiforge-bench:swarm} — the Phase 7.4
- * headless bot swarm at a configurable player count.
+ * Entry point for {@code :multiforge-bench:swarm} — a headless player swarm
+ * held for a real-time window, measuring whether the server keeps 20 TPS.
  *
- * <p><b>Simplified swarm (documented per the Phase 7.4a task brief):</b>
- * this does <em>not</em> open real Minecraft client connections. A
- * from-scratch handshake + login + play-packet client, or a
- * license-compatible off-the-shelf one, was judged too large a scope
- * addition for this pass (and would need its own license-compat
- * review per CLAUDE.md before landing). Instead this drives the
- * already-booted server over the same RCON channel {@code vanilla} and
- * {@code atm10} use:
+ * <p><b>Bots (default, {@code bench.swarmMode=bots}).</b> {@link BotSwarm}
+ * connects {@code bench.players} real protocol clients over the game port.
+ * Once they are in, RCON makes them creative, gives them dirt, and spreads
+ * them over a {@code bench.spread}-block radius around spawn so they land in
+ * different regions; then they walk, place and break blocks for the run
+ * duration. This exercises the whole player path: login and configuration,
+ * chunk sending and tracking per player, movement handling, block
+ * interaction and the resulting block and light updates, and entity
+ * tracking between players.
  *
- * <ol>
- *   <li>{@code /summon minecraft:armor_stand} once per simulated player,
- *       scattered around spawn, tagged {@code mfbench_swarm};</li>
- *   <li>{@code /forceload add} over the scatter area, so the swarm's
- *       footprint stays chunk-loaded/tracked like a real player's render
- *       distance would keep it loaded;</li>
- *   <li>a real-time churn loop for the run duration: each round moves
- *       every bot with {@code execute as @e[tag=mfbench_swarm] at @s run
- *       tp @s ~dx ~ ~dz} (a genuine random-walk step per entity, one RCON
- *       round-trip regardless of player count) and periodically fires a
- *       {@code particle} burst per bot as a stand-in for "dig" activity;</li>
- *   <li>{@code /kill @e[tag=mfbench_swarm]} + {@code /forceload remove
- *       all} to tear the swarm back down before {@code stop}.</li>
- * </ol>
+ * <p><b>Armor stands ({@code bench.swarmMode=armor-stand}).</b> The old
+ * fallback, kept for machines that cannot afford the client-side decoding
+ * cost of many bots: RCON {@code /summon}s tagged armor stands under a
+ * forceload and teleports them in a random walk. No connection, chunk
+ * sending or player tracking is exercised; the result says which mode ran.
  *
- * <p>This exercises the chunk-load/chunk-tracking and per-entity tick
- * paths under N-way concurrent load without needing real player
- * connections — it does <em>not</em> exercise the packet-flush /
- * client-connection paths a real protocol client would (no client
- * sockets are ever opened against the server's game port). If a real
- * protocol client lands in a future pass, it should slot in as an
- * alternate {@code SwarmBench} mode behind the same {@code -Pplayers=}
- * flag.
- *
- * <p>Unlike {@link VanillaBench} and {@link Atm10Bench}, this profile
- * runs the server at its <em>natural</em> pace (no {@code /tick
- * sprint}) — the whole point of a swarm bench is whether sustained
- * concurrent load holds 20 TPS over real time, which a sprint (no
- * pacing) can't measure.
+ * <p>The server runs at its natural pace (no {@code /tick sprint}) for
+ * {@code bench.ticks / 20} seconds after the swarm is in place; timing comes
+ * from {@code /multiforge tickstats} over exactly that window.
  */
 public final class SwarmBench {
 
     private static final String SWARM_TAG = "mfbench_swarm";
+    private static final String BOT_PREFIX = "mfbot";
 
     public static void main(String[] args) throws Exception {
         int players = Integer.getInteger("bench.players", 20);
         long ticks = Long.getLong("bench.ticks", 12000L);
-        Path workspaceDir = Path.of(System.getProperty("bench.workspaceDir", "upstream/neoforge-1.21.1"));
+        int workers = Integer.getInteger("bench.workers", Runtime.getRuntime().availableProcessors());
+        int spread = Integer.getInteger("bench.spread", 512);
+        int renderDistance = Integer.getInteger("bench.renderDistance", 8);
+        String mode = System.getProperty("bench.swarmMode", "bots");
         Path outputFile = Path.of(
                 System.getProperty("bench.outputFile", "docs/verification/m9/7.4/swarm-" + players + "/patched.json"));
         Path bootLog = Path.of(System.getProperty(
                 "bench.bootLog", "multiforge-bench/build/bench-logs/swarm-" + players + "-boot.log"));
-        // Phase X task X.8 (docs/verification/m456/x8-strict-mode-swarm.md)
-        // needs the nested `:neoforge:runServer` launch to carry
-        // -Dmultiforge.regiontick.strict=on so the strict-mode watchdog is
-        // actually armed for the run — nothing plumbed extraJvmArgs through
-        // to this Config field until now (VanillaBench/Atm10Bench still
-        // hardcode ""). See HeadlessServerRunner.Config#extraJvmArgs.
         String extraJvmArgs = System.getProperty("bench.extraJvmArgs", "");
+        if (!mode.equals("bots") && !mode.equals("armor-stand")) {
+            System.err.println("SwarmBench: bench.swarmMode must be bots or armor-stand, not " + mode);
+            System.exit(2);
+        }
 
-        // ticks/20 mirrors the "N ticks at the natural 20 TPS target"
-        // framing the other two profiles use for -Pticks, but here it is
-        // an actual real-time wall-clock duration, not a sprint count.
         Duration churnDuration = Duration.ofMillis(ticks * 50L);
+        System.out.println("SwarmBench: players=" + players + " mode=" + mode + " workers=" + workers + " duration="
+                + churnDuration.toSeconds() + "s spread=" + spread);
 
-        System.out.println("SwarmBench: players=" + players + " duration=" + churnDuration.toSeconds()
-                + "s (real-time; simplified RCON /summon armor-stand swarm — see multiforge-bench/README.md)");
-
-        HeadlessServerRunner.Config config = new HeadlessServerRunner.Config(
-                workspaceDir, 1, "1234567890", Math.max(players + 4, 20), null, null, extraJvmArgs);
+        HeadlessServerRunner.Config config = HeadlessServerRunner.Config.of(BenchSetup.install(), workers, "1234567890")
+                .withMaxPlayers(Math.max(players + 4, 20))
+                .withExtraJvmArgs(extraJvmArgs)
+                .withProperties(Map.of("allow-flight", "true", "view-distance", String.valueOf(renderDistance)));
         MetricsCollector metrics = new MetricsCollector();
         Instant start = Instant.now();
 
         Map<String, Object> extra = new LinkedHashMap<>();
+        extra.put("server", BenchSetup.flavour());
         extra.put("players", players);
-        extra.put("swarm_mode", "rcon-armor-stand-fallback");
+        extra.put("swarm_mode", mode);
+        extra.put("pacing", "real-time");
 
         try (HeadlessServerRunner runner = new HeadlessServerRunner(config, bootLog)) {
-            boolean bootOk = runner.boot(metrics);
-            if (!bootOk) {
+            if (!runner.boot(metrics)) {
                 System.err.println("SwarmBench: server failed to come up within timeout — see " + bootLog);
-                BenchResult failure =
-                        BenchResult.from("swarm", 1, ticks, elapsedMs(start), metrics, 0, false, false, extra);
-                failure.writeTo(outputFile);
+                BenchResult.from("swarm", workers, ticks, elapsedMs(start), metrics, 0, false, false, extra)
+                        .writeTo(outputFile);
                 System.exit(1);
                 return;
             }
 
-            spawnSwarm(runner, players);
-            int rounds = churnSwarm(runner, metrics, churnDuration);
-            extra.put("churn_rounds", rounds);
-            despawnSwarm(runner);
+            boolean ok;
+            if (mode.equals("bots")) {
+                ok = runBots(runner, metrics, players, spread, renderDistance, churnDuration, extra);
+            } else {
+                spawnArmorStands(runner, players);
+                runner.beginMeasurement();
+                extra.put("churn_rounds", churnArmorStands(runner, churnDuration));
+                runner.endMeasurement();
+                despawnArmorStands(runner);
+                ok = true;
+            }
 
             boolean cleanStop = runner.shutdown(Duration.ofSeconds(2));
             BenchResult result = BenchResult.from(
-                    "swarm", 1, ticks, elapsedMs(start), metrics, runner.heapPeakMb(), true, cleanStop, extra);
+                    "swarm", workers, ticks, elapsedMs(start), metrics, runner.rssPeakMb(), true, cleanStop, extra);
             Files.createDirectories(outputFile.toAbsolutePath().getParent());
             result.writeTo(outputFile);
             System.out.println(result.toJson());
             System.out.println("SwarmBench: wrote " + outputFile.toAbsolutePath());
+            if (!ok) System.exit(1);
         }
     }
 
-    private static void spawnSwarm(HeadlessServerRunner runner, int players) throws IOException {
+    /** @return false when bots failed to join or were dropped during the run */
+    private static boolean runBots(
+            HeadlessServerRunner runner,
+            MetricsCollector metrics,
+            int players,
+            int spread,
+            int renderDistance,
+            Duration duration,
+            Map<String, Object> extra)
+            throws IOException, InterruptedException {
+        try (BotSwarm swarm = new BotSwarm("127.0.0.1", runner.gamePort(), renderDistance)) {
+            swarm.connect(BOT_PREFIX, players, 10);
+            int joined = swarm.awaitJoined(players, 120_000 + players * 500L);
+            System.out.println("SwarmBench: " + joined + "/" + players + " bots joined");
+            extra.put("bots_joined", joined);
+            if (joined < players) {
+                extra.put("bot_disconnects", swarm.disconnects().toString());
+                return false;
+            }
+
+            runner.rcon().command("gamemode creative @a");
+            runner.rcon().command("give @a minecraft:dirt 64");
+            if (spread > 0) {
+                System.out.println("SwarmBench: "
+                        + runner.rcon()
+                                .command(String.format(
+                                        Locale.ROOT,
+                                        "spreadplayers 0 0 %d %d false @a",
+                                        Math.max(8, spread / 8),
+                                        spread)));
+            }
+            // Let the spread's chunk generation and sends settle before measuring.
+            Thread.sleep(15_000);
+            swarm.enableBlockWork();
+
+            runner.beginMeasurement();
+            long pollMs = Math.max(1000, Math.min(10_000, duration.toMillis() / 20));
+            long deadline = System.currentTimeMillis() + duration.toMillis();
+            int minConnected = players;
+            while (System.currentTimeMillis() < deadline && runner.isAlive()) {
+                Thread.sleep(pollMs);
+                minConnected = Math.min(minConnected, swarm.connectedCount());
+                runner.safeQuery();
+            }
+            runner.endMeasurement();
+
+            extra.put("bots_connected_min", minConnected);
+            extra.put("bots_connected_end", swarm.connectedCount());
+            extra.put("blocks_placed", swarm.blocksPlaced());
+            extra.put("blocks_broken", swarm.blocksBroken());
+            extra.put("position_corrections", swarm.corrections());
+            extra.put("regions", regionCount(runner));
+            if (!swarm.disconnects().isEmpty())
+                extra.put("bot_disconnects", swarm.disconnects().toString());
+            System.out.println("SwarmBench: " + metrics.sampleCount() + " tick-query samples, "
+                    + swarm.blocksPlaced() + " placements, " + swarm.blocksBroken() + " breaks, min connected "
+                    + minConnected);
+            return minConnected == players && runner.isAlive();
+        }
+    }
+
+    /** Live region count from {@code /multiforge region list} (first line), or -1 on a stock server. */
+    private static int regionCount(HeadlessServerRunner runner) {
+        if (!runner.hasTickStats()) return -1;
+        try {
+            String reply = runner.rcon().command("multiforge region list");
+            var m = java.util.regex.Pattern.compile("(\\d+) region").matcher(reply);
+            return m.find() ? Integer.parseInt(m.group(1)) : -1;
+        } catch (IOException e) {
+            return -1;
+        }
+    }
+
+    private static void spawnArmorStands(HeadlessServerRunner runner, int players) throws IOException {
         int side = (int) Math.ceil(Math.sqrt(Math.max(1, players)));
         int spreadRadius = Math.max(16, side * 8);
         runner.rcon()
@@ -143,13 +205,11 @@ public final class SwarmBench {
                     Locale.ROOT, "summon minecraft:armor_stand %d 200 %d {Tags:[\"%s\"],Silent:1b}", x, z, SWARM_TAG);
             runner.rcon().command(cmd);
         }
-        System.out.println("SwarmBench: spawned " + players + " bots across a " + (2 * spreadRadius) + "x"
+        System.out.println("SwarmBench: spawned " + players + " armor stands across a " + (2 * spreadRadius) + "x"
                 + (2 * spreadRadius) + " block area, forceloaded at that footprint");
     }
 
-    /** Real-time random-walk + occasional "dig" (particle burst) loop, polling {@code /tick query} every round. */
-    private static int churnSwarm(HeadlessServerRunner runner, MetricsCollector metrics, Duration duration)
-            throws InterruptedException {
+    private static int churnArmorStands(HeadlessServerRunner runner, Duration duration) throws InterruptedException {
         long pollIntervalMs = Math.max(500, Math.min(3000, duration.toMillis() / 10));
         long deadline = System.currentTimeMillis() + duration.toMillis();
         Random rnd = new Random(42);
@@ -160,29 +220,21 @@ public final class SwarmBench {
             int dz = rnd.nextInt(7) - 3;
             try {
                 runner.rcon().command("execute as @e[tag=" + SWARM_TAG + "] at @s run tp @s ~" + dx + " ~ ~" + dz);
-                if (round % 3 == 0) {
-                    runner.rcon()
-                            .command("execute as @e[tag=" + SWARM_TAG + "] at @s run particle "
-                                    + "minecraft:block minecraft:dirt ~ ~-1 ~ 0.2 0 0.2 0 3");
-                }
                 runner.safeQuery();
             } catch (IOException e) {
                 System.err.println("SwarmBench: churn round " + round + " RCON error: " + e.getMessage());
             }
             Thread.sleep(pollIntervalMs);
         }
-        System.out.println("SwarmBench: churn complete after " + round + " rounds, " + metrics.sampleCount()
-                + " tick-query samples");
         return round;
     }
 
-    private static void despawnSwarm(HeadlessServerRunner runner) {
+    private static void despawnArmorStands(HeadlessServerRunner runner) {
         try {
             runner.rcon().command("kill @e[tag=" + SWARM_TAG + "]");
             runner.rcon().command("forceload remove all");
         } catch (IOException e) {
-            System.err.println(
-                    "SwarmBench: cleanup RCON error (non-fatal, server is about to stop anyway): " + e.getMessage());
+            System.err.println("SwarmBench: cleanup RCON error: " + e.getMessage());
         }
     }
 

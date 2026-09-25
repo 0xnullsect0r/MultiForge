@@ -143,8 +143,9 @@ threshold updates take effect immediately.
 - `MultiThreadedSchedulerHostTest` — end-to-end region/global/async
   scheduling and repeating tasks against the parallel host.
 - `RegionThroughputBenchTest` — smoke check that both 1-worker and
-  many-worker runs produce positive throughput.
+  many-worker runs produce positive throughput. Skipped unless
+  `-PrunBench=true`.
 
 For a full scaling curve, run
-`./gradlew :multiforge-runtime:test --tests RegionThroughputBench` and
-look at the console output.
+`./gradlew :multiforge-runtime:test --tests RegionThroughputBenchTest -PrunBench=true`
+and look at the console output.

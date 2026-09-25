@@ -34,13 +34,13 @@ tasks.withType<Test>().configureEach {
         events("passed", "skipped", "failed")
         showStandardStreams = false
     }
-    // Bump the test JVM heap. Some concurrent-stress tests (e.g.
-    // RegionFileIntegrationTest.concurrentReadStress) drive ~16 threads
-    // × 5s of random reads producing many transient byte[] allocations
-    // and OOM under the JVM's default heap on shared CI runners; local
-    // dev boxes with more RAM never trip it. 2 GiB is comfortably above
-    // any single test's working set while still fitting the CI runner.
+    // Concurrent-stress tests allocate heavily; the default heap is too small
+    // on shared CI runners. 2 GiB fits every test's working set.
     maxHeapSize = "2g"
+    // Opt-in throughput benches (@EnabledIfSystemProperty runBench=true):
+    // ./gradlew test -PrunBench=true, or -DrunBench=true on the Gradle JVM.
+    val runBench = providers.gradleProperty("runBench").orNull ?: System.getProperty("runBench")
+    if (runBench != null) systemProperty("runBench", runBench)
 }
 
 configure<SpotlessExtension> {

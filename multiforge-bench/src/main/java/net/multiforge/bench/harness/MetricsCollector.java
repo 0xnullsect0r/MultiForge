@@ -46,10 +46,16 @@ import java.util.regex.Pattern;
  *       sprint, not just the tail-end rolling buffer.</li>
  * </ul>
  *
- * <p>Vanilla exposes P50/P95/P99 but no true per-tick max. {@link
- * #maxMspt()} is a documented approximation: the highest P99 sample
- * observed across every query, or the highest "Can't keep up" lag-spike
- * duration parsed from the log, whichever is larger.
+ * <p>Those two only see the last 100 ticks, or an average. On a MultiForge
+ * server the authoritative source is the {@code /multiforge tickstats} reply
+ * ({@link #recordTickStats}): every tick of the measured window, its true
+ * maximum, and a TPS count over the last ten minutes of wall time. When that
+ * reply was recorded, every accessor reports it and {@link #timingSource()}
+ * is {@code "tickstats"}. Without it (a stock NeoForge baseline) the
+ * percentiles come from {@code /tick query}, the maximum is the larger of the
+ * highest P99 seen and the longest "Can't keep up" overrun, and TPS is the
+ * game-time advance over the wall time of the window ({@link
+ * #recordGameTimeWindow}) — still a measurement, never a projection.
  */
 public final class MetricsCollector {
 
@@ -68,6 +74,23 @@ public final class MetricsCollector {
     private final List<Double> p99SamplesMs = new ArrayList<>();
     private final List<Double> lagSpikesMs = new ArrayList<>();
 
+    private static final Pattern TICK_STATS = Pattern.compile(
+            "ticks=(\\d+) mean=([0-9.]+)ms p50=([0-9.]+)ms p95=([0-9.]+)ms p99=([0-9.]+)ms max=([0-9.]+)ms"
+                    + " tps=([0-9.]+) window=([0-9.]+)s");
+
+    /** Parsed {@code /multiforge tickstats} reply; see {@code net.multiforge.runtime.diagnostics.TickStats}. */
+    public record TickStatsReply(
+            long ticks,
+            double mean,
+            double p50,
+            double p95,
+            double p99,
+            double max,
+            double tps,
+            double windowSeconds) {}
+
+    private TickStatsReply tickStats;
+    private Double gameTimeTps;
     private Double sprintAvgMsPerTick;
     private Long sprintTicksPerSecond;
 
@@ -83,6 +106,36 @@ public final class MetricsCollector {
             p95SamplesMs.add(Double.parseDouble(pct.group(2)));
             p99SamplesMs.add(Double.parseDouble(pct.group(3)));
         }
+    }
+
+    /** Feeds one {@code /multiforge tickstats} reply. Unmatched text is ignored. */
+    public synchronized void recordTickStats(String reply) {
+        Matcher m = TICK_STATS.matcher(reply);
+        if (m.find()) {
+            tickStats = new TickStatsReply(
+                    Long.parseLong(m.group(1)),
+                    Double.parseDouble(m.group(2)),
+                    Double.parseDouble(m.group(3)),
+                    Double.parseDouble(m.group(4)),
+                    Double.parseDouble(m.group(5)),
+                    Double.parseDouble(m.group(6)),
+                    Double.parseDouble(m.group(7)),
+                    Double.parseDouble(m.group(8)));
+        }
+    }
+
+    /** Records that game time advanced {@code ticks} over {@code wallSeconds} of real time. */
+    public synchronized void recordGameTimeWindow(long ticks, double wallSeconds) {
+        if (wallSeconds > 0) gameTimeTps = ticks / wallSeconds;
+    }
+
+    public synchronized Optional<TickStatsReply> tickStats() {
+        return Optional.ofNullable(tickStats);
+    }
+
+    /** {@code "tickstats"} when {@link #recordTickStats} was fed, else {@code "tick-query"}. */
+    public synchronized String timingSource() {
+        return tickStats != null ? "tickstats" : "tick-query";
     }
 
     /** Feeds one line tailed from the server's boot/console log. Safe to call for every line. */
@@ -105,6 +158,7 @@ public final class MetricsCollector {
     }
 
     public synchronized double avgMspt() {
+        if (tickStats != null) return tickStats.mean();
         if (sprintAvgMsPerTick != null) {
             return sprintAvgMsPerTick;
         }
@@ -112,21 +166,36 @@ public final class MetricsCollector {
     }
 
     public synchronized double p50Mspt() {
+        if (tickStats != null) return tickStats.p50();
         return median(p50SamplesMs).orElseGet(this::avgMspt);
     }
 
     public synchronized double p95Mspt() {
-        return max(p95SamplesMs).orElseGet(() -> avgMspt() * 2.0);
+        if (tickStats != null) return tickStats.p95();
+        return max(p95SamplesMs).orElse(0.0);
     }
 
     public synchronized double p99Mspt() {
-        return max(p99SamplesMs).orElseGet(() -> avgMspt() * 3.0);
+        if (tickStats != null) return tickStats.p99();
+        return max(p99SamplesMs).orElse(0.0);
     }
 
     public synchronized double maxMspt() {
+        if (tickStats != null) return tickStats.max();
         double fromPercentiles = p99Mspt();
         double fromLag = max(lagSpikesMs).orElse(0.0);
         return Math.max(fromPercentiles, fromLag);
+    }
+
+    /**
+     * Measured ticks per second over the window: the tickstats ten-minute
+     * count, else the game-time advance over wall time, else {@code NaN}
+     * (nothing was measured — never a figure projected from the mean).
+     */
+    public synchronized double sustainedTps() {
+        if (tickStats != null) return tickStats.tps();
+        if (gameTimeTps != null) return gameTimeTps;
+        return Double.NaN;
     }
 
     public synchronized long sprintTicksPerSecond() {

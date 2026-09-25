@@ -35,6 +35,7 @@ import net.multiforge.runtime.config.ConfigCodec;
 import net.multiforge.runtime.config.MultiForgeConfig;
 import net.multiforge.runtime.config.MultiForgeConfigStore;
 import net.multiforge.runtime.diagnostics.ProbeRegistry;
+import net.multiforge.runtime.diagnostics.TickStats;
 import net.multiforge.runtime.diagnostics.ViolationLogger;
 import net.multiforge.runtime.region.Region;
 import net.multiforge.runtime.region.ThreadedRegionizer;
@@ -65,6 +66,7 @@ import net.multiforge.runtime.scheduler.MultiThreadedSchedulerHost;
  *   /multiforge chunks &lt;world&gt;   — loaded chunks of a world, per owning region
  *   /multiforge warn list         — show recent violations from ViolationLogger
  *   /multiforge warn clear        — reset the violation history ring buffer
+ *   /multiforge tickstats [reset] — tick times: mean, p50/p95/p99, true max, 10-min TPS
  *   /multiforge certify &lt;modId&gt;  — run the scanner against a jar in ./mods,
  *                                  print pass/fail per rule (see docs/certification.md)
  *   /multiforge certify all       — same, for every jar under ./mods
@@ -165,6 +167,7 @@ public final class MultiForgeCommandDispatcher {
             case "probes" -> handleProbes(args, output);
             case "chunks" -> handleChunks(args, output);
             case "warn" -> handleWarn(args, output);
+            case "tickstats" -> handleTickStats(args, output);
             case "certify" -> handleCertify(args, output);
             default -> {
                 output.accept("Unknown subcommand: " + args[0] + ". Try `/multiforge help`.");
@@ -201,7 +204,10 @@ public final class MultiForgeCommandDispatcher {
         output.accept("Diagnostics:");
         output.accept("  /multiforge probes                 — dump every ProbeRegistry counter");
         output.accept("  /multiforge probes <prefix>        — filter, e.g. `probes region-tick`");
-        output.accept("  /multiforge chunks <world>         — M9 chunk-shadow summary for one world");
+        output.accept(
+                "  /multiforge tickstats              — tick times since reset: mean, p50/p95/p99, max, 10-min TPS");
+        output.accept("  /multiforge tickstats reset        — start a new measurement window");
+        output.accept("  /multiforge chunks <world>         — loaded chunks per region for one world");
         output.accept("                                     — world = namespaced id, e.g. minecraft:overworld");
         output.accept("  /multiforge warn list              — recent ViolationLogger events");
         output.accept("  /multiforge warn clear             — reset the violation history ring buffer");
@@ -272,6 +278,21 @@ public final class MultiForgeCommandDispatcher {
         if (matched == 0) {
             output.accept(prefix.isEmpty() ? "(no probes recorded)" : "(no probes matching prefix '" + prefix + "')");
         }
+        return true;
+    }
+
+    /** {@code /multiforge tickstats [reset]} — see {@link TickStats}. */
+    private boolean handleTickStats(String[] args, Consumer<String> output) {
+        if (args.length == 2 && args[1].equals("reset")) {
+            TickStats.reset();
+            output.accept("Tick statistics reset.");
+            return true;
+        }
+        if (args.length != 1) {
+            output.accept("Usage: /multiforge tickstats [reset]");
+            return false;
+        }
+        output.accept(TickStats.snapshot().render());
         return true;
     }
 

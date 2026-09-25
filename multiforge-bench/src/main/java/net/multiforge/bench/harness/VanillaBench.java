@@ -19,48 +19,48 @@ import java.time.Instant;
 import java.util.Map;
 
 /**
- * Entry point for {@code :multiforge-bench:vanilla} — the Phase 7.4
- * vanilla-only TPS/MSPT baseline. Boots the current MultiForge fork with
- * {@code workers=1} and no mods on the classpath, sprints the configured
- * tick count, and writes the result JSON specified in
- * {@code docs/design/m9-phase7-runbook.md} §5.
+ * Entry point for {@code :multiforge-bench:vanilla} — the no-mods MSPT
+ * baseline. Boots an installed server with no mods ({@link BenchSetup}:
+ * {@code bench.server=multiforge}, or {@code stock} for the plain NeoForge
+ * control of the same version) at {@code bench.workers} workers, sprints
+ * {@code bench.ticks} ticks, and writes the result JSON. The two flavours'
+ * results side by side give the region runtime's overhead on an idle world.
  *
- * <p>System properties (set by the {@code vanilla} Gradle task from
- * {@code -Pticks=}):
+ * <p>System properties (set by the {@code vanilla} Gradle task):
  *
  * <ul>
  *   <li>{@code bench.ticks} — default {@code 12000} (10 game-minutes)</li>
- *   <li>{@code bench.workspaceDir} — default {@code upstream/neoforge-1.21.1}</li>
- *   <li>{@code bench.outputFile} — default {@code docs/verification/m9/7.4/vanilla/patched.json}</li>
- *   <li>{@code bench.bootLog} — where the child server's stdout/stderr is captured</li>
+ *   <li>{@code bench.workers} — default {@code 1}</li>
+ *   <li>{@code bench.outputFile} — default {@code
+ *       docs/verification/m9/7.4/vanilla/<patched|baseline>.json}</li>
+ *   <li>{@code bench.bootLog} — where the server's console output is captured</li>
  * </ul>
  */
 public final class VanillaBench {
 
     public static void main(String[] args) throws Exception {
         long ticks = Long.getLong("bench.ticks", 12000L);
-        int workers = 1;
-        Path workspaceDir = Path.of(System.getProperty("bench.workspaceDir", "upstream/neoforge-1.21.1"));
-        Path outputFile =
-                Path.of(System.getProperty("bench.outputFile", "docs/verification/m9/7.4/vanilla/patched.json"));
-        Path bootLog =
-                Path.of(System.getProperty("bench.bootLog", "multiforge-bench/build/bench-logs/vanilla-boot.log"));
+        int workers = Integer.getInteger("bench.workers", 1);
+        String flavour = BenchSetup.flavour();
+        Path outputFile = Path.of(System.getProperty(
+                "bench.outputFile",
+                "docs/verification/m9/7.4/vanilla/" + (flavour.equals("stock") ? "baseline" : "patched") + ".json"));
+        Path bootLog = Path.of(System.getProperty(
+                "bench.bootLog", "multiforge-bench/build/bench-logs/vanilla-" + flavour + "-boot.log"));
 
-        System.out.println("VanillaBench: workspaceDir=" + workspaceDir.toAbsolutePath() + " workers=" + workers
-                + " ticks=" + ticks);
+        System.out.println("VanillaBench: server=" + flavour + " workers=" + workers + " ticks=" + ticks);
 
         HeadlessServerRunner.Config config =
-                new HeadlessServerRunner.Config(workspaceDir, workers, "1234567890", 20, null, null, "");
+                HeadlessServerRunner.Config.of(BenchSetup.install(), workers, "1234567890");
         MetricsCollector metrics = new MetricsCollector();
         Instant start = Instant.now();
+        Map<String, Object> extra = Map.of("server", flavour, "pacing", "sprint");
 
         try (HeadlessServerRunner runner = new HeadlessServerRunner(config, bootLog)) {
-            boolean bootOk = runner.boot(metrics);
-            if (!bootOk) {
+            if (!runner.boot(metrics)) {
                 System.err.println("VanillaBench: server failed to come up within timeout — see " + bootLog);
-                BenchResult failure = BenchResult.from(
-                        "vanilla", workers, ticks, elapsedMs(start), metrics, 0, false, false, Map.of());
-                failure.writeTo(outputFile);
+                BenchResult.from("vanilla", workers, ticks, elapsedMs(start), metrics, 0, false, false, extra)
+                        .writeTo(outputFile);
                 System.exit(1);
                 return;
             }
@@ -69,15 +69,7 @@ public final class VanillaBench {
             boolean cleanStop = runner.shutdown(Duration.ofSeconds(2));
 
             BenchResult result = BenchResult.from(
-                    "vanilla",
-                    workers,
-                    ticks,
-                    elapsedMs(start),
-                    metrics,
-                    runner.heapPeakMb(),
-                    true,
-                    cleanStop,
-                    Map.of());
+                    "vanilla", workers, ticks, elapsedMs(start), metrics, runner.rssPeakMb(), true, cleanStop, extra);
             Files.createDirectories(outputFile.toAbsolutePath().getParent());
             result.writeTo(outputFile);
             System.out.println(result.toJson());
