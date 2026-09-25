@@ -129,10 +129,10 @@ public final class PhasedRegionTickBody implements RegionTickBody {
         /**
          * Append {@code body} to whatever is currently wired at
          * {@code phase}. If nothing is wired, this is equivalent to
-         * {@link #set(Phase, RegionTickBody)}. Used by Phase 5 M9 wiring
-         * so runtime-internal drain calls (e.g. {@code
-         * ChunkTaskScheduler.drainInto}, {@code AutoSaveRunner.runOnce})
-         * fire <em>after</em> a user-supplied body for the same phase.
+         * {@link #set(Phase, RegionTickBody)}. Used by {@code
+         * MultiThreadedSchedulerHost.installRegionTickBody} so the region's
+         * own work fires <em>after</em> a caller-supplied body for the same
+         * phase.
          */
         public Builder append(Phase phase, RegionTickBody body) {
             if (body == null) return this;

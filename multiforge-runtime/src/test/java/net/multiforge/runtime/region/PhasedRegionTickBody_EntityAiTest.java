@@ -38,7 +38,7 @@ import org.junit.jupiter.api.io.TempDir;
  * #setEntityTickRunner}, the {@code phaseEntityAiTick} body's {@link
  * OwnerToken} correctness guard, and the {@code
  * .append(Phase.ENTITY_AI, ...)} wiring installed by {@link
- * MultiThreadedSchedulerHost#installM9WiredTickBody}.
+ * MultiThreadedSchedulerHost#installRegionTickBody}.
  *
  * <p>Entity ticking itself (the Vanilla {@code Entity#tick} call) lives
  * in the fork bridge ({@code net.multiforge.neoforge.tick.
@@ -105,7 +105,7 @@ class PhasedRegionTickBody_EntityAiTest {
 
         RecordingEntityTickRunner runner = new RecordingEntityTickRunner(entities);
         host.setEntityTickRunner(runner);
-        host.installM9WiredTickBody(PhasedRegionTickBody.builder(), null, journalDir);
+        host.installRegionTickBody(PhasedRegionTickBody.builder());
 
         RegionTickBody body = host.scheduler().body();
         tickAsOwner(body, region);
@@ -136,7 +136,7 @@ class PhasedRegionTickBody_EntityAiTest {
 
         RecordingEntityTickRunner runner = new RecordingEntityTickRunner(entities);
         host.setEntityTickRunner(runner);
-        host.installM9WiredTickBody(PhasedRegionTickBody.builder(), null, journalDir);
+        host.installRegionTickBody(PhasedRegionTickBody.builder());
 
         RegionTickBody body = host.scheduler().body();
         tickAsOwner(body, regionA);
@@ -158,7 +158,7 @@ class PhasedRegionTickBody_EntityAiTest {
 
         RecordingEntityTickRunner runner = new RecordingEntityTickRunner(entities);
         host.setEntityTickRunner(runner);
-        host.installM9WiredTickBody(PhasedRegionTickBody.builder(), null, journalDir);
+        host.installRegionTickBody(PhasedRegionTickBody.builder());
 
         long warnsBefore = ProbeRegistry.get("entity-ai.wrong-owner");
 

@@ -35,19 +35,10 @@ import org.slf4j.LoggerFactory;
  *   [violations]
  *   policy = "warn"         # warn | reroute-only | fail
  *   warnPerMin = 5          # warnings per minute per violation site
- *
- *   [persistence]
- *   autosaveTicks = 6000    # per-region journal autosave interval, in ticks
  * </pre>
  */
 public record MultiForgeConfig(
-        int cores,
-        int threadsPerCore,
-        Mode mode,
-        int regionSize,
-        ViolationPolicy violationPolicy,
-        int warnPerMin,
-        long autosaveTicks) {
+        int cores, int threadsPerCore, Mode mode, int regionSize, ViolationPolicy violationPolicy, int warnPerMin) {
 
     public enum Mode {
         OFF,
@@ -148,36 +139,31 @@ public record MultiForgeConfig(
                 Mode.HYBRID,
                 4, // 2^4 = 16 chunks per section side (Folia default)
                 ViolationPolicy.WARN,
-                5,
-                6000L); // Vanilla's autosave cadence: 5 minutes at 20 TPS
+                5);
     }
 
     /** Builder-style with-methods so /multiforge commands can produce a new snapshot. */
     public MultiForgeConfig withCores(int v) {
-        return new MultiForgeConfig(v, threadsPerCore, mode, regionSize, violationPolicy, warnPerMin, autosaveTicks);
+        return new MultiForgeConfig(v, threadsPerCore, mode, regionSize, violationPolicy, warnPerMin);
     }
 
     public MultiForgeConfig withThreadsPerCore(int v) {
-        return new MultiForgeConfig(cores, v, mode, regionSize, violationPolicy, warnPerMin, autosaveTicks);
+        return new MultiForgeConfig(cores, v, mode, regionSize, violationPolicy, warnPerMin);
     }
 
     public MultiForgeConfig withMode(Mode v) {
-        return new MultiForgeConfig(cores, threadsPerCore, v, regionSize, violationPolicy, warnPerMin, autosaveTicks);
+        return new MultiForgeConfig(cores, threadsPerCore, v, regionSize, violationPolicy, warnPerMin);
     }
 
     public MultiForgeConfig withRegionSize(int v) {
-        return new MultiForgeConfig(cores, threadsPerCore, mode, v, violationPolicy, warnPerMin, autosaveTicks);
+        return new MultiForgeConfig(cores, threadsPerCore, mode, v, violationPolicy, warnPerMin);
     }
 
     public MultiForgeConfig withViolationPolicy(ViolationPolicy v) {
-        return new MultiForgeConfig(cores, threadsPerCore, mode, regionSize, v, warnPerMin, autosaveTicks);
+        return new MultiForgeConfig(cores, threadsPerCore, mode, regionSize, v, warnPerMin);
     }
 
     public MultiForgeConfig withWarnPerMin(int v) {
-        return new MultiForgeConfig(cores, threadsPerCore, mode, regionSize, violationPolicy, v, autosaveTicks);
-    }
-
-    public MultiForgeConfig withAutosaveTicks(long v) {
-        return new MultiForgeConfig(cores, threadsPerCore, mode, regionSize, violationPolicy, warnPerMin, v);
+        return new MultiForgeConfig(cores, threadsPerCore, mode, regionSize, violationPolicy, v);
     }
 }

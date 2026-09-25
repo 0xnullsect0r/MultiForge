@@ -138,16 +138,15 @@ class MultiForgeCommandDispatcherTest {
         assertThat(out).anyMatch(l -> l.contains("no probes matching prefix 'nomatch'"));
     }
 
-    // M9 sub-step 1: /multiforge chunks — reports chunk-holder counts by ChunkLoadLevel,
-    // using the ChunkHolderManager the fork bridge populates from Vanilla ticket events.
+    // /multiforge chunks — loaded chunks per region, from the world's ChunkHolderManager.
     @Test
     void chunksNotInstalledReportsFailure(@TempDir Path tmp) throws IOException {
-        // The 2-arg constructor leaves chunkManagers null (bridge not wired).
+        // The 2-arg constructor leaves chunkManagers null (no runtime).
         MultiForgeCommandDispatcher d = make(tmp);
         List<String> out = new ArrayList<>();
         assertThat(d.dispatch(new String[] {"chunks", "minecraft:overworld"}, out::add))
                 .isFalse();
-        assertThat(out).anyMatch(l -> l.contains("bridge not installed"));
+        assertThat(out).anyMatch(l -> l.contains("runtime not installed"));
     }
 
     @Test
@@ -161,22 +160,16 @@ class MultiForgeCommandDispatcherTest {
     }
 
     @Test
-    void chunksReportsPerLevelCounts(@TempDir Path tmp) throws IOException {
+    void chunksReportsLoadedChunksPerRegion(@TempDir Path tmp) throws IOException {
         net.multiforge.api.world.WorldRef world = net.multiforge.api.world.WorldRef.of("minecraft:overworld");
         net.multiforge.runtime.chunk.ChunkHolderManager manager =
                 new net.multiforge.runtime.chunk.ChunkHolderManager(world);
-        net.multiforge.runtime.region.RegionId regionId = net.multiforge.runtime.region.RegionId.next();
-        net.multiforge.runtime.chunk.NewChunkHolder h1 =
-                manager.createHolder(new net.multiforge.api.world.ChunkPos(0, 0), regionId);
-        h1.setLevel(net.multiforge.runtime.chunk.ChunkLoadLevel.TICKING);
-        net.multiforge.runtime.chunk.NewChunkHolder h2 =
-                manager.createHolder(new net.multiforge.api.world.ChunkPos(1, 0), regionId);
-        h2.setLevel(net.multiforge.runtime.chunk.ChunkLoadLevel.TICKING);
-        net.multiforge.runtime.chunk.NewChunkHolder h3 =
-                manager.createHolder(new net.multiforge.api.world.ChunkPos(2, 0), regionId);
-        h3.setLevel(net.multiforge.runtime.chunk.ChunkLoadLevel.BORDER);
-        // h4 stays at the default INACCESSIBLE
-        manager.createHolder(new net.multiforge.api.world.ChunkPos(3, 0), regionId);
+        net.multiforge.runtime.region.RegionId a = net.multiforge.runtime.region.RegionId.next();
+        net.multiforge.runtime.region.RegionId b = net.multiforge.runtime.region.RegionId.next();
+        manager.createHolder(new net.multiforge.api.world.ChunkPos(0, 0), a);
+        manager.createHolder(new net.multiforge.api.world.ChunkPos(1, 0), a);
+        manager.createHolder(new net.multiforge.api.world.ChunkPos(2, 0), a);
+        manager.createHolder(new net.multiforge.api.world.ChunkPos(90, 0), b);
 
         java.util.Map<net.multiforge.api.world.WorldRef, net.multiforge.runtime.chunk.ChunkHolderManager> map =
                 new java.util.HashMap<>();
@@ -185,10 +178,9 @@ class MultiForgeCommandDispatcherTest {
         List<String> out = new ArrayList<>();
         assertThat(d.dispatch(new String[] {"chunks", "minecraft:overworld"}, out::add))
                 .isTrue();
-        assertThat(out).anyMatch(l -> l.contains("holders=4"));
-        assertThat(out).anyMatch(l -> l.contains("TICKING") && l.contains(": 2"));
-        assertThat(out).anyMatch(l -> l.contains("BORDER") && l.contains(": 1"));
-        assertThat(out).anyMatch(l -> l.contains("INACCESSIBLE") && l.contains(": 1"));
+        assertThat(out).anyMatch(l -> l.contains("loaded chunks=4") && l.contains("regions=2"));
+        assertThat(out).anyMatch(l -> l.contains("region " + a) && l.contains(": 3 chunk(s)"));
+        assertThat(out).anyMatch(l -> l.contains("region " + b) && l.contains(": 1 chunk(s)"));
     }
 
     @Test
@@ -199,7 +191,7 @@ class MultiForgeCommandDispatcherTest {
         List<String> out = new ArrayList<>();
         assertThat(d.dispatch(new String[] {"chunks", "minecraft:bogus"}, out::add))
                 .isTrue();
-        assertThat(out).anyMatch(l -> l.contains("No chunk manager"));
+        assertThat(out).anyMatch(l -> l.contains("No chunks of"));
     }
 
     // /multiforge warn — operator view over ViolationLogger's recent-violation history.

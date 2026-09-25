@@ -31,7 +31,7 @@ import org.junit.jupiter.api.io.TempDir;
  * m13-b3-region-tick.md §5.1): {@link
  * MultiThreadedSchedulerHost#setBlockFluidRunner} plumbs a {@link
  * ScheduledTickRunner} into the {@code BLOCK_FLUID_TICKS} phase slot that
- * {@link MultiThreadedSchedulerHost#installM9WiredTickBody} wires. Extends
+ * {@link MultiThreadedSchedulerHost#installRegionTickBody} wires. Extends
  * the {@code PhasedRegionTickBodyWiringTest} fixture pattern (worker pool
  * shut down up-front, tests drive {@code body.tickOnce(region)} by hand).
  */
@@ -81,7 +81,7 @@ class PhasedRegionTickBody_BlockFluidTicksTest {
 
         RecordingRunner runner = new RecordingRunner();
         host.setBlockFluidRunner(runner);
-        host.installM9WiredTickBody(PhasedRegionTickBody.builder(), null, journalDir);
+        host.installRegionTickBody(PhasedRegionTickBody.builder());
 
         RegionTickBody body = host.scheduler().body();
         body.tickOnce(region);
@@ -99,7 +99,7 @@ class PhasedRegionTickBody_BlockFluidTicksTest {
 
         RecordingRunner runner = new RecordingRunner();
         host.setBlockFluidRunner(runner);
-        host.installM9WiredTickBody(PhasedRegionTickBody.builder(), null, journalDir);
+        host.installRegionTickBody(PhasedRegionTickBody.builder());
 
         RegionTickBody body = host.scheduler().body();
         body.tickOnce(regionA);
@@ -119,7 +119,7 @@ class PhasedRegionTickBody_BlockFluidTicksTest {
         host.setBlockFluidRunner(r -> {
             throw new RuntimeException("boom — simulated fork-bridge failure");
         });
-        host.installM9WiredTickBody(userBuilder, null, journalDir);
+        host.installRegionTickBody(userBuilder);
 
         RegionTickBody body = host.scheduler().body();
         // Later phases (here, the user-supplied REGION_EVENTS body) still run,

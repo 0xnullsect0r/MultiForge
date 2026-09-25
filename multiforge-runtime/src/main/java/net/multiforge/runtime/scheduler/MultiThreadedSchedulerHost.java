@@ -12,8 +12,6 @@
  */
 package net.multiforge.runtime.scheduler;
 
-import java.io.IOException;
-import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -25,7 +23,6 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.function.BiFunction;
 import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
 import java.util.function.Function;
@@ -41,18 +38,10 @@ import net.multiforge.api.spi.SchedulerHost;
 import net.multiforge.api.world.ChunkPos;
 import net.multiforge.api.world.WorldRef;
 import net.multiforge.runtime.chunk.ChunkHolderManager;
-import net.multiforge.runtime.chunk.ChunkTaskScheduler;
-import net.multiforge.runtime.chunk.HolderManagerRegionData;
 import net.multiforge.runtime.chunk.NewChunkHolder;
-import net.multiforge.runtime.chunk.Ticket;
-import net.multiforge.runtime.chunk.TicketType;
 import net.multiforge.runtime.config.MultiForgeConfig;
 import net.multiforge.runtime.diagnostics.ProbeRegistry;
 import net.multiforge.runtime.diagnostics.ViolationLogger;
-import net.multiforge.runtime.journal.AutoSaveRunner;
-import net.multiforge.runtime.journal.JournalReplayHarness;
-import net.multiforge.runtime.journal.RegionJournal;
-import net.multiforge.runtime.journal.RegionJournalLifecycle;
 import net.multiforge.runtime.ownership.Domain;
 import net.multiforge.runtime.ownership.OwnerToken;
 import net.multiforge.runtime.ownership.OwnershipEnforcer;
@@ -69,7 +58,6 @@ import net.multiforge.runtime.region.ScheduledTickRunner;
 import net.multiforge.runtime.region.ThreadedRegionizer;
 import net.multiforge.runtime.region.TickRegionScheduler;
 import net.multiforge.runtime.region.pin.RegionPinManager;
-import net.multiforge.runtime.shutdown.RegionShutdownCoordinator;
 
 /**
  * Parallel {@link SchedulerHost} that runs region/entity work on the
@@ -86,26 +74,12 @@ import net.multiforge.runtime.shutdown.RegionShutdownCoordinator;
 public final class MultiThreadedSchedulerHost implements SchedulerHost, AutoCloseable {
 
     private static final long TICK_MS = 50L;
-    // Vanilla's default: autosave every 6000 ticks (5 minutes at 20 TPS);
-    // the live interval is MultiForgeConfig.autosaveTicks().
-    static final long DEFAULT_AUTOSAVE_INTERVAL_TICKS = 6000L;
-
     /** The synthetic world holding the global region; not a Minecraft level. */
     public static final WorldRef GLOBAL_WORLD = WorldRef.of("multiforge:global");
-    // Per-tick budget knobs for the Phase 5 wiring. Bounded so that
-    // pollFullLoadUpdate / ChunkTaskScheduler.drainInto / AutoSaveRunner
-    // can never block a region worker thread past its 50 ms tick target
-    // (CLAUDE.md rule 4). Undrained work simply defers to the next tick.
-    static final int PHASE_FULL_LOAD_MAX_PER_TICK = 4096;
-    static final int PHASE_CHUNK_TASK_MAX_PER_TICK = 256;
-    static final long PHASE_CHUNK_TASK_DEADLINE_NANOS = 2_000_000L; // 2ms
-    static final int PHASE_AUTOSAVE_MAX_CHUNKS_PER_TICK = 24;
-    static final long PHASE_AUTOSAVE_DEADLINE_NANOS = 3_000_000L; // 3ms
 
     private final MultiForgeConfig config;
     private final ConcurrentMap<String, ThreadedRegionizer> regionizers = new ConcurrentHashMap<>();
     private final ConcurrentMap<String, ChunkHolderManager> chunkManagers = new ConcurrentHashMap<>();
-    private final ChunkTaskScheduler chunkTaskScheduler;
     private final Function<WorldRef, ThreadedRegionizer> regionizerFactory;
     private final RegionizedTaskQueue taskQueue;
     private final TickRegionScheduler scheduler;
@@ -116,36 +90,9 @@ public final class MultiThreadedSchedulerHost implements SchedulerHost, AutoClos
     // its owning ChunkHolderManager without a linear scan over every world.
     private final ConcurrentMap<RegionId, WorldRef> regionToWorld = new ConcurrentHashMap<>();
 
-    // Per-region last-autosave tick counter, keyed by region id. Read at
-    // the top of the FLUSH_OUTBOUND phase to decide whether the autosave
-    // budget has come due for this region (Vanilla parity: 6000 ticks).
-    private final ConcurrentMap<RegionId, Long> lastAutosaveTick = new ConcurrentHashMap<>();
-
-    // Per-region AutoSaveRunner cache — one runner per region, bound to
-    // that region's HolderManagerRegionData + RegionJournal at first use.
-    // Cleared when the region dies (via the same RegionListener that
-    // untracks the journal).
-    private final ConcurrentMap<RegionId, AutoSaveRunner> autoSaveRunners = new ConcurrentHashMap<>();
-
-    // Optional Phase 5 wiring dependencies — set by installM9WiredTickBody.
-    // Null when the M9 wire-in has not been applied, in which case the
-    // tick body defaults to whatever was passed in at construction.
-    private volatile RegionShutdownCoordinator shutdownCoordinator;
-    private volatile RegionJournalLifecycle journalLifecycle;
-    private volatile Path journalDir;
+    // Region pins honoured by every world's regionizer (bindPins).
     private volatile RegionPinManager pins;
     private volatile AutoCloseable pinSubscription;
-
-    // Phase 5 wave B wiring: pluggable chunk-payload serializer for
-    // AutoSaveRunner. Defaults to the phase-6 stub (empty payload) so
-    // tests and any pre-fork-wiring boot window keep working exactly as
-    // before. The fork's ServerLifecycleHooks glue swaps this for
-    // RegionChunkSerializer.serializeForJournal once the real,
-    // MC-dependent serializer is available (see
-    // net.multiforge.neoforge.io.RegionChunkSerializer in the
-    // upstream/neoforge-1.21.1 fork module — multiforge-runtime itself
-    // must stay MC-free).
-    private volatile BiFunction<Region, NewChunkHolder, byte[]> chunkSerializer = (region, holder) -> new byte[0];
 
     // B3.2 wiring (docs/design/m13-b3-region-tick.md §5.1): pluggable
     // per-region BLOCK_FLUID_TICKS runner. Defaults to a no-op so tests
@@ -235,10 +182,6 @@ public final class MultiThreadedSchedulerHost implements SchedulerHost, AutoClos
                     return r == null ? null : r.readLock();
                 });
         this.scheduler = new TickRegionScheduler(config.tickWorkerCount(), body, taskQueue, 128, mode);
-        this.chunkTaskScheduler = new ChunkTaskScheduler(taskQueue, (w, x, z) -> {
-            ThreadedRegionizer r = regionizerForOrNull(w);
-            return r == null ? null : r.regionAtChunk(x, z);
-        });
 
         // Global region is exposed under a synthetic world so it uses the
         // same inbox+tick plumbing as any other region. Publish it into
@@ -310,34 +253,6 @@ public final class MultiThreadedSchedulerHost implements SchedulerHost, AutoClos
     };
 
     /**
-     * Replace the chunk-payload serializer every {@link
-     * AutoSaveRunner} (existing and future) delegates to via {@link
-     * #serializeChunkSafely}. Every cached runner in {@link
-     * #autoSaveRunners} was built with {@code this::serializeChunkSafely}
-     * as its serializer, which re-reads this volatile field on every
-     * call — so swapping it here takes effect immediately for every
-     * region, not just ones whose runner is created afterwards.
-     *
-     * <p>Not part of {@link SchedulerHost}: this is a MultiForge-only
-     * escape hatch for MC-dependent glue that cannot live in this
-     * MC-free module. See {@code
-     * net.multiforge.neoforge.io.RegionChunkSerializer#serializeForJournal}
-     * in the fork module for the production implementation; the
-     * default ({@code (region, holder) -> new byte[0]}) is a
-     * deliberate no-op so tests that never call this method keep
-     * working unchanged.
-     *
-     * @param serializer must never block (CLAUDE.md rule 4). Exceptions
-     *     are swallowed by {@link #serializeChunkSafely} — a serializer
-     *     bug never reaches {@link AutoSaveRunner#runOnce} or the tick
-     *     pipeline, it just degrades that one chunk's payload to
-     *     {@code byte[0]} for that call.
-     */
-    public void setChunkSerializer(BiFunction<Region, NewChunkHolder, byte[]> serializer) {
-        this.chunkSerializer = Objects.requireNonNull(serializer, "serializer");
-    }
-
-    /**
      * Replace the {@link ScheduledTickRunner} the {@code
      * BLOCK_FLUID_TICKS} phase body ({@link #phaseBlockFluidTicksTick})
      * invokes (docs/design/m13-b3-region-tick.md §5.1). Idempotent —
@@ -405,32 +320,6 @@ public final class MultiThreadedSchedulerHost implements SchedulerHost, AutoClos
      */
     public boolean hasEntityTickRunner() {
         return entityTickRunnerRegistered;
-    }
-
-    /**
-     * Exception-safe indirection to the current {@link
-     * #chunkSerializer}. Every {@link AutoSaveRunner} is built with a
-     * method reference to this method (not to {@link #chunkSerializer}
-     * directly) so that (a) {@link #setChunkSerializer} takes effect
-     * for already-cached runners too, and (b) a misbehaving serializer
-     * (the fork's {@code RegionChunkSerializer.serializeForJournal},
-     * or a test's spy/throwing lambda) can never propagate an
-     * exception into the FLUSH_OUTBOUND phase — CLAUDE.md rule 5's
-     * auto-reroute+warn default applies here just as much as it does
-     * to mod call sites.
-     */
-    private byte[] serializeChunkSafely(Region region, NewChunkHolder holder) {
-        try {
-            byte[] payload = chunkSerializer.apply(region, holder);
-            return payload != null ? payload : new byte[0];
-        } catch (RuntimeException e) {
-            ProbeRegistry.bump("autosave.serializer.failure");
-            ViolationLogger.warn(
-                    "MultiThreadedSchedulerHost.serializeChunkSafely",
-                    "chunk serializer threw for region " + region.id() + ": "
-                            + e.getClass().getSimpleName() + ": " + e.getMessage());
-            return new byte[0];
-        }
     }
 
     public RegionizedTaskQueue taskQueue() {
@@ -519,24 +408,12 @@ public final class MultiThreadedSchedulerHost implements SchedulerHost, AutoClos
             // leaked per-region state and left holders pointing at dead
             // RegionIds.
             r.addListener(chunkManagerFor(world));
-            r.addListener(chunkTaskScheduler);
             // Phase 5.1/5.3 wiring: region → world map so the M9-wired
             // tick body can route Region → ChunkHolderManager without
             // linear-scanning every world's manager.
             r.addListener(newRegionWorldTracker(world));
             RegionPinManager boundPins = this.pins;
             if (boundPins != null) r.setPins(boundPins::all);
-            // Phase 5.4/5.5 wiring: when installM9WiredTickBody has run,
-            // every subsequently-created world's regionizer also gets
-            // the journal lifecycle listener. Worlds materialised
-            // before that call miss out — production wiring installs the
-            // M9 body early enough (server-lifecycle-hook) that this is
-            // benign, and tests can invoke wireJournalLifecycleFor() by
-            // hand if they materialise worlds before the lifecycle.
-            RegionJournalLifecycle lifecycle = this.journalLifecycle;
-            if (lifecycle != null) {
-                r.addListener(lifecycle);
-            }
             return r;
         });
     }
@@ -579,8 +456,6 @@ public final class MultiThreadedSchedulerHost implements SchedulerHost, AutoClos
             @Override
             public void onRegionDied(Region region) {
                 regionToWorld.remove(region.id());
-                lastAutosaveTick.remove(region.id());
-                autoSaveRunners.remove(region.id());
             }
         };
     }
@@ -619,22 +494,8 @@ public final class MultiThreadedSchedulerHost implements SchedulerHost, AutoClos
         return Map.copyOf(regionizers);
     }
 
-    public ChunkTaskScheduler chunkTaskScheduler() {
-        return chunkTaskScheduler;
-    }
-
     public ChunkHolderManager chunkManagerFor(WorldRef world) {
-        // Round-5 H4: wire the per-world regionizer accessor so
-        // ChunkHolderManager.addTicket/removeTicket pin the section→region
-        // mapping across their resolve→write pair. The supplier is queried
-        // lazily on every ticket write (not captured at construction) so
-        // the manager can be created inside regionizerFor's
-        // computeIfAbsent — where the regionizer itself is not yet
-        // published to the regionizers map. Same "null when regionizer
-        // not materialised" contract as the OwnerLookup / ReadLockLookup
-        // pair in RegionizedTaskQueue (Phase 1.2).
-        return chunkManagers.computeIfAbsent(
-                world.dimensionId(), id -> new ChunkHolderManager(world, () -> regionizerForOrNull(world)));
+        return chunkManagers.computeIfAbsent(world.dimensionId(), id -> new ChunkHolderManager(world));
     }
 
     /**
@@ -651,92 +512,29 @@ public final class MultiThreadedSchedulerHost implements SchedulerHost, AutoClos
     }
 
     // ============================================================
-    // Phase 5 wave A — M9 tick-body wiring
+    // Region tick body
     // ============================================================
 
     /**
-     * Install the Phase 5 (M9) tick-body wiring:
+     * Install the per-region tick body: after the region's mailbox (drained
+     * by the scheduler before the body runs), {@link
+     * PhasedRegionTickBody.Phase#BLOCK_FLUID_TICKS} runs the registered
+     * {@link ScheduledTickRunner} (scheduled block and fluid ticks, then the
+     * block events they queued), {@link PhasedRegionTickBody.Phase#ENTITY_AI}
+     * the registered {@link EntityTickRunner}, and {@link
+     * PhasedRegionTickBody.Phase#BLOCK_ENTITIES} the region's block-entity
+     * tickers. See docs/design/barrier-tick-model.md.
      *
-     * <ol>
-     *   <li><b>{@link PhasedRegionTickBody.Phase#INBOUND_MAILBOX}</b> —
-     *       prepends {@link HolderManagerRegionData#pollFullLoadUpdate()}
-     *       drain (task 5.1) so downstream phases see the freshest
-     *       load-level updates.</li>
-     *   <li><b>{@link PhasedRegionTickBody.Phase#BLOCK_FLUID_TICKS}</b> —
-     *       appends {@link #phaseBlockFluidTicksTick} (B3.2, docs/design/
-     *       m13-b3-region-tick.md §5.1), which invokes the registered
-     *       {@link ScheduledTickRunner} for this region's owned chunks'
-     *       scheduled block/fluid ticks. No-op until a real runner is
-     *       registered via {@link #setBlockFluidRunner}.</li>
-     *   <li><b>{@link PhasedRegionTickBody.Phase#REGION_EVENTS}</b> —
-     *       appends {@link ChunkTaskScheduler#drainInto(RegionId, int, long)}
-     *       (task 5.2), draining BLOCKING→IDLE priority chunk work up
-     *       to a bounded budget so the region worker never overspends
-     *       its 50 ms tick target (CLAUDE.md rule 4).</li>
-     *   <li><b>{@link PhasedRegionTickBody.Phase#FLUSH_OUTBOUND}</b> —
-     *       appends {@link AutoSaveRunner#runOnce(Region)} (task 5.3),
-     *       gated so autosave runs at most every {@code
-     *       config.autosaveTicks()} region ticks (Vanilla
-     *       parity: 6000 ticks = 5 minutes at 20 TPS).</li>
-     * </ol>
-     *
-     * <p>Also installs a {@link RegionJournalLifecycle} listener on
-     * every regionizer already known to this host <em>and</em> every
-     * regionizer created afterwards (task 5.4), and hands the coordinator
-     * to the lifecycle so per-region journals are tracked for the
-     * {@link net.multiforge.runtime.shutdown.ShutdownPhase#FLUSHING_JOURNAL}
-     * shutdown phase (task 5.5).
-     *
-     * <p>{@code userBuilder} carries the caller-supplied (usually
-     * Vanilla-body) work for the other phases; the M9 wiring is
-     * prepended / appended so it always fires regardless of what the
-     * caller wired. Safe to call more than once — a fresh call rebuilds
-     * the body from the passed-in {@code userBuilder} and swaps it into
-     * the scheduler (see {@link TickRegionScheduler#setBody}). The
-     * region-journal listener install is idempotent; the shutdown
-     * coordinator ref is last-writer-wins.
-     *
-     * @param userBuilder the phase bodies the caller wants to wire
-     * @param coordinator shutdown coordinator to hand new journals to; nullable
-     * @param journalDir  directory where per-region {@code region-&lt;id&gt;.mjl}
-     *                    files live; may not be null
+     * <p>{@code userBuilder} carries any extra per-phase work (tests use it
+     * for probes); the region work is appended so both run. Safe to call
+     * more than once: each call rebuilds the body and swaps it in.
      */
-    public void installM9WiredTickBody(
-            PhasedRegionTickBody.Builder userBuilder, RegionShutdownCoordinator coordinator, Path journalDir) {
+    public void installRegionTickBody(PhasedRegionTickBody.Builder userBuilder) {
         Objects.requireNonNull(userBuilder, "userBuilder");
-        Objects.requireNonNull(journalDir, "journalDir");
-        this.shutdownCoordinator = coordinator;
-        this.journalDir = journalDir;
-
-        // Install (or replace) the journal lifecycle listener on every
-        // known regionizer. Prior lifecycle (if any) stays wired to the
-        // old regionizers; a rewire is only useful for tests, so keeping
-        // both is benign (an already-created region has its journal
-        // opened once by the old listener and left alone by the new).
-        RegionJournalLifecycle lifecycle = new RegionJournalLifecycle(journalDir, coordinator);
-        this.journalLifecycle = lifecycle;
-        for (ThreadedRegionizer r : regionizers.values()) {
-            r.addListener(lifecycle);
-            // Backfill: regions that were created before the lifecycle
-            // was wired won't get onRegionCreated fired retroactively.
-            // Open their journals here so the invariant "every live
-            // region has an open journal after installM9WiredTickBody"
-            // holds. Uses regions() which returns a de-duplicated snapshot.
-            for (Region region : r.regions()) {
-                lifecycle.onRegionCreated(region);
-            }
-        }
-
-        // Build the wired body and swap it into the scheduler. Appended (not
-        // `.set`) so a caller-supplied body for the same phase — e.g. a test
-        // probe — still runs.
         PhasedRegionTickBody.Builder wired = userBuilder
-                .prepend(PhasedRegionTickBody.Phase.INBOUND_MAILBOX, this::phasePollFullLoadUpdate)
                 .append(PhasedRegionTickBody.Phase.BLOCK_FLUID_TICKS, this::phaseBlockFluidTicksTick)
                 .append(PhasedRegionTickBody.Phase.ENTITY_AI, this::phaseEntityAiTick)
-                .append(PhasedRegionTickBody.Phase.BLOCK_ENTITIES, this::phaseBlockEntitiesTickPerRegion)
-                .append(PhasedRegionTickBody.Phase.REGION_EVENTS, this::phaseDrainChunkTasks)
-                .append(PhasedRegionTickBody.Phase.FLUSH_OUTBOUND, this::phaseAutoSave);
+                .append(PhasedRegionTickBody.Phase.BLOCK_ENTITIES, this::phaseBlockEntitiesTickPerRegion);
         scheduler.setBody(wired.build());
     }
 
@@ -825,125 +623,10 @@ public final class MultiThreadedSchedulerHost implements SchedulerHost, AutoClos
     }
 
     /**
-     * Replay every region journal in {@code dir} through {@code harness}
-     * (crash recovery — see {@link JournalReplayHarness#replayAll}).
-     */
-    public int replayJournalsFromDir(Path dir, JournalReplayHarness harness) throws IOException {
-        return JournalReplayHarness.replayAll(dir, harness);
-    }
-
-    /** Test/observability accessor for the installed journal lifecycle. */
-    public RegionJournalLifecycle journalLifecycle() {
-        return journalLifecycle;
-    }
-
-    /** Test/observability accessor for the installed shutdown coordinator. */
-    public RegionShutdownCoordinator shutdownCoordinator() {
-        return shutdownCoordinator;
-    }
-
-    /**
-     * INBOUND_MAILBOX phase body — drain the region's pending
-     * full-load-update queue so subsequent phases (block/fluid ticks,
-     * entity AI, etc.) observe the freshest {@link
-     * net.multiforge.runtime.chunk.ChunkLoadLevel} for each holder.
-     * Bounded by {@link #PHASE_FULL_LOAD_MAX_PER_TICK} to preserve
-     * CLAUDE.md rule 4.
-     */
-    private void phasePollFullLoadUpdate(Region region) {
-        WorldRef world = regionToWorld.get(region.id());
-        if (world == null) return; // region already died — nothing to drain
-        ChunkHolderManager manager = chunkManagers.get(world.dimensionId());
-        if (manager == null) return;
-        HolderManagerRegionData data = manager.regionData(region.id());
-        int drained = 0;
-        while (drained < PHASE_FULL_LOAD_MAX_PER_TICK) {
-            NewChunkHolder holder = data.pollFullLoadUpdate();
-            if (holder == null) break;
-            drained++;
-            // The actual level-change re-publish is driven by
-            // NewChunkHolder.setLevel() (fires the LevelChangeListener);
-            // by the time the holder was enqueued its level had already
-            // been updated, so the poll here just clears the pending
-            // flag. Full-chunk-future resolution (Vanilla's Phase 6
-            // migration) will hang off this same drain path.
-        }
-    }
-
-    /**
-     * REGION_EVENTS phase body — drain BLOCKING→IDLE priority chunk
-     * work owned by this region. Bounded by both a max task count and
-     * a wall-clock deadline; undrained tasks stay enqueued and are
-     * retried next tick.
-     */
-    private void phaseDrainChunkTasks(Region region) {
-        long deadline = System.nanoTime() + PHASE_CHUNK_TASK_DEADLINE_NANOS;
-        chunkTaskScheduler.drainInto(region.id(), PHASE_CHUNK_TASK_MAX_PER_TICK, deadline);
-    }
-
-    /**
-     * FLUSH_OUTBOUND phase body — run the region's per-tick autosave
-     * slice, but only every {@code config.autosaveTicks()}
-     * region ticks (Vanilla parity). The AutoSaveRunner itself has a
-     * bounded per-call chunk count + deadline; it degrades gracefully
-     * on a slow disk by simply saving fewer chunks per call.
-     */
-    private void phaseAutoSave(Region region) {
-        long now = region.currentTick();
-        Long last = lastAutosaveTick.get(region.id());
-        if (last != null && now - last < config.autosaveTicks()) return;
-        AutoSaveRunner runner = autoSaveRunnerFor(region);
-        if (runner == null) return; // journal never opened for this region — skip
-        try {
-            runner.runOnce(region);
-            lastAutosaveTick.put(region.id(), now);
-        } catch (IOException e) {
-            ViolationLogger.warn(
-                    "MultiThreadedSchedulerHost.phaseAutoSave",
-                    "autosave failed for region " + region.id() + ": " + e.getMessage());
-        }
-    }
-
-    /**
-     * Lazy per-region AutoSaveRunner factory. Returns {@code null} if
-     * the region has no journal (either the M9 wire-in hasn't run yet,
-     * or the region's journal failed to open — see {@link
-     * RegionJournalLifecycle#onRegionCreated}).
-     *
-     * <p>The runner is built with {@code this::serializeChunkSafely},
-     * an indirection to the pluggable {@link #chunkSerializer} (see
-     * {@link #setChunkSerializer}) rather than a hardcoded stub —
-     * production boot glue (the fork's {@code ServerLifecycleHooks})
-     * registers {@code RegionChunkSerializer.serializeForJournal}
-     * there; tests that never call {@link #setChunkSerializer} keep
-     * getting the {@code byte[0]} default.
-     */
-    private AutoSaveRunner autoSaveRunnerFor(Region region) {
-        return autoSaveRunners.computeIfAbsent(region.id(), id -> {
-            RegionJournalLifecycle lc = this.journalLifecycle;
-            if (lc == null) return null;
-            RegionJournal journal = lc.journalFor(id);
-            if (journal == null) return null;
-            WorldRef world = regionToWorld.get(id);
-            if (world == null) return null;
-            ChunkHolderManager manager = chunkManagers.get(world.dimensionId());
-            if (manager == null) return null;
-            HolderManagerRegionData data = manager.regionData(id);
-            return new AutoSaveRunner(
-                    data,
-                    journal,
-                    this::serializeChunkSafely,
-                    PHASE_AUTOSAVE_MAX_CHUNKS_PER_TICK,
-                    PHASE_AUTOSAVE_DEADLINE_NANOS);
-        });
-    }
-
-    /**
      * Ensure a chunk is occupied and its region is registered with the
-     * scheduler. Also creates a holder in the world's
-     * {@link ChunkHolderManager} owned by the region, and drops a
-     * {@link TicketType#PLUGIN} ticket so the chunk stays loaded at
-     * BORDER level.
+     * scheduler, and record it in the world's {@link ChunkHolderManager}
+     * as owned by that region. For MC-free callers (tests, benchmarks);
+     * a server registers loaded chunks through {@link #registerChunk}.
      */
     public Region touchChunk(WorldRef world, int chunkX, int chunkZ) {
         ThreadedRegionizer regionizer = regionizerFor(world);
@@ -952,7 +635,6 @@ public final class MultiThreadedSchedulerHost implements SchedulerHost, AutoClos
         scheduler.register(r);
         ChunkHolderManager manager = chunkManagerFor(world);
         manager.createHolder(pos, r.id());
-        manager.addTicket(r.id(), pos, Ticket.of(TicketType.PLUGIN, "multiforge:touch"));
         return r;
     }
 
@@ -961,10 +643,9 @@ public final class MultiThreadedSchedulerHost implements SchedulerHost, AutoClos
      * scheduler, without adding any keep-loaded ticket or creating a
      * chunk holder. Used from the {@link
      * net.neoforged.neoforge.event.level.ChunkEvent.Load} handler
-     * (M8 sub-step 6a): the chunk is already loaded by Vanilla's own
-     * ticket, so MultiForge only needs to know it exists so region
-     * workers can eventually tick it. Ticket/holder management stays
-     * out of scope until M9.
+     * : the chunk is already loaded by Vanilla, so MultiForge only
+     * needs to know it exists so its region ticks it. The caller records
+     * the holder in the world's {@link ChunkHolderManager}.
      */
     public Region registerChunk(WorldRef world, int chunkX, int chunkZ) {
         ThreadedRegionizer regionizer = regionizerFor(world);
@@ -1016,16 +697,6 @@ public final class MultiThreadedSchedulerHost implements SchedulerHost, AutoClos
                 pinSub.close();
             } catch (Exception ignored) {
                 // CopyOnWriteArrayList removal; cannot fail
-            }
-        }
-        RegionShutdownCoordinator coordinator = this.shutdownCoordinator;
-        if (coordinator != null) {
-            try {
-                // No drain wait: in BARRIER mode mailboxes only drain when the
-                // server thread drives a tick, and drainMailboxesOnCaller already ran.
-                coordinator.shutdown(java.time.Duration.ZERO);
-            } catch (IOException | IllegalStateException e) {
-                ViolationLogger.warn("MultiThreadedSchedulerHost.close", "closing region journals failed: " + e);
             }
         }
         scheduler.close();

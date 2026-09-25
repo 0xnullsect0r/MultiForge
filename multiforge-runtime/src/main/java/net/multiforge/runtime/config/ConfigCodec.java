@@ -50,8 +50,7 @@ public final class ConfigCodec {
                                 '-', '_')
                         .toUpperCase(Locale.ROOT));
         int warnPerMin = intOr(r, "violations.warnPerMin", d.warnPerMin());
-        long autosaveTicks = Math.max(1L, longOr(r, "persistence.autosaveTicks", d.autosaveTicks()));
-        return new MultiForgeConfig(cores, tpc, mode, regionSize, vp, warnPerMin, autosaveTicks);
+        return new MultiForgeConfig(cores, tpc, mode, regionSize, vp, warnPerMin);
     }
 
     public static String render(MultiForgeConfig c) {
@@ -70,9 +69,7 @@ public final class ConfigCodec {
         sb.append("policy = \"")
                 .append(c.violationPolicy().name().toLowerCase(Locale.ROOT).replace('_', '-'))
                 .append("\"\n");
-        sb.append("warnPerMin = ").append(c.warnPerMin()).append("\n\n");
-        sb.append("[persistence]\n");
-        sb.append("autosaveTicks = ").append(c.autosaveTicks()).append("\n");
+        sb.append("warnPerMin = ").append(c.warnPerMin()).append("\n");
         return sb.toString();
     }
 
@@ -104,11 +101,6 @@ public final class ConfigCodec {
     private static int intOr(UnmodifiableConfig r, String key, int fallback) {
         Number v = number(r, key);
         return v == null ? fallback : Math.toIntExact(v.longValue());
-    }
-
-    private static long longOr(UnmodifiableConfig r, String key, long fallback) {
-        Number v = number(r, key);
-        return v == null ? fallback : v.longValue();
     }
 
     private static <E extends Enum<E>> E enumOr(UnmodifiableConfig r, String key, Class<E> type, E fallback) {

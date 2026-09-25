@@ -1,6 +1,6 @@
 --- a/net/minecraft/server/level/ServerChunkCache.java
 +++ b/net/minecraft/server/level/ServerChunkCache.java
-@@ -135,10 +135,31 @@ public class ServerChunkCache extends ChunkSource implements net.neoforged.neofo
+@@ -135,7 +135,27 @@ public class ServerChunkCache extends ChunkSource implements net.neoforged.neofo
      @Override
      public ChunkAccess getChunk(int p_8360_, int p_8361_, ChunkStatus p_330876_, boolean p_8363_) {
          if (Thread.currentThread() != this.mainThread) {
@@ -29,11 +29,7 @@
          } else {
              ProfilerFiller profilerfiller = this.level.getProfiler();
              profilerfiller.incrementCounter("getChunk");
-+            net.multiforge.neoforge.chunk.ServerChunkCacheBridge.observeGet(this, p_8360_, p_8361_, p_330876_, p_8363_);
-             long i = ChunkPos.asLong(p_8360_, p_8361_);
- 
-             for (int j = 0; j < 4; j++) {
-@@ -172,7 +193,13 @@ public class ServerChunkCache extends ChunkSource implements net.neoforged.neofo
+@@ -172,7 +192,13 @@ public class ServerChunkCache extends ChunkSource implements net.neoforged.neofo
      @Override
      public LevelChunk getChunkNow(int p_8357_, int p_8358_) {
          if (Thread.currentThread() != this.mainThread) {
@@ -48,24 +44,3 @@
          } else {
              this.level.getProfiler().incrementCounter("getChunkNow");
              long i = ChunkPos.asLong(p_8357_, p_8358_);
-@@ -299,10 +326,12 @@ public class ServerChunkCache extends ChunkSource implements net.neoforged.neofo
-     public void save(boolean p_8420_) {
-         this.runDistanceManagerUpdates();
-         this.chunkMap.saveAllChunks(p_8420_);
-+        net.multiforge.neoforge.chunk.ServerChunkCacheBridge.afterSave(this, p_8420_);
-     }
- 
-     @Override
-     public void close() throws IOException {
-+        net.multiforge.neoforge.chunk.ServerChunkCacheBridge.beforeClose(this);
-         this.save(true);
-         this.lightEngine.close();
-         this.chunkMap.close();
-@@ -326,6 +355,7 @@ public class ServerChunkCache extends ChunkSource implements net.neoforged.neofo
-         this.chunkMap.tick(p_201913_);
-         this.level.getProfiler().pop();
-         this.clearCache();
-+        net.multiforge.neoforge.chunk.ServerChunkCacheBridge.afterTickChunks(this, p_201913_);
-     }
- 
-     private void tickChunks() {

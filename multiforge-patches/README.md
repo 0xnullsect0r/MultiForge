@@ -17,7 +17,7 @@ they implement is `docs/design/barrier-tick-model.md`.
 | `01-ownership/`        | Positional ownership guards at the mutation sites (`Level.setBlock`, `scheduleTick`, `addFreshEntity`, `Entity.remove`, `BlockEntity.setChanged`, ...). |
 | `02-region-tick/`      | Per-region scheduled ticks, block events, entities and block entities; per-thread random, neighbour updater and profiler; region gates in `ServerLevel.tick`; `MinecraftServer` passes `haveTime` to the coordinator. |
 | `03-world-data/`       | Empty. Per-region tick state lives in `LevelTicks`' per-chunk containers and `ServerLevel`'s per-region block-event queues (02). |
-| `04-chunk-system/`     | `ServerChunkCache.getChunk`/`getChunkNow` fast path and main-thread hand-off for region workers; chunk-system hooks. |
+| `04-chunk-system/`     | `ServerChunkCache.getChunk`/`getChunkNow`: region workers read loaded chunks directly and hand real loads to the server thread. |
 | `05-entity-migration/` | Cross-region teleports and player dimension changes deferred to the server thread; leaf locks on entity storage, the entity tick list and the tracker map. (Named for the M4 design it replaced.) |
 | `06-networking/`       | Empty. Packets are handled on the server thread, between barriers, as in Vanilla. |
 | `07-persistence/`      | Empty. Chunks are saved by Vanilla's own `ChunkMap` save path on the server thread. |

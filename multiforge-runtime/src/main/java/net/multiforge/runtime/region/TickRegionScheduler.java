@@ -118,11 +118,9 @@ public final class TickRegionScheduler implements AutoCloseable, RegionListener 
     /**
      * Swap in a new per-region tick body. Applied on the next tick each
      * worker starts — no in-flight tick is preempted. Callers must not
-     * pass {@code null}. Used by Phase 5 wiring in {@link
-     * net.multiforge.runtime.scheduler.MultiThreadedSchedulerHost} to
-     * install a {@link PhasedRegionTickBody} with M9 wiring
-     * (pollFullLoadUpdate, ChunkTaskScheduler.drainInto, AutoSaveRunner)
-     * after the host has constructed its per-world managers.
+     * pass {@code null}. Used by {@code
+     * MultiThreadedSchedulerHost.installRegionTickBody} once the server's
+     * runners are bound.
      */
     public void setBody(RegionTickBody body) {
         this.body = Objects.requireNonNull(body, "body");

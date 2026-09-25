@@ -25,7 +25,7 @@ loading, commands typed by players, autosave. For each level it ticks,
    `TickRegionScheduler.driveTick`). A region's tick body runs, in order:
    its mailbox, scheduled block and fluid ticks (with Vanilla's
    collect-then-run semantics), the block events those ticks queued, its
-   entities, its block entities, its chunk tasks, and its journal autosave.
+   entities, and its block entities.
 4. **Barrier**: `dispatchLevelTick` returns only once every region finished.
 
 Region work and server-thread work therefore **never overlap**. The only
@@ -130,6 +130,16 @@ ticking world" crash handling, and NeoForge's `removeErroringBlockEntities`/
 `removeErroringEntities` options (applied inside Vanilla's own tick wrappers),
 behave exactly as they do for an inline level tick.
 
+## Chunks
+
+Chunk loading, tickets, load levels, generation, lighting and saving are
+Vanilla's and run on the server thread, unchanged. The runtime only tracks
+which region owns each loaded chunk: `RegionizedChunkLifecycle` adds a
+chunk to the regionizer and to the world's `ChunkHolderManager` index on
+`ChunkEvent.Load` and removes it on `ChunkEvent.Unload`. A region worker
+reads loaded chunks directly and hands a real load to the server thread
+(`MainThreadHandoff`, see *Shared Vanilla state* above).
+
 ## What this replaced
 
 - **Free-running regions.** The scheduler ticked regions on their own 20 TPS
@@ -143,6 +153,13 @@ behave exactly as they do for an inline level tick.
   chunk position and cross-region jumps deferred to the server thread, none
   of that is needed; it broke references to the entity and rubber-banded
   players.
+- **M9 chunk-system fork.** A shadow of Vanilla's chunk system (holders
+  with load levels and futures, per-region ticket maps, facades for
+  `ChunkMap`, `DistanceManager` and the light engine, a per-region
+  chunk-save journal and an MCA reader/writer) was fed by observer hooks in
+  the chunk code but never drove anything: Vanilla kept loading, lighting
+  and saving every chunk, and the journal never received a write. It was
+  removed; the chunk index above is what remained in use.
 - **M5 global subsystems.** Ten Vanilla methods (weather, time, world border,
   raids, dragon fight, scoreboard and boss-bar callbacks, command dispatch)
   were hollowed out and re-run from a global-region worker. In the barrier

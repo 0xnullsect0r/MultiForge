@@ -30,7 +30,6 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import net.multiforge.api.world.WorldRef;
 import net.multiforge.runtime.chunk.ChunkHolderManager;
-import net.multiforge.runtime.chunk.ChunkLoadLevel;
 import net.multiforge.runtime.chunk.NewChunkHolder;
 import net.multiforge.runtime.config.MultiForgeConfig;
 import net.multiforge.runtime.config.MultiForgeConfigStore;
@@ -60,9 +59,7 @@ import net.multiforge.runtime.scheduler.MultiThreadedSchedulerHost;
  *   /multiforge region list
  *   /multiforge probes           — dump all ProbeRegistry counters (diagnostics)
  *   /multiforge probes &lt;prefix&gt;  — dump counters whose key starts with prefix
- *   /multiforge chunks &lt;world&gt;   — summarize the M9-bridge chunk shadow
- *                                  (counts by ChunkLoadLevel; requires the fork
- *                                  ChunkMap bridge to be installed)
+ *   /multiforge chunks &lt;world&gt;   — loaded chunks of a world, per owning region
  *   /multiforge warn list         — show recent violations from ViolationLogger
  *   /multiforge warn clear        — reset the violation history ring buffer
  *   /multiforge certify &lt;modId&gt;  — run the scanner against a jar in ./mods,
@@ -212,18 +209,14 @@ public final class MultiForgeCommandDispatcher {
     }
 
     /**
-     * Summarize the M9-bridge chunk shadow for one world: counts by
-     * {@link ChunkLoadLevel}. Requires the fork bridge
-     * ({@code net.multiforge.neoforge.ChunkHolderManagerBridge}) to be
-     * installed so that Vanilla ticket-level updates propagate into
-     * {@link ChunkHolderManager}.
+     * Summarize one world's loaded chunks by owning region.
      *
      * <p>Usage: {@code /multiforge chunks <world>} where {@code <world>}
      * is a namespaced dimension id like {@code minecraft:overworld}.
      */
     private boolean handleChunks(String[] args, Consumer<String> output) {
         if (chunkManagers == null) {
-            output.accept("Chunk-system bridge not installed. Ensure ChunkHolderManagerBridge is wired.");
+            output.accept("Regionized runtime not installed (mode = off).");
             return false;
         }
         if (args.length < 2) {
@@ -233,18 +226,16 @@ public final class MultiForgeCommandDispatcher {
         WorldRef world = WorldRef.of(args[1]);
         ChunkHolderManager manager = chunkManagers.apply(world);
         if (manager == null) {
-            output.accept("No chunk manager for world '" + args[1] + "' (never touched by the bridge).");
+            output.accept("No chunks of '" + args[1] + "' are loaded.");
             return true;
         }
-        java.util.EnumMap<ChunkLoadLevel, Integer> counts = new java.util.EnumMap<>(ChunkLoadLevel.class);
-        for (ChunkLoadLevel l : ChunkLoadLevel.values()) counts.put(l, 0);
+        java.util.Map<String, Integer> byRegion = new java.util.TreeMap<>();
         for (NewChunkHolder h : manager.holders()) {
-            counts.merge(h.level(), 1, Integer::sum);
+            byRegion.merge(String.valueOf(h.owningRegion()), 1, Integer::sum);
         }
-        int total = manager.holderCount();
-        output.accept("world=" + args[1] + " holders=" + total);
-        for (ChunkLoadLevel l : ChunkLoadLevel.values()) {
-            output.accept("  " + l.name() + " (distance=" + l.distance() + "): " + counts.get(l));
+        output.accept("world=" + args[1] + " loaded chunks=" + manager.holderCount() + " regions=" + byRegion.size());
+        for (java.util.Map.Entry<String, Integer> e : byRegion.entrySet()) {
+            output.accept("  region " + e.getKey() + ": " + e.getValue() + " chunk(s)");
         }
         return true;
     }

@@ -33,7 +33,7 @@ import org.junit.jupiter.api.io.TempDir;
  * Coverage for B3.4's per-region {@code BLOCK_ENTITIES} wiring
  * (docs/design/m13-b3-region-tick.md §5.3):
  * {@code MultiThreadedSchedulerHost#phaseBlockEntitiesTickPerRegion},
- * installed by {@link MultiThreadedSchedulerHost#installM9WiredTickBody}.
+ * installed by {@link MultiThreadedSchedulerHost#installRegionTickBody}.
  *
  * <p>End-to-end through the real production path: a region is created
  * via {@link MultiThreadedSchedulerHost#touchChunk}, a {@link
@@ -82,7 +82,7 @@ class PhasedRegionTickBody_BlockEntitiesPerRegionTest {
         manager.regionData(region.id()).addBlockEntityTicker(b);
         manager.regionData(region.id()).addBlockEntityTicker(c);
 
-        host.installM9WiredTickBody(PhasedRegionTickBody.builder(), null, journalDir);
+        host.installRegionTickBody(PhasedRegionTickBody.builder());
         RegionTickBody body = host.scheduler().body();
 
         body.tickOnce(region);
@@ -107,7 +107,7 @@ class PhasedRegionTickBody_BlockEntitiesPerRegionTest {
         manager.regionData(regionA.id()).addBlockEntityTicker(inA);
         manager.regionData(regionB.id()).addBlockEntityTicker(inB);
 
-        host.installM9WiredTickBody(PhasedRegionTickBody.builder(), null, journalDir);
+        host.installRegionTickBody(PhasedRegionTickBody.builder());
         RegionTickBody body = host.scheduler().body();
 
         body.tickOnce(regionA);
@@ -133,7 +133,7 @@ class PhasedRegionTickBody_BlockEntitiesPerRegionTest {
         manager.regionData(region.id()).addBlockEntityTicker(removed);
         assertThat(manager.regionData(region.id()).blockEntityTickerCount()).isEqualTo(2);
 
-        host.installM9WiredTickBody(PhasedRegionTickBody.builder(), null, journalDir);
+        host.installRegionTickBody(PhasedRegionTickBody.builder());
         RegionTickBody body = host.scheduler().body();
 
         body.tickOnce(region);
@@ -155,7 +155,7 @@ class PhasedRegionTickBody_BlockEntitiesPerRegionTest {
         manager.regionData(region.id()).addBlockEntityTicker(before);
         manager.regionData(region.id()).addBlockEntityTicker(throwing);
 
-        host.installM9WiredTickBody(PhasedRegionTickBody.builder(), null, journalDir);
+        host.installRegionTickBody(PhasedRegionTickBody.builder());
         RegionTickBody body = host.scheduler().body();
 
         // Vanilla crashes the server on a block-entity tick failure (its own

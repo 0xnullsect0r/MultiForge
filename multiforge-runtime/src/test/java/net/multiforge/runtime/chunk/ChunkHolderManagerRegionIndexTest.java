@@ -79,27 +79,14 @@ class ChunkHolderManagerRegionIndexTest {
     }
 
     @Test
-    void droppingAnUnticketedHolderRemovesItFromTheIndex() {
+    void droppingAHolderRemovesItFromTheIndex() {
         ChunkHolderManager m = new ChunkHolderManager(WORLD);
         RegionId region = RegionId.next();
         ChunkPos pos = new ChunkPos(5, 5);
         m.createHolder(pos, region);
 
-        assertThat(m.dropHolderIfUnticketed(pos)).isTrue();
+        assertThat(m.dropHolder(pos)).isNotNull();
         assertThat(m.holderAt(pos)).isNull();
         assertThat(m.holdersOwnedBy(region)).isEmpty();
-    }
-
-    @Test
-    void aTicketedHolderIsKept() {
-        ChunkHolderManager m = new ChunkHolderManager(WORLD);
-        RegionId region = RegionId.next();
-        ChunkPos pos = new ChunkPos(6, 6);
-        m.addTicket(region, pos, Ticket.of(TicketType.PLUGIN, "keep"));
-
-        assertThat(m.dropHolderIfUnticketed(pos)).isFalse();
-        assertThat(m.holdersOwnedBy(region))
-                .extracting(NewChunkHolder::position)
-                .containsExactly(pos);
     }
 }

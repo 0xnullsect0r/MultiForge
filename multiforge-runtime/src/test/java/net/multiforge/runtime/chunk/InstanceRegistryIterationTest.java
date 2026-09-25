@@ -28,11 +28,8 @@ import org.junit.jupiter.api.Test;
  * <p>{@code Collections.synchronizedMap(WeakHashMap)} — the shape this
  * class wraps — is safe for individual {@code get}/{@code put}/{@code
  * remove} calls but requires the caller hold the wrapper's monitor for
- * the duration of any iteration over the map's views. {@link
- * MultiForgeDistanceManager} and {@link MultiForgeLightEngine} (fork-side,
- * not reachable from this MC-free module) register every live facade
- * instance in exactly this shape; nothing walks the registry today, but
- * the hazard is latent — a future all-instances command would inherit a
+ * the duration of any iteration over the map's views. Nothing walks the
+ * registry today, but the hazard is latent — a future all-instances command would inherit a
  * {@code ConcurrentModificationException} risk with no compile-time
  * warning. {@link InstanceRegistry#snapshot()} closes that gap by taking
  * the monitor once and handing back a private copy the caller can iterate

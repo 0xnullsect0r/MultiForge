@@ -42,12 +42,12 @@ class ConfigCodecTest {
                 """
             [mtserver]
             cores = 12
-            [persistence]
-            autosaveTicks = 1200
+            [violations]
+            warnPerMin = 9
             """;
         MultiForgeConfig c = ConfigCodec.parse(toml);
         assertThat(c.cores()).isEqualTo(12);
-        assertThat(c.autosaveTicks()).isEqualTo(1200L);
+        assertThat(c.warnPerMin()).isEqualTo(9);
         // Everything else stays at defaults.
         assertThat(c.threadsPerCore()).isEqualTo(MultiForgeConfig.defaults().threadsPerCore());
         assertThat(c.violationPolicy()).isEqualTo(MultiForgeConfig.defaults().violationPolicy());

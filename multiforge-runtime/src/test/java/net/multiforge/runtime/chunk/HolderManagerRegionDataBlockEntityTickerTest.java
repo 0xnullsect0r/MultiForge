@@ -105,7 +105,7 @@ class HolderManagerRegionDataBlockEntityTickerTest {
 
         // shouldLeave (over NewChunkHolder) is irrelevant here — no holders
         // are staged — only the ChunkPos-keyed ticker predicate matters.
-        HolderManagerRegionData child = data.split(h -> false, cp -> cp.equals(leaveChunk));
+        HolderManagerRegionData child = data.split(cp -> cp.equals(leaveChunk));
 
         assertThat(data.snapshotBlockEntityTickers()).containsExactly(stayTicker);
         assertThat(child.snapshotBlockEntityTickers()).containsExactly(leaveTicker);

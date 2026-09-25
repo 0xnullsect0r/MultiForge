@@ -180,24 +180,7 @@ public class ServerLifecycleHooks {
                             + foreign.getMessage());
             throw foreign;
         }
-        // M9 Phase 5 wave B: wire the real chunk-payload serializer now
-        // that install() above has either freshly installed a host or
-        // confirmed one is already installed (the AlreadyInstalledException
-        // reuse path — same JVM, successive GameTestServer instances).
-        // MultiForgeRegionizedRuntime.current() is null only with mode=off
-        // (the foreign-host IllegalStateException above rethrows).
-        // setChunkSerializer is idempotent and volatile-backed,
-        // so re-registering on the reuse path is harmless.
-        //
-        // This closes the last functional gap in the FLUSH_OUTBOUND
-        // autosave wiring: without it, AutoSaveRunner keeps writing
-        // byte[0] payloads to the journal (durable but content-free),
-        // which is what made the Phase 7.2/7.3 determinism runs unable
-        // to validate against real world saves.
         net.multiforge.runtime.scheduler.MultiThreadedSchedulerHost mfHost = net.multiforge.runtime.scheduler.MultiForgeRegionizedRuntime.current();
-        if (mfHost != null) {
-            mfHost.setChunkSerializer(net.multiforge.neoforge.io.RegionChunkSerializer::serializeForJournal);
-        }
         // M8 sub-step 6a: install the ChunkEvent.Load/Unload listeners
         // that keep the regionizer in sync with Vanilla-loaded chunks.
         // Idempotent per JVM.
@@ -207,15 +190,9 @@ public class ServerLifecycleHooks {
         // body — once per fresh runtime (see freshInstall above).
         if (mfHost != null && freshInstall) {
             net.multiforge.neoforge.RegionRuntimeInit.install(mfHost, server);
-            // The per-region phase body: block/fluid ticks and block events,
-            // entities, block entities, chunk tasks, and per-region autosave
-            // into <world>/multiforge/journal.
-            mfHost.installM9WiredTickBody(
-                    net.multiforge.runtime.region.PhasedRegionTickBody.builder(),
-                    new net.multiforge.runtime.shutdown.RegionShutdownCoordinator(mfHost.scheduler(), mfHost.taskQueue()),
-                    server.getWorldPath(net.minecraft.world.level.storage.LevelResource.ROOT)
-                            .resolve("multiforge")
-                            .resolve("journal"));
+            // The per-region phase body: block/fluid ticks and the block events
+            // they queue, entities, block entities.
+            mfHost.installRegionTickBody(net.multiforge.runtime.region.PhasedRegionTickBody.builder());
             // Region pins (/multiforge region pin): keep each pinned area's
             // loaded chunks in one region.
             mfHost.bindPins(net.multiforge.neoforge.MultiForgeServerState.pinManagerFor(server));
