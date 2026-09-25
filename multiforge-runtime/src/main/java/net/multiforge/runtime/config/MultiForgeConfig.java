@@ -114,6 +114,33 @@ public record MultiForgeConfig(
         return Math.max(1, cores * threadsPerCore);
     }
 
+    /**
+     * The mode the server actually runs in: {@code -Dmultiforge.mode=off|hybrid|strict}
+     * when set (so an operator can switch MultiForge off, or into strict
+     * regression mode, without editing the file), otherwise {@link #mode()}.
+     * An unrecognised property value is ignored.
+     *
+     * <ul>
+     * <li>{@link Mode#OFF} — the regionized runtime is not installed; the
+     *     server runs Vanilla's single-threaded tick.</li>
+     * <li>{@link Mode#HYBRID} — regions tick in parallel; an ownership
+     *     violation is rerouted to its owner with a rate-limited warning.</li>
+     * <li>{@link Mode#STRICT} — as hybrid, but ownership violations and
+     *     region-tick overruns throw (regression runs).</li>
+     * </ul>
+     */
+    public Mode effectiveMode() {
+        String override = System.getProperty("multiforge.mode");
+        if (override != null && !override.isBlank()) {
+            try {
+                return Mode.valueOf(override.trim().toUpperCase(java.util.Locale.ROOT));
+            } catch (IllegalArgumentException ignored) {
+                LOG.warn("ignoring unrecognised -Dmultiforge.mode={} (expected off, hybrid or strict)", override);
+            }
+        }
+        return mode;
+    }
+
     public static MultiForgeConfig defaults() {
         return new MultiForgeConfig(
                 Runtime.getRuntime().availableProcessors(),

@@ -78,4 +78,61 @@ public final class OwnershipGuard {
     public static void rerouteAt(String site, Level level, BlockPos pos, Runnable mutation) {
         rerouteAt(site, level, pos.getX() >> 4, pos.getZ() >> 4, mutation);
     }
+
+    /**
+     * Defer an entity move that would take {@code entity} into a chunk of
+     * {@code target} owned by another region. Called at the top of the
+     * teleport entry points. On a region worker, moving an entity into a
+     * foreign region would hand it to a region that may be ticking right now;
+     * instead the whole call ({@code redo}) is re-run on the server thread
+     * after the tick barrier, where no region runs. Moves within the caller's
+     * region, and calls from any non-region thread, proceed inline. A move to
+     * another dimension proceeds inline too (only this level's regions are
+     * ticking), except for players: removing a player from a level updates
+     * every tracked entity's viewer set, including other regions' entities,
+     * so a player's dimension change is always deferred.
+     *
+     * @return {@code true} if the move was deferred and the caller must return
+     */
+    public static boolean deferCrossRegionMove(
+            String site, net.minecraft.world.entity.Entity entity, Level target, double x, double z, Runnable redo) {
+        if (target.isClientSide()) return false;
+        if (target != entity.level()) {
+            if (!(entity instanceof net.minecraft.server.level.ServerPlayer)
+                    || net.multiforge.runtime.ownership.OwnerToken.current().domain()
+                            != net.multiforge.runtime.ownership.Domain.REGION) {
+                return false;
+            }
+            net.multiforge.runtime.diagnostics.ProbeRegistry.bump(site + ":deferred-player-dimension-change");
+            OwnershipEnforcer.reroute(site, redo);
+            return true;
+        }
+        int chunkX = net.minecraft.util.Mth.floor(x) >> 4;
+        int chunkZ = net.minecraft.util.Mth.floor(z) >> 4;
+        if (!OwnershipEnforcer.isCrossRegionFromWorker(target.mfWorldRef(), chunkX, chunkZ)) return false;
+        net.multiforge.runtime.diagnostics.ProbeRegistry.bump(site + ":deferred-cross-region");
+        OwnershipEnforcer.reroute(site, redo);
+        return true;
+    }
+
+    /**
+     * Defer {@code work} to the server thread when called from a region
+     * worker. Used for operations whose effects are not confined to one
+     * region — command execution (a command block's {@code /fill}, {@code
+     * /tp @e}, {@code /kill}), function execution — so they run after the
+     * tick barrier, while no region runs, exactly as a command typed by a
+     * player does. From any other thread this returns {@code false} and the
+     * caller runs inline.
+     *
+     * @return {@code true} if deferred and the caller must return
+     */
+    public static boolean deferToServerThread(String site, Runnable work) {
+        if (net.multiforge.runtime.ownership.OwnerToken.current().domain()
+                != net.multiforge.runtime.ownership.Domain.REGION) {
+            return false;
+        }
+        net.multiforge.runtime.diagnostics.ProbeRegistry.bump(site + ":deferred-to-server-thread");
+        OwnershipEnforcer.reroute(site, work);
+        return true;
+    }
 }

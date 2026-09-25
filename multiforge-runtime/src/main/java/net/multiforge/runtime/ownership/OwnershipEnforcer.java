@@ -99,6 +99,15 @@ public final class OwnershipEnforcer {
         return mode;
     }
 
+    /**
+     * Select the enforcement mode (the server applies its configured
+     * {@code mode = "strict"} through this). {@code -Dmultiforge.ownership.mode}
+     * sets the initial value.
+     */
+    public static void setMode(Mode m) {
+        mode = Objects.requireNonNull(m, "m");
+    }
+
     /** Test-only: overrides the mode without going through the system property. */
     public static void setModeForTesting(Mode m) {
         mode = Objects.requireNonNull(m, "m");
@@ -243,6 +252,23 @@ public final class OwnershipEnforcer {
             throw new OwnershipViolationException(site, Thread.currentThread(), tok.domain());
         }
         return false;
+    }
+
+    /**
+     * @return {@code true} iff the caller is a region worker and chunk
+     *     ({@code chunkX}, {@code chunkZ}) of {@code world} is owned by a
+     *     different region (or by none). Unlike {@link #canMutateAt} this is a
+     *     plain query — no probe, no warning — for call sites that treat a
+     *     cross-region target as a normal event to be deferred (an entity
+     *     teleporting into another region), not a violation.
+     */
+    public static boolean isCrossRegionFromWorker(WorldRef world, int chunkX, int chunkZ) {
+        if (mode == Mode.OFF) return false;
+        OwnerToken tok = OwnerToken.current();
+        if (tok.domain() != Domain.REGION) return false;
+        PositionRouter router = positionRouter;
+        if (router == null || world == null) return false;
+        return router.ownerOf(world, chunkX, chunkZ) != tok.regionId();
     }
 
     /**

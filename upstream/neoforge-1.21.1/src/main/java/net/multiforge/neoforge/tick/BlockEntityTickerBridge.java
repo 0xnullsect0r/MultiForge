@@ -31,8 +31,7 @@ import net.multiforge.runtime.scheduler.MultiThreadedSchedulerHost;
 /**
  * Fork-local façade the {@code multiforge-patches/02-region-tick/net/
  * minecraft/world/level/Level.java.patch} hunks call into — mirrors the
- * {@link RegionizedTickCoordinator} / {@code GlobalSystemsBridge} facade
- * shape (patched Vanilla code references a stable fork-local API; the
+ * {@link RegionizedTickCoordinator} facade shape (patched Vanilla code references a stable fork-local API; the
  * actual runtime behind it is swapped out from behind without editing
  * any patch file).
  *
@@ -95,7 +94,7 @@ public final class BlockEntityTickerBridge {
      * already present in its {@code blockEntityTickers} list at the
      * moment this runs — see the class javadoc. Idempotent: a second
      * call for a world already installed is a no-op. Called from {@code
-     * MultiForgeGlobalSystemsInit} on {@code LevelEvent.Load}.
+     * RegionRuntimeInit} on {@code LevelEvent.Load}.
      *
      * <p>Never throws (CLAUDE.md rule 5): a failure here — the runtime
      * not installed yet, no regionizer materialised for this world, an
@@ -121,7 +120,7 @@ public final class BlockEntityTickerBridge {
         }
     }
 
-    /** Called from {@code MultiForgeGlobalSystemsInit} on {@code LevelEvent.Unload}. */
+    /** Called from {@code RegionRuntimeInit} on {@code LevelEvent.Unload}. */
     public static void uninstallLevel(ServerLevel level) {
         INSTALLED.remove(RegionizedTickCoordinator.asWorldRef(level));
     }

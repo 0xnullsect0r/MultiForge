@@ -22,8 +22,6 @@ import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
-import net.multiforge.runtime.entity.MigratingEntityRef;
-import net.multiforge.runtime.entity.MigrationState;
 import net.multiforge.runtime.journal.RegionJournal;
 import net.multiforge.runtime.region.Region;
 import net.multiforge.runtime.region.RegionId;
@@ -37,10 +35,8 @@ import net.multiforge.runtime.region.TickRegionScheduler;
  * <ol>
  *   <li>Flip to {@link ShutdownPhase#DRAINING_INBOX} — the network
  *       layer stops accepting new packets. Workers keep ticking.</li>
- *   <li>Wait until every region's {@link RegionizedTaskQueue} inbox is
- *       empty, every migrating entity has landed
- *       ({@link MigrationState#MIGRATING} count == 0), and the orphan
- *       queue is empty — bounded by a wall-clock deadline.</li>
+ *   <li>Wait until every region's {@link RegionizedTaskQueue} inbox and
+ *       the orphan queue are empty — bounded by a wall-clock deadline.</li>
  *   <li>Flip to {@link ShutdownPhase#FLUSHING_JOURNAL}, close every
  *       {@link RegionJournal} (this fsyncs and closes the fd).</li>
  *   <li>Flip to {@link ShutdownPhase#STOPPING_WORKERS} and call
@@ -56,7 +52,7 @@ public final class RegionShutdownCoordinator {
     /** Callback invoked when the shutdown coordinator emits progress. */
     @FunctionalInterface
     public interface ProgressListener {
-        void onPhaseAdvanced(ShutdownPhase from, ShutdownPhase to, long inboxRemaining, long migrationsInFlight);
+        void onPhaseAdvanced(ShutdownPhase from, ShutdownPhase to, long inboxRemaining);
     }
 
     private final TickRegionScheduler scheduler;
@@ -71,7 +67,6 @@ public final class RegionShutdownCoordinator {
     // FLUSHING_JOURNAL phase; a single journal appearing in both is closed
     // twice, which RegionJournal.close() tolerates via its idempotent guard.
     private final ConcurrentMap<RegionId, RegionJournal> journalsByRegion = new ConcurrentHashMap<>();
-    private final List<MigratingEntityRef> migratingRefs = new CopyOnWriteArrayList<>();
     private final AtomicReference<ShutdownPhase> phase = new AtomicReference<>(ShutdownPhase.ACCEPTING);
     private final CopyOnWriteArrayList<ProgressListener> listeners = new CopyOnWriteArrayList<>();
 
@@ -128,10 +123,6 @@ public final class RegionShutdownCoordinator {
         return List.copyOf(journalsByRegion.values());
     }
 
-    public void trackMigrationRef(MigratingEntityRef ref) {
-        migratingRefs.add(Objects.requireNonNull(ref, "ref"));
-    }
-
     public void addListener(ProgressListener listener) {
         listeners.add(Objects.requireNonNull(listener, "listener"));
     }
@@ -185,17 +176,13 @@ public final class RegionShutdownCoordinator {
 
     /**
      * Blocking predicate exposed for tests: every inbox is empty, the
-     * orphan queue is empty, and no entity is mid-migration.
+     * and the orphan queue is empty.
      */
     public boolean drainedCompletely() {
         for (Region r : regions) {
             if (taskQueue.inboxSize(r) > 0) return false;
         }
-        if (taskQueue.orphanedSize() > 0) return false;
-        for (MigratingEntityRef ref : migratingRefs) {
-            if (ref.migrationState() == MigrationState.MIGRATING) return false;
-        }
-        return true;
+        return taskQueue.orphanedSize() == 0;
     }
 
     public long totalInboxDepth() {
@@ -203,14 +190,6 @@ public final class RegionShutdownCoordinator {
         for (Region r : regions) total += taskQueue.inboxSize(r);
         total += taskQueue.orphanedSize();
         return total;
-    }
-
-    public long migrationsInFlight() {
-        long n = 0;
-        for (MigratingEntityRef ref : migratingRefs) {
-            if (ref.migrationState() == MigrationState.MIGRATING) n++;
-        }
-        return n;
     }
 
     public List<RegionJournal> journalsForTesting() {
@@ -224,9 +203,8 @@ public final class RegionShutdownCoordinator {
             return;
         }
         long inbox = totalInboxDepth();
-        long migrations = migrationsInFlight();
         for (ProgressListener l : listeners) {
-            l.onPhaseAdvanced(from, to, inbox, migrations);
+            l.onPhaseAdvanced(from, to, inbox);
         }
     }
 

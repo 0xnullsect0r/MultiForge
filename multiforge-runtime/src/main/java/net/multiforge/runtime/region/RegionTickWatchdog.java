@@ -91,6 +91,15 @@ public final class RegionTickWatchdog {
         return mode;
     }
 
+    /**
+     * Select the watchdog mode (the server applies its configured {@code
+     * mode = "strict"} through this). {@code -Dmultiforge.regiontick.strict}
+     * sets the initial value.
+     */
+    public static void setMode(Mode m) {
+        mode = java.util.Objects.requireNonNull(m, "m");
+    }
+
     /** Test-only: set the mode directly without going through a system property. */
     public static void setModeForTesting(Mode m) {
         mode = m;

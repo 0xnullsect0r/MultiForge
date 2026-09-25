@@ -127,18 +127,30 @@ public class ServerLifecycleHooks {
         // runtime in barrier mode — the server thread drives every region
         // tick (net.multiforge.neoforge.RegionizedTickCoordinator), so region
         // work never overlaps the Vanilla main loop. The real per-region
-        // phase body is installed below, once the global subsystems and
-        // per-region runners are registered. Sizing comes from
+        // phase body is installed below, once the per-region runners are
+        // bound. Sizing comes from
         // config/multiforge-server.toml (defaults when absent).
         // M5 (Track B) §4.3: whether this call actually constructed a new
         // MultiThreadedSchedulerHost (fresh boot) vs. reused an existing
         // one (GameTestServer, same JVM, successive server instances) —
-        // gates the B2low global-subsystem registration block below so a
-        // reused host does not get every subsystem double-registered.
+        // gates the runner binding below so a reused host is not bound twice.
         boolean freshInstall = true;
-        try {
+        net.multiforge.runtime.config.MultiForgeConfig mfConfig = net.multiforge.neoforge.MultiForgeServerState.loadConfig(server);
+        net.multiforge.runtime.config.MultiForgeConfig.Mode mfMode = mfConfig.effectiveMode();
+        if (mfMode == net.multiforge.runtime.config.MultiForgeConfig.Mode.STRICT) {
+            net.multiforge.runtime.ownership.OwnershipEnforcer.setMode(net.multiforge.runtime.ownership.OwnershipEnforcer.Mode.STRICT);
+            net.multiforge.runtime.region.RegionTickWatchdog.setMode(net.multiforge.runtime.region.RegionTickWatchdog.Mode.STRICT);
+        }
+        if (mfMode == net.multiforge.runtime.config.MultiForgeConfig.Mode.OFF) {
+            // mode = "off": no regionized runtime. Every MultiForge guard falls
+            // through and RegionizedTickCoordinator runs Vanilla's level tick
+            // unchanged — the kill switch, and the control for regression runs.
+            org.slf4j.LoggerFactory.getLogger("multiforge.lifecycle")
+                    .info("MultiForge mode=off: running Vanilla's single-threaded tick");
+            freshInstall = false;
+        } else try {
             net.multiforge.runtime.scheduler.MultiForgeRegionizedRuntime.install(
-                    net.multiforge.neoforge.MultiForgeServerState.loadConfig(server),
+                    mfConfig,
                     region -> {},
                     net.multiforge.runtime.region.TickRegionScheduler.Mode.BARRIER);
         } catch (net.multiforge.runtime.scheduler.MultiForgeRegionizedRuntime.AlreadyInstalledException already) {
@@ -165,10 +177,9 @@ public class ServerLifecycleHooks {
         // that install() above has either freshly installed a host or
         // confirmed one is already installed (the AlreadyInstalledException
         // reuse path — same JVM, successive GameTestServer instances).
-        // MultiForgeRegionizedRuntime.current() is guaranteed non-null
-        // here; the only path that leaves it null (the foreign-host
-        // IllegalStateException above) already rethrew and never reaches
-        // this line. setChunkSerializer is idempotent and volatile-backed,
+        // MultiForgeRegionizedRuntime.current() is null only with mode=off
+        // (the foreign-host IllegalStateException above rethrows).
+        // setChunkSerializer is idempotent and volatile-backed,
         // so re-registering on the reuse path is harmless.
         //
         // This closes the last functional gap in the FLUSH_OUTBOUND
@@ -185,19 +196,13 @@ public class ServerLifecycleHooks {
         // Idempotent per JVM.
         net.multiforge.neoforge.RegionizedChunkLifecycle.installOnEventBus();
 
-        // MultiForge M5 (Track B, B2low): register the five low-risk
-        // global subsystems (weather, time, world border, scoreboard,
-        // boss events) on the freshly-installed host's GlobalSystems
-        // registry — see docs/design/global-region.md §4.2/§4.3. Gated
-        // on freshInstall (set above) so a reused host (GameTestServer,
-        // same JVM) never gets every subsystem double-registered — the
-        // single most likely correctness bug the design doc calls out
-        // for this wiring.
+        // Bind the per-region runners and install the real per-region phase
+        // body — once per fresh runtime (see freshInstall above).
         if (mfHost != null && freshInstall) {
-            net.multiforge.neoforge.globals.MultiForgeGlobalSystemsInit.install(mfHost, server);
-            // Install the real per-region phase body: block/fluid ticks,
-            // entity AI, block entities, the global subsystems, chunk tasks
-            // and per-region autosave into <world>/multiforge/journal.
+            net.multiforge.neoforge.RegionRuntimeInit.install(mfHost, server);
+            // The per-region phase body: block/fluid ticks and block events,
+            // entities, block entities, chunk tasks, and per-region autosave
+            // into <world>/multiforge/journal.
             mfHost.installM9WiredTickBody(
                     net.multiforge.runtime.region.PhasedRegionTickBody.builder(),
                     new net.multiforge.runtime.shutdown.RegionShutdownCoordinator(mfHost.scheduler(), mfHost.taskQueue()),
@@ -266,15 +271,9 @@ public class ServerLifecycleHooks {
         // happen next boot.
         try {
             net.multiforge.runtime.scheduler.MultiForgeRegionizedRuntime.shutdown();
-            // B2low teardown: drop the bindings/side-tables MultiForgeGlobalSystemsInit
-            // set up for the host being shut down, so a subsequent fresh
-            // install (next GameTestServer instance, same JVM) starts from
-            // a clean slate rather than accumulating stale WorldBorder
-            // identity entries across server restarts.
-            net.multiforge.neoforge.globals.GlobalSystemsBridge.unbind();
             // B3.4 teardown: drop the per-world "installed" bridge state
-            // (docs/design/m13-b3-region-tick.md §5.3) alongside B2low's,
-            // for the same reused-JVM-across-server-instances reason.
+            // (docs/design/m13-b3-region-tick.md §5.3), for the
+            // reused-JVM-across-server-instances case.
             net.multiforge.neoforge.tick.BlockEntityTickerBridge.unbind();
         } catch (Throwable t) {
             // Never let a runtime-shutdown hiccup prevent normal server-stop cleanup.

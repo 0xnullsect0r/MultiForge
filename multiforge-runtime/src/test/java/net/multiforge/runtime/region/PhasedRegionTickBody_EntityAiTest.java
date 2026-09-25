@@ -25,8 +25,6 @@ import net.multiforge.api.world.ChunkPos;
 import net.multiforge.api.world.WorldRef;
 import net.multiforge.runtime.config.MultiForgeConfig;
 import net.multiforge.runtime.diagnostics.ProbeRegistry;
-import net.multiforge.runtime.entity.MigratingEntityRef;
-import net.multiforge.runtime.entity.MigrationState;
 import net.multiforge.runtime.ownership.OwnerToken;
 import net.multiforge.runtime.scheduler.MultiThreadedSchedulerHost;
 import org.junit.jupiter.api.AfterEach;
@@ -47,9 +45,9 @@ import org.junit.jupiter.api.io.TempDir;
  * EntityTickRunnerBridge}), which this MC-free module cannot exercise
  * directly. Instead, {@link RecordingEntityTickRunner} models "a region
  * with N owned chunks and M entities total" using only MC-free types
- * ({@link Region#ownedChunkSnapshot()}, {@link ChunkPos}, {@link
- * MigratingEntityRef}) — close enough to the real fork bridge's shape
- * (walk owned chunks, skip MIGRATING refs) to prove the wiring, guard,
+ * ({@link Region#ownedChunkSnapshot()}, {@link ChunkPos}) — close
+ * enough to the real fork bridge's shape (walk owned chunks) to prove
+ * the wiring, guard,
  * and cross-region isolation properties this phase promises, without
  * needing any Minecraft type.
  *
@@ -85,8 +83,11 @@ class PhasedRegionTickBody_EntityAiTest {
         OwnerToken.runAs(OwnerToken.forRegion(region.id().value()), () -> body.tickOnce(region));
     }
 
-    private static MigratingEntityRef resident(WorldRef world, ChunkPos pos) {
-        return new MigratingEntityRef(UUID.randomUUID(), world, pos);
+    /** An entity as the fake runner sees it: an id in a chunk of a world. */
+    private record FakeEntity(UUID uuid, WorldRef world, ChunkPos chunkPos) {}
+
+    private static FakeEntity resident(WorldRef world, ChunkPos pos) {
+        return new FakeEntity(UUID.randomUUID(), world, pos);
     }
 
     @Test
@@ -97,11 +98,10 @@ class PhasedRegionTickBody_EntityAiTest {
         List<ChunkPos> owned = region.ownedChunkSnapshot();
         assertThat(owned).hasSize(2);
 
-        MigratingEntityRef e1 = resident(WORLD_A, owned.get(0));
-        MigratingEntityRef e2 = resident(WORLD_A, owned.get(0));
-        MigratingEntityRef e3 = resident(WORLD_A, owned.get(1));
-        Map<ChunkPos, List<MigratingEntityRef>> entities =
-                Map.of(owned.get(0), List.of(e1, e2), owned.get(1), List.of(e3));
+        FakeEntity e1 = resident(WORLD_A, owned.get(0));
+        FakeEntity e2 = resident(WORLD_A, owned.get(0));
+        FakeEntity e3 = resident(WORLD_A, owned.get(1));
+        Map<ChunkPos, List<FakeEntity>> entities = Map.of(owned.get(0), List.of(e1, e2), owned.get(1), List.of(e3));
 
         RecordingEntityTickRunner runner = new RecordingEntityTickRunner(entities);
         host.setEntityTickRunner(runner);
@@ -128,9 +128,9 @@ class PhasedRegionTickBody_EntityAiTest {
 
         ChunkPos posA = region0(regionA);
         ChunkPos posB = region0(regionB);
-        MigratingEntityRef eA = resident(WORLD_A, posA);
-        MigratingEntityRef eB = resident(WORLD_B, posB);
-        Map<ChunkPos, List<MigratingEntityRef>> entities = new ConcurrentHashMap<>();
+        FakeEntity eA = resident(WORLD_A, posA);
+        FakeEntity eB = resident(WORLD_B, posB);
+        Map<ChunkPos, List<FakeEntity>> entities = new ConcurrentHashMap<>();
         entities.put(posA, List.of(eA));
         entities.put(posB, List.of(eB));
 
@@ -150,32 +150,11 @@ class PhasedRegionTickBody_EntityAiTest {
     }
 
     @Test
-    void migratingEntitiesAreSkipped(@TempDir Path journalDir) {
-        Region region = host.touchChunk(WORLD_A, 0, 0);
-        ChunkPos pos = region0(region);
-
-        MigratingEntityRef migrating = resident(WORLD_A, pos);
-        assertThat(migrating.beginMigration()).isTrue(); // RESIDENT -> MIGRATING
-        MigratingEntityRef stillResident = resident(WORLD_A, pos);
-
-        Map<ChunkPos, List<MigratingEntityRef>> entities = Map.of(pos, List.of(migrating, stillResident));
-        RecordingEntityTickRunner runner = new RecordingEntityTickRunner(entities);
-        host.setEntityTickRunner(runner);
-        host.installM9WiredTickBody(PhasedRegionTickBody.builder(), null, journalDir);
-
-        RegionTickBody body = host.scheduler().body();
-        tickAsOwner(body, region);
-
-        assertThat(runner.tickedUuids(region.id())).containsExactly(stillResident.uuid());
-        assertThat(runner.tickedUuids(region.id())).doesNotContain(migrating.uuid());
-    }
-
-    @Test
     void wrongOwnerGuardWarnsAndSkipsWithoutTicking(@TempDir Path journalDir) {
         Region region = host.touchChunk(WORLD_A, 0, 0);
         ChunkPos pos = region0(region);
-        MigratingEntityRef e1 = resident(WORLD_A, pos);
-        Map<ChunkPos, List<MigratingEntityRef>> entities = Map.of(pos, List.of(e1));
+        FakeEntity e1 = resident(WORLD_A, pos);
+        Map<ChunkPos, List<FakeEntity>> entities = Map.of(pos, List.of(e1));
 
         RecordingEntityTickRunner runner = new RecordingEntityTickRunner(entities);
         host.setEntityTickRunner(runner);
@@ -210,18 +189,15 @@ class PhasedRegionTickBody_EntityAiTest {
      * this region's owned chunks" purely with MC-free types: it walks
      * {@link Region#ownedChunkSnapshot()} (the real B3.1 accessor,
      * production-backed by {@code ChunkHolderManager.holdersOwnedBy})
-     * and looks up each chunk's entities in a test-supplied map,
-     * skipping any ref whose {@link MigratingEntityRef#migrationState()}
-     * is {@link MigrationState#MIGRATING} — mirroring the real fork
-     * bridge's {@code EntityTickRunnerBridge} / patched {@code
-     * ServerLevel.mfTickOneEntity}'s migration guard.
+     * and looks up each chunk's entities in a test-supplied map —
+     * the shape of the real fork bridge's {@code EntityTickRunnerBridge}.
      */
     private static final class RecordingEntityTickRunner implements EntityTickRunner {
-        private final Map<ChunkPos, List<MigratingEntityRef>> entitiesByChunk;
+        private final Map<ChunkPos, List<FakeEntity>> entitiesByChunk;
         private final Map<RegionId, AtomicInteger> invocations = new ConcurrentHashMap<>();
         private final Map<RegionId, List<UUID>> tickedByRegion = new ConcurrentHashMap<>();
 
-        RecordingEntityTickRunner(Map<ChunkPos, List<MigratingEntityRef>> entitiesByChunk) {
+        RecordingEntityTickRunner(Map<ChunkPos, List<FakeEntity>> entitiesByChunk) {
             this.entitiesByChunk = entitiesByChunk;
         }
 
@@ -230,8 +206,7 @@ class PhasedRegionTickBody_EntityAiTest {
             invocations.computeIfAbsent(region.id(), id -> new AtomicInteger()).incrementAndGet();
             List<UUID> ticked = tickedByRegion.computeIfAbsent(region.id(), id -> new ArrayList<>());
             for (ChunkPos pos : region.ownedChunkSnapshot()) {
-                for (MigratingEntityRef ref : entitiesByChunk.getOrDefault(pos, List.of())) {
-                    if (ref.migrationState() == MigrationState.MIGRATING) continue;
+                for (FakeEntity ref : entitiesByChunk.getOrDefault(pos, List.of())) {
                     ticked.add(ref.uuid());
                 }
             }

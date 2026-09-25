@@ -1,6 +1,6 @@
 --- a/net/minecraft/world/level/Level.java
 +++ b/net/minecraft/world/level/Level.java
-@@ -214,6 +214,21 @@
+@@ -214,6 +214,24 @@ public abstract class Level extends net.neoforged.neoforge.attachment.Attachment
  
      @Override
      public boolean setBlock(BlockPos p_46605_, BlockState p_46606_, int p_46607_, int p_46608_) {
@@ -25,3 +25,25 @@
          if (this.isOutsideBuildHeight(p_46605_)) {
              return false;
          } else if (!this.isClientSide && this.isDebug()) {
+@@ -1113,6 +1131,21 @@ public abstract class Level extends net.neoforged.neoforge.attachment.Attachment
+         return this.dimension;
+     }
+ 
++    // MultiForge (multiforge-patches/01-ownership/): the runtime's identifier
++    // for this level, cached because ownership checks read it on every
++    // guarded mutation. Computed lazily; a racy double computation yields an
++    // equal value, so no synchronisation is needed.
++    private net.multiforge.api.world.WorldRef mfWorldRef;
++
++    public net.multiforge.api.world.WorldRef mfWorldRef() {
++        net.multiforge.api.world.WorldRef ref = this.mfWorldRef;
++        if (ref == null) {
++            ref = net.multiforge.api.world.WorldRef.of(this.dimension.location().toString());
++            this.mfWorldRef = ref;
++        }
++        return ref;
++    }
++
+     @Override
+     public RandomSource getRandom() {
+         return this.random;

@@ -1,10 +1,29 @@
 --- a/net/minecraft/world/level/Level.java
 +++ b/net/minecraft/world/level/Level.java
-@@ -532,10 +532,37 @@
-     public float getSunAngle(float p_46491_) {
-         float f = this.getTimeOfDay(p_46491_);
-         return f * (float) (Math.PI * 2);
+@@ -101,7 +101,9 @@ public abstract class Level extends net.neoforged.neoforge.attachment.Attachment
+     public float rainLevel;
+     public float oThunderLevel;
+     public float thunderLevel;
+-    public final RandomSource random = RandomSource.create();
++    // MultiForge (multiforge-patches/02-region-tick/): one stream per thread —
++    // region workers draw from this concurrently (see PerThreadRandomSource).
++    public final RandomSource random = net.multiforge.neoforge.world.PerThreadRandomSource.create();
+     @Deprecated
+     private final RandomSource threadSafeRandom = RandomSource.createThreadSafe();
+     private final Holder<DimensionType> dimensionTypeRegistration;
+@@ -156,7 +158,10 @@ public abstract class Level extends net.neoforged.neoforge.attachment.Attachment
+         this.thread = Thread.currentThread();
+         this.biomeManager = new BiomeManager(this, p_270248_);
+         this.isDebug = p_270470_;
+-        this.neighborUpdater = new CollectingNeighborUpdater(this, p_270466_);
++        // MultiForge (multiforge-patches/02-region-tick/): one update chain per
++        // thread — region workers update neighbours concurrently.
++        this.neighborUpdater = new net.multiforge.neoforge.world.PerThreadNeighborUpdater(
++                () -> new CollectingNeighborUpdater(this, p_270466_));
+         this.registryAccess = p_270200_;
+         this.damageSources = new DamageSources(p_270200_);
      }
+@@ -539,6 +544,33 @@ public abstract class Level extends net.neoforged.neoforge.attachment.Attachment
  
      public void addBlockEntityTicker(TickingBlockEntity p_151526_) {
          (this.tickingBlockEntities ? this.pendingBlockEntityTickers : this.blockEntityTickers).add(p_151526_);
@@ -38,7 +57,9 @@
      }
  
      public void addFreshBlockEntities(java.util.Collection<BlockEntity> beList) {
-@@ -576,4 +576,19 @@
+@@ -550,6 +582,21 @@ public abstract class Level extends net.neoforged.neoforge.attachment.Attachment
+     }
+ 
      protected void tickBlockEntities() {
 +        // MultiForge (multiforge-patches/02-region-tick/): once the
 +        // per-region BLOCK_ENTITIES phase body
@@ -58,3 +79,15 @@
          ProfilerFiller profilerfiller = this.getProfiler();
          profilerfiller.push("blockEntities");
          if (!this.pendingFreshBlockEntities.isEmpty()) {
+@@ -1174,6 +1221,11 @@ public abstract class Level extends net.neoforged.neoforge.attachment.Attachment
+     }
+ 
+     public ProfilerFiller getProfiler() {
++        // MultiForge (multiforge-patches/02-region-tick/): the server profiler is
++        // single-threaded; region workers must not push into it concurrently.
++        if (net.multiforge.runtime.ownership.OwnerToken.current().domain() == net.multiforge.runtime.ownership.Domain.REGION) {
++            return net.minecraft.util.profiling.InactiveProfiler.INSTANCE;
++        }
+         return this.profiler.get();
+     }
+ 

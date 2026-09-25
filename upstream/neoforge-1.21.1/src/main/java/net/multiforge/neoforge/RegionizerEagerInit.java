@@ -37,7 +37,7 @@ public final class RegionizerEagerInit {
     /**
      * Materialises a regionizer for every {@link ServerLevel} already
      * loaded on {@code server}. Called from {@code
-     * MultiForgeGlobalSystemsInit.install} on {@code
+     * RegionRuntimeInit.install} on {@code
      * ServerAboutToStartEvent}, before the B2 subsystem bindings so
      * those bindings query already-materialised regionizers.
      */

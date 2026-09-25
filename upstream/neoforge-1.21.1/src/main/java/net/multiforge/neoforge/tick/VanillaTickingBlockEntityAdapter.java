@@ -24,23 +24,12 @@ import net.minecraft.world.level.block.entity.TickingBlockEntity;
  * {@link net.multiforge.runtime.chunk.HolderManagerRegionData} operate
  * over (docs/design/m13-b3-region-tick.md §5.3).
  *
- * <p>{@link #shouldTick()} reproduces the gate Vanilla's own {@code
- * tickBlockEntities()} loop applies at the {@code
- * blockEntityTickers}-iteration level — {@code
- * shouldTickBlocksAt(getPos())} — before this adapter's {@link
- * #tick()} runs the delegate. This is Vanilla parity, not a new gate:
- * a block entity ticks if its chunk is at {@code ChunkLoadLevel
- * .TICKING} or higher, the same bar Vanilla's inline loop already
- * enforces (see {@code Level.java:573} at freeze time — {@code flag &&
- * this.shouldTickBlocksAt(tickingblockentity.getPos())}). The {@code
- * flag} (tick-rate-manager "runs normally") half of that Vanilla
- * condition is deliberately not reproduced here: {@link
- * net.multiforge.runtime.region.BlockEntityTickRunner#standard} has no
- * hook into Vanilla's {@code TickRateManager}, and freezing/slowing the
- * game tick rate is an orthogonal, server-wide concern this adapter
- * does not need to duplicate — the per-region phase body simply runs
- * whenever the region worker's own tick runs, matching how every other
- * B3 phase body already behaves under a paused/slowed tick rate.
+ * <p>{@link #shouldTick()} reproduces the gates Vanilla applies to the
+ * same ticker in {@code ServerLevel.tick}: block entities tick only when the
+ * level ticks entities at all this tick ({@code ServerLevel.mfRegionRunsEntities}
+ * — players present or the level recently occupied), the tick rate runs
+ * normally ({@code /tick freeze} stops them), and the ticker's chunk is
+ * block-ticking ({@code shouldTickBlocksAt}).
  *
  * <p>Instances are cheap, stateless wrappers — one per registered
  * ticker, created once at {@link BlockEntityTickerBridge#onTickerAdded}
@@ -60,7 +49,9 @@ public final class VanillaTickingBlockEntityAdapter implements net.multiforge.ru
 
     @Override
     public boolean shouldTick() {
-        return level.shouldTickBlocksAt(delegate.getPos());
+        return (!(level instanceof net.minecraft.server.level.ServerLevel serverLevel) || serverLevel.mfRegionRunsEntities)
+                && level.tickRateManager().runsNormally()
+                && level.shouldTickBlocksAt(delegate.getPos());
     }
 
     @Override

@@ -19,7 +19,6 @@ import net.multiforge.api.world.WorldRef;
 import net.multiforge.neoforge.RegionizedTickCoordinator;
 import net.multiforge.runtime.chunk.ChunkHolderManager;
 import net.multiforge.runtime.chunk.NewChunkHolder;
-import net.multiforge.runtime.diagnostics.ViolationLogger;
 import net.multiforge.runtime.region.EntityTickRunner;
 import net.multiforge.runtime.region.Region;
 import net.multiforge.runtime.scheduler.MultiThreadedSchedulerHost;
@@ -32,7 +31,7 @@ import net.multiforge.runtime.scheduler.MultiThreadedSchedulerHost;
  * has confirmed the calling thread actually owns it (docs/design/
  * m13-b3-region-tick.md §5.2).
  *
- * <p>Registered exactly once, from {@code MultiForgeGlobalSystemsInit
+ * <p>Registered exactly once, from {@code RegionRuntimeInit
  * .install} on {@code ServerAboutToStart} (the same lifecycle point
  * every other B2/B3 fork bridge binds at), via {@link
  * MultiThreadedSchedulerHost#setEntityTickRunner}.
@@ -89,32 +88,14 @@ public final class EntityTickRunnerBridge implements EntityTickRunner {
         ChunkHolderManager manager = host.chunkManagerForOrNull(world);
         if (manager == null) return;
 
-        for (NewChunkHolder holder : manager.holdersOwnedBy(region.id())) {
-            try {
-                level.mfTickEntitiesForChunk(holder);
-            } catch (Throwable t) {
-                // Auto-reroute+warn (CLAUDE.md rule 5): one chunk's entity
-                // pass failing (a mod's Entity#tick throwing past Vanilla's
-                // own guardEntityTick isolation — should not happen, but a
-                // bridge-level defense costs nothing) must not stop the
-                // rest of this region's chunks from ticking this pass.
-                ViolationLogger.warn(
-                        "entity-ai.chunk-tick-failure",
-                        "mfTickEntitiesForChunk(" + holder.position() + ") failed for " + region.id() + " in "
-                                + world.dimensionId() + ": " + t.getClass().getSimpleName() + ": " + t.getMessage());
-            }
+        java.util.List<NewChunkHolder> holders = manager.holdersOwnedBy(region.id());
+        java.util.List<net.minecraft.world.level.ChunkPos> chunks = new java.util.ArrayList<>(holders.size());
+        for (NewChunkHolder holder : holders) {
+            chunks.add(new net.minecraft.world.level.ChunkPos(holder.position().x(), holder.position().z()));
         }
+        level.mfTickEntitiesForChunks(chunks);
     }
 
-    /**
-     * Linear scan of {@link MinecraftServer#getAllLevels()} matching
-     * {@code world} by {@link RegionizedTickCoordinator#asWorldRef}.
-     * Not cached: the set of loaded levels is small (a handful of
-     * dimensions) and essentially static after boot, and this runs at
-     * most once per region per tick — not once per chunk or per
-     * entity — so the cost is negligible next to the entity iteration
-     * itself.
-     */
     private ServerLevel resolveLevel(WorldRef world) {
         for (ServerLevel level : server.getAllLevels()) {
             if (RegionizedTickCoordinator.asWorldRef(level).equals(world)) {

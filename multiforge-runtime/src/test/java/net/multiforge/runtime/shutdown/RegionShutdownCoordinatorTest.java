@@ -17,12 +17,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 import java.io.IOException;
 import java.nio.file.Path;
 import java.time.Duration;
-import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
 import net.multiforge.api.world.ChunkPos;
 import net.multiforge.api.world.WorldRef;
-import net.multiforge.runtime.entity.MigratingEntityRef;
-import net.multiforge.runtime.entity.MigrationState;
 import net.multiforge.runtime.journal.JournalEntryKind;
 import net.multiforge.runtime.journal.RegionJournal;
 import net.multiforge.runtime.region.Region;
@@ -53,7 +50,7 @@ class RegionShutdownCoordinatorTest {
             coord.trackJournal(j);
 
             AtomicInteger phaseHits = new AtomicInteger();
-            coord.addListener((from, to, inbox, migrations) -> phaseHits.incrementAndGet());
+            coord.addListener((from, to, inbox) -> phaseHits.incrementAndGet());
 
             assertThat(coord.phase()).isEqualTo(ShutdownPhase.ACCEPTING);
             assertThat(coord.acceptingWork()).isTrue();
@@ -109,31 +106,6 @@ class RegionShutdownCoordinatorTest {
             // After scheduler.close() the queue may still hold entries if the
             // worker didn't drain fast enough; either way phase reached STOPPED.
             assertThat(coord.totalInboxDepth()).isGreaterThanOrEqualTo(0);
-        }
-    }
-
-    @Test
-    void countsMigrationsInFlight(@TempDir Path dir) throws IOException {
-        ThreadedRegionizer regionizer = new ThreadedRegionizer(WORLD, 0);
-        Region r = regionizer.addChunk(new ChunkPos(0, 0));
-        RegionizedTaskQueue queue = RegionizedTaskQueue.of(regionizer);
-        TickRegionScheduler sched = newScheduler(queue);
-        RegionShutdownCoordinator coord = new RegionShutdownCoordinator(sched, queue);
-        coord.trackRegion(r);
-        try (RegionJournal j = RegionJournal.open(new RegionId(6), dir)) {
-            coord.trackJournal(j);
-
-            MigratingEntityRef resident = new MigratingEntityRef(UUID.randomUUID(), WORLD, new ChunkPos(0, 0));
-            MigratingEntityRef migrating = new MigratingEntityRef(UUID.randomUUID(), WORLD, new ChunkPos(0, 0));
-            migrating.beginMigration();
-            coord.trackMigrationRef(resident);
-            coord.trackMigrationRef(migrating);
-            assertThat(coord.migrationsInFlight()).isEqualTo(1);
-            assertThat(migrating.migrationState()).isEqualTo(MigrationState.MIGRATING);
-
-            // A short deadline — coordinator advances anyway once wall time expires.
-            coord.shutdown(Duration.ofMillis(100));
-            assertThat(coord.phase()).isEqualTo(ShutdownPhase.STOPPED);
         }
     }
 }

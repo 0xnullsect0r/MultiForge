@@ -270,6 +270,12 @@ public final class TickRegionScheduler implements AutoCloseable, RegionListener 
      * A region that cannot be claimed ({@link Region#tryMarkTicking()}
      * fails — it is mid-merge or already dead) is skipped this tick.
      *
+     * <p>A throwable escaping a region's tick is rethrown here, on the
+     * caller, once every region has finished — the first one, with any
+     * others attached as suppressed. On a server that is the server thread,
+     * whose Vanilla crash handling ("Exception ticking world") then applies
+     * exactly as it would to an exception from an inline level tick.
+     *
      * @throws IllegalStateException in {@link Mode#FREE_RUNNING}
      */
     public TickAllResult driveTick(Collection<Region> regions, long deadlineNanos, BooleanSupplier pump) {
@@ -281,6 +287,7 @@ public final class TickRegionScheduler implements AutoCloseable, RegionListener 
         List<Region> batch = List.copyOf(regions);
         AtomicInteger remaining = new AtomicInteger(batch.size());
         long[] finishedAt = new long[batch.size()];
+        Throwable[] failures = new Throwable[batch.size()];
         Thread waiter = Thread.currentThread();
         for (int i = 0; i < batch.size(); i++) {
             final int idx = i;
@@ -289,7 +296,7 @@ public final class TickRegionScheduler implements AutoCloseable, RegionListener 
             pool.execute(() -> {
                 try {
                     if (region.tryMarkTicking()) {
-                        tickClaimed(s, region);
+                        failures[idx] = tickClaimed(s, region, false);
                     }
                 } finally {
                     finishedAt[idx] = System.nanoTime();
@@ -309,9 +316,17 @@ public final class TickRegionScheduler implements AutoCloseable, RegionListener 
             if (!didWork && remaining.get() > 0) LockSupport.parkNanos(100_000L);
         }
         List<RegionId> overrun = new ArrayList<>();
+        Throwable first = null;
         for (int i = 0; i < batch.size(); i++) {
             if (finishedAt[i] > deadline) overrun.add(batch.get(i).id());
+            if (failures[i] != null) {
+                if (first == null) first = failures[i];
+                else if (first != failures[i]) first.addSuppressed(failures[i]);
+            }
         }
+        if (first instanceof RuntimeException re) throw re;
+        if (first instanceof Error err) throw err;
+        if (first != null) throw new IllegalStateException("region tick failed", first);
         return new TickAllResult(batch.size(), overrun);
     }
 
@@ -382,7 +397,7 @@ public final class TickRegionScheduler implements AutoCloseable, RegionListener 
 
             long start = System.nanoTime();
             try {
-                tickClaimed(s, region);
+                tickClaimed(s, region, true);
             } finally {
                 // Deadline = start-of-tick + one tick period, not
                 // now + one period — so slow regions catch up rather
@@ -396,9 +411,11 @@ public final class TickRegionScheduler implements AutoCloseable, RegionListener 
     /**
      * Run one tick of an already-claimed ({@link Region#tryMarkTicking()}
      * succeeded) region on the current worker, then release it. Shared by
-     * both modes.
+     * both modes. A throwable from the tick is handed to the worker's
+     * uncaught-exception handler when {@code reportUncaught} (free-running:
+     * nobody else will see it), otherwise returned to the caller.
      */
-    private void tickClaimed(RegionState_ s, Region region) {
+    private Throwable tickClaimed(RegionState_ s, Region region, boolean reportUncaught) {
         long start = System.nanoTime();
         RegionTickWatchdog.enterTick(region);
         try {
@@ -412,11 +429,13 @@ public final class TickRegionScheduler implements AutoCloseable, RegionListener 
             // exitTick did not run (either body threw or the watchdog itself threw in STRICT mode);
             // ensure the watchdog's per-thread state is cleared before routing the exception.
             RegionTickWatchdog.exitTickAfterThrow();
+            if (!reportUncaught) return t;
             Thread.currentThread().getUncaughtExceptionHandler().uncaughtException(Thread.currentThread(), t);
         } finally {
             s.mspt.recordNanos(System.nanoTime() - start);
             region.markNotTicking();
         }
+        return null;
     }
 
     private static final class ScheduleEntry implements Comparable<ScheduleEntry> {

@@ -52,8 +52,7 @@ import net.neoforged.neoforge.event.level.ExplosionEvent;
  */
 public final class SchedulerBackedDispatchExecutor implements DispatchExecutor {
     /**
-     * Matches the synthetic global world every other global-region call site uses (see
-     * {@code MultiForgeGlobalSystemsInit.install}'s {@code CommandDispatchSystem} wiring).
+     * The synthetic global region's world (see {@code MultiThreadedSchedulerHost#globalRegion}).
      */
     private static final WorldRef GLOBAL_WORLD = WorldRef.of("multiforge:global");
 

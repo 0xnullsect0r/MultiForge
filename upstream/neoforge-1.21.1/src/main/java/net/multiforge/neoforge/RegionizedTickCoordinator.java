@@ -61,10 +61,14 @@ import net.multiforge.runtime.scheduler.MultiThreadedSchedulerHost;
  * against other regions, which {@link OwnershipGuard}'s per-chunk checks
  * and the thread-safe shared structures take care of.
  *
- * <p>If the runtime is not installed, or {@code level} has no regionizer
- * yet, Vanilla's {@code ServerLevel.tick} runs unchanged: the {@code
- * regionsHandle*} guards report {@code false} in that state, so nothing is
- * dropped (CLAUDE.md rule 5).
+ * <p>If the runtime is not installed ({@code mode = "off"}), or {@code
+ * level} has no regionizer yet, Vanilla's {@code ServerLevel.tick} runs
+ * unchanged: the {@code regionsHandle*} guards report {@code false} in that
+ * state, so nothing is dropped (CLAUDE.md rule 5).
+ *
+ * <p>An exception from a region's tick is rethrown on the server thread
+ * once the barrier completes, so Vanilla's crash handling applies to it
+ * exactly as to an exception from an inline level tick.
  */
 public final class RegionizedTickCoordinator {
     private static final String DEADLINE_PROP = "multiforge.regiontick.dispatch-ms";
@@ -107,7 +111,7 @@ public final class RegionizedTickCoordinator {
     public static void dispatchLevelTick(ServerLevel level, java.util.function.BooleanSupplier haveTime) {
         MultiThreadedSchedulerHost host = MultiForgeRegionizedRuntime.current();
         if (host == null) {
-            LevelTickDispatchProbes.bootstrapSkip(level.dimension().location().toString());
+            // mode = "off" (or the runtime is not up yet): plain Vanilla.
             level.tick(haveTime);
             return;
         }
@@ -122,18 +126,13 @@ public final class RegionizedTickCoordinator {
         if (host.regionizerForOrNull(world) == null) {
             // No chunk of this level is loaded yet; the regionsHandle* guards
             // reported false, so ServerLevel.tick above ran everything inline.
-            LevelTickDispatchProbes.noRegionizerSkip(world.dimensionId());
+            LevelTickDispatchProbes.noRegionizerInline(world.dimensionId());
             return;
         }
-        TickRegionScheduler.TickAllResult result;
-        try {
-            result = host.driveRegions(world, DISPATCH_DEADLINE_NANOS, pump);
-        } catch (RuntimeException t) {
-            // Dispatch-side bug (region-worker exceptions stay on the worker).
-            LevelTickDispatchProbes.dispatchFailure(world.dimensionId(), t);
-            return;
-        }
-        checkOverrun(world, result);
+        // A throwable from a region's tick is rethrown here, after every region
+        // finished, so MinecraftServer.tickChildren's "Exception ticking world"
+        // crash handling applies exactly as for Vanilla's inline level tick.
+        checkOverrun(world, host.driveRegions(world, DISPATCH_DEADLINE_NANOS, pump));
     }
 
     private static void checkOverrun(WorldRef world, TickRegionScheduler.TickAllResult result) {
@@ -157,7 +156,7 @@ public final class RegionizedTickCoordinator {
      * runtime is installed, {@code level}'s world has a materialised
      * regionizer, and a real {@link
      * net.multiforge.runtime.region.ScheduledTickRunner} has been
-     * registered (see {@code MultiForgeGlobalSystemsInit.install} /
+     * registered (see {@code RegionRuntimeInit.install} /
      * {@code net.multiforge.neoforge.tick.ScheduledTickRunnerBridge}).
      * Read by the {@code ServerLevel.tick(BooleanSupplier)} patch hunk to
      * decide whether to skip Vanilla's inline {@code
@@ -220,13 +219,10 @@ public final class RegionizedTickCoordinator {
 
     /**
      * B3.3 (docs/design/m13-b3-region-tick.md §5.2): the {@code
-     * ServerLevel.tick}/{@code mfTickEntitiesAll} no-op guard —
-     * mirrors {@code GlobalSystemsBridge.weatherHandled}/{@code
-     * timeHandled}'s shape exactly (bound + has-a-target for this
-     * level), except the "target" here is host-wide (one {@link
-     * net.multiforge.runtime.region.EntityTickRunner}, not one per
-     * world) so the check is host-installed + regionizer-materialised
-     * + runner-registered rather than a per-world lookup.
+     * ServerLevel.tick}/{@code mfTickEntitiesAll} no-op guard: the
+     * check is host-installed + regionizer-materialised + runner-
+     * registered (one {@link
+     * net.multiforge.runtime.region.EntityTickRunner} host-wide).
      *
      * @return {@code true} iff (1) the MultiForge runtime is installed,
      *         (2) a regionizer has been materialised for {@code level}'s

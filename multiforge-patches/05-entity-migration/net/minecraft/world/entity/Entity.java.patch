@@ -1,42 +1,43 @@
 --- a/net/minecraft/world/entity/Entity.java
 +++ b/net/minecraft/world/entity/Entity.java
-@@ -2620,6 +2620,13 @@
-                 serverlevel.resetEmptyTime();
-                 serverlevel1.resetEmptyTime();
-                 p_350951_.postDimensionTransition().onTransition(entity2);
-+                // MultiForge (multiforge-patches/05-entity-migration/, M4 Track A2.4): 2-hop
-+                // bookkeeping through the global region (source dim -> global -> destination dim,
-+                // mirroring PlayerJoinCoordinator's netty->global hop). Vanilla already recreated
-+                // the Entity object above (entity2), so this call only keeps EntityRegistry
-+                // bookkeeping in sync; it enqueues and returns immediately, never blocking this
-+                // (source region worker) thread — CLAUDE.md rule 4.
-+                net.multiforge.neoforge.entity.EntityMigrationBridge.onChangeDimension(this, entity2, serverlevel1);
-             }
+@@ -2579,6 +2579,14 @@ public abstract class Entity extends net.neoforged.neoforge.attachment.Attachmen
  
-             serverlevel.getProfiler().pop();
-@@ -2784,6 +2791,12 @@
+     @Nullable
+     public Entity changeDimension(DimensionTransition p_350951_) {
++        // MultiForge (multiforge-patches/05-entity-migration/): a same-dimension
++        // transition into another region's chunk runs on the server thread after the
++        // tick barrier (see OwnershipGuard.deferCrossRegionMove).
++        if (net.multiforge.neoforge.OwnershipGuard.deferCrossRegionMove(
++                "Entity.changeDimension", this, p_350951_.newLevel(), p_350951_.pos().x, p_350951_.pos().z,
++                () -> this.changeDimension(p_350951_))) {
++            return this;
++        }
+         if (!net.neoforged.neoforge.common.CommonHooks.onTravelToDimension(this, p_350951_.newLevel().dimension())) return null;
+         if (this.level() instanceof ServerLevel serverlevel && !this.isRemoved()) {
+             ServerLevel serverlevel1 = p_350951_.newLevel();
+@@ -2748,6 +2756,12 @@ public abstract class Entity extends net.neoforged.neoforge.attachment.Attachmen
+     public boolean teleportTo(
+         ServerLevel p_265257_, double p_265407_, double p_265727_, double p_265410_, Set<RelativeMovement> p_265083_, float p_265573_, float p_265094_
+     ) {
++        // MultiForge (multiforge-patches/05-entity-migration/): see changeDimension.
++        if (net.multiforge.neoforge.OwnershipGuard.deferCrossRegionMove(
++                "Entity.teleportTo", this, p_265257_, p_265407_, p_265410_,
++                () -> this.teleportTo(p_265257_, p_265407_, p_265727_, p_265410_, p_265083_, p_265573_, p_265094_))) {
++            return true;
++        }
+         float f = Mth.clamp(p_265094_, -90.0F, 90.0F);
+         if (p_265257_ == this.level()) {
+             this.moveTo(p_265407_, p_265727_, p_265410_, p_265573_, f);
+@@ -2776,6 +2790,12 @@ public abstract class Entity extends net.neoforged.neoforge.attachment.Attachmen
+ 
+     public void teleportTo(double p_19887_, double p_19888_, double p_19889_) {
          if (this.level() instanceof ServerLevel) {
++            // MultiForge (multiforge-patches/05-entity-migration/): see changeDimension.
++            if (net.multiforge.neoforge.OwnershipGuard.deferCrossRegionMove(
++                    "Entity.teleportTo", this, this.level(), p_19887_, p_19889_,
++                    () -> this.teleportTo(p_19887_, p_19888_, p_19889_))) {
++                return;
++            }
              this.moveTo(p_19887_, p_19888_, p_19889_, this.getYRot(), this.getXRot());
              this.teleportPassengers();
-+            // MultiForge (multiforge-patches/05-entity-migration/, M4 Track A2.3): force-flush the
-+            // whole passenger tree atomically — Vanilla's teleportPassengers() above already
-+            // repositioned every rider via moveTo, so this only needs to detect whether the final
-+            // position crossed a region boundary and, if so, hand the tree off as one unit. See
-+            // EntityMigrationBridge.onTeleport's javadoc.
-+            net.multiforge.neoforge.entity.EntityMigrationBridge.onTeleport(this);
          }
-     }
- 
-@@ -3392,6 +3405,12 @@
-             }
- 
-             this.levelCallback.onMove();
-+            // MultiForge (multiforge-patches/05-entity-migration/, M4 Track A2.1): the single
-+            // chokepoint every Vanilla position-changing call (move, teleportTo, changeDimension,
-+            // moveTo, ...) ultimately funnels through. Cheap fast path (two ConcurrentHashMap
-+            // lookups) unless this move actually crossed a region boundary — see
-+            // EntityMigrationBridge.onPositionChanged's javadoc.
-+            net.multiforge.neoforge.entity.EntityMigrationBridge.onPositionChanged(this);
-         }
-         if (this.isAddedToLevel() && !this.level.isClientSide && !this.isRemoved()) this.level.getChunk((int) Math.floor(p_20344_) >> 4, (int) Math.floor(p_20346_) >> 4); // Forge - ensure target chunk is loaded.
-     }

@@ -42,6 +42,33 @@ def applyTargetDirFor = { String targetRel ->
     targetRel != null && targetRel.startsWith('net/minecraft/') ? neoforgeSrcMainJava : mfCommittedSrcMainJava
 }
 
+// Idempotence: several groups patch the same file (ServerLevel, Level, ...), so
+// "is this one patch already applied?" cannot be answered per patch once a later
+// group has changed that patch's context. Instead the applier works per target
+// file: it keeps a pristine copy of every net/minecraft target under
+// build/multiforge-pristine/ plus the SHA-256 of the output it last produced.
+// On each run, a target whose current content still equals that recorded
+// output is ours, so it is restored from the pristine copy; anything else is a
+// freshly materialised source (setup rewrote it), which becomes the new
+// pristine copy. Then every group is applied in order. This makes the task
+// safe to run any number of times, alone or as part of compileJava, and
+// picks up edited patches. Targets outside net/minecraft (the committed
+// net/neoforged tree) are applied once and skipped when already applied.
+def pristineRoot = project.layout.buildDirectory.dir('multiforge-pristine').get().asFile
+def appliedHashes = new File(pristineRoot, 'applied-output.sha256')
+
+def sha256Of = { File f ->
+    java.security.MessageDigest.getInstance('SHA-256').digest(f.bytes).encodeHex().toString()
+}
+
+def patchTargetOf = { File patchFile ->
+    def firstLine = patchFile.readLines().find { it.startsWith('--- a/') || it.startsWith('--- ') }
+    if (firstLine == null) return null
+    String targetRel = firstLine.replaceFirst(/^---\s+a?\//, '').replaceFirst(/^---\s+/, '').trim()
+    int tab = targetRel.indexOf('\t')
+    return tab >= 0 ? targetRel.substring(0, tab) : targetRel
+}
+
 def applyMultiforgePatches = tasks.register('applyMultiforgePatches') {
     group = 'multiforge'
     description = 'Applies multiforge-patches/<NN-group>/**/*.patch on top of the patched vanilla source.'
@@ -58,72 +85,115 @@ def applyMultiforgePatches = tasks.register('applyMultiforgePatches') {
         }
 
         def groups = multiforgePatchesRoot.listFiles({ f -> f.isDirectory() } as FileFilter)?.sort { it.name } ?: []
+        def ordered = []
+        groups.each { group ->
+            fileTree(dir: group, include: '**/*.patch').files.sort { it.path }.each { ordered << [group, it] }
+        }
+
+        // 1. Reset every net/minecraft target to its pristine content.
+        def recorded = [:]
+        def recordedSeeded = [] as Set
+        if (appliedHashes.exists()) {
+            appliedHashes.eachLine { line ->
+                def parts = line.split('  ')
+                if (parts.length >= 2) recorded[parts[1]] = parts[0]
+                if (parts.length >= 3 && parts[2] == 'seeded') recordedSeeded << parts[1]
+            }
+        }
+        def mcTargets = ordered.collect { patchTargetOf(it[1]) }.findAll { it != null && it.startsWith('net/minecraft/') }.unique()
+        int restored = 0
+        int seeded = 0
+        def seededNow = [] as Set
+        // A file patched last time but no longer targeted goes back to what it was
+        // before MultiForge touched it: deleted if it was seeded from :base, restored
+        // from its pristine copy otherwise.
+        recorded.keySet().findAll { !mcTargets.contains(it) }.each { String stale ->
+            def target = new File(neoforgeSrcMainJava, stale)
+            def pristine = new File(pristineRoot, stale)
+            if (target.exists() && sha256Of(target) == recorded[stale]) {
+                if (recordedSeeded.contains(stale)) target.delete()
+                else if (pristine.exists()) target.bytes = pristine.bytes
+                restored++
+            }
+            pristine.delete()
+        }
+        mcTargets.each { String targetRel ->
+            def target = new File(neoforgeSrcMainJava, targetRel)
+            def pristine = new File(pristineRoot, targetRel)
+            if (target.exists() && recorded[targetRel] != null && sha256Of(target) == recorded[targetRel] && pristine.exists()) {
+                target.bytes = pristine.bytes
+                if (recordedSeeded.contains(targetRel)) seededNow << targetRel
+                restored++
+            } else if (target.exists()) {
+                pristine.parentFile.mkdirs()
+                pristine.bytes = target.bytes
+            } else {
+                // NeoForge does not patch this Vanilla file, so it only exists in :base.
+                def baseTarget = new File(baseSrcMainJava, targetRel)
+                if (!baseTarget.exists()) {
+                    throw new GradleException("MultiForge: patch target ${targetRel} exists in neither :neoforge nor :base")
+                }
+                target.parentFile.mkdirs()
+                target.bytes = baseTarget.bytes
+                pristine.parentFile.mkdirs()
+                pristine.bytes = baseTarget.bytes
+                seededNow << targetRel
+                seeded++
+            }
+        }
+
+        // 2. Apply every group in order.
         int applied = 0
         int skipped = 0
-        int seeded = 0
-        groups.each { group ->
-            def patchFiles = fileTree(dir: group, include: '**/*.patch').files.sort { it.path }
-            patchFiles.each { patchFile ->
-                // Parse the patch header to find the target file path (e.g.
-                // 'net/minecraft/server/level/ChunkHolder.java'). The first
-                // line is `--- a/<path>` (git apply -p1 semantics).
-                def firstLine = patchFile.readLines().find { it.startsWith('--- a/') || it.startsWith('--- ') }
-                String targetRel = null
-                if (firstLine != null) {
-                    targetRel = firstLine.replaceFirst(/^---\s+a?\//, '').replaceFirst(/^---\s+/, '').trim()
-                    // Strip anything after a tab (git patches include timestamps sometimes).
-                    int tab = targetRel.indexOf('\t')
-                    if (tab >= 0) targetRel = targetRel.substring(0, tab)
-                }
-                def targetDir = applyTargetDirFor(targetRel)
-                if (targetRel != null && targetDir == neoforgeSrcMainJava) {
-                    def neoforgeTarget = new File(neoforgeSrcMainJava, targetRel)
-                    def baseTarget = new File(baseSrcMainJava, targetRel)
-                    if (!neoforgeTarget.exists() && baseTarget.exists()) {
-                        // Seed :neoforge's copy from :base — see source-location note above.
-                        // Do this BEFORE the git apply check so both check + apply see the file.
-                        neoforgeTarget.parentFile.mkdirs()
-                        neoforgeTarget.bytes = baseTarget.bytes
-                        logger.lifecycle("MultiForge: seeded ${targetRel} from :base for ${group.name}/${patchFile.name}")
-                        seeded++
-                    }
-                }
-
-                def checkResult = exec {
+        ordered.each { group, File patchFile ->
+            String targetRel = patchTargetOf(patchFile)
+            def targetDir = applyTargetDirFor(targetRel)
+            def checkResult = exec {
+                workingDir = targetDir
+                commandLine = ['git', 'apply', '--check', '--recount', patchFile.absolutePath]
+                ignoreExitValue = true
+                standardOutput = new ByteArrayOutputStream()
+                errorOutput = new ByteArrayOutputStream()
+            }
+            if (checkResult.exitValue == 0) {
+                exec {
                     workingDir = targetDir
-                    commandLine = ['git', 'apply', '--check', '--recount', patchFile.absolutePath]
-                    ignoreExitValue = true
-                    standardOutput = new ByteArrayOutputStream()
-                    errorOutput = new ByteArrayOutputStream()
+                    commandLine = ['git', 'apply', '--recount', patchFile.absolutePath]
                 }
-                if (checkResult.exitValue == 0) {
-                    exec {
-                        workingDir = targetDir
-                        commandLine = ['git', 'apply', '--recount', patchFile.absolutePath]
-                    }
-                    logger.lifecycle("MultiForge: applied ${group.name}/${patchFile.name}")
-                    applied++
-                    return
-                }
+                applied++
+                return
+            }
+            if (targetDir != neoforgeSrcMainJava) {
                 def reverseCheck = exec {
                     workingDir = targetDir
-                    commandLine = ['git', 'apply', '--reverse', '--check', patchFile.absolutePath]
+                    commandLine = ['git', 'apply', '--reverse', '--check', '--recount', patchFile.absolutePath]
                     ignoreExitValue = true
                     standardOutput = new ByteArrayOutputStream()
                     errorOutput = new ByteArrayOutputStream()
                 }
                 if (reverseCheck.exitValue == 0) {
-                    logger.lifecycle("MultiForge: ${group.name}/${patchFile.name} already applied — skipping")
                     skipped++
                     return
                 }
-                throw new GradleException(
-                    "MultiForge: patch ${group.name}/${patchFile.name} does not apply cleanly and is not " +
-                    "already applied. Run 'git apply --check ${patchFile.absolutePath}' from " +
-                    "${targetDir} for details.")
             }
+            def err = new ByteArrayOutputStream()
+            exec {
+                workingDir = targetDir
+                commandLine = ['git', 'apply', '--check', '--recount', patchFile.absolutePath]
+                ignoreExitValue = true
+                errorOutput = err
+            }
+            throw new GradleException(
+                "MultiForge: patch ${group.name}/${patchFile.name} does not apply to ${targetRel}:\n${err}")
         }
-        logger.lifecycle("MultiForge: ${applied} patch(es) applied, ${skipped} already up to date, ${seeded} file(s) seeded from :base.")
+
+        // 3. Record what we produced, so the next run recognises it.
+        appliedHashes.parentFile.mkdirs()
+        appliedHashes.text = mcTargets.collect {
+            "${sha256Of(new File(neoforgeSrcMainJava, it))}  ${it}" + (seededNow.contains(it) ? '  seeded' : '')
+        }.join('\n') + '\n'
+        logger.lifecycle("MultiForge: ${applied} patch(es) applied (${restored} target(s) reset to pristine, " +
+                "${seeded} seeded from :base), ${skipped} committed-tree patch(es) already present.")
     }
 }
 

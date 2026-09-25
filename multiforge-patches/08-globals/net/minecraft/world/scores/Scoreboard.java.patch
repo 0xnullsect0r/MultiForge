@@ -1,0 +1,387 @@
+--- a/net/minecraft/world/scores/Scoreboard.java
++++ b/net/minecraft/world/scores/Scoreboard.java
+@@ -28,6 +28,12 @@ import net.minecraft.world.scores.criteria.ObjectiveCriteria;
+ import org.apache.commons.lang3.mutable.MutableBoolean;
+ import org.slf4j.Logger;
+ 
++// MultiForge (multiforge-patches/08-globals/): region workers read and update
++// scores concurrently (stat and kill criteria, team lookups, entity removal).
++// Every public and protected method is synchronized on the scoreboard, ScoreAccess
++// operations lock the same monitor, collection getters return copies, and the hot
++// getPlayersTeam lookup reads a concurrent mirror of teamsByPlayer without locking.
++// Code run under the lock is score bookkeeping and packet broadcasts only.
+ public class Scoreboard {
+     public static final String HIDDEN_SCORE_PREFIX = "#";
+     private static final Logger LOGGER = LogUtils.getLogger();
+@@ -37,13 +43,14 @@ public class Scoreboard {
+     private final Map<DisplaySlot, Objective> displayObjectives = new EnumMap<>(DisplaySlot.class);
+     private final Object2ObjectMap<String, PlayerTeam> teamsByName = new Object2ObjectOpenHashMap<>();
+     private final Object2ObjectMap<String, PlayerTeam> teamsByPlayer = new Object2ObjectOpenHashMap<>();
++    private final java.util.concurrent.ConcurrentHashMap<String, PlayerTeam> mfTeamsByPlayer = new java.util.concurrent.ConcurrentHashMap<>();
+ 
+     @Nullable
+-    public Objective getObjective(@Nullable String p_83478_) {
++    public synchronized Objective getObjective(@Nullable String p_83478_) {
+         return this.objectivesByName.get(p_83478_);
+     }
+ 
+-    public Objective addObjective(
++    public synchronized Objective addObjective(
+         String p_83437_,
+         ObjectiveCriteria p_83438_,
+         Component p_83439_,
+@@ -62,7 +69,7 @@ public class Scoreboard {
+         }
+     }
+ 
+-    public final void forAllObjectives(ObjectiveCriteria p_83428_, ScoreHolder p_313805_, Consumer<ScoreAccess> p_83430_) {
++    public final synchronized void forAllObjectives(ObjectiveCriteria p_83428_, ScoreHolder p_313805_, Consumer<ScoreAccess> p_83430_) {
+         this.objectivesByCriteria
+             .getOrDefault(p_83428_, Collections.emptyList())
+             .forEach(p_313676_ -> p_83430_.accept(this.getOrCreatePlayerScore(p_313805_, p_313676_, true)));
+@@ -72,11 +79,11 @@ public class Scoreboard {
+         return this.playerScores.computeIfAbsent(p_313892_, p_313683_ -> new PlayerScores());
+     }
+ 
+-    public ScoreAccess getOrCreatePlayerScore(ScoreHolder p_313714_, Objective p_313948_) {
++    public synchronized ScoreAccess getOrCreatePlayerScore(ScoreHolder p_313714_, Objective p_313948_) {
+         return this.getOrCreatePlayerScore(p_313714_, p_313948_, false);
+     }
+ 
+-    public ScoreAccess getOrCreatePlayerScore(final ScoreHolder p_313717_, final Objective p_83473_, boolean p_313939_) {
++    public synchronized ScoreAccess getOrCreatePlayerScore(final ScoreHolder p_313717_, final Objective p_83473_, boolean p_313939_) {
+         final boolean flag = p_313939_ || !p_83473_.getCriteria().isReadOnly();
+         PlayerScores playerscores = this.getOrCreatePlayerInfo(p_313717_.getScoreboardName());
+         final MutableBoolean mutableboolean = new MutableBoolean();
+@@ -84,30 +91,34 @@ public class Scoreboard {
+         return new ScoreAccess() {
+             @Override
+             public int get() {
+-                return score.value();
++                synchronized (Scoreboard.this) {
++                    return score.value();
++                }
+             }
+ 
+             @Override
+             public void set(int p_313831_) {
+-                if (!flag) {
+-                    throw new IllegalStateException("Cannot modify read-only score");
+-                } else {
+-                    boolean flag1 = mutableboolean.isTrue();
+-                    if (p_83473_.displayAutoUpdate()) {
+-                        Component component = p_313717_.getDisplayName();
+-                        if (component != null && !component.equals(score.display())) {
+-                            score.display(component);
++                synchronized (Scoreboard.this) {
++                    if (!flag) {
++                        throw new IllegalStateException("Cannot modify read-only score");
++                    } else {
++                        boolean flag1 = mutableboolean.isTrue();
++                        if (p_83473_.displayAutoUpdate()) {
++                            Component component = p_313717_.getDisplayName();
++                            if (component != null && !component.equals(score.display())) {
++                                score.display(component);
++                                flag1 = true;
++                            }
++                        }
++    
++                        if (p_313831_ != score.value()) {
++                            score.value(p_313831_);
+                             flag1 = true;
+                         }
+-                    }
+-
+-                    if (p_313831_ != score.value()) {
+-                        score.value(p_313831_);
+-                        flag1 = true;
+-                    }
+-
+-                    if (flag1) {
+-                        this.sendScoreToPlayers();
++    
++                        if (flag1) {
++                            this.sendScoreToPlayers();
++                        }
+                     }
+                 }
+             }
+@@ -115,26 +126,34 @@ public class Scoreboard {
+             @Nullable
+             @Override
+             public Component display() {
+-                return score.display();
++                synchronized (Scoreboard.this) {
++                    return score.display();
++                }
+             }
+ 
+             @Override
+             public void display(@Nullable Component p_313826_) {
+-                if (mutableboolean.isTrue() || !Objects.equals(p_313826_, score.display())) {
+-                    score.display(p_313826_);
+-                    this.sendScoreToPlayers();
++                synchronized (Scoreboard.this) {
++                    if (mutableboolean.isTrue() || !Objects.equals(p_313826_, score.display())) {
++                        score.display(p_313826_);
++                        this.sendScoreToPlayers();
++                    }
+                 }
+             }
+ 
+             @Override
+             public void numberFormatOverride(@Nullable NumberFormat p_313875_) {
+-                score.numberFormat(p_313875_);
+-                this.sendScoreToPlayers();
++                synchronized (Scoreboard.this) {
++                    score.numberFormat(p_313875_);
++                    this.sendScoreToPlayers();
++                }
+             }
+ 
+             @Override
+             public boolean locked() {
+-                return score.isLocked();
++                synchronized (Scoreboard.this) {
++                    return score.isLocked();
++                }
+             }
+ 
+             @Override
+@@ -148,12 +167,14 @@ public class Scoreboard {
+             }
+ 
+             private void setLocked(boolean p_313822_) {
+-                score.setLocked(p_313822_);
+-                if (mutableboolean.isTrue()) {
+-                    this.sendScoreToPlayers();
++                synchronized (Scoreboard.this) {
++                    score.setLocked(p_313822_);
++                    if (mutableboolean.isTrue()) {
++                        this.sendScoreToPlayers();
++                    }
++    
++                    Scoreboard.this.onScoreLockChanged(p_313717_, p_83473_);
+                 }
+-
+-                Scoreboard.this.onScoreLockChanged(p_313717_, p_83473_);
+             }
+ 
+             private void sendScoreToPlayers() {
+@@ -164,12 +185,12 @@ public class Scoreboard {
+     }
+ 
+     @Nullable
+-    public ReadOnlyScoreInfo getPlayerScoreInfo(ScoreHolder p_313711_, Objective p_313813_) {
++    public synchronized ReadOnlyScoreInfo getPlayerScoreInfo(ScoreHolder p_313711_, Objective p_313813_) {
+         PlayerScores playerscores = this.playerScores.get(p_313711_.getScoreboardName());
+         return playerscores != null ? playerscores.get(p_313813_) : null;
+     }
+ 
+-    public Collection<PlayerScoreEntry> listPlayerScores(Objective p_313802_) {
++    public synchronized Collection<PlayerScoreEntry> listPlayerScores(Objective p_313802_) {
+         List<PlayerScoreEntry> list = new ArrayList<>();
+         this.playerScores.forEach((p_313669_, p_313670_) -> {
+             Score score = p_313670_.get(p_313802_);
+@@ -180,26 +201,26 @@ public class Scoreboard {
+         return list;
+     }
+ 
+-    public Collection<Objective> getObjectives() {
+-        return this.objectivesByName.values();
++    public synchronized Collection<Objective> getObjectives() {
++        return List.copyOf(this.objectivesByName.values());
+     }
+ 
+-    public Collection<String> getObjectiveNames() {
+-        return this.objectivesByName.keySet();
++    public synchronized Collection<String> getObjectiveNames() {
++        return List.copyOf(this.objectivesByName.keySet());
+     }
+ 
+-    public Collection<ScoreHolder> getTrackedPlayers() {
++    public synchronized Collection<ScoreHolder> getTrackedPlayers() {
+         return this.playerScores.keySet().stream().map(ScoreHolder::forNameOnly).toList();
+     }
+ 
+-    public void resetAllPlayerScores(ScoreHolder p_313823_) {
++    public synchronized void resetAllPlayerScores(ScoreHolder p_313823_) {
+         PlayerScores playerscores = this.playerScores.remove(p_313823_.getScoreboardName());
+         if (playerscores != null) {
+             this.onPlayerRemoved(p_313823_);
+         }
+     }
+ 
+-    public void resetSinglePlayerScore(ScoreHolder p_313783_, Objective p_313928_) {
++    public synchronized void resetSinglePlayerScore(ScoreHolder p_313783_, Objective p_313928_) {
+         PlayerScores playerscores = this.playerScores.get(p_313783_.getScoreboardName());
+         if (playerscores != null) {
+             boolean flag = playerscores.remove(p_313928_);
+@@ -214,12 +235,12 @@ public class Scoreboard {
+         }
+     }
+ 
+-    public Object2IntMap<Objective> listPlayerScores(ScoreHolder p_313893_) {
++    public synchronized Object2IntMap<Objective> listPlayerScores(ScoreHolder p_313893_) {
+         PlayerScores playerscores = this.playerScores.get(p_313893_.getScoreboardName());
+         return playerscores != null ? playerscores.listScores() : Object2IntMaps.emptyMap();
+     }
+ 
+-    public void removeObjective(Objective p_83503_) {
++    public synchronized void removeObjective(Objective p_83503_) {
+         this.objectivesByName.remove(p_83503_.getName());
+ 
+         for (DisplaySlot displayslot : DisplaySlot.values()) {
+@@ -240,21 +261,21 @@ public class Scoreboard {
+         this.onObjectiveRemoved(p_83503_);
+     }
+ 
+-    public void setDisplayObjective(DisplaySlot p_296205_, @Nullable Objective p_83419_) {
++    public synchronized void setDisplayObjective(DisplaySlot p_296205_, @Nullable Objective p_83419_) {
+         this.displayObjectives.put(p_296205_, p_83419_);
+     }
+ 
+     @Nullable
+-    public Objective getDisplayObjective(DisplaySlot p_295165_) {
++    public synchronized Objective getDisplayObjective(DisplaySlot p_295165_) {
+         return this.displayObjectives.get(p_295165_);
+     }
+ 
+     @Nullable
+-    public PlayerTeam getPlayerTeam(String p_83490_) {
++    public synchronized PlayerTeam getPlayerTeam(String p_83490_) {
+         return this.teamsByName.get(p_83490_);
+     }
+ 
+-    public PlayerTeam addPlayerTeam(String p_83493_) {
++    public synchronized PlayerTeam addPlayerTeam(String p_83493_) {
+         PlayerTeam playerteam = this.getPlayerTeam(p_83493_);
+         if (playerteam != null) {
+             LOGGER.warn("Requested creation of existing team '{}'", p_83493_);
+@@ -267,26 +288,28 @@ public class Scoreboard {
+         }
+     }
+ 
+-    public void removePlayerTeam(PlayerTeam p_83476_) {
++    public synchronized void removePlayerTeam(PlayerTeam p_83476_) {
+         this.teamsByName.remove(p_83476_.getName());
+ 
+         for (String s : p_83476_.getPlayers()) {
+             this.teamsByPlayer.remove(s);
++            this.mfTeamsByPlayer.remove(s);
+         }
+ 
+         this.onTeamRemoved(p_83476_);
+     }
+ 
+-    public boolean addPlayerToTeam(String p_83434_, PlayerTeam p_83435_) {
++    public synchronized boolean addPlayerToTeam(String p_83434_, PlayerTeam p_83435_) {
+         if (this.getPlayersTeam(p_83434_) != null) {
+             this.removePlayerFromTeam(p_83434_);
+         }
+ 
+         this.teamsByPlayer.put(p_83434_, p_83435_);
++        this.mfTeamsByPlayer.put(p_83434_, p_83435_);
+         return p_83435_.getPlayers().add(p_83434_);
+     }
+ 
+-    public boolean removePlayerFromTeam(String p_83496_) {
++    public synchronized boolean removePlayerFromTeam(String p_83496_) {
+         PlayerTeam playerteam = this.getPlayersTeam(p_83496_);
+         if (playerteam != null) {
+             this.removePlayerFromTeam(p_83496_, playerteam);
+@@ -296,66 +319,67 @@ public class Scoreboard {
+         }
+     }
+ 
+-    public void removePlayerFromTeam(String p_83464_, PlayerTeam p_83465_) {
++    public synchronized void removePlayerFromTeam(String p_83464_, PlayerTeam p_83465_) {
+         if (this.getPlayersTeam(p_83464_) != p_83465_) {
+             throw new IllegalStateException("Player is either on another team or not on any team. Cannot remove from team '" + p_83465_.getName() + "'.");
+         } else {
+             this.teamsByPlayer.remove(p_83464_);
++            this.mfTeamsByPlayer.remove(p_83464_);
+             p_83465_.getPlayers().remove(p_83464_);
+         }
+     }
+ 
+-    public Collection<String> getTeamNames() {
+-        return this.teamsByName.keySet();
++    public synchronized Collection<String> getTeamNames() {
++        return List.copyOf(this.teamsByName.keySet());
+     }
+ 
+-    public Collection<PlayerTeam> getPlayerTeams() {
+-        return this.teamsByName.values();
++    public synchronized Collection<PlayerTeam> getPlayerTeams() {
++        return List.copyOf(this.teamsByName.values());
+     }
+ 
+     @Nullable
+     public PlayerTeam getPlayersTeam(String p_83501_) {
+-        return this.teamsByPlayer.get(p_83501_);
++        return this.mfTeamsByPlayer.get(p_83501_);
+     }
+ 
+-    public void onObjectiveAdded(Objective p_83422_) {
++    public synchronized void onObjectiveAdded(Objective p_83422_) {
+     }
+ 
+-    public void onObjectiveChanged(Objective p_83455_) {
++    public synchronized void onObjectiveChanged(Objective p_83455_) {
+     }
+ 
+-    public void onObjectiveRemoved(Objective p_83467_) {
++    public synchronized void onObjectiveRemoved(Objective p_83467_) {
+     }
+ 
+-    protected void onScoreChanged(ScoreHolder p_313729_, Objective p_313930_, Score p_83424_) {
++    protected synchronized void onScoreChanged(ScoreHolder p_313729_, Objective p_313930_, Score p_83424_) {
+     }
+ 
+-    protected void onScoreLockChanged(ScoreHolder p_313727_, Objective p_313708_) {
++    protected synchronized void onScoreLockChanged(ScoreHolder p_313727_, Objective p_313708_) {
+     }
+ 
+-    public void onPlayerRemoved(ScoreHolder p_313917_) {
++    public synchronized void onPlayerRemoved(ScoreHolder p_313917_) {
+     }
+ 
+-    public void onPlayerScoreRemoved(ScoreHolder p_313899_, Objective p_83433_) {
++    public synchronized void onPlayerScoreRemoved(ScoreHolder p_313899_, Objective p_83433_) {
+     }
+ 
+-    public void onTeamAdded(PlayerTeam p_83423_) {
++    public synchronized void onTeamAdded(PlayerTeam p_83423_) {
+     }
+ 
+-    public void onTeamChanged(PlayerTeam p_83456_) {
++    public synchronized void onTeamChanged(PlayerTeam p_83456_) {
+     }
+ 
+-    public void onTeamRemoved(PlayerTeam p_83468_) {
++    public synchronized void onTeamRemoved(PlayerTeam p_83468_) {
+     }
+ 
+-    public void entityRemoved(Entity p_83421_) {
++    public synchronized void entityRemoved(Entity p_83421_) {
+         if (!(p_83421_ instanceof Player) && !p_83421_.isAlive()) {
+             this.resetAllPlayerScores(p_83421_);
+             this.removePlayerFromTeam(p_83421_.getScoreboardName());
+         }
+     }
+ 
+-    protected ListTag savePlayerScores(HolderLookup.Provider p_331535_) {
++    protected synchronized ListTag savePlayerScores(HolderLookup.Provider p_331535_) {
+         ListTag listtag = new ListTag();
+         this.playerScores.forEach((p_330203_, p_330204_) -> p_330204_.listRawScores().forEach((p_330199_, p_330200_) -> {
+                 CompoundTag compoundtag = p_330200_.write(p_331535_);
+@@ -366,7 +390,7 @@ public class Scoreboard {
+         return listtag;
+     }
+ 
+-    protected void loadPlayerScores(ListTag p_83446_, HolderLookup.Provider p_330625_) {
++    protected synchronized void loadPlayerScores(ListTag p_83446_, HolderLookup.Provider p_330625_) {
+         for (int i = 0; i < p_83446_.size(); i++) {
+             CompoundTag compoundtag = p_83446_.getCompound(i);
+             Score score = Score.read(compoundtag, p_330625_);
