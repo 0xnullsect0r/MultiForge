@@ -116,7 +116,7 @@ public final class RegionizedTickCoordinator {
         }
         java.util.function.BooleanSupplier pump = net.multiforge.neoforge.chunk.MainThreadHandoff.pumpFor(level.getServer());
         if (level.dimension() == Level.OVERWORLD) {
-            checkOverrun(WorldRef.of("multiforge:global"), host.driveGlobalTick(DISPATCH_DEADLINE_NANOS, pump));
+            checkOverrun(MultiThreadedSchedulerHost.GLOBAL_WORLD, host.driveGlobalTick(DISPATCH_DEADLINE_NANOS, pump));
         }
 
         level.tick(haveTime);
@@ -132,6 +132,29 @@ public final class RegionizedTickCoordinator {
         // finished, so MinecraftServer.tickChildren's "Exception ticking world"
         // crash handling applies exactly as for Vanilla's inline level tick.
         checkOverrun(world, host.driveRegions(world, DISPATCH_DEADLINE_NANOS, pump));
+        // Chunk work a region could not take this tick, then the block-change
+        // broadcast Vanilla sends right after its chunk loop.
+        level.getChunkSource().mfAfterRegions();
+    }
+
+    /**
+     * Whether {@code level}'s random ticks and natural spawning run in its
+     * regions this tick ({@code ServerChunkCache.tickChunks} then queues them
+     * per region instead of running them inline).
+     */
+    public static boolean regionsHandleChunkTicks(ServerLevel level) {
+        MultiThreadedSchedulerHost host = MultiForgeRegionizedRuntime.current();
+        return host != null && host.regionizerForOrNull(asWorldRef(level)) != null;
+    }
+
+    /** The id of the region owning chunk ({@code chunkX}, {@code chunkZ}) of {@code level}, or -1. */
+    public static long regionIdAt(ServerLevel level, int chunkX, int chunkZ) {
+        MultiThreadedSchedulerHost host = MultiForgeRegionizedRuntime.current();
+        if (host == null) return -1L;
+        net.multiforge.runtime.region.ThreadedRegionizer regionizer = host.regionizerForOrNull(asWorldRef(level));
+        if (regionizer == null) return -1L;
+        net.multiforge.runtime.region.Region region = regionizer.regionAtChunk(chunkX, chunkZ);
+        return region == null ? -1L : region.id().value();
     }
 
     private static void checkOverrun(WorldRef world, TickRegionScheduler.TickAllResult result) {

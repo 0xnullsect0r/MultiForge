@@ -17,16 +17,22 @@ loading, commands typed by players, autosave. For each level it ticks,
    tasks and GLOBAL-domain event listeners.
 2. **Vanilla level tick**, on the server thread: `ServerLevel.tick`, unchanged
    except that it skips exactly the work regions own. Weather, time, world
-   border, raids, the dragon fight, sleeping, random ticks and mob spawning
-   (`ServerChunkCache.tick`), block events queued outside a region, and entity
-   section management all run here, as in Vanilla.
+   border, raids, the dragon fight, sleeping, chunk loading and unloading,
+   custom spawners (phantoms, patrols, cats, wandering traders), block events
+   queued outside a region, and entity section management all run here, as
+   in Vanilla. `ServerChunkCache.tickChunks` still picks this tick's ticking
+   chunks, but queues each one's random ticks and natural spawning for the
+   region owning it.
 3. **Regions**, in parallel: every live region of the level ticks once on the
    worker pool (`MultiThreadedSchedulerHost.driveRegions` →
    `TickRegionScheduler.driveTick`). A region's tick body runs, in order:
-   its mailbox, scheduled block and fluid ticks (with Vanilla's
-   collect-then-run semantics), the block events those ticks queued, its
-   entities, and its block entities.
-4. **Barrier**: `dispatchLevelTick` returns only once every region finished.
+   its mailbox, its chunks' random ticks and natural spawning, scheduled
+   block and fluid ticks (with Vanilla's collect-then-run semantics), the
+   block events those ticks queued, its entities, and its block entities.
+4. **Barrier**: once every region finished, the server thread runs any chunk
+   work a region could not take (its region merged or split away mid-tick)
+   and broadcasts the tick's block changes to clients, as Vanilla does right
+   after its chunk loop. Then `dispatchLevelTick` returns.
 
 Region work and server-thread work therefore **never overlap**. The only
 concurrency is between regions of the same level, and regions are, by
@@ -54,6 +60,18 @@ The worker pool size is `cores × threadsPerCore` from
 | `off` | The regionized runtime is not installed. Every guard falls through and the server runs Vanilla's single-threaded tick. The kill switch, and the control for regression runs. |
 | `hybrid` (default) | As above: regions in parallel; an ownership violation is rerouted to its owner with a rate-limited warning. |
 | `strict` | As hybrid, but an ownership violation throws and a region overrunning the barrier deadline throws. For regression runs. |
+
+## Natural spawning
+
+Vanilla computes one `NaturalSpawner.SpawnState` per level per tick: entity
+counts per mob category, and a cap of `category limit × spawnable chunks /
+289`. The spawn state is mutable scratch (the chunk being evaluated, its
+spawn potential), so regions cannot share it. Each region gets its own,
+built on the server thread from the region's own entities and its own
+spawnable chunks. The per-region caps therefore add up to the level-wide
+cap. What changes is only where the headroom is: a crowded region no longer
+suppresses spawning in a distant empty one. This is also how Folia spawns.
+The level-wide state is still computed, for `getLastSpawnState()`.
 
 ## Ownership
 
@@ -105,6 +123,7 @@ Everything region workers touch that is not per-chunk:
 | `EntityTickList`, `ChunkMap` tracker map, player list, navigating mobs, dragon parts | Synchronized / concurrent collections; `sendBlockUpdated` re-paths only the calling region's mobs and tracks its re-entrancy per thread. |
 | `PathTypeCache` | One immutable entry per slot, replaced with a single reference write. |
 | `Scoreboard` | Synchronized on the scoreboard; `getPlayersTeam` reads a concurrent mirror lock-free. |
+| `PoiManager` (villager workstations, beds, bells, lightning rods, portals) | Every access holds the manager's monitor, shared with its `SectionStorage`; query streams are materialised inside it. A block change in one region updates it while a villager in another queries it. `ensureLoadedAndValid` loads chunks outside the lock. |
 
 Every lock above is a **leaf**: nothing that could wait on another thread, and
 no foreign code, runs while it is held. That is the exception to CLAUDE.md

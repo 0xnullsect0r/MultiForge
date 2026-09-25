@@ -112,8 +112,11 @@ public final class ScheduledTickRunnerBridge implements ScheduledTickRunner {
         if (world == null) return; // region died since this phase was scheduled
         ServerLevel level = LEVELS.get(world.dimensionId());
         if (level == null) return; // level not (yet) registered — LevelEvent.Load hasn't fired
+        // Random ticks and natural spawning first, as in Vanilla's level tick
+        // (ServerChunkCache.tickChunks queued them for this region).
+        level.getChunkSource().mfTickRegionChunks(region.id().value());
         ChunkHolderManager manager = host.chunkManagerForOrNull(world);
-        if (manager == null) return; // no chunk shadowed for this world yet
+        if (manager == null) return; // no chunk of this world indexed yet
 
         List<ChunkPos> owned = region.ownedChunkSnapshot();
         List<net.minecraft.world.level.ChunkPos> chunks = new java.util.ArrayList<>(owned.size());

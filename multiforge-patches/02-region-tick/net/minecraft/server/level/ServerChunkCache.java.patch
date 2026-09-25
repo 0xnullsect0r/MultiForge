@@ -1,0 +1,129 @@
+--- a/net/minecraft/server/level/ServerChunkCache.java
++++ b/net/minecraft/server/level/ServerChunkCache.java
+@@ -358,6 +358,12 @@ public class ServerChunkCache extends ChunkSource implements net.neoforged.neofo
+                 int k = this.level.getGameRules().getInt(GameRules.RULE_RANDOMTICKING);
+                 boolean flag = this.level.getLevelData().getGameTime() % 400L == 0L;
+ 
++                // MultiForge (multiforge-patches/02-region-tick/): with regions
++                // active, each chunk's random ticks and natural spawning run in
++                // the region owning it (mfTickRegionChunks), after this method.
++                if (net.multiforge.neoforge.RegionizedTickCoordinator.regionsHandleChunkTicks(this.level)) {
++                    this.mfQueueRegionChunkTicks(list, j, flag1, k, flag, naturalspawner$spawnstate);
++                } else
+                 for (ServerChunkCache.ChunkAndHolder serverchunkcache$chunkandholder : list) {
+                     LevelChunk levelchunk1 = serverchunkcache$chunkandholder.chunk;
+                     ChunkPos chunkpos = levelchunk1.getPos();
+@@ -380,12 +386,113 @@ public class ServerChunkCache extends ChunkSource implements net.neoforged.neofo
+             }
+ 
+             profilerfiller.popPush("broadcast");
++            if (net.multiforge.neoforge.RegionizedTickCoordinator.regionsHandleChunkTicks(this.level)) {
++                // Regions change these chunks after this method returns;
++                // mfAfterRegions broadcasts once they are done.
++                this.mfBroadcastAfterRegions = list;
++            } else
+             list.forEach(p_184022_ -> p_184022_.holder.broadcastChanges(p_184022_.chunk));
+             profilerfiller.pop();
+             profilerfiller.pop();
+         }
+     }
+ 
++    // MultiForge (multiforge-patches/02-region-tick/): per-region chunk ticks.
++    private record MfChunkTick(LevelChunk chunk, boolean spawn, boolean tick) {}
++
++    private static final class MfRegionChunkTicks {
++        final List<MfChunkTick> chunks = new java.util.ArrayList<>();
++        int spawnChunks;
++        NaturalSpawner.SpawnState spawnState;
++    }
++
++    private final java.util.concurrent.ConcurrentHashMap<Long, MfRegionChunkTicks> mfRegionChunkTicks = new java.util.concurrent.ConcurrentHashMap<>();
++    private long mfInhabitedDelta;
++    private int mfRandomTickSpeed;
++    private boolean mfSpawnPersistent;
++    @Nullable
++    private List<ServerChunkCache.ChunkAndHolder> mfBroadcastAfterRegions;
++
++    /**
++     * Server thread: sort this tick's chunk work by owning region. Each region
++     * gets its own spawn state, counting only its entities and with its mob
++     * caps scaled to its own spawnable chunks, because a spawn state is
++     * mutable scratch that regions cannot share. A chunk no region owns runs
++     * inline against the level-wide state, as in Vanilla.
++     */
++    private void mfQueueRegionChunkTicks(
++            List<ServerChunkCache.ChunkAndHolder> list,
++            long inhabitedDelta,
++            boolean doMobSpawning,
++            int randomTickSpeed,
++            boolean spawnPersistent,
++            NaturalSpawner.SpawnState levelSpawnState) {
++        this.mfRegionChunkTicks.clear();
++        this.mfInhabitedDelta = inhabitedDelta;
++        this.mfRandomTickSpeed = randomTickSpeed;
++        this.mfSpawnPersistent = spawnPersistent;
++        for (ServerChunkCache.ChunkAndHolder entry : list) {
++            LevelChunk chunk = entry.chunk;
++            ChunkPos pos = chunk.getPos();
++            boolean spawnable = this.level.isNaturalSpawningAllowed(pos) && this.chunkMap.anyPlayerCloseEnoughForSpawning(pos);
++            if (!spawnable && !this.distanceManager.shouldForceTicks(pos.toLong())) continue;
++            boolean spawn = doMobSpawning && (this.spawnEnemies || this.spawnFriendlies) && this.level.getWorldBorder().isWithinBounds(pos);
++            boolean tick = this.level.shouldTickBlocksAt(pos.toLong());
++            long region = net.multiforge.neoforge.RegionizedTickCoordinator.regionIdAt(this.level, pos.x, pos.z);
++            if (region < 0) {
++                chunk.incrementInhabitedTime(inhabitedDelta);
++                if (spawn) NaturalSpawner.spawnForChunk(this.level, chunk, levelSpawnState, this.spawnFriendlies, this.spawnEnemies, spawnPersistent);
++                if (tick) this.level.tickChunk(chunk, randomTickSpeed);
++                continue;
++            }
++            MfRegionChunkTicks work = this.mfRegionChunkTicks.computeIfAbsent(region, r -> new MfRegionChunkTicks());
++            work.chunks.add(new MfChunkTick(chunk, spawn, tick));
++            if (spawnable) work.spawnChunks++;
++        }
++        if (!doMobSpawning || this.mfRegionChunkTicks.isEmpty()) return;
++        java.util.Map<Long, List<Entity>> entitiesByRegion = new java.util.HashMap<>();
++        for (Entity entity : this.level.getAllEntities()) {
++            ChunkPos pos = entity.chunkPosition();
++            long region = net.multiforge.neoforge.RegionizedTickCoordinator.regionIdAt(this.level, pos.x, pos.z);
++            if (this.mfRegionChunkTicks.containsKey(region)) entitiesByRegion.computeIfAbsent(region, r -> new java.util.ArrayList<>()).add(entity);
++        }
++        this.mfRegionChunkTicks.forEach((region, work) -> work.spawnState = NaturalSpawner.createState(
++                work.spawnChunks, entitiesByRegion.getOrDefault(region, List.of()), this::getFullChunk, new LocalMobCapCalculator(this.chunkMap)));
++    }
++
++    /** Region worker: run the random ticks and natural spawning queued for {@code regionId}. */
++    public void mfTickRegionChunks(long regionId) {
++        MfRegionChunkTicks work = this.mfRegionChunkTicks.remove(regionId);
++        if (work != null) this.mfRunChunkTicks(work);
++    }
++
++    private void mfRunChunkTicks(MfRegionChunkTicks work) {
++        net.multiforge.runtime.diagnostics.ProbeRegistry.bump("region-tick.chunk-ticks");
++        for (MfChunkTick entry : work.chunks) {
++            entry.chunk.incrementInhabitedTime(this.mfInhabitedDelta);
++            if (entry.spawn && work.spawnState != null) {
++                NaturalSpawner.spawnForChunk(this.level, entry.chunk, work.spawnState, this.spawnFriendlies, this.spawnEnemies, this.mfSpawnPersistent);
++            }
++            if (entry.tick) this.level.tickChunk(entry.chunk, this.mfRandomTickSpeed);
++        }
++    }
++
++    /**
++     * Server thread, after the level's regions finished: run chunk work no
++     * region took (its region merged or split away mid-tick), then broadcast
++     * this tick's block changes.
++     */
++    public void mfAfterRegions() {
++        for (java.util.Iterator<MfRegionChunkTicks> it = this.mfRegionChunkTicks.values().iterator(); it.hasNext(); ) {
++            MfRegionChunkTicks work = it.next();
++            it.remove();
++            this.mfRunChunkTicks(work);
++        }
++        List<ServerChunkCache.ChunkAndHolder> list = this.mfBroadcastAfterRegions;
++        this.mfBroadcastAfterRegions = null;
++        if (list != null) list.forEach(p_184022_ -> p_184022_.holder.broadcastChanges(p_184022_.chunk));
++    }
++
+     private void getFullChunk(long p_8371_, Consumer<LevelChunk> p_8372_) {
+         ChunkHolder chunkholder = this.getVisibleChunkIfPresent(p_8371_);
+         if (chunkholder != null) {

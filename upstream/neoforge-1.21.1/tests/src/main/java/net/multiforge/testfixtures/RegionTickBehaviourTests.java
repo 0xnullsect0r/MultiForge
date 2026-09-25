@@ -251,4 +251,46 @@ public class RegionTickBehaviourTests {
                     .thenSucceed();
         });
     }
+
+    @GameTest(template = TestsMod.TEMPLATE_3x3, timeoutTicks = 400)
+    @TestHolder(description = {
+            "Random ticks run in the region owning the chunk: unsupported leaves decay",
+            "in a forced chunk, and the chunk work was run by region workers."
+    })
+    static void randomTicksRunInRegions(final DynamicTest test) {
+        test.onGameTest(helper -> {
+            MultiThreadedSchedulerHost host = MultiForgeRegionizedRuntime.current();
+            helper.assertTrue(host != null, "runtime must be installed");
+            net.minecraft.server.level.ServerLevel level = helper.getLevel();
+            BlockPos rel = new BlockPos(1, 2, 1);
+            BlockPos abs = helper.absolutePos(rel);
+            int cx = abs.getX() >> 4;
+            int cz = abs.getZ() >> 4;
+            net.minecraft.world.level.GameRules.IntegerValue speed = level.getGameRules().getRule(net.minecraft.world.level.GameRules.RULE_RANDOMTICKING);
+            int oldSpeed = speed.get();
+            net.minecraft.world.level.ChunkPos chunk = new net.minecraft.world.level.ChunkPos(cx, cz);
+            long before = net.multiforge.runtime.diagnostics.ProbeRegistry.get("region-tick.chunk-ticks");
+            // A force-ticking ticket (NeoForge: forceTicks = true) random-ticks the
+            // chunk without players nearby; a high speed makes the decay near-certain.
+            speed.set(1024, level.getServer());
+            level.getChunkSource().addRegionTicket(net.minecraft.server.level.TicketType.FORCED, chunk, 2, chunk, true);
+            helper.setBlock(rel, Blocks.OAK_LEAVES.defaultBlockState()
+                    .setValue(net.minecraft.world.level.block.LeavesBlock.PERSISTENT, false)
+                    .setValue(net.minecraft.world.level.block.LeavesBlock.DISTANCE, 7));
+            Runnable restore = () -> {
+                speed.set(oldSpeed, level.getServer());
+                level.getChunkSource().removeRegionTicket(net.minecraft.server.level.TicketType.FORCED, chunk, 2, chunk, true);
+            };
+            helper.startSequence()
+                    .thenWaitUntil(() -> helper.assertTrue(
+                            helper.getBlockState(rel).isAir(), "leaves have not decayed yet " + describe(helper, rel)))
+                    .thenExecute(() -> {
+                        restore.run();
+                        helper.assertTrue(
+                                net.multiforge.runtime.diagnostics.ProbeRegistry.get("region-tick.chunk-ticks") > before,
+                                "no region ran chunk ticks");
+                    })
+                    .thenSucceed();
+        });
+    }
 }
