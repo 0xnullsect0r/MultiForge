@@ -4,17 +4,20 @@
  
      @Override
      public boolean setBlock(BlockPos p_46605_, BlockState p_46606_, int p_46607_, int p_46608_) {
-+        // MultiForge (multiforge-patches/01-ownership/): reroute+warn if
-+        // called off the owning region/tick thread, instead of mutating
-+        // world state from an arbitrary caller thread. See
-+        // net.multiforge.neoforge.OwnershipGuard and docs/blueprint.md M7.
-+        if (!net.multiforge.neoforge.OwnershipGuard.canMutate("Level.setBlock")) {
-+            final BlockPos multiforge$pos = p_46605_;
++        // MultiForge (multiforge-patches/01-ownership/): reroute+warn if the
++        // caller does not own the chunk being written (a foreign region's
++        // worker, or a non-tick thread), instead of mutating world state it
++        // does not own. See net.multiforge.neoforge.OwnershipGuard and
++        // docs/blueprint.md M7.
++        if (!net.multiforge.neoforge.OwnershipGuard.canMutateAt("Level.setBlock", this, p_46605_)) {
++            final BlockPos multiforge$pos = p_46605_.immutable();
 +            final BlockState multiforge$state = p_46606_;
 +            final int multiforge$flags = p_46607_;
 +            final int multiforge$recursionLeft = p_46608_;
-+            net.multiforge.neoforge.OwnershipGuard.reroute(
++            net.multiforge.neoforge.OwnershipGuard.rerouteAt(
 +                    "Level.setBlock",
++                    this,
++                    multiforge$pos,
 +                    () -> this.setBlock(multiforge$pos, multiforge$state, multiforge$flags, multiforge$recursionLeft));
 +            return false;
 +        }

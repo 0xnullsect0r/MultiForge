@@ -52,20 +52,7 @@ public final class MultiForgeCommandBinder {
     private MultiForgeCommandBinder() {}
 
     public static void register(MinecraftServer server) {
-        Path serverDir = server.getServerDirectory().toAbsolutePath();
-        Path configFile = serverDir.resolve("config").resolve("multiforge-server.toml");
-
-        MultiForgeConfigStore configStore;
-        try {
-            Files.createDirectories(configFile.getParent());
-            configStore = MultiForgeConfigStore.load(configFile);
-        } catch (IOException e) {
-            ViolationLogger.warn(
-                    "MultiForgeCommandBinder.register",
-                    "failed to load " + configFile + " — /multiforge config subcommands will not persist: " + e.getMessage());
-            configStore = new MultiForgeConfigStore(
-                    configFile, net.multiforge.runtime.config.MultiForgeConfig.defaults());
-        }
+        MultiForgeConfigStore configStore = MultiForgeServerState.configStoreFor(server);
 
         // v1.3.16: share ONE RegionPinManager instance with
         // DebugChannelServer via MultiForgeServerState so /multiforge

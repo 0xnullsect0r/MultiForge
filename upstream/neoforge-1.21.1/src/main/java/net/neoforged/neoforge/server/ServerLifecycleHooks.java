@@ -124,13 +124,12 @@ public class ServerLifecycleHooks {
         });
 
         // MultiForge M8 sub-step 4: bring up the process-wide regionized
-        // runtime. The tick body is a no-op for now — the M8 patches
-        // that decompose ServerLevel.tick into per-region phases
-        // (multiforge-patches/02-region-tick/ + /03-world-data/) will
-        // wire a real PhasedRegionTickBody in a follow-up. Installing
-        // early here means every subsequent runtime consumer
-        // (RegionizedData slots, per-world regionizers) has a live host
-        // to reach for.
+        // runtime in barrier mode — the server thread drives every region
+        // tick (net.multiforge.neoforge.RegionizedTickCoordinator), so region
+        // work never overlaps the Vanilla main loop. The real per-region
+        // phase body is installed below, once the global subsystems and
+        // per-region runners are registered. Sizing comes from
+        // config/multiforge-server.toml (defaults when absent).
         // M5 (Track B) §4.3: whether this call actually constructed a new
         // MultiThreadedSchedulerHost (fresh boot) vs. reused an existing
         // one (GameTestServer, same JVM, successive server instances) —
@@ -139,8 +138,9 @@ public class ServerLifecycleHooks {
         boolean freshInstall = true;
         try {
             net.multiforge.runtime.scheduler.MultiForgeRegionizedRuntime.install(
-                    net.multiforge.runtime.config.MultiForgeConfig.defaults(),
-                    region -> {});
+                    net.multiforge.neoforge.MultiForgeServerState.loadConfig(server),
+                    region -> {},
+                    net.multiforge.runtime.region.TickRegionScheduler.Mode.BARRIER);
         } catch (net.multiforge.runtime.scheduler.MultiForgeRegionizedRuntime.AlreadyInstalledException already) {
             // Test harnesses (GameTestServer) may install once per JVM and reuse
             // across successive server instances — that's fine, keep going.
@@ -195,6 +195,15 @@ public class ServerLifecycleHooks {
         // for this wiring.
         if (mfHost != null && freshInstall) {
             net.multiforge.neoforge.globals.MultiForgeGlobalSystemsInit.install(mfHost, server);
+            // Install the real per-region phase body: block/fluid ticks,
+            // entity AI, block entities, the global subsystems, chunk tasks
+            // and per-region autosave into <world>/multiforge/journal.
+            mfHost.installM9WiredTickBody(
+                    net.multiforge.runtime.region.PhasedRegionTickBody.builder(),
+                    new net.multiforge.runtime.shutdown.RegionShutdownCoordinator(mfHost.scheduler(), mfHost.taskQueue()),
+                    server.getWorldPath(net.minecraft.world.level.storage.LevelResource.ROOT)
+                            .resolve("multiforge")
+                            .resolve("journal"));
         }
 
         // MultiForge v1.3.5-1.3.9 hook point moved to handleServerStarting

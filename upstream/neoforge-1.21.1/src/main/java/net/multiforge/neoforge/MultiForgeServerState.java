@@ -18,6 +18,8 @@ import java.nio.file.Path;
 import java.util.Objects;
 import java.util.WeakHashMap;
 import net.minecraft.server.MinecraftServer;
+import net.multiforge.runtime.config.MultiForgeConfig;
+import net.multiforge.runtime.config.MultiForgeConfigStore;
 import net.multiforge.runtime.region.pin.RegionPinManager;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -48,6 +50,7 @@ import org.slf4j.LoggerFactory;
 public final class MultiForgeServerState {
     private static final Logger LOGGER = LoggerFactory.getLogger("multiforge.serverstate");
     private static final WeakHashMap<MinecraftServer, RegionPinManager> PINS = new WeakHashMap<>();
+    private static final WeakHashMap<MinecraftServer, MultiForgeConfigStore> CONFIGS = new WeakHashMap<>();
 
     private MultiForgeServerState() {}
 
@@ -79,8 +82,43 @@ public final class MultiForgeServerState {
         return loaded;
     }
 
+    /**
+     * Return the {@link MultiForgeConfigStore} for {@code server}, loading
+     * {@code <serverDir>/config/multiforge-server.toml} on first call (and
+     * writing defaults if the file does not exist). Shared by the runtime
+     * install in {@code ServerLifecycleHooks} and the {@code /multiforge
+     * config} command, so both see the same snapshot.
+     */
+    public static synchronized MultiForgeConfigStore configStoreFor(MinecraftServer server) {
+        Objects.requireNonNull(server, "server");
+        MultiForgeConfigStore cached = CONFIGS.get(server);
+        if (cached != null) {
+            return cached;
+        }
+        Path configFile = server.getServerDirectory()
+                .toAbsolutePath()
+                .resolve("config")
+                .resolve("multiforge-server.toml");
+        MultiForgeConfigStore loaded;
+        try {
+            Files.createDirectories(configFile.getParent());
+            loaded = MultiForgeConfigStore.load(configFile);
+        } catch (IOException e) {
+            LOGGER.warn("failed to load {} — using defaults: {}", configFile, e.getMessage());
+            loaded = new MultiForgeConfigStore(configFile, MultiForgeConfig.defaults());
+        }
+        CONFIGS.put(server, loaded);
+        return loaded;
+    }
+
+    /** The current config snapshot for {@code server} — see {@link #configStoreFor}. */
+    public static MultiForgeConfig loadConfig(MinecraftServer server) {
+        return configStoreFor(server).get();
+    }
+
     /** Explicit clear-on-stop. WeakHashMap covers the case we forget. */
     public static synchronized void clear(MinecraftServer server) {
         PINS.remove(server);
+        CONFIGS.remove(server);
     }
 }

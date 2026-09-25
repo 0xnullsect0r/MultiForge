@@ -6,12 +6,11 @@
              try {
 -                serverlevel.tick(p_129954_);
 +                // MultiForge (multiforge-patches/02-region-tick/): route the
-+                // per-level tick through the RegionizedTickCoordinator facade,
-+                // which dispatches to per-region workers. See the facade
-+                // javadoc — the per-level work formerly done here inline now
-+                // has a real per-region destination for every constituent
-+                // (docs/design/m13-b3-region-tick.md).
-+                net.multiforge.neoforge.RegionizedTickCoordinator.dispatchLevelTick(serverlevel);
++                // per-level tick through RegionizedTickCoordinator, which runs
++                // Vanilla's level tick here and then drives every region of
++                // the level once on the worker pool (barrier tick model — see
++                // the facade javadoc and docs/design/m13-b3-region-tick.md).
++                net.multiforge.neoforge.RegionizedTickCoordinator.dispatchLevelTick(serverlevel, p_129954_);
              } catch (Throwable throwable) {
                  CrashReport crashreport = CrashReport.forThrowable(throwable, "Exception ticking world");
                  serverlevel.fillReportDetails(crashreport);

@@ -5,8 +5,9 @@
      @Override
      public boolean addFreshEntity(Entity p_8837_) {
 +        // MultiForge (multiforge-patches/01-ownership/): see Level.setBlock for rationale.
-+        if (!net.multiforge.neoforge.OwnershipGuard.canMutate("ServerLevel.addFreshEntity")) {
-+            net.multiforge.neoforge.OwnershipGuard.reroute("ServerLevel.addFreshEntity", () -> this.addFreshEntity(p_8837_));
++        if (!net.multiforge.neoforge.OwnershipGuard.canMutateAt("ServerLevel.addFreshEntity", this, p_8837_.blockPosition())) {
++            net.multiforge.neoforge.OwnershipGuard.rerouteAt(
++                    "ServerLevel.addFreshEntity", this, p_8837_.blockPosition(), () -> this.addFreshEntity(p_8837_));
 +            return false;
 +        }
          return this.addEntity(p_8837_);

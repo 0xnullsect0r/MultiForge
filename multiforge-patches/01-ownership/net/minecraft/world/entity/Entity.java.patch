@@ -5,8 +5,9 @@
  
      public void remove(Entity.RemovalReason p_146834_) {
 +        // MultiForge (multiforge-patches/01-ownership/): see Level.setBlock for rationale.
-+        if (!net.multiforge.neoforge.OwnershipGuard.canMutate("Entity.remove")) {
-+            net.multiforge.neoforge.OwnershipGuard.reroute("Entity.remove", () -> this.remove(p_146834_));
++        if (!net.multiforge.neoforge.OwnershipGuard.canMutateAt("Entity.remove", this.level(), this.blockPosition())) {
++            net.multiforge.neoforge.OwnershipGuard.rerouteAt(
++                    "Entity.remove", this.level(), this.blockPosition(), () -> this.remove(p_146834_));
 +            return;
 +        }
          this.setRemoved(p_146834_);

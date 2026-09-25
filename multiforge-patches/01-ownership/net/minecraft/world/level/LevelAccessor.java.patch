@@ -18,9 +18,11 @@
 +            this.getBlockTicks().schedule(this.createTick(p_186465_, p_186466_, p_186467_, p_186468_));
 +            return;
 +        }
-+        if (!net.multiforge.neoforge.OwnershipGuard.canMutate("LevelAccessor.scheduleTick")) {
-+            net.multiforge.neoforge.OwnershipGuard.reroute(
-+                    "LevelAccessor.scheduleTick", () -> this.scheduleTick(p_186465_, p_186466_, p_186467_, p_186468_));
++        if (this instanceof Level multiforge$level
++                && !net.multiforge.neoforge.OwnershipGuard.canMutateAt("LevelAccessor.scheduleTick", multiforge$level, p_186465_)) {
++            final BlockPos multiforge$pos = p_186465_.immutable();
++            net.multiforge.neoforge.OwnershipGuard.rerouteAt(
++                    "LevelAccessor.scheduleTick", multiforge$level, multiforge$pos, () -> this.scheduleTick(multiforge$pos, p_186466_, p_186467_, p_186468_));
 +            return;
 +        }
          this.getBlockTicks().schedule(this.createTick(p_186465_, p_186466_, p_186467_, p_186468_));
@@ -32,9 +34,11 @@
 +            this.getBlockTicks().schedule(this.createTick(p_186461_, p_186462_, p_186463_));
 +            return;
 +        }
-+        if (!net.multiforge.neoforge.OwnershipGuard.canMutate("LevelAccessor.scheduleTick")) {
-+            net.multiforge.neoforge.OwnershipGuard.reroute(
-+                    "LevelAccessor.scheduleTick", () -> this.scheduleTick(p_186461_, p_186462_, p_186463_));
++        if (this instanceof Level multiforge$level
++                && !net.multiforge.neoforge.OwnershipGuard.canMutateAt("LevelAccessor.scheduleTick", multiforge$level, p_186461_)) {
++            final BlockPos multiforge$pos = p_186461_.immutable();
++            net.multiforge.neoforge.OwnershipGuard.rerouteAt(
++                    "LevelAccessor.scheduleTick", multiforge$level, multiforge$pos, () -> this.scheduleTick(multiforge$pos, p_186462_, p_186463_));
 +            return;
 +        }
          this.getBlockTicks().schedule(this.createTick(p_186461_, p_186462_, p_186463_));
@@ -48,9 +52,11 @@
 +            this.getFluidTicks().schedule(this.createTick(p_186474_, p_186475_, p_186476_, p_186477_));
 +            return;
 +        }
-+        if (!net.multiforge.neoforge.OwnershipGuard.canMutate("LevelAccessor.scheduleTick")) {
-+            net.multiforge.neoforge.OwnershipGuard.reroute(
-+                    "LevelAccessor.scheduleTick", () -> this.scheduleTick(p_186474_, p_186475_, p_186476_, p_186477_));
++        if (this instanceof Level multiforge$level
++                && !net.multiforge.neoforge.OwnershipGuard.canMutateAt("LevelAccessor.scheduleTick", multiforge$level, p_186474_)) {
++            final BlockPos multiforge$pos = p_186474_.immutable();
++            net.multiforge.neoforge.OwnershipGuard.rerouteAt(
++                    "LevelAccessor.scheduleTick", multiforge$level, multiforge$pos, () -> this.scheduleTick(multiforge$pos, p_186475_, p_186476_, p_186477_));
 +            return;
 +        }
          this.getFluidTicks().schedule(this.createTick(p_186474_, p_186475_, p_186476_, p_186477_));
@@ -62,9 +68,11 @@
 +            this.getFluidTicks().schedule(this.createTick(p_186470_, p_186471_, p_186472_));
 +            return;
 +        }
-+        if (!net.multiforge.neoforge.OwnershipGuard.canMutate("LevelAccessor.scheduleTick")) {
-+            net.multiforge.neoforge.OwnershipGuard.reroute(
-+                    "LevelAccessor.scheduleTick", () -> this.scheduleTick(p_186470_, p_186471_, p_186472_));
++        if (this instanceof Level multiforge$level
++                && !net.multiforge.neoforge.OwnershipGuard.canMutateAt("LevelAccessor.scheduleTick", multiforge$level, p_186470_)) {
++            final BlockPos multiforge$pos = p_186470_.immutable();
++            net.multiforge.neoforge.OwnershipGuard.rerouteAt(
++                    "LevelAccessor.scheduleTick", multiforge$level, multiforge$pos, () -> this.scheduleTick(multiforge$pos, p_186471_, p_186472_));
 +            return;
 +        }
          this.getFluidTicks().schedule(this.createTick(p_186470_, p_186471_, p_186472_));
