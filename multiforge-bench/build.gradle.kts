@@ -172,12 +172,13 @@ tasks.register<JavaExec>("swarm") {
 // region-teleport.sh --dry-run`). Every script accepts --dry-run and ends
 // with a machine-parseable "PASS"/"FAIL" as its last stdout line.
 //
-// Real runs need a real headless-server-capable workstation with
-// vendored upstream/neoforge-1.21.1 — nothing CI can do — so by default
-// these tasks pass --dry-run themselves; add
+// Real runs need a headless-server-capable workstation with the
+// vendored upstream/neoforge-1.21.1 built; pass
 // -PrealRun to actually launch a server (see docs/verification/m456/
 // README.md "How to run" for the full prerequisites and expected wall
-// clock per task).
+// clock per task). Without either flag the task fails rather than
+// pretending a dry run is a verification: -PdryRun checks the script's
+// plumbing and reports SKIPPED, -PrealRun runs the real thing.
 // -------------------------------------------------------------------------
 
 val m456VerificationDir = project.projectDir.resolve("verification/m456")
@@ -188,8 +189,17 @@ fun registerM456VerificationTask(taskName: String, scriptName: String, timeoutMi
         description = taskDescription
         workingDir = rootProject.projectDir
         val scriptArgs = mutableListOf("bash", m456VerificationDir.resolve(scriptName).absolutePath)
-        if (!project.hasProperty("realRun")) {
+        val realRun = project.hasProperty("realRun")
+        val dryRun = project.hasProperty("dryRun")
+        if (!realRun) {
             scriptArgs += "--dry-run"
+        }
+        doFirst {
+            if (!realRun && !dryRun) {
+                throw GradleException(
+                        "$taskName needs -PrealRun (launch a real server) or -PdryRun (check the script's " +
+                                "plumbing only; reports SKIPPED, never PASS). See docs/verification/m456/README.md.")
+            }
         }
         commandLine(scriptArgs)
         timeout.set(Duration.ofMinutes(timeoutMinutes))

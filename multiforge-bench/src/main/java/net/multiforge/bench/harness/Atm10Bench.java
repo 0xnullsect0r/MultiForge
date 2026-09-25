@@ -34,9 +34,9 @@ import java.util.stream.Stream;
  * fresh MultiForge dev-server run directory, boots, and runs the same
  * sprint-based MSPT capture {@link VanillaBench} uses.
  *
- * <p>Without {@code -PmodpackDir}, this prints setup instructions and
- * exits 0 — it is not an error to run {@code :atm10} without a modpack
- * on hand, it just can't do anything real yet.
+ * <p>Without a usable {@code -PmodpackDir}, this prints setup
+ * instructions and exits with status 2: a bench that measured nothing must
+ * not look like a passing run.
  */
 public final class Atm10Bench {
 
@@ -64,22 +64,22 @@ public final class Atm10Bench {
     public static void main(String[] args) throws Exception {
         String modpackDirProp = System.getProperty("bench.modpackDir", "").trim();
         if (modpackDirProp.isEmpty()) {
-            System.out.println(HELP_MESSAGE);
-            return;
+            System.err.println(HELP_MESSAGE);
+            System.exit(2);
         }
 
         Path modpackDir = Path.of(modpackDirProp);
         if (!Files.isDirectory(modpackDir)) {
             System.out.println("Atm10Bench: -PmodpackDir=" + modpackDirProp
                     + " does not exist or is not a directory.\n\n" + HELP_MESSAGE);
-            return;
+            System.exit(2);
         }
         Path modsDir = modpackDir.resolve("mods");
         Path configDir = modpackDir.resolve("config");
         if (!Files.isDirectory(modsDir)) {
             System.out.println("Atm10Bench: expected a mods/ subdirectory under " + modpackDir
                     + " — is this an ATM10-formatted server dir?\n\n" + HELP_MESSAGE);
-            return;
+            System.exit(2);
         }
 
         long ticks = Long.getLong("bench.ticks", 12000L);

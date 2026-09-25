@@ -228,9 +228,20 @@ mf_grep_count() {
 
 # mf_pass_or_fail <status> — prints the final, machine-parseable PASS/FAIL
 # line (must be the LAST line of stdout) and exits with the matching code.
+# In --dry-run mode a successful run prints SKIPPED instead of PASS.
 # Must be the last thing an x{N} script calls.
 mf_pass_or_fail() {
     local status="$1"
+    if [ "${MF_DRY_RUN:-0}" = "1" ]; then
+        # A dry run only proves the script's plumbing; it never ran a
+        # server, so it must not report PASS.
+        if [ "$status" -eq 0 ]; then
+            echo "SKIPPED (dry run: script plumbing OK, no server was run)"
+            exit 0
+        fi
+        echo "FAIL"
+        exit 1
+    fi
     if [ "$status" -eq 0 ]; then
         echo "PASS"
         exit 0
