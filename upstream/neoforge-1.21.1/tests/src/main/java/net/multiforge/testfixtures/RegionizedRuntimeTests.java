@@ -93,4 +93,24 @@ public class RegionizedRuntimeTests {
             helper.succeed();
         });
     }
+
+    @GameTest(template = TestsMod.TEMPLATE_3x3)
+    @TestHolder(description = {
+            "/multiforge commands that take a world accept a namespaced dimension id:",
+            "a plain string argument stopped at the ':' of minecraft:overworld."
+    })
+    static void worldArgumentsAcceptNamespacedIds(final DynamicTest test) {
+        test.onGameTest(helper -> {
+            var server = helper.getLevel().getServer();
+            var source = server.createCommandSourceStack();
+            for (String command : java.util.List.of(
+                    "multiforge chunks minecraft:overworld",
+                    "multiforge region pin gametest minecraft:overworld 0 0 1 1")) {
+                var parse = server.getCommands().getDispatcher().parse(command, source);
+                helper.assertTrue(parse.getExceptions().isEmpty() && !parse.getReader().canRead(),
+                        "'" + command + "' does not parse: " + parse.getExceptions().values() + " at '" + parse.getReader().getRemaining() + "'");
+            }
+            helper.succeed();
+        });
+    }
 }

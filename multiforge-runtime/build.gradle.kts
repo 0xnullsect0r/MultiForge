@@ -38,6 +38,8 @@ dependencies {
     testImplementation("org.assertj:assertj-core:3.26.3")
     testImplementation("org.slf4j:slf4j-simple:2.0.9")
     testImplementation("org.awaitility:awaitility:4.2.1")
+    // Property tests (EPL-2.0, test scope only: never shipped).
+    testImplementation("net.jqwik:jqwik:1.9.1")
 }
 
 // Templated version file baked into the runtime jar.

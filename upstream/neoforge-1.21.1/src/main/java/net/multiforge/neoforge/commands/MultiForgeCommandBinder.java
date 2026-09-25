@@ -20,6 +20,7 @@ import java.util.stream.Stream;
 import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.commands.Commands;
 import net.minecraft.commands.SharedSuggestionProvider;
+import net.minecraft.commands.arguments.ResourceLocationArgument;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.MinecraftServer;
 import net.multiforge.neoforge.MultiForgeServerState;
@@ -88,6 +89,9 @@ public final class MultiForgeCommandBinder {
                 .then(probesSubtree(dispatcher))
                 .then(chunksSubtree(dispatcher))
                 .then(warnSubtree(dispatcher))
+                .then(Commands.literal("tickstats")
+                        .executes(ctx -> run(dispatcher, ctx, "tickstats"))
+                        .then(Commands.literal("reset").executes(ctx -> run(dispatcher, ctx, "tickstats", "reset"))))
                 .then(certifySubtree(dispatcher));
     }
 
@@ -140,7 +144,7 @@ public final class MultiForgeCommandBinder {
                         "region",
                         "pin",
                         strArg(ctx, "id"),
-                        strArg(ctx, "world"),
+                        worldArg(ctx),
                         intArg(ctx, "fromCX"),
                         intArg(ctx, "fromCZ"),
                         intArg(ctx, "toCX"),
@@ -148,7 +152,7 @@ public final class MultiForgeCommandBinder {
         var toCX = Commands.argument("toCX", IntegerArgumentType.integer()).then(toCZ);
         var fromCZ = Commands.argument("fromCZ", IntegerArgumentType.integer()).then(toCX);
         var fromCX = Commands.argument("fromCX", IntegerArgumentType.integer()).then(fromCZ);
-        var world = Commands.argument("world", StringArgumentType.string())
+        var world = Commands.argument("world", ResourceLocationArgument.id())
                 .suggests((ctx, b) -> SharedSuggestionProvider.suggestResource(
                         ctx.getSource().levels().stream().map(level -> level.location()), b))
                 .then(fromCX);
@@ -167,10 +171,10 @@ public final class MultiForgeCommandBinder {
 
     private static LiteralArgumentBuilder<CommandSourceStack> chunksSubtree(MultiForgeCommandDispatcher dispatcher) {
         return Commands.literal("chunks")
-                .then(Commands.argument("world", StringArgumentType.string())
+                .then(Commands.argument("world", ResourceLocationArgument.id())
                         .suggests((ctx, b) -> SharedSuggestionProvider.suggestResource(
                                 ctx.getSource().levels().stream().map(level -> level.location()), b))
-                        .executes(ctx -> run(dispatcher, ctx, "chunks", strArg(ctx, "world"))));
+                        .executes(ctx -> run(dispatcher, ctx, "chunks", worldArg(ctx))));
     }
 
     private static LiteralArgumentBuilder<CommandSourceStack> warnSubtree(MultiForgeCommandDispatcher dispatcher) {
@@ -193,6 +197,11 @@ public final class MultiForgeCommandBinder {
 
     private static String strArg(CommandContext<CommandSourceStack> ctx, String name) {
         return StringArgumentType.getString(ctx, name);
+    }
+
+    /** The {@code world} argument: a dimension id such as {@code minecraft:overworld}. */
+    private static String worldArg(CommandContext<CommandSourceStack> ctx) {
+        return ResourceLocationArgument.getId(ctx, "world").toString();
     }
 
     private static String intArg(CommandContext<CommandSourceStack> ctx, String name) {

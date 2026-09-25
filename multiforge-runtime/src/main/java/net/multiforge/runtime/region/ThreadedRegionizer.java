@@ -63,6 +63,14 @@ public final class ThreadedRegionizer {
     private final ConcurrentMap<SectionPos, Region> sectionToRegion = new ConcurrentHashMap<>();
 
     /**
+     * The loaded chunks of each occupied section (packed {@code x, z}). A
+     * section stays in its region until its last chunk is removed; removing
+     * one chunk of a section that still has others loaded changes nothing.
+     * Guarded by the write lock.
+     */
+    private final Map<SectionPos, Set<Long>> sectionChunks = new HashMap<>();
+
+    /**
      * Structural mutation lock. Write side is held by {@link #addChunk} /
      * {@link #removeChunk} (and the {@link #mergeInto} / {@link
      * #splitIfDisconnected} helpers they call). Read side is exposed via
@@ -91,6 +99,21 @@ public final class ThreadedRegionizer {
 
     public WorldRef world() {
         return world;
+    }
+
+    /** Whether chunk {@code pos} is loaded (added and not removed). */
+    public boolean isChunkLoaded(ChunkPos pos) {
+        rwLock.readLock().lock();
+        try {
+            Set<Long> loaded = sectionChunks.get(SectionPos.ofChunk(pos.x(), pos.z(), sectionChunkShift));
+            return loaded != null && loaded.contains(packChunk(pos));
+        } finally {
+            rwLock.readLock().unlock();
+        }
+    }
+
+    private static long packChunk(ChunkPos pos) {
+        return ((long) pos.x() << 32) | (pos.z() & 0xFFFFFFFFL);
     }
 
     public int sectionChunkShift() {
@@ -143,16 +166,18 @@ public final class ThreadedRegionizer {
     }
 
     /**
-     * Mark the chunk containing {@code pos} as occupied. Creates a new
-     * region if necessary, or merges neighbouring regions if the new
-     * section bridges them.
+     * Mark the chunk {@code pos} as loaded. The first chunk of a section
+     * adds the section: a new region, or the neighbouring region (merging
+     * neighbours the section bridges). Adding a chunk that is already
+     * loaded is a no-op.
      *
-     * @return the region that owns the section after the call.
+     * @return the region that owns the chunk's section after the call.
      */
     public Region addChunk(ChunkPos pos) {
         SectionPos section = SectionPos.ofChunk(pos.x(), pos.z(), sectionChunkShift);
         rwLock.writeLock().lock();
         try {
+            sectionChunks.computeIfAbsent(section, k -> new HashSet<>()).add(packChunk(pos));
             Region existing = sectionToRegion.get(section);
             if (existing != null) return existing;
 
@@ -183,14 +208,19 @@ public final class ThreadedRegionizer {
     }
 
     /**
-     * Remove the section containing {@code pos} from its region. If the
-     * removal disconnects the region, the connected components become
-     * independent regions.
+     * Mark the chunk {@code pos} as unloaded. When it was its section's last
+     * loaded chunk, the section leaves its region; if that disconnects the
+     * region, the connected components become independent regions. Removing
+     * a chunk that is not loaded is a no-op.
      */
     public void removeChunk(ChunkPos pos) {
         SectionPos section = SectionPos.ofChunk(pos.x(), pos.z(), sectionChunkShift);
         rwLock.writeLock().lock();
         try {
+            Set<Long> loaded = sectionChunks.get(section);
+            if (loaded == null || !loaded.remove(packChunk(pos))) return;
+            if (!loaded.isEmpty()) return;
+            sectionChunks.remove(section);
             Region region = sectionToRegion.remove(section);
             if (region == null) return;
             region.removeSection(section);
@@ -216,6 +246,7 @@ public final class ThreadedRegionizer {
         try {
             Collection<Region> live = regions();
             sectionToRegion.clear();
+            sectionChunks.clear();
             for (Region region : live) {
                 region.drainSections();
                 region.markDead();

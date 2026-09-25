@@ -254,6 +254,10 @@ public final class DebugChannelServer {
 
     private static void onPlayerLoggedIn(PlayerEvent.PlayerLoggedInEvent event) {
         if (!(event.getEntity() instanceof ServerPlayer player)) return;
+        // Only clients that negotiated the channel (the debug client mod) are
+        // tracked; sending to a vanilla client, or a NeoForge one without the
+        // mod, is refused by NeoForge's payload check.
+        if (!player.connection.hasChannel(DebugFramePayload.TYPE)) return;
         PLAYERS.put(player.getUUID(), player);
         SUBSCRIPTIONS.put(player.getUUID(), 0); // waits for the client to send SUBSCRIBE
 
