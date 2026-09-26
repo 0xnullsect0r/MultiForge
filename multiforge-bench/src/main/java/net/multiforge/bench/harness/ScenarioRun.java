@@ -47,6 +47,11 @@ import java.util.regex.Pattern;
  *   <li>{@code x3} — dragon fight: a bot enters the End, the dragon spawns,
  *       is killed by damage attributed to the bot, and its death runs the
  *       full sequence: exit portal lit, egg on the podium, one gateway.</li>
+ *   <li>{@code x4} — the {@code multiforge-testmods} fixture mods: an entity
+ *       in one region rewrites a block in another once a second (on
+ *       MultiForge each write is rerouted and must still report {@code
+ *       true}), and a {@code legacy}-declared mod counting entity ticks in
+ *       plain collections must only ever be called on the server thread.</li>
  * </ul>
  */
 public final class ScenarioRun {
@@ -153,6 +158,7 @@ public final class ScenarioRun {
         all.put("x1", ScenarioRun::crossRegionTeleport);
         all.put("x2", ScenarioRun::raid);
         all.put("x3", ScenarioRun::dragonFight);
+        all.put("x4", ScenarioRun::fixtureMods);
         List<String> names = which.equals("all") ? List.copyOf(all.keySet()) : List.of(which.split(","));
 
         boolean pass = true;
@@ -190,6 +196,7 @@ public final class ScenarioRun {
             String flavour, int workers, String seed, String name, Scenario scenario, Path logDir) throws Exception {
         HeadlessServerRunner.Config config = HeadlessServerRunner.Config.of(BenchSetup.install(flavour), workers, seed)
                 .withProperties(Map.of("allow-flight", "true", "difficulty", "easy"));
+        if (MOD_SCENARIOS.contains(name)) config = config.withMods(testModsDir(logDir), null);
         Ctx ctx = new Ctx(flavour, name, config, logDir);
         try {
             ctx.boot("");
@@ -222,6 +229,24 @@ public final class ScenarioRun {
                 .filter(e -> e.getKey().startsWith("info."))
                 .forEach(e -> System.out.println("  [" + flavour + "] " + e.getKey() + " = " + e.getValue()));
         return ctx.observations;
+    }
+
+    /** Scenarios that run with the multiforge-testmods fixture jars in mods/. */
+    private static final java.util.Set<String> MOD_SCENARIOS = java.util.Set.of("x4");
+
+    /** A mods directory holding the jars listed in {@code bench.testmods} (comma-separated). */
+    private static Path testModsDir(Path logDir) throws IOException {
+        String jars = System.getProperty("bench.testmods", "").trim();
+        if (jars.isEmpty())
+            throw new IllegalStateException("bench.testmods is not set (run through :multiforge-bench:scenario)");
+        Path dir = logDir.resolve("scenario-mods");
+        HeadlessServerRunner.deleteRecursively(dir);
+        Files.createDirectories(dir);
+        for (String jar : jars.split(",")) {
+            Path p = Path.of(jar.trim());
+            Files.copy(p, dir.resolve(p.getFileName()));
+        }
+        return dir;
     }
 
     // ------------------------------------------------------------------
@@ -371,6 +396,57 @@ public final class ScenarioRun {
             }
             ctx.observe("gateways", gateways);
         }
+    }
+
+    // ------------------------------------------------------------------
+    // X.4 — fixture mods: a cross-region writer and a legacy listener
+    // ------------------------------------------------------------------
+
+    private static final Pattern STAT = Pattern.compile("(\\w+)=(\\w+)");
+
+    static void fixtureMods(Ctx ctx) throws Exception {
+        int[][] spots = {{8, 8}, {2008, 8}};
+        for (int[] s : spots) ctx.cmd(String.format(Locale.ROOT, "forceload add %d %d", s[0], s[1]));
+        if (!ctx.await(
+                120_000,
+                () -> ctx.cmd("execute if loaded 8 0 8").contains("passed")
+                        && ctx.cmd("execute if loaded 2008 0 8").contains("passed"))) {
+            throw new IllegalStateException("fixture spots never loaded");
+        }
+        // The writer stands in one region and targets a block in the other.
+        ctx.cmd("summon minecraft:armor_stand 8 100 8 {Tags:[\"mftest_writer\"],NoGravity:1b,"
+                + "NeoForgeData:{tx:2008,ty:100,tz:8}}");
+        // Entity ticks in both regions for the legacy listener to count.
+        for (int[] s : spots) {
+            for (int i = 0; i < 10; i++) {
+                ctx.cmd(String.format(
+                        Locale.ROOT,
+                        "summon minecraft:pig %d 120 %d {NoAI:1b,NoGravity:1b,PersistenceRequired:1b}",
+                        s[0] + i,
+                        s[1]));
+            }
+        }
+        ctx.sprint(400);
+        if (ctx.runner.hasTickStats()) ctx.observations.put("info.regions", regions(ctx));
+        ctx.observe(
+                "target_is_wool",
+                ctx.cmd("execute if block 2008 100 8 #minecraft:wool").contains("passed"));
+        Map<String, String> writer = stats(ctx.cmd("mftest_writer stats"));
+        ctx.observations.put("info.writes", writer.get("writes"));
+        ctx.observe("writes_at_least_15", Long.parseLong(writer.getOrDefault("writes", "0")) >= 15);
+        ctx.observe("writer_false_returns", writer.get("false_returns"));
+        Map<String, String> legacy = stats(ctx.cmd("mftest_legacy stats"));
+        ctx.observations.put("info.legacy_ticks", legacy.get("ticks"));
+        ctx.observe("legacy_counted_ticks", Long.parseLong(legacy.getOrDefault("ticks", "0")) > 0);
+        ctx.observe("legacy_off_server_thread", legacy.get("off_server_thread"));
+        ctx.observe("legacy_consistent", legacy.get("consistent"));
+    }
+
+    private static Map<String, String> stats(String reply) {
+        Map<String, String> out = new LinkedHashMap<>();
+        Matcher m = STAT.matcher(reply);
+        while (m.find()) out.put(m.group(1), m.group(2));
+        return out;
     }
 
     /** Y of the dragon egg above the exit portal at (0, 0), or -1. */

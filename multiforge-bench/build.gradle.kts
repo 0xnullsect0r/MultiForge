@@ -111,8 +111,17 @@ tasks.register<JavaExec>("determinism") {
 // Phase X behaviour checks (ScenarioRun): each scenario on stock NeoForge and
 // on MultiForge from the same seed; observations must match.
 tasks.register<JavaExec>("scenario") {
-    description = "Phase X scenarios on stock vs MultiForge: -Pscenario=x1|x2|x3|all (default all) [-Pworkers=4]."
+    description = "Phase X scenarios on stock vs MultiForge: -Pscenario=x1|x2|x3|x4|all (default all) [-Pworkers=4]."
     benchCommon("scenario")
+    // x4 runs with the fixture mods in mods/.
+    val testmodJars = listOf(":multiforge-testmods:writer", ":multiforge-testmods:legacy")
+            .map { project(it).tasks.named<Jar>("jar") }
+    dependsOn(testmodJars)
+    doFirst {
+        systemProperty(
+                "bench.testmods",
+                testmodJars.joinToString(",") { it.get().archiveFile.get().asFile.absolutePath })
+    }
     mainClass.set("net.multiforge.bench.harness.ScenarioRun")
     providers.gradleProperty("scenario").orNull?.let { systemProperty("bench.scenario", it) }
     (project.findProperty("seed") as String?)?.let { systemProperty("bench.seed", it) }

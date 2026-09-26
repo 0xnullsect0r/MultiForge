@@ -59,6 +59,9 @@ include(
     // Static ASM-based mod-jar safety scanner. No Minecraft/NeoForge dep —
     // see docs/design/scanner-rules.md §1.1.
     "multiforge-scanner",
+    // Fixture mods for the bench scenarios (see multiforge-testmods/README.md).
+    "multiforge-testmods:writer",
+    "multiforge-testmods:legacy",
 )
 
 // MultiForge patches under `multiforge-patches/<NN-group>/` are applied

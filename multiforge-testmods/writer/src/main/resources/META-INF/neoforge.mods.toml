@@ -1,0 +1,18 @@
+# Fixture mod for MultiForge's bench scenarios (multiforge-testmods/README.md).
+modLoader = "javafml"
+loaderVersion = "[4,)"
+license = "GPL-3.0-only"
+
+[[mods]]
+modId = "mftest_writer"
+version = "${version}"
+displayName = "MultiForge test: cross-region writer"
+description = "Writes blocks into another region from an entity tick. Test fixture; not for real servers."
+authors = "MultiForge authors"
+
+[[dependencies.mftest_writer]]
+modId = "neoforge"
+type = "required"
+versionRange = "[21.1,)"
+ordering = "NONE"
+side = "SERVER"
