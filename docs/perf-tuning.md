@@ -1,168 +1,152 @@
-# Performance Tuning Guide
+# Performance tuning
 
-MultiForge's throughput comes from splitting the world into regions
-and ticking them on separate worker threads. Every knob in this guide
-is either "how many workers" or "how the region topology reacts to
-load" — there's no single global "make it faster" switch, because the
-right answer depends on whether your bottleneck is CPU count, region
-fragmentation, or IO.
+MultiForge's gain comes from ticking separate regions of a level in parallel
+(see [`regions.md`](regions.md) and
+[`design/barrier-tick-model.md`](design/barrier-tick-model.md)). Everything
+else in a server tick still runs on the server thread as in Vanilla: network,
+chunk loading and generation, lighting, saving, weather, raids, commands and
+entity section management. Keep that in mind before tuning anything:
 
-## `multiforge.toml` tunables
+- **Parallelism only helps when the load is spread over separate regions.**
+  One contiguous loaded area is always one region and is ticked by one
+  worker, however many workers there are. Ten players standing together are
+  one region; ten players in ten distant bases can be ten.
+- A slow server-thread phase (a big chunk generation burst, a heavy autosave,
+  a mod doing expensive work in a server-thread event) is not helped by more
+  workers.
+- A tick lasts as long as the server-thread work plus the slowest region of
+  each level, because of the barrier.
 
-The full operator-visible knob set (`config/multiforge-server.toml` on
-a running server; see `docs/operator-handbook.md` for the install
-layout):
+## Knobs
+
+`config/multiforge-server.toml`:
 
 ```toml
-# CPU
-cores = 8                    # worker cores to dedicate
-threads-per-core = 2         # SMT threads per core (worker pool = cores * threads-per-core)
+[mtserver]
+cores = 8               # default: available processors
+threadsPerCore = 1      # worker pool = cores × threadsPerCore
+mode = "hybrid"         # off | hybrid | strict
 
 [region]
-size = 16                    # chunks per side of the base section
-mode = "player-only"         # or "full-world"
-mspt-split-threshold = 30.0  # ms — regions hotter than this get split
-mspt-merge-threshold = 5.0   # ms — regions colder than this can be merged
-
-[persistence]
-autosave-per-tick-chunks = 8         # max chunks written per tick per region
-autosave-per-tick-nanos  = 2000000   # 2 ms budget per tick per region
-journal-fsync = true                 # fsync on every append (only turn off for benchmarks)
+size = 4                # sections are 2^size chunks per side (4 → 16)
 
 [violations]
-warn-per-mod-per-second = 5          # rate limit for reroute warnings
+policy = "warn"         # warn | reroute-only | fail
+warnPerMin = 5
 ```
 
-There is deliberately **no separate "tick budget" key** — the closest
-thing is `mspt-split-threshold`, which is the signal
-`AdaptiveSizingDriver` (`docs/regions.md`) acts on to decide a region
-is too hot and should be split. Treat it as the de facto per-region
-tick budget: a region that consistently sits above this threshold is,
-by definition, over budget.
+There are no other performance keys: no tick budget, no split/merge
+thresholds, no autosave settings. Saving is Vanilla's
+([`persistence.md`](persistence.md)).
 
-`cores` / `threads-per-core` together set the tick worker pool size
-(`MultiForgeConfig.tickWorkerCount()` = `cores * threadsPerCore`,
-floored at 1). For flexing the worker count without editing the TOML —
-useful when running the bench harness at several worker counts back to
-back — pass `-Dmultiforge.workers=N` on the JVM command line; it
-short-circuits the computed value entirely for that run.
+`/multiforge config cores|threads <n>` and `/multiforge region size <chunks>`
+apply live. `-Dmultiforge.workers=N` on the JVM command line replaces
+`cores × threadsPerCore` for that run, which is convenient for comparing
+worker counts.
 
-## Region count vs memory tradeoff
+### Worker pool size
 
-More, smaller regions (lower `region.size`, or a hot area that's been
-split by the adaptive sizer):
+- The pool never needs more workers than there are regions that are busy at
+  the same time. Check `/multiforge region list` before raising it.
+- Leave headroom for the server thread, the network threads and GC. On a
+  machine that runs nothing else, a pool of (physical cores − 1 or 2) is a
+  reasonable start; `threadsPerCore = 2` only helps if the CPU has SMT and
+  the regions are busy.
+- Oversubscribing (more workers than free cores) makes every region slower,
+  because workers are descheduled mid-tick and the barrier waits for the
+  slowest one.
 
-- Better isolation — one region's lag spike doesn't drag neighboring
-  bases down.
-- Finer-grained split targets, so the sizer has more opportunities to
-  shed load from a genuinely hot area.
-- More per-region bookkeeping overhead: each region carries its own
-  ticket map (`PerRegionTicketMap`), holder table, autosave queue, and
-  (if not parked) a dedicated worker context. At high region counts
-  this bookkeeping — not raw tick work — becomes the memory cost
-  center.
+### Region size
 
-Fewer, larger regions (higher `region.size`, `mode = "full-world"`):
+`size` sets the section edge (`/multiforge region size` takes it in chunks,
+a power of 2 from 1 to 256). Two loaded areas become separate regions only
+when at least one whole unloaded section lies between them.
 
-- Less bookkeeping overhead per chunk.
-- A single hot chunk inside a large region drags the whole region's
-  MSPT up, and the region can't shed just that one hot chunk — the
-  sizer can only split along section boundaries, so a large region
-  with one bad actor tile-entity stays slow until something changes
-  the underlying load.
+- **Smaller sections** (for example 8 or 4 chunks): nearby bases become
+  separate regions sooner, so there is more to run in parallel. The price is
+  more merge and split activity as players move and chunks load and unload,
+  and regions that sit closer together.
+- **Larger sections** (32 chunks and up): fewer, larger regions and less
+  topology churn, but bases need to be further apart before they tick in
+  parallel.
 
-`region.mode = "player-only"` (the Folia default, and MultiForge's
-default) avoids the memory cost of ticking regions with no players
-nearby at all — regions with no `nearbyPlayerCount` get `PARK`ed by
-the sizer rather than staying live. `full-world` trades that memory
-saving for uniform, always-on simulation (needed for some redstone- or
-farm-heavy modpacks that expect distant machines to keep running).
+After changing it, compare `/multiforge tickstats` over similar play and
+check the probes listed below.
 
-## Autosave frequency tradeoff
+### Pins
 
-`autosave-per-tick-chunks` and `autosave-per-tick-nanos` both cap how
-much IO a region's autosave queue can do in a single tick — whichever
-limit is hit first wins for that tick. Raising either value:
+`/multiforge region pin` forces a rectangle's loaded chunks into one region.
+It is a correctness and consistency tool (keep a build that spans an
+unloaded gap on one thread), not a speed-up: a pin can only merge regions,
+never split them. Remove pins you no longer need.
 
-- Shortens the data-loss window on a crash (more chunks get written
-  more often).
-- Steals more of the region's per-tick time budget from actual
-  simulation, which can itself push the region toward the split
-  threshold.
+### Mode
 
-`journal-fsync = false` skips the fsync-on-append the WAL journal
-normally does (`docs/persistence.md`) — this measurably speeds up
-write-heavy benchmarks, but it means a crash can lose journal entries
-the OS hadn't flushed to disk yet. Only turn it off for benchmarking;
-leave it `true` for any server holding real player data.
+- `hybrid` (default) is the production mode.
+- `strict` throws on an ownership violation and when a region overruns the
+  barrier deadline, which stops the server. Use it for testing only.
+- `off` runs Vanilla's single-threaded tick. It is the baseline to compare
+  against and a kill switch; it takes effect at the next start.
 
-## TPS interpretation: per-region vs server-average
+## Measuring
 
-A single server-average TPS number can hide a saturated region behind
-several idle ones — the average is only useful as a first glance, not
-as the diagnostic signal. Two places to look instead:
+### Whole-server tick time
 
-- **`/multiforge region list`** — one line per region with MSPT
-  p50/p95. This is the ground truth: if one region sits above
-  `mspt-split-threshold` for more than a few seconds and the sizer
-  hasn't split it, either the region has a single very hot chunk that
-  can't be split further, or something is blocking the region worker
-  thread outright (check `docs/debugging-violations.md` first).
-- **Client HUD F3 overlay** — `region-<id> mspt=X.X/Y.Y owned=N
-  sections=M`, live per-region, from inside the game.
+`/multiforge tickstats` reports every tick since the last
+`/multiforge tickstats reset`: tick count, mean, p50/p95/p99, the true
+maximum, and the TPS actually achieved over the last ten minutes. Reset it,
+play or run the load for a while, then read it. This is the number to
+compare between configurations.
 
-Rule of thumb: server-average TPS answers "is anything wrong
-anywhere?"; per-region MSPT p95 answers "where, and how bad?" Always
-check the latter before tuning worker count or region size in response
-to a TPS complaint — raising worker count doesn't help if the problem
-is one region with a single overloaded chunk.
+### Regions
 
-## When to raise or lower worker count
+- `/multiforge region list`: regions per world, their section counts and
+  states. If the busy part of the world is one region, more workers will
+  not help.
+- `/multiforge chunks <world>`: loaded chunks per region.
+- The optional client debug mod (`multiforge-client`) shows per-region
+  p50/p95 tick time in its HUD (`region-<id> mspt=p50/p95 owned=N
+  sections=M`); see [`client-mod-guide.md`](client-mod-guide.md).
 
-- Raise `cores`/`threads-per-core` (or `-Dmultiforge.workers=N` for a
-  quick test) when `/multiforge region list` shows multiple regions
-  simultaneously near their split threshold and CPU headroom exists —
-  more workers means more regions can tick in parallel instead of
-  queueing for a worker.
-- Adding workers stops helping once the number of *live* (non-parked)
-  regions is smaller than the worker count — you can't parallelize
-  past the number of things there are to parallelize. Check region
-  count (`/multiforge region list`) before assuming more workers will
-  help; a modpack with one enormous unsplit region gets zero benefit
-  from extra workers.
-- Lower worker count on hardware with fewer physical cores than
-  `cores * threads-per-core` implies — oversubscription causes context
-  switching overhead that shows up as elevated MSPT across every
-  region, not just the hot one.
+### Probes
 
-## Bench harness usage
+`/multiforge probes [prefix]` dumps diagnostic counters. The useful ones:
 
-All under `multiforge-bench/`, run via Gradle from the repo root:
+| Probe | Meaning |
+|---|---|
+| `region-tick.overrun` | A region's tick, minus designed waits, took longer than the watchdog threshold (default 500 ms, `-Dmultiforge.watchdog.warn-ms`). Usually a blocking call, a stuck mod handler, or one very busy region. A warning names the region. |
+| `region-tick.dispatch.overrun` | A level's regions did not all finish within the barrier deadline (default 500 ms, `-Dmultiforge.regiontick.dispatch-ms`). |
+| `region-tick.wait-ms.<kind>` | Total milliseconds region workers spent in designed waits: `main-thread-chunk-load` and `serial-lane`. These are excluded from the overrun check. |
+| `region.main-thread-chunk-load` | Count of region workers that touched a chunk that was not loaded and had to wait for the server thread to load it. A steadily growing value means some region code (often a mod, or entities at the edge of loaded terrain) reaches into unloaded chunks every tick. |
+| `serial-lane.handoff` | Event listeners a region worker handed to the server thread to run one at a time (see [`events.md`](events.md)). |
+| `<site>:cross-region` | Mutations rerouted to another region's mailbox, per mutation site (e.g. `Level.setBlock:cross-region`). Some are normal; a high rate means work keeps crossing region borders. |
+| `reroute.<site>.mismatch` | A rerouted call returned Vanilla's predicted result to its caller, but the owner saw a different result when it applied it. |
+| `event.dispatch.*` | How event listeners were dispatched: `inline`, `serial`, `global`, `async`. |
+
+`/multiforge warn list` shows the recent rate-limited warnings behind these
+counters. See [`debugging-violations.md`](debugging-violations.md).
+
+## Bench harness
+
+Under `multiforge-bench/` (details in its `README.md` and `build.gradle.kts`):
 
 ```
-./gradlew :multiforge-bench:vanilla   [-Pticks=<n>]
-./gradlew :multiforge-bench:swarm     [-Pplayers=<n>] [-Pticks=<n>]
-./gradlew :multiforge-bench:atm10     -PmodpackDir=/path/to/atm10-server [-Pticks=<n>] [-Pworkers=<n>]
-./gradlew :multiforge-bench:determinism [-PdiffMode=BYTE_IDENTICAL|SEMANTIC] [-Pworkers=<n>]
+./gradlew :multiforge-bench:vanilla   [-Pticks=<n>] [-Pworkers=<n>] [-Pserver=stock]
+./gradlew :multiforge-bench:swarm     [-Pplayers=<n>] [-Pticks=<n>] [-Pworkers=<n>] [-Pspread=<blocks>]
+./gradlew :multiforge-bench:atm10     -PmodpackDir=<dir> [-Pticks=<n>] [-Pworkers=<n>]
+./gradlew :multiforge-bench:determinism [-Pworkers=1[,4,...]]
 ```
 
-- **`vanilla`** — baseline profile: `workers=1`, no mods. Establishes
-  the floor everything else is compared against. Default 12000 ticks
-  (10 game-minutes).
-- **`swarm`** — headless bot swarm at a configurable player count;
-  the profile CLAUDE.md/regression runs use to simulate real
-  concurrent player load without needing real clients.
-- **`atm10`** — All The Mods 10 modpack baseline. Requires a
-  pre-fetched modpack directory (`-PmodpackDir=...`) — the task never
-  downloads the ~500 MB pack itself.
-- **`determinism`** — the parity regression CLAUDE.md rule 3 requires:
-  byte-identical world save vs upstream NeoForge on a fixed seed
-  (`BYTE_IDENTICAL`, single worker) or a semantic comparison across
-  worker counts (`SEMANTIC`). This is the gate, not an optional
-  benchmark — break it at your peril.
+- `vanilla`: no mods, `/tick sprint`; the baseline.
+- `swarm`: protocol bots that walk, place and break blocks in real time;
+  `-Pspread` controls how far apart they are, and therefore how many
+  regions exist.
+- `atm10`: a modpack profile; needs an unpacked pack (`-PmodpackDir`) or
+  `-PmodpackUrl` with `-PmodpackSha256`.
+- `determinism`: the Vanilla-parity gate. It ticks a fixed-seed world on
+  stock NeoForge and on MultiForge and compares the result.
 
-Each profile writes its result to
-`build/bench-verification/<profile>/patched.json` and a boot log under
-`build/bench-logs/<profile>-boot.log`; compare successive runs' JSON
-output rather than eyeballing console TPS numbers when chasing a
-regression.
+`-Pserver=stock` runs the same profile on plain NeoForge. Timing comes from
+`/multiforge tickstats`; each run writes a JSON result (`-PoutputFile`) and a
+boot log under `multiforge-bench/build/bench-logs/`. Compare JSON results
+between runs rather than console TPS.

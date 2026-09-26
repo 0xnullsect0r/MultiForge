@@ -207,24 +207,24 @@ Nothing under `world/`, `mods/`, or the rest of `config/` is touched.
 
 ### Rolling back
 
-Beyond the launcher and `libraries/`, MultiForge writes only to:
-- `world/multiforge/` (per-region journal WAL, autosave metadata)
-- `config/multiforge-server.toml`
-- `logs/multiforge-*.log`
+Beyond the launcher and `libraries/`, MultiForge writes only its own config files:
+- `config/multiforge-server.toml` (workers, mode, region size, violation policy)
+- `config/multiforge-mods.toml` (per-mod thread-safety classification)
+- `config/multiforge-region-pins.toml` (only if you pin regions)
 
-Your Vanilla world files, mod configs, and NeoForge configs are untouched — MultiForge's world data is a purely additive `world/multiforge/` subdirectory. To roll back:
+It adds nothing to `world/`: chunks, entities and player data are saved by Vanilla's own code, so the world stays readable by upstream NeoForge. To roll back:
 
 ```
 # /stop the server first
 mv run.sh.pre-multiforge-*.bak run.sh              # restore the stock launcher
 mv user_jvm_args.txt.pre-multiforge-*.bak user_jvm_args.txt
-rm -rf world/multiforge/ config/multiforge-server.toml
+rm -f config/multiforge-*.toml
 ./run.sh                                           # back on stock NeoForge
 ```
 
-The MultiForge artifacts left under `libraries/net/neoforged/neoforge/1.21.1-v*/` are inert once the launcher no longer points at them; delete that directory too if you want the space back.
+The MultiForge artifacts left under `libraries/net/neoforged/neoforge/21.1.251-multiforge-*/` are inert once the launcher no longer points at them; delete that directory too if you want the space back.
 
-Your existing `world/` remains byte-compatible with upstream NeoForge (this is a MultiForge invariant — see [docs/design/entity-migration.md](design/entity-migration.md) and the M9 vanilla-parity verdict at [docs/verification/m9/](verification/m9/)).
+That the world stays compatible is checked, not assumed: the vanilla-parity gate ticks one world on stock NeoForge and on MultiForge and compares the terrain chunk by chunk ([docs/verification/README.md](verification/README.md)).
 
 ---
 
@@ -283,21 +283,20 @@ The resulting layout is identical to Method 1's fresh-installer flow — MultiFo
 
 ## Verify your install worked
 
-Once the server is up, check the boot log for the MultiForge banner and the runtime version:
+Once the server is up, the boot log identifies the fork and shows the runtime starting:
 
 ```
-[main/INFO] [multiforge]: MultiForge 1.3.0 runtime installed
-[main/INFO] [multiforge]: Region scheduler: 8 cores × 2 threads/core = 16 workers
-[main/INFO] [multiforge]: Global-region tick body wired
-[main/INFO] [multiforge]: Ownership enforcer: REROUTE (default)
+NeoForge mod loading, version 21.1.251-multiforge-<ver>, for MC 1.21.1
+multiforge:debug/v1 emitters installed (heartbeat + region-map + pin-list + violations)
+MultiForge: /multiforge Brigadier tree registered with tab-completion
 ```
 
-Then, from an op-level in-game console or RCON:
+Then, from the console or RCON (op level):
 
 ```
-/multiforge region list          # see materialized regions
-/multiforge probe tps            # verify the TPS histogram is ticking
-/multiforge probe event.dispatch  # verify M12 event routing is live
+/multiforge region list          # regions per world, with their sections
+/multiforge tickstats            # mean/p50/p95/p99/max MSPT and ten-minute TPS
+/multiforge config show          # the active configuration
 ```
 
 For deep observability (region borders, MSPT heatmap, live pin selection) download the [MultiForge client debug mod](https://github.com/0xnullsect0r/MultiForge/releases/latest/download/multiforge-client.jar) and drop it into your Minecraft client's `mods/` folder. It loads on any NeoForge 1.21.1 client and stays inert until you connect to a MultiForge server (which advertises the `multiforge:debug/v1` channel).
@@ -314,8 +313,6 @@ For deep observability (region borders, MSPT heatmap, live pin selection) downlo
 
 **"EULA not accepted" on first boot.** Edit `eula.txt` to `eula=true`.
 
-**"MultiForge cannot start — no region-worker cores available."** Bad `multiforge-server.toml`: `cores` must be ≥ 1. Default is 8 — a value of 0 or a negative number rejects boot.
-
 **Is MultiForge actually running?** The fork identifies itself in three places at boot:
 
 ```
@@ -331,15 +328,15 @@ Once running, `/multiforge region list` and `/multiforge config` report live reg
 
 **Warnings like `[region-tick.no-regionizer-skip::minecraft:the_nether] … has no materialised regionizer yet — skipping this tick`** are normal at startup: a dimension gets a regionizer when chunks first load there, so dimensions nobody has entered skip their tick until then.
 
-**"Chunk system port failed — falling back to Vanilla ChunkMap."** MultiForge's M9 chunk-system port didn't initialize. Check earlier log lines for a stack trace, and file an issue at [github.com/0xnullsect0r/MultiForge/issues](https://github.com/0xnullsect0r/MultiForge/issues) with the boot log attached.
+**`[region-tick.overrun] region … tick body took …ms`.** A region spent longer than the watchdog threshold (500 ms) on its own work in one tick; waits for chunk generation are not counted. Occasional ones during heavy exploration are lag spikes, as on any server; constant ones mean one region carries too much — see [docs/perf-tuning.md](perf-tuning.md). In `mode = "strict"` an overrun stops the server: strict mode is for testing, not production.
 
-**Drop-in method: `world/multiforge/` grows unbounded.** Per-region WAL journal isn't rolling over. Set `journal-max-file-mb = 128` in `config/multiforge-server.toml` (default is 512).
+**A mod misbehaves only on MultiForge.** Mark it `legacy` in `config/multiforge-mods.toml` (`[mods]` table, `modid = "legacy"`) so its event listeners run one at a time on the server thread, and report it. See [docs/legacy-compat.md](legacy-compat.md).
 
 ---
 
 ## What's next
 
-- **Configure for your workload** — [docs/perf-tuning.md](perf-tuning.md) walks through `cores`/`threads-per-core`/`region mode`/`autosave` tuning.
-- **Understand the model** — [docs/blueprint.md](blueprint.md) is the full design; [docs/regions.md](regions.md) explains how regions form and migrate.
+- **Configure for your workload** — [docs/perf-tuning.md](perf-tuning.md) covers worker count, region size and pins.
+- **Understand the model** — [docs/design/barrier-tick-model.md](design/barrier-tick-model.md) is the design; [docs/regions.md](regions.md) explains how regions form, merge and split.
 - **Port a mod** — [docs/mod-porting.md](mod-porting.md) covers common patterns for mods that assume single-threaded access.
 - **Debug violations** — [docs/debugging-violations.md](debugging-violations.md) explains the `ProbeRegistry`/`ViolationLogger` output when the ownership enforcer fires.

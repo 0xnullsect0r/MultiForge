@@ -1,0 +1,19 @@
+{
+  "profile": "vanilla",
+  "workers": 1,
+  "ticks": 6000,
+  "wall_clock_ms": 21990,
+  "avg_mspt": 0.05,
+  "p50_mspt": 0.0,
+  "p95_mspt": 0.3,
+  "p99_mspt": 32.6,
+  "max_mspt": 32.6,
+  "tps_sustained_last_10min": null,
+  "rss_peak_mb": 891,
+  "boot_ok": true,
+  "clean_stop": true,
+  "timing_source": "tick-query",
+  "sprint_tps": 9917,
+  "server": "stock",
+  "pacing": "sprint"
+}

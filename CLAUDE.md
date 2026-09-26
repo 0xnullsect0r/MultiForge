@@ -64,7 +64,12 @@ parallel between two barriers. New code must respect it.
 4. **Shared Vanilla state touched by region workers** needs a leaf lock or
    a per-thread instance (see the table in the design doc). A leaf lock is
    one under which no foreign code runs and nothing waits on another thread.
-5. **`InstanceRegistry<K, V>`** (in `net.multiforge.runtime.chunk`) is the
+5. **A designed wait on a region worker** (the two bounded exceptions to
+   rule 4: `MainThreadHandoff`, `SerialLane`) is bracketed with
+   `RegionTickWatchdog.beginWait()/endWait(kind)`, so the watchdog and the
+   barrier deadline do not count it as the region's own time. Do not use it
+   to hide any other wait.
+6. **`InstanceRegistry<K, V>`** (in `net.multiforge.runtime.chunk`) is the
    standard weak-keyed per-server/per-level lookup. Use it, not a raw
    `WeakHashMap`.
 
@@ -83,17 +88,27 @@ See top-level `README.md`. Key directories:
 - `multiforge-installer/` — repackages patched NeoForge + runtime into
   installer jar.
 - `multiforge-client/` — client-side debug mod, ordinary NeoForge mod.
-- `multiforge-testmods/` — fixture mods.
-- `multiforge-bench/` — headless bot swarm + TPS harness.
+- `multiforge-scanner/` — ASM mod-jar safety scanner (`/multiforge certify`).
+- `multiforge-testmods/` — fixture mods (cross-region writer, legacy listener)
+  used by the bench scenarios and the scanner corpus.
+- `multiforge-bench/` — installed-server harness: parity gate, scenarios,
+  protocol-bot swarm (MCProtocolLib), TPS/MSPT benches.
 - `docs/` — design docs.
 
 ## Build
 
-- Requires **JDK 21**, ~20 GB free disk for NeoForge workspace.
-- `./gradlew :setup` vendors NeoForge 1.21.1 into `upstream/`.
-- `./gradlew build` runs the full build. `spotless` runs automatically.
-- Sub-projects that do not depend on Minecraft (api, runtime, scanner,
-  installer, bench) build standalone without the `:setup` step.
+- Requires **JDK 21**, ~20 GB free disk for the NeoForge workspace.
+- Outer modules: `./gradlew build` (api, runtime, scanner, installer, bench,
+  client, testmods). Spotless runs automatically.
+- The fork (`upstream/neoforge-1.21.1`, NeoForge 21.1.251, NeoDev build)
+  consumes api + runtime from mavenLocal. In order:
+  1. `./gradlew :multiforge-api:publishToMavenLocal :multiforge-runtime:publishToMavenLocal`
+  2. in `upstream/neoforge-1.21.1`: `./gradlew setup` (decompile + NeoForge
+     patches; the MultiForge patches are applied automatically before compile)
+  3. then `:neoforge:compileJava`, `:tests:runGameTestServer` (GameTests),
+     `:neoforge:installerJar` (installer in `projects/neoforge/build/libs`),
+     `immaculateCheck licenseCheck` (formatting, headers).
+- Patch work: `scripts/mf-patches.py` (see `multiforge-patches/README.md`).
 
 ## Code style
 
@@ -109,11 +124,20 @@ See top-level `README.md`. Key directories:
 ## Testing
 
 - Unit tests: JUnit 5 + AssertJ + jqwik. Live under `src/test/java`.
-- CI runs `./gradlew build spotlessCheck test`. Spotless enforces the
-  GPL-3 header — there is no separate licenseHeaderCheck task.
-- Deterministic-mode regression: `./gradlew :multiforge-bench:determinism`
-  (fixed seed, single worker, 20 min, world hash asserted).
-- Bench (nightly): `./gradlew :multiforge-bench:atm10`.
+- CI runs `./gradlew spotlessCheck` + the module builds, and the fork job
+  runs every GameTest (NeoForge's suite + `net.multiforge.testfixtures`).
+  Spotless enforces the GPL-3 header in the outer modules;
+  `immaculateCheck`/`licenseCheck` in the fork.
+- Live-server checks (`multiforge-bench`, need a built installer; see
+  `docs/verification/README.md`):
+  - `./gradlew :multiforge-bench:determinism -Pworkers=1,4` — the vanilla
+    parity gate: one fixed-seed world ticked on stock NeoForge and on
+    MultiForge, terrain compared chunk by chunk.
+  - `./gradlew :multiforge-bench:scenario` — Phase X behaviour checks on
+    stock vs MultiForge (teleport, raid, dragon, fixture mods).
+  - `:multiforge-bench:vanilla|swarm|atm10|x8StrictSwarm` — benches with
+    real protocol bots; `nightly.yml` runs a short set every night.
+- Scanner: `./gradlew :multiforge-scanner:scanCorpus` (gated in CI).
 
 ## Git workflow
 

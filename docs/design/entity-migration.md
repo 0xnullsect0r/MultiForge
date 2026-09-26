@@ -1,5 +1,9 @@
 # Entity Migration Protocol — Design
 
+> **Historical — superseded.** M4 entity migration was retired: ownership follows chunk
+> position, and moves that cross regions are deferred to the server thread. See
+> `docs/design/barrier-tick-model.md` and `docs/migration.md`.
+
 **Status:** Phase 0 task 0.1 of the M4+M5+M6 landing plan
 (`plans/bubbly-jumping-comet.md`).
 **Freezes:** the semantics Track A (M4, tasks A1.1–A4.2) implements

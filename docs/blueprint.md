@@ -56,6 +56,37 @@ This avoids ecosystem collapse while allowing meaningful scalability. The main a
 
 ---
 
+## Status (2026-09-26)
+
+This blueprint is the original design and its milestone history. What runs
+today is the **barrier tick model** ([`design/barrier-tick-model.md`](design/barrier-tick-model.md)):
+the server thread runs Vanilla's loop, and each level's regions tick in
+parallel between two barriers. Several milestones below were replaced by
+it rather than completed as first written; their sections are kept as
+history and marked.
+
+| Milestone | Status |
+|---|---|
+| M0–M2 instrumentation, scheduler, region tick MVP | Done |
+| M3 compatibility lane | Done: the serial event lane and per-mod safety classes (`legacy-compat.md`, `events.md`) |
+| M4 entity migration | **Replaced**: ownership follows chunk position; cross-region moves defer to the server thread |
+| M5 global subsystems | **Replaced**: Vanilla's own code runs them on the server thread, which is the single owner |
+| M6 tooling | Done: client debug mod, scanner (CI gate on a mod-jar corpus), bench harness |
+| M7 ownership enforcement | Done |
+| M8 region tick loop | Done, including honest return values for rerouted `setBlock`/`addFreshEntity` |
+| M9 chunk-system port | **Retired**: Vanilla's chunk system runs everything; the runtime only indexes loaded chunks by region |
+| M10 migration + networking | **Replaced** with M4; packet handling stays on the server thread |
+| M11 persistence + globals | **Replaced**: saving is Vanilla's; globals as M5 |
+| M12 event routing | Done: `@DispatchDomain`, mixed-domain cancellable events, `addListener` routing, the serial lane |
+| M13 per-region entity/block-entity/scheduled ticks | Done (B3's free-running tick replaced by the barrier model) |
+| M14 per-region random ticks and natural spawning | Done: per-region `NaturalSpawner` state and mob caps |
+
+Verification — GameTests, the vanilla-parity gate, the Phase X scenarios
+and the benches, with the runs that still need bigger hardware — is in
+[`verification/README.md`](verification/README.md).
+
+---
+
 ## Goals, Non-Goals, and Constraints
 
 ## Goals
@@ -342,6 +373,10 @@ Mitigate via quotas, bounded mailboxes, and latency watchdogs.
 ---
 
 ## Persistence, Autosave, and Crash Safety
+
+> **As built:** saving is Vanilla's, on the server thread; region mailboxes
+> are drained on the server thread before the world is saved at stop. The
+> per-region journal below was built in M9 and retired unused.
 
 ## Save model
 - per-region dirty tracking
@@ -636,7 +671,15 @@ been documented-and-deferred through M8:
 - exit gate: chunk loading/unloading/ticket lifecycle
   deterministic-regression-verified region-by-region
 
-### Status: Landed (pending Phase 7 verification runs)
+### Status: Retired
+
+The shadow chunk system below was fed by observer hooks but never drove
+anything — Vanilla kept loading, lighting and saving every chunk — and it
+was removed (`docs/design/barrier-tick-model.md`, *What this replaced*).
+What remained in use is the per-region chunk index. The Phase 7 runbook
+below was superseded by `:multiforge-bench:determinism` (vanilla parity
+against stock NeoForge on a shared seed world) and the benches in
+`docs/verification/README.md`. The original status follows as history.
 
 M9 code has landed on `develop` across Phases 0–6. Structural exit-gate
 work is complete; the milestone closes once the Phase 7 wall-clock
@@ -773,6 +816,7 @@ four landed real fixes in M9 Phase 1; see "Resolved in M9 Phase 1"
 above.
 
 ## M10 — Entity Migration + Networking
+- **Status: replaced** — see the status table at the top.
 - Entity#teleportAsync binds to EntityMigrationCoordinator
   (multiforge-patches/05-entity-migration/); gameplay packet handlers in
   ServerGamePacketListenerImpl hop to sender's owner region via
@@ -781,6 +825,7 @@ above.
   windows, no lost UUID references); packet-handler region-hop regression
 
 ## M11 — Persistence + Globals
+- **Status: replaced** — see the status table at the top.
 - wires AutoSaveRunner/RegionJournal into the chunk pipeline
   (multiforge-patches/07-persistence/); moves
   weather/time/border/dragon/wither/raids/scoreboards/command dispatch to a
@@ -789,11 +834,28 @@ above.
   systems verified to not require per-region ownership
 
 ## M12 — Event Routing
+- **Status: done** — `docs/events.md`; mixed-domain cancellable events run
+  inline in priority order, `addListener` registrations are routed, and
+  `LEGACY_SERIAL` is the serial lane.
 - IEventBus.post honors @DispatchDomain annotations (already defined in
   multiforge-api/, currently ignored at post time)
   (multiforge-patches/09-events/)
 - exit gate: event dispatch domain/ordering contract regression
   (REGION/GLOBAL/LEGACY_SERIAL routing verified per-listener)
+
+## M13 — Per-Region Entity, Block-Entity and Scheduled Ticks
+- entities, block entities, scheduled block/fluid ticks and block events run
+  on the owning region's worker inside the level tick
+- **Status: done** — `docs/design/barrier-tick-model.md`; GameTests in
+  `net.multiforge.testfixtures.RegionTickBehaviourTests`
+
+## M14 — Per-Region Chunk Ticks and Spawning
+- random ticks and natural spawning of each region's chunks run on its
+  worker, with a per-region `NaturalSpawner.SpawnState` and mob caps scaled
+  to the region's spawnable chunks; level-wide totals stay on the server
+  thread
+- **Status: done** — `ServerChunkCache.mfTickRegionChunks`
+  (`multiforge-patches/02-region-tick/`)
 
 Each milestone from M7 onward touching net.minecraft.* repeats the same
 discipline: deterministic-mode regression before landing, patches grouped

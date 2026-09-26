@@ -1,0 +1,22 @@
+{
+  "profile": "atm10",
+  "workers": 4,
+  "ticks": 6000,
+  "wall_clock_ms": 74762,
+  "avg_mspt": 0.19,
+  "p50_mspt": 0.11,
+  "p95_mspt": 0.51,
+  "p99_mspt": 1.64,
+  "max_mspt": 14.76,
+  "tps_sustained_last_10min": null,
+  "rss_peak_mb": 1501,
+  "boot_ok": true,
+  "clean_stop": true,
+  "timing_source": "tickstats",
+  "sprint_tps": 4330,
+  "ticks_measured": 6004,
+  "server": "multiforge",
+  "pacing": "sprint",
+  "modpack": "/tmp/claude-0/-home-user-MultiForge/89b0d72f-7841-5c24-b0a2-7b2a2c1d2c1d/scratchpad/modpack17",
+  "mod_jar_count": 17
+}

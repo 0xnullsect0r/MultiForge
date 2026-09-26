@@ -1,151 +1,156 @@
-# MultiForge Region Logic (M2)
+# Regions
 
-## Executive summary
-
-The world is partitioned into **regions**. Every chunk belongs to
-exactly one region; every region is owned by exactly one worker
-thread. Cross-region access is illegal from a region worker and must
-be routed through a per-region mailbox — this is how MultiForge
-achieves parallel ticking without breaking mod code that assumes the
-old single-thread model.
+MultiForge splits each loaded world into **regions** and ticks the regions of
+a level in parallel on a worker pool, between two barriers on the server
+thread. The tick model itself (what runs where, the barrier, ownership) is
+described in [`design/barrier-tick-model.md`](design/barrier-tick-model.md);
+this page covers how regions are formed and how an operator configures them.
 
 ## Vocabulary
 
-| Term      | Meaning                                                                                  |
-|-----------|------------------------------------------------------------------------------------------|
-| Chunk     | The 16×16 blocks Vanilla already tracks.                                                 |
-| Section   | A coarse tile of {@code 2^regionSize} chunks per side (default `regionSize=4` → 16×16).  |
-| Region    | The transitive-closure of adjacent occupied sections; the tick-scheduling unit.          |
-| Global region | A synthetic region for weather, time, world border, dragon fight, wither, raids, scoreboards, command dispatch. |
+| Term | Meaning |
+|---|---|
+| Chunk | The 16×16-block column Vanilla already tracks. |
+| Section | A square of `2^size` chunks per side (`[region] size`, default 4 → 16×16 chunks). |
+| Region | An 8-connected group of occupied sections; the unit that one worker ticks. |
+| Global region | A synthetic region, ticked once per server tick before the overworld's level tick. It runs work queued on the global domain (`ServerDomains.global()` tasks and GLOBAL-domain event listeners). |
 
-## Section → region → worker
+A section is **occupied** while at least one of its chunks is loaded.
 
-1. Chunks map to sections deterministically:
-   `sectionX = chunkX >> regionSize`.
-2. Occupied sections form regions via 8-neighbour adjacency:
-   `ThreadedRegionizer.addChunk(pos)` either extends the neighbouring
-   region or creates a new one, and merges adjacent regions if the new
-   section bridges them.
-3. Removing a section can split a region if it was the only bridge —
-   the regionizer runs a flood-fill and peels off any orphan
-   components into fresh regions.
-4. The `TickRegionScheduler` picks the region with the earliest
-   next-fire deadline and ticks it on a worker (EDF).
+## How regions form
 
-Each region carries an atomic state — `TRANSIENT`, `READY`, `TICKING`,
-`DEAD`. A worker claims a region via `Region.tryMarkTicking()`
-(CAS `READY→TICKING`), runs its tick body, then `markNotTicking()`
-(CAS `TICKING→READY`). Dead regions are dropped from the schedule.
+`ThreadedRegionizer` (one per world) keeps the loaded chunks of each section
+and the section → region map. It is fed by `RegionizedChunkLifecycle`, which
+listens to NeoForge's `ChunkEvent.Load` / `ChunkEvent.Unload`. Vanilla decides
+what loads and when; the regionizer only follows.
 
-## Adaptive sizing
+1. Chunk → section: `sectionX = chunkX >> size`, `sectionZ = chunkZ >> size`.
+2. **Load.** When a chunk loads in an unoccupied section, the section joins
+   the region of any of its 8 neighbouring sections. If it touches several
+   regions, they are merged into the largest one. If it touches none, a new
+   region is created.
+3. **Unload.** A section leaves its region only when its last loaded chunk
+   unloads. If that disconnects the region, each connected component becomes
+   its own region (split). A region with no sections left dies.
 
-`AdaptiveSizingDriver` runs off the tick loop on a low-priority
-thread. For each region it examines:
+Consequences:
 
-- `p95Mspt` — 95th-percentile milliseconds per tick over the last ~5 s.
-- `meanMspt` — rolling mean over the same window.
-- `sectionCount` — how big the region is.
-- `nearbyPlayerCount` — how many players see chunks it owns.
+- One contiguous loaded area is always one region, however large.
+- Two regions always have at least one fully unloaded section between them.
+  That gap is what makes ticking them in parallel safe.
+- Anything an entity or block can reach in one tick is in its own region or
+  in an unloaded chunk.
 
-It emits a `Recommendation` per region:
+Each region has a state (`RegionState`): `TRANSIENT` → `READY` ⇄ `TICKING`,
+`FOLDING` while another region is being merged into it, and `DEAD` (terminal)
+after it was merged away or lost its last section.
 
-| Signal                                                                    | Recommendation |
-|---------------------------------------------------------------------------|----------------|
-| `p95Mspt ≥ region.msptSplitThreshold` AND `sectionCount ≥ 4`              | `SPLIT`        |
-| `region.mode = player-only` AND no nearby players                         | `PARK`         |
-| `meanMspt ≤ region.msptMergeThreshold` AND no nearby players              | `MERGE`        |
-| otherwise                                                                 | `HOLD`         |
+## Ownership and cross-region work
 
-The M2.5 patch wires these recommendations into the regionizer's
-concrete split/merge primitives; until then the driver is
-observation-only.
+Ownership is positional: a region owns the chunks of its sections, and an
+entity, block entity or scheduled tick belongs to the region owning its chunk.
+Nothing is migrated when an entity walks; the region that owns its chunk at the
+start of its tick ticks it.
 
-## The global region
+- A mutation from a region worker at a chunk its region does not own is
+  rerouted to the owner's mailbox (`RegionizedTaskQueue.queueChunkTask`) and
+  runs at that region's next drain. If no region owns the chunk, it goes to
+  the server thread.
+- A task queued for a chunk that is not loaded waits in an orphan queue and is
+  delivered when that chunk loads.
+- Cross-region teleports, player dimension changes and command execution
+  started on a region worker are deferred to the server thread and run after
+  the barrier (`OwnershipGuard.deferCrossRegionMove` / `deferToServerThread`).
 
-A single dedicated region ticks state that has no natural spatial
-owner: weather, time, world border, gamerules, ender-dragon fight,
-wither, raid manager, scoreboards, and command dispatch. It runs on
-its own worker at 20 TPS, alongside the region workers.
+## Region pins
 
-## Cross-region routing
+A pin is an operator-defined rectangle of chunks whose loaded chunks always
+tick in one region, even when they are not adjacent. The regionizer merges
+every region holding a section of the pin and does not split the pinned area.
+Use it for a build that spans an unloaded gap, such as two farms joined by an
+item line, or a base and its chunk loaders.
 
-Every task that targets a chunk-scoped location goes through
-`RegionizedTaskQueue.queueChunkTask(world, chunkX, chunkZ, task)`. At
-enqueue time we look up the owner region; at drain time (start and
-end of every tick) the owning region's worker runs its inbox.
+A pin cannot separate its area from loaded chunks next to it: regions whose
+sections touch always merge.
 
-If the chunk is not currently loaded, the task lands in the orphan
-queue and is re-routed on the next `reroute()` pass. This is how
-network packets, entity teleports, and cross-region events safely
-land on their target.
+Pins are stored in `config/multiforge-region-pins.toml`:
+
+```toml
+[[pins]]
+id = "base-north"
+world = "minecraft:overworld"
+from = [ -128, -128 ]   # chunk coordinates, inclusive
+to   = [ 128, 128 ]
+```
+
+The file is rewritten by `/multiforge region pin` and `/multiforge region
+unpin`, and the change applies immediately. Manual edits are read at the next
+server start.
 
 ## Configuration
 
-The operator-visible knobs live in `multiforge-server.toml`:
+`config/multiforge-server.toml`. A missing file or key means the default; the
+file is written the first time a `/multiforge config` or `/multiforge region
+size` command changes something. Defaults shown:
 
 ```toml
 [mtserver]
-cores = 8               # cores × threadsPerCore = tick worker count
-threadsPerCore = 2
+cores = 8               # default: the JVM's available processors
+threadsPerCore = 1      # worker pool = cores × threadsPerCore (at least 1)
 mode = "hybrid"         # off | hybrid | strict
 
 [region]
-size = 4                # 2^size chunks per section side (4 → 16×16, Folia default)
-mode = "player-only"    # player-only | full-world
-msptSplitThreshold = 35.0
-msptMergeThreshold = 5.0
+size = 4                # sections are 2^size chunks per side (4 → 16)
 
 [violations]
 policy = "warn"         # warn | reroute-only | fail
-warnPerMin = 5
+warnPerMin = 5          # rate-limited warnings per minute per site
 ```
+
+`policy` controls what a cross-region mutation does: `warn` reroutes it and
+logs a rate-limited warning, `reroute-only` reroutes it without logging (the
+probe counter still counts it), `fail` throws, as `mode = "strict"` does.
+
+JVM overrides: `-Dmultiforge.workers=N` replaces the computed pool size, and
+`-Dmultiforge.mode=off|hybrid|strict` replaces `mode`.
 
 In-game (op only):
 
 ```
-/multiforge config cores 8
-/multiforge config threads 2
-/multiforge region size 4
-/multiforge region mode player-only
-/multiforge region pin -128 -128 128 128
+/multiforge config show | reload
+/multiforge config cores <n>
+/multiforge config threads <n>
+/multiforge config mode <hybrid|strict|off>
+/multiforge config policy <warn|reroute-only|fail>
+/multiforge config warnPerMin <n>
+/multiforge region size <chunks>          # power of 2, 1..256
+/multiforge region pin <id> <world> <fromCX> <fromCZ> <toCX> <toCZ>
+/multiforge region unpin <id>
 /multiforge region list
 ```
 
-Changes rewrite `multiforge-server.toml` atomically and publish a new
-snapshot to `MultiForgeConfigStore` subscribers, so pool sizing and
-threshold updates take effect immediately.
+Commands update `multiforge-server.toml` and apply live:
 
-## What M2 gives up
+- A changed pool size resizes the worker pool (`TickRegionScheduler.resize`).
+- A changed region size re-partitions every world: mailboxes are drained,
+  each world's regions are dissolved, the loaded chunks are re-added with the
+  new section size, and block-entity tickers are moved to their new owners.
+- Switching between `hybrid` and `strict` is immediate. Switching to or from
+  `off` takes effect at the next server start, because `off` means the
+  regionized runtime is not installed at all.
 
-- `AdaptiveSizingDriver` observes but does not yet act — the concrete
-  split/merge primitives it recommends will be wired in M2.5 once the
-  chunk-system patch (M3) provides the per-region chunk-load ticket
-  bookkeeping the primitives need.
-- `MinecraftServer.runServer` is not yet replaced — that patch lives
-  under `multiforge-patches/02-region-tick/` and applies against the
-  vendored NeoForge tree (produced by `./gradlew :setup -Pmc=true`).
-  The M2 slice ships the runtime, the config, and the parallel
-  `SchedulerHost` so the tick body is ready to bind when the vendored
-  workspace exists.
-- Per-region autosave and the WAL journal are M6 work; M2 relies on
-  Vanilla's global save-all.
+`/multiforge region list` prints, per world, each region's id, section count,
+the maximum number of chunks those sections can hold, and its state, followed
+by the pins. `/multiforge chunks <world>` prints the loaded chunk count per
+region. See [`multiforge-command.md`](multiforge-command.md) for the full
+command reference.
 
-## Test coverage
+## Tests
 
-- `ThreadedRegionizerTest` — merge on adjacency, split on bridge
-  removal, section coalescing.
-- `RegionizedTaskQueueTest` — FIFO ordering, orphan reroute,
-  exception isolation.
-- `AdaptiveSizingDriverTest` — SPLIT / MERGE / PARK / HOLD decision
-  matrix.
-- `ConfigCodecTest` — TOML round-trip, partial-key overlay,
-  invalid-enum fail-fast.
-- `MultiThreadedSchedulerHostTest` — end-to-end region/global/async
-  scheduling and repeating tasks against the parallel host.
-- `RegionThroughputBenchTest` — smoke check that both 1-worker and
-  many-worker runs produce positive throughput. Skipped unless
-  `-PrunBench=true`.
-
-For a full scaling curve, run
-`./gradlew :multiforge-runtime:test --tests RegionThroughputBenchTest -PrunBench=true`
-and look at the console output.
+- `ThreadedRegionizerTest`: merge on adjacency, split when a bridging
+  section unloads, per-section chunk counting.
+- `RegionizedTaskQueueTest`: FIFO ordering, orphan reroute, exception
+  isolation.
+- `ConfigCodecTest`: TOML round-trip, partial files, invalid values.
+- `MultiThreadedSchedulerHostTest`: region, global and async scheduling
+  against the parallel host.
