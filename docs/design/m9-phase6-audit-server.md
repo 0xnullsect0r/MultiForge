@@ -1,5 +1,11 @@
 # M9 Phase 6 wave A — downstream caller audit (server cohorts 6.1–6.7)
 
+> **Historical — superseded.** The M9 chunk-system fork this document describes was
+> retired: Vanilla's chunk system loads, ticks, lights and saves every chunk, and MultiForge
+> only tracks which region owns each loaded chunk. See `docs/design/barrier-tick-model.md`
+> (*Chunks*, *What this replaced*). Kept for the record; the classes and patches named here
+> no longer exist.
+
 **Status:** complete. All seven cohorts audited against the Phase 4/5 M9
 landing. Verdict: **all CLEAN**; five regression tests added under
 `multiforge-runtime/src/test/java/net/multiforge/runtime/chunk/regression/`

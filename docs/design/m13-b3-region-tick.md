@@ -1,5 +1,9 @@
 # Full B3 — Per-Region Entity/Block-Tick Wiring — Design
 
+> **Historical — superseded.** B3's free-running region tick was replaced by the barrier
+> tick model, which runs the same per-region phases inside Vanilla's own level tick; see
+> `docs/design/barrier-tick-model.md`. Kept for the record.
+
 **Status:** Task B3.0 of the B3 + M12 landing plan
 (`plans/bubbly-jumping-comet.md`). Freezes the contract that B3.1
 through B3.5 implement against; changes to any signature below require

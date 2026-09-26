@@ -1,5 +1,11 @@
 # MultiForge RegionFile (MCA) Format Contract
 
+> **Historical — superseded.** The M9 chunk-system fork this document describes was
+> retired: Vanilla's chunk system loads, ticks, lights and saves every chunk, and MultiForge
+> only tracks which region owns each loaded chunk. See `docs/design/barrier-tick-model.md`
+> (*Chunks*, *What this replaced*). Kept for the record; the classes and patches named here
+> no longer exist.
+
 *Phase 0 task 0.4 of the M9 landing plan. Freezes the byte-level contract
 that Phase 3 (`RegionFileHeader`/`Reader`/`Writer`/`Cache`) must obey so
 per-region autosave (Phase 5 task 5.3) can stop serializing on Vanilla's
