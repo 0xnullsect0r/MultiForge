@@ -92,6 +92,7 @@ public final class MetricsCollector {
     private TickStatsReply tickStats;
     private Double gameTimeTps;
     private Double sprintAvgMsPerTick;
+    private int sprintCompletions;
     private Long sprintTicksPerSecond;
 
     /** Feeds one {@code /tick query} RCON reply. Safe to call repeatedly; unmatched text is ignored. */
@@ -142,6 +143,7 @@ public final class MetricsCollector {
     public synchronized void recordLogLine(String line) {
         Matcher sprint = SPRINT_COMPLETED.matcher(line);
         if (sprint.find()) {
+            sprintCompletions++;
             sprintTicksPerSecond = Long.parseLong(sprint.group(1));
             sprintAvgMsPerTick = Double.parseDouble(sprint.group(2));
             return;
@@ -150,6 +152,11 @@ public final class MetricsCollector {
         if (lag.find()) {
             lagSpikesMs.add(Double.parseDouble(lag.group(1)));
         }
+    }
+
+    /** How many "Sprint completed" log lines have been seen. */
+    public synchronized int sprintCompletions() {
+        return sprintCompletions;
     }
 
     /** Whether a "Sprint completed" (or equivalent) log line has been observed yet. */

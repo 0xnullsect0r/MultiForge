@@ -220,7 +220,8 @@ public final class HeadlessServerRunner implements AutoCloseable {
             try {
                 rcon.command("list");
                 String reply = rcon.command("multiforge tickstats reset");
-                hasTickStats = reply.contains("reset");
+                // A stock server echoes the unknown command back, "reset" included.
+                hasTickStats = reply.contains("Tick statistics reset");
                 return true;
             } catch (IOException e) {
                 lastError = e;

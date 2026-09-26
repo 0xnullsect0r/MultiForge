@@ -106,7 +106,20 @@ public final class SwarmBench {
                 ok = true;
             }
 
+            if (runner.hasTickStats()) {
+                ProbeSummary probes = ProbeSummary.parse(runner.rcon().command("multiforge probes"));
+                long violations = probes.violations();
+                long overruns = probes.overruns();
+                extra.put("ownership_violations", violations);
+                extra.put("region_overruns", overruns);
+                extra.put("reroutes", probes.reroutes());
+                extra.put("reroute_mismatches", probes.rerouteMismatches());
+                if (violations > 0)
+                    extra.put("violation_counters", probes.violationCounters().toString());
+                if (Boolean.getBoolean("bench.failOnViolations") && (violations > 0 || overruns > 0)) ok = false;
+            }
             boolean cleanStop = runner.shutdown(Duration.ofSeconds(2));
+            if (Boolean.getBoolean("bench.failOnViolations") && !cleanStop) ok = false;
             BenchResult result = BenchResult.from(
                     "swarm", workers, ticks, elapsedMs(start), metrics, runner.rssPeakMb(), true, cleanStop, extra);
             Files.createDirectories(outputFile.toAbsolutePath().getParent());

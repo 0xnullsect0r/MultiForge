@@ -93,6 +93,7 @@ public final class BotSwarm implements AutoCloseable {
     private final AtomicLong corrections = new AtomicLong();
     private final Map<String, String> disconnects = new ConcurrentHashMap<>();
     private volatile boolean closing;
+    private volatile boolean walking = true;
 
     public BotSwarm(String host, int port, int renderDistance) {
         this.host = host;
@@ -126,6 +127,11 @@ public final class BotSwarm implements AutoCloseable {
             Thread.sleep(200);
         }
         return joined.get();
+    }
+
+    /** Whether bots walk each tick (default) or stand where the server put them. */
+    public void setWalking(boolean walking) {
+        this.walking = walking;
     }
 
     /** Let bots start placing and breaking blocks (after they were made creative). */
@@ -272,9 +278,11 @@ public final class BotSwarm implements AutoCloseable {
         synchronized void tick() {
             if (!inWorld || !session.isConnected()) return;
             ticks++;
-            if (rnd.nextInt(40) == 0) heading += (rnd.nextDouble() - 0.5) * Math.PI;
-            x += Math.cos(heading) * STEP;
-            z += Math.sin(heading) * STEP;
+            if (walking) {
+                if (rnd.nextInt(40) == 0) heading += (rnd.nextDouble() - 0.5) * Math.PI;
+                x += Math.cos(heading) * STEP;
+                z += Math.sin(heading) * STEP;
+            }
             session.send(new ServerboundMovePlayerPosPacket(false, x, y, z));
 
             if (blockWork && ticks % ACTION_PERIOD_TICKS == 0) {
