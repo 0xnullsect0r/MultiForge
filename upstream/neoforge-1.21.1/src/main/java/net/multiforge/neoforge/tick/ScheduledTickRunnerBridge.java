@@ -21,7 +21,6 @@ import net.multiforge.api.world.ChunkPos;
 import net.multiforge.api.world.WorldRef;
 import net.multiforge.neoforge.RegionizedTickCoordinator;
 import net.multiforge.runtime.chunk.ChunkHolderManager;
-import net.multiforge.runtime.chunk.NewChunkHolder;
 import net.multiforge.runtime.diagnostics.ProbeRegistry;
 import net.multiforge.runtime.diagnostics.ViolationLogger;
 import net.multiforge.runtime.ownership.Domain;
@@ -36,14 +35,12 @@ import net.neoforged.neoforge.event.level.LevelEvent;
 /**
  * Vanilla-backed {@link ScheduledTickRunner} implementation (B3.2, docs/
  * design/m13-b3-region-tick.md §5.1). Walks {@link
- * Region#ownedChunkSnapshot()} for the region being ticked and, for each
- * owned chunk with a live {@link NewChunkHolder}, drains that chunk's
- * scheduled block/fluid ticks via {@code
- * ServerLevel.mfTickBlockFluidTicksForChunk} — the wrap-and-rename
- * extraction the {@code 02-region-tick/net/minecraft/server/level/
- * ServerLevel.java.patch} / {@code LevelTicks.java.patch} hunks expose.
+ * Region#ownedChunkSnapshot()} for the region being ticked and runs the due
+ * scheduled block/fluid ticks of its owned chunks, then the block events
+ * they queued, via {@code ServerLevel.mfTickRegionScheduledTicks} (the
+ * {@code 02-region-tick} ServerLevel/LevelTicks patches).
  *
- * <p>Registered once from {@code MultiForgeGlobalSystemsInit.install} on
+ * <p>Registered once from {@code RegionRuntimeInit.install} on
  * {@code ServerAboutToStart} via {@link
  * MultiThreadedSchedulerHost#setBlockFluidRunner}. {@link #installOnEventBus}
  * additionally wires the {@code LevelEvent.Load}/{@code Unload} listeners
@@ -51,9 +48,7 @@ import net.neoforged.neoforge.event.level.LevelEvent;
  * ServerLevel} — the {@code multiforge-runtime} module is MC-free and has
  * no such mapping of its own (only {@code WorldRef → RegionId} via {@code
  * MultiThreadedSchedulerHost#worldForRegion}), so the fork bridge owns
- * this side table itself, the same registration shape {@code
- * MultiForgeGlobalSystemsInit} already uses for the B2low/B2high per-level
- * targets.
+ * this side table itself.
  */
 public final class ScheduledTickRunnerBridge implements ScheduledTickRunner {
     private static final AtomicBoolean INSTALLED = new AtomicBoolean(false);
@@ -117,14 +112,18 @@ public final class ScheduledTickRunnerBridge implements ScheduledTickRunner {
         if (world == null) return; // region died since this phase was scheduled
         ServerLevel level = LEVELS.get(world.dimensionId());
         if (level == null) return; // level not (yet) registered — LevelEvent.Load hasn't fired
+        // Random ticks and natural spawning first, as in Vanilla's level tick
+        // (ServerChunkCache.tickChunks queued them for this region).
+        level.getChunkSource().mfTickRegionChunks(region.id().value());
         ChunkHolderManager manager = host.chunkManagerForOrNull(world);
-        if (manager == null) return; // no chunk shadowed for this world yet
+        if (manager == null) return; // no chunk of this world indexed yet
 
         List<ChunkPos> owned = region.ownedChunkSnapshot();
+        List<net.minecraft.world.level.ChunkPos> chunks = new java.util.ArrayList<>(owned.size());
         for (ChunkPos pos : owned) {
-            NewChunkHolder holder = manager.holderAt(pos);
-            if (holder == null) continue; // holder unloaded between snapshot and this loop turn
-            level.mfTickBlockFluidTicksForChunk(holder);
+            if (manager.holderAt(pos) == null) continue; // holder unloaded between snapshot and now
+            chunks.add(new net.minecraft.world.level.ChunkPos(pos.x(), pos.z()));
         }
+        level.mfTickRegionScheduledTicks(region.id().value(), chunks);
     }
 }

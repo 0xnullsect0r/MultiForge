@@ -1,5 +1,11 @@
 # M9 Review — /67 Round 5
 
+> **Historical — superseded.** The M9 chunk-system fork this document describes was
+> retired: Vanilla's chunk system loads, ticks, lights and saves every chunk, and MultiForge
+> only tracks which region owns each loaded chunk. See `docs/design/barrier-tick-model.md`
+> (*Chunks*, *What this replaced*). Kept for the record; the classes and patches named here
+> no longer exist.
+
 **Scope.** Every commit from `054f8f9` (Phase 0 design freeze) through `HEAD`
 after the sibling verification-runbook commit (`9a6dde7`). 41 commits cover
 Phase 1 blocker fixes, Phase 2 NewChunkHolder extension, Phase 3 MCA I/O,

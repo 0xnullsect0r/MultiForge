@@ -16,88 +16,172 @@ import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStreamReader;
 import java.io.UncheckedIOException;
+import java.net.InetAddress;
+import java.net.ServerSocket;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Optional;
+import java.util.Map;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.util.stream.Stream;
 
 /**
- * Boots one headless MultiForge dev server — the vendored, patched
- * NeoForge fork under {@code upstream/neoforge-1.21.1} — drives it over
- * RCON, and tears it down.
+ * Boots one headless server from an installed server directory ({@link
+ * ServerInstall}), drives it over RCON, and tears it down.
  *
- * <p>This is the Java port of the shell-script pattern proven out by
- * hand at {@code scratchpad/capture.sh} while investigating the Phase
- * 7.2/7.3 determinism captures: run {@code ./gradlew :neoforge:runServer
- * -Dmultiforge.workers=N}, wait for {@code "RCON running on"} in the
- * boot log, drive it via RCON, {@code save-all flush} then {@code stop},
- * wait for the child JVM to exit (and force-kill it if it doesn't).
+ * <p>The JVM is this harness's own child process — launched straight from
+ * the installer's {@code unix_args.txt} with {@code $JAVA_HOME/bin/java}
+ * (or {@code java} on {@code PATH}) — so its pid, exit status and RSS are
+ * observed directly. The game and RCON ports are picked free per run, so
+ * two runners (a MultiForge server and a stock baseline) can coexist.
  *
- * <p>Talks to the server exclusively over TCP (RCON) and by tailing its
- * log file — no {@code net.minecraft.*} import anywhere in this class,
- * per CLAUDE.md's requirement that {@code multiforge-bench} stay
- * MC-free.
+ * <p>Talks to the server only over TCP (RCON, and the game port for {@link
+ * BotSwarm}) and by tailing its console log — no {@code net.minecraft.*}
+ * import, so {@code multiforge-bench} stays MC-free.
+ *
+ * <p>Timing comes from {@code /multiforge tickstats} when the server is
+ * MultiForge: every tick since {@link #beginMeasurement()}, with the true
+ * maximum and a TPS count over the last ten minutes of wall time. A stock
+ * NeoForge baseline has no such command, so there it falls back to
+ * vanilla's {@code /tick query} (last 100 ticks, no maximum) and the result
+ * says so ({@code timing_source}).
  */
 public final class HeadlessServerRunner implements AutoCloseable {
 
-    private static final Duration RCON_BOOT_TIMEOUT = Duration.ofSeconds(180);
+    private static final Duration RCON_BOOT_TIMEOUT = Duration.ofSeconds(300);
     private static final Duration RCON_IO_TIMEOUT = Duration.ofSeconds(30);
-    private static final Duration JVM_EXIT_TIMEOUT = Duration.ofSeconds(90);
-    private static final Path DEV_JDK = Path.of("/home/aric/.local/jdk/jdk-21.0.12.1+1");
+    private static final Duration JVM_EXIT_TIMEOUT = Duration.ofSeconds(300);
     private static final String RCON_PASSWORD = "multiforge";
-    private static final int RCON_PORT = 25575;
+    private static final Pattern LAST_NUMBER = Pattern.compile("(\\d+)");
 
     /**
-     * @param neoforgeWorkspaceDir path to {@code upstream/neoforge-1.21.1}
-     * @param workers value passed as {@code -Dmultiforge.workers=}
+     * @param install the installed server directory to run in
+     * @param workers value passed as {@code -Dmultiforge.workers=} (ignored by a stock server)
      * @param levelSeed fixed seed for reproducible captures
      * @param maxPlayers {@code server.properties} {@code max-players}
-     * @param modsSourceDir if non-null, copied into the run dir's {@code mods/} (atm10 profile)
-     * @param configSourceDir if non-null, copied into the run dir's {@code config/} (atm10 profile)
-     * @param extraJvmArgs extra whitespace-separated {@code -D}/{@code -X} flags appended to the launch command
+     * @param modsSourceDir if non-null, its jars become the run's {@code mods/}; otherwise {@code mods/} is emptied
+     * @param configSourceDir if non-null, copied over the run dir's {@code config/}
+     * @param extraJvmArgs extra whitespace-separated {@code -D}/{@code -X} flags for the server JVM
+     * @param serverProperties extra {@code server.properties} entries, overriding the defaults
+     * @param worldSource if non-null, copied in as the run's {@code world/}; otherwise the run starts a new world
      */
     public record Config(
-            Path neoforgeWorkspaceDir,
+            ServerInstall install,
             int workers,
             String levelSeed,
             int maxPlayers,
             Path modsSourceDir,
             Path configSourceDir,
-            String extraJvmArgs) {}
+            String extraJvmArgs,
+            Map<String, String> serverProperties,
+            Path worldSource) {
+
+        public Config {
+            serverProperties = serverProperties == null ? Map.of() : Map.copyOf(serverProperties);
+            extraJvmArgs = extraJvmArgs == null ? "" : extraJvmArgs;
+        }
+
+        public static Config of(ServerInstall install, int workers, String levelSeed) {
+            return new Config(install, workers, levelSeed, 20, null, null, "", Map.of(), null);
+        }
+
+        public Config withMaxPlayers(int n) {
+            return new Config(
+                    install,
+                    workers,
+                    levelSeed,
+                    n,
+                    modsSourceDir,
+                    configSourceDir,
+                    extraJvmArgs,
+                    serverProperties,
+                    worldSource);
+        }
+
+        public Config withMods(Path mods, Path config) {
+            return new Config(
+                    install, workers, levelSeed, maxPlayers, mods, config, extraJvmArgs, serverProperties, worldSource);
+        }
+
+        public Config withExtraJvmArgs(String args) {
+            return new Config(
+                    install,
+                    workers,
+                    levelSeed,
+                    maxPlayers,
+                    modsSourceDir,
+                    configSourceDir,
+                    args,
+                    serverProperties,
+                    worldSource);
+        }
+
+        public Config withWorld(Path world) {
+            return new Config(
+                    install,
+                    workers,
+                    levelSeed,
+                    maxPlayers,
+                    modsSourceDir,
+                    configSourceDir,
+                    extraJvmArgs,
+                    serverProperties,
+                    world);
+        }
+
+        public Config withProperties(Map<String, String> props) {
+            Map<String, String> merged = new LinkedHashMap<>(serverProperties);
+            merged.putAll(props);
+            return new Config(
+                    install,
+                    workers,
+                    levelSeed,
+                    maxPlayers,
+                    modsSourceDir,
+                    configSourceDir,
+                    extraJvmArgs,
+                    merged,
+                    worldSource);
+        }
+    }
 
     private final Config config;
     private final Path runDir;
     private final Path bootLog;
+    private final int gamePort;
+    private final int rconPort;
 
-    private Process gradleProcess;
+    private Process serverProcess;
     private RconClient rcon;
-    private long serverPid = -1;
     private MetricsCollector metricsSink;
+    private boolean hasTickStats;
+    private long windowStartGameTime = -1;
+    private long windowStartNanos;
 
-    private final AtomicLong heapPeakKb = new AtomicLong();
+    private final AtomicLong rssPeakKb = new AtomicLong();
     private final AtomicBoolean running = new AtomicBoolean(false);
-    private Thread rssSamplerThread;
-    private Thread logTailThread;
 
-    public HeadlessServerRunner(Config config, Path bootLogPath) {
+    public HeadlessServerRunner(Config config, Path bootLogPath) throws IOException {
         this.config = config;
-        this.runDir = config.neoforgeWorkspaceDir().resolve("projects/neoforge/run/server");
+        this.runDir = config.install().dir();
         this.bootLog = bootLogPath;
+        this.gamePort = freePort();
+        this.rconPort = freePort();
     }
 
     /**
-     * Boots the server. Returns {@code false} (rather than throwing) if
-     * RCON never comes up within {@link #RCON_BOOT_TIMEOUT} — a boot
-     * failure is a legitimate bench outcome ({@code boot_ok: false} in
-     * the result JSON), not necessarily a harness bug.
+     * Boots the server. Returns {@code false} (rather than throwing) if RCON
+     * never comes up within {@link #RCON_BOOT_TIMEOUT} or the JVM exits first —
+     * a boot failure is a legitimate bench outcome ({@code boot_ok: false}).
      */
     public boolean boot(MetricsCollector metricsSink) throws IOException, InterruptedException {
         this.metricsSink = metricsSink;
@@ -106,194 +190,175 @@ public final class HeadlessServerRunner implements AutoCloseable {
         }
         prepareRunDir();
 
-        List<String> cmd = new ArrayList<>();
-        cmd.add(config.neoforgeWorkspaceDir()
-                .resolve("gradlew")
-                .toAbsolutePath()
-                .toString());
-        cmd.add(":neoforge:runServer");
-        cmd.add("-Dmultiforge.workers=" + config.workers());
-        if (config.extraJvmArgs() != null && !config.extraJvmArgs().isBlank()) {
-            for (String part : config.extraJvmArgs().trim().split("\\s+")) {
-                cmd.add(part);
-            }
+        List<String> jvmArgs = new ArrayList<>();
+        jvmArgs.add("-Dmultiforge.workers=" + config.workers());
+        if (!config.extraJvmArgs().isBlank()) {
+            jvmArgs.addAll(List.of(config.extraJvmArgs().trim().split("\\s+")));
         }
-
-        ProcessBuilder pb = new ProcessBuilder(cmd);
-        pb.directory(config.neoforgeWorkspaceDir().toFile());
+        ProcessBuilder pb = new ProcessBuilder(config.install().command(jvmArgs));
+        pb.directory(runDir.toFile());
         pb.redirectErrorStream(true);
         pb.redirectOutput(bootLog.toFile());
-
-        var env = pb.environment();
-        // Force, not putIfAbsent: this is a nested `gradlew
-        // :neoforge:runServer` invocation, and a GRADLE_OPTS already set
-        // in the environment this JVM was launched from (e.g. the outer
-        // `./gradlew :multiforge-bench:vanilla` invocation's own shell)
-        // would otherwise leak straight through to it — confirmed live
-        // during Phase 7.4a implementation to starve the nested build's
-        // daemon (3 GiB was not enough for the NeoForge/NeoForm build
-        // graph) even though the outer build ran fine on it.
-        env.put("GRADLE_OPTS", "-Xmx6G");
-        if (Files.isDirectory(DEV_JDK)) {
-            env.put("JAVA_HOME", DEV_JDK.toString());
-            env.put("PATH", DEV_JDK.resolve("bin") + ":" + env.getOrDefault("PATH", ""));
-        }
+        pb.redirectInput(ProcessBuilder.Redirect.PIPE);
 
         running.set(true);
-        gradleProcess = pb.start();
+        serverProcess = pb.start();
+        startRssSampler();
+        startLogTail();
 
-        boolean rconUp = waitForBootLogPattern("RCON running on", RCON_BOOT_TIMEOUT);
-        if (!rconUp) {
+        if (!waitForBootLogPattern("RCON running on", RCON_BOOT_TIMEOUT)) {
             running.set(false);
             return false;
         }
 
-        serverPid = findServerJvmPid().orElse(-1L);
-        startRssSampler();
-        startLogTail();
-
-        rcon = new RconClient("127.0.0.1", RCON_PORT, RCON_PASSWORD, RCON_IO_TIMEOUT);
-        // The RCON bind-log line lands a beat before the socket reliably
-        // accepts+auths a client in practice; probe with a real command
-        // (rather than a blind sleep) until it succeeds or times out.
+        rcon = new RconClient("127.0.0.1", rconPort, RCON_PASSWORD, RCON_IO_TIMEOUT);
+        // The RCON bind line lands a beat before the socket reliably accepts
+        // and authenticates; probe with a real command until it answers.
         long probeDeadline = System.currentTimeMillis() + 15_000;
-        boolean rconReady = false;
         IOException lastError = null;
         while (System.currentTimeMillis() < probeDeadline) {
             try {
                 rcon.command("list");
-                rconReady = true;
-                break;
+                String reply = rcon.command("multiforge tickstats reset");
+                // A stock server echoes the unknown command back, "reset" included.
+                hasTickStats = reply.contains("Tick statistics reset");
+                return true;
             } catch (IOException e) {
                 lastError = e;
                 Thread.sleep(500);
             }
         }
-        if (!rconReady) {
-            running.set(false);
-            throw new IOException("RCON never became responsive after boot", lastError);
-        }
-        return true;
+        running.set(false);
+        throw new IOException("RCON never became responsive after boot", lastError);
     }
 
     public RconClient rcon() {
         return rcon;
     }
 
-    public long serverPid() {
-        return serverPid;
+    public int gamePort() {
+        return gamePort;
     }
 
-    public long heapPeakMb() {
-        return heapPeakKb.get() / 1024;
+    public long serverPid() {
+        return serverProcess == null ? -1 : serverProcess.pid();
+    }
+
+    /** Peak resident set size of the server JVM, sampled once a second. */
+    public long rssPeakMb() {
+        return rssPeakKb.get() / 1024;
+    }
+
+    /** Whether the server has {@code /multiforge tickstats} (false for a stock NeoForge baseline). */
+    public boolean hasTickStats() {
+        return hasTickStats;
+    }
+
+    public boolean isAlive() {
+        return serverProcess != null && serverProcess.isAlive();
+    }
+
+    /** Start the measured window: resets {@code /multiforge tickstats} so boot and setup ticks don't count. */
+    public void beginMeasurement() throws IOException {
+        if (hasTickStats) rcon.command("multiforge tickstats reset");
+        windowStartGameTime = gameTime();
+        windowStartNanos = System.nanoTime();
+    }
+
+    /** Close the measured window: folds the tick statistics (or a {@code /tick query} fallback) into the sink. */
+    public void endMeasurement() {
+        try {
+            long ticks = gameTime() - windowStartGameTime;
+            if (windowStartGameTime >= 0 && ticks >= 0) {
+                metricsSink.recordGameTimeWindow(ticks, (System.nanoTime() - windowStartNanos) / 1e9);
+            }
+        } catch (IOException e) {
+            System.err.println("bench: game time query failed: " + e.getMessage());
+        }
+        try {
+            if (hasTickStats) metricsSink.recordTickStats(rcon.command("multiforge tickstats"));
+        } catch (IOException e) {
+            System.err.println("bench: tickstats query failed: " + e.getMessage());
+        }
+        safeQuery();
     }
 
     /**
      * Freezes the tick loop, sprints exactly {@code ticks} game-ticks via
-     * {@code /tick sprint}, and waits for the resulting "Sprint
-     * completed" (or "Nothing to sprint") log line.
+     * {@code /tick sprint}, and waits for the "Sprint completed" log line.
      *
-     * <p><b>Why sprint, not real time:</b> {@code /tick sprint} runs the
-     * requested ticks back-to-back with the normal 50ms-per-tick pacing
-     * disabled, so a 12000-tick (10 game-minute) run typically finishes
-     * in well under a second of wall-clock time on an idle world. The
-     * MSPT numbers it produces still measure genuine per-tick
-     * computation cost — {@code ServerTickRateManager} times each tick
-     * the same way whether or not it then sleeps to pace to 20 TPS — so
-     * this is a fast, repeatable way to gather the compute-cost
-     * distribution ({@link MetricsCollector}) without waiting out 10
-     * real minutes for an idle vanilla or ATM10-idle-boot profile. The
-     * swarm profile instead needs a real sustained-load window (see
-     * {@code SwarmBench}'s churn loop) since its whole point is whether
-     * concurrent load holds 20 TPS over time, not raw per-tick cost.
+     * <p>A sprint runs ticks back to back with no 50 ms pacing, so it measures
+     * per-tick compute cost quickly; the per-tick durations {@code tickstats}
+     * records are the same whether or not the server then sleeps. It does not
+     * measure whether real-time load holds 20 TPS — the swarm profile does.
      */
     public void runSprintProfile(long ticks) throws IOException, InterruptedException {
         rcon.command("tick freeze");
+        beginMeasurement();
         rcon.command("tick sprint " + ticks);
 
-        long timeoutMs = Math.max(30_000, ticks / 5);
+        long timeoutMs = Math.max(60_000, ticks * 20);
         long deadline = System.currentTimeMillis() + timeoutMs;
-        while (System.currentTimeMillis() < deadline) {
-            if (metricsSink.sawSprintCompleted()) {
-                break;
-            }
-            if (!gradleProcess.isAlive()) {
-                break;
-            }
+        while (System.currentTimeMillis() < deadline && !metricsSink.sawSprintCompleted() && isAlive()) {
             Thread.sleep(200);
         }
-        // One more query while frozen post-sprint, to capture the
-        // last-~100-tick rolling-window percentiles at the tail of the run.
-        safeQuery();
+        endMeasurement();
+        rcon.command("tick unfreeze");
+    }
+
+    /** The overworld's game time ({@code /time query gametime}), or -1 when the reply has no number. */
+    public long gameTime() throws IOException {
+        Matcher m = LAST_NUMBER.matcher(rcon.command("time query gametime"));
+        long value = -1;
+        while (m.find()) value = Long.parseLong(m.group(1));
+        return value;
     }
 
     /** Issues one {@code /tick query} and feeds the reply to the metrics sink; failures are swallowed. */
     public void safeQuery() {
         try {
-            String reply = rcon.command("tick query");
-            metricsSink.recordTickQueryReply(reply);
+            metricsSink.recordTickQueryReply(rcon.command("tick query"));
         } catch (IOException e) {
-            // Best-effort: RCON can be briefly unresponsive while the
-            // server thread is mid-sprint. A missed sample just means one
-            // fewer percentile data point, not a failed run.
+            // RCON can be briefly slow under load; one missed sample is not a failed run.
         }
     }
 
     /**
-     * Flushes and stops the server, then waits for the child JVM to
-     * exit, force-killing it if it doesn't within {@link
-     * #JVM_EXIT_TIMEOUT}.
+     * Flushes and stops the server, then waits for the JVM to exit,
+     * force-killing it after {@link #JVM_EXIT_TIMEOUT}.
      *
-     * @return {@code true} if {@code save-all}/{@code stop} both
-     *     round-tripped over RCON and the JVM exited on its own.
+     * @return {@code true} if {@code save-all flush} and {@code stop} both
+     *     round-tripped over RCON and the JVM exited on its own with status 0.
      */
     public boolean shutdown(Duration settleBeforeStop) throws InterruptedException {
         boolean cleanStop = true;
+        if (settleBeforeStop != null) {
+            Thread.sleep(settleBeforeStop.toMillis());
+        }
         try {
-            if (settleBeforeStop != null) {
-                Thread.sleep(settleBeforeStop.toMillis());
-            }
-            rcon.command("save-all flush");
-            Thread.sleep(2000);
+            // `stop` saves every level itself. A separate `save-all flush` of a big
+            // world can outlast the RCON read timeout, and then `stop` was never sent.
             rcon.command("stop");
         } catch (IOException e) {
+            // The server may close RCON before it answers; the exit code decides.
+        }
+        if (!serverProcess.waitFor(JVM_EXIT_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS)) {
+            cleanStop = false;
+            serverProcess.destroy();
+            if (!serverProcess.waitFor(10, TimeUnit.SECONDS)) serverProcess.destroyForcibly();
+            serverProcess.waitFor(10, TimeUnit.SECONDS);
+        } else if (serverProcess.exitValue() != 0) {
             cleanStop = false;
         }
-
-        long deadline = System.currentTimeMillis() + JVM_EXIT_TIMEOUT.toMillis();
-        while (isServerAlive() && System.currentTimeMillis() < deadline) {
-            Thread.sleep(1000);
-        }
-        if (isServerAlive()) {
-            cleanStop = false;
-            ProcessHandle.of(serverPid).ifPresent(ProcessHandle::destroy);
-            Thread.sleep(3000);
-            ProcessHandle.of(serverPid).ifPresent(ProcessHandle::destroyForcibly);
-        }
-
         running.set(false);
-        if (gradleProcess != null) {
-            gradleProcess.waitFor(10, TimeUnit.SECONDS);
-        }
         return cleanStop;
-    }
-
-    private boolean isServerAlive() {
-        return serverPid > 0
-                && ProcessHandle.of(serverPid).map(ProcessHandle::isAlive).orElse(false);
     }
 
     @Override
     public void close() {
         running.set(false);
-        // RconClient opens/closes a fresh connection per command — see
-        // its class javadoc — so there is no persistent socket to close
-        // here.
-        if (isServerAlive()) {
-            ProcessHandle.of(serverPid).ifPresent(ProcessHandle::destroyForcibly);
-        }
-        if (gradleProcess != null && gradleProcess.isAlive()) {
-            gradleProcess.destroyForcibly();
+        if (serverProcess != null && serverProcess.isAlive()) {
+            serverProcess.destroyForcibly();
         }
     }
 
@@ -301,33 +366,48 @@ public final class HeadlessServerRunner implements AutoCloseable {
 
     private void prepareRunDir() throws IOException {
         deleteRecursively(runDir.resolve("world"));
+        if (config.worldSource() != null) copyDirectory(config.worldSource(), runDir.resolve("world"));
         deleteRecursively(runDir.resolve("logs"));
         deleteRecursively(runDir.resolve("crash-reports"));
         Files.createDirectories(runDir);
         Files.writeString(runDir.resolve("eula.txt"), "eula=true\n");
         Files.writeString(runDir.resolve("server.properties"), serverProperties());
 
+        deleteRecursively(runDir.resolve("mods"));
+        Files.createDirectories(runDir.resolve("mods"));
         if (config.modsSourceDir() != null && Files.isDirectory(config.modsSourceDir())) {
-            deleteRecursively(runDir.resolve("mods"));
             copyDirectory(config.modsSourceDir(), runDir.resolve("mods"));
         }
         if (config.configSourceDir() != null && Files.isDirectory(config.configSourceDir())) {
-            deleteRecursively(runDir.resolve("config"));
             copyDirectory(config.configSourceDir(), runDir.resolve("config"));
         }
     }
 
     private String serverProperties() {
-        return "level-seed=" + config.levelSeed() + "\n"
-                + "level-name=world\n"
-                + "motd=MultiForge bench\n"
-                + "online-mode=false\n"
-                + "spawn-protection=0\n"
-                + "max-players=" + config.maxPlayers() + "\n"
-                + "sync-chunk-writes=true\n"
-                + "enable-rcon=true\n"
-                + "rcon.password=" + RCON_PASSWORD + "\n"
-                + "rcon.port=" + RCON_PORT + "\n";
+        Map<String, String> props = new LinkedHashMap<>();
+        props.put("level-seed", config.levelSeed());
+        props.put("level-name", "world");
+        props.put("motd", "MultiForge bench");
+        props.put("online-mode", "false");
+        props.put("enforce-secure-profile", "false");
+        props.put("spawn-protection", "0");
+        props.put("max-players", String.valueOf(config.maxPlayers()));
+        props.put("server-ip", "127.0.0.1");
+        props.put("server-port", String.valueOf(gamePort));
+        props.put("sync-chunk-writes", "true");
+        props.put("enable-rcon", "true");
+        props.put("rcon.password", RCON_PASSWORD);
+        props.put("rcon.port", String.valueOf(rconPort));
+        props.putAll(config.serverProperties());
+        StringBuilder sb = new StringBuilder();
+        props.forEach((k, v) -> sb.append(k).append('=').append(v).append('\n'));
+        return sb.toString();
+    }
+
+    private static int freePort() throws IOException {
+        try (ServerSocket socket = new ServerSocket(0, 0, InetAddress.getLoopbackAddress())) {
+            return socket.getLocalPort();
+        }
     }
 
     private boolean waitForBootLogPattern(String needle, Duration timeout) throws InterruptedException, IOException {
@@ -339,7 +419,7 @@ public final class HeadlessServerRunner implements AutoCloseable {
                     return true;
                 }
             }
-            if (!gradleProcess.isAlive()) {
+            if (!serverProcess.isAlive()) {
                 return false;
             }
             Thread.sleep(1000);
@@ -347,94 +427,18 @@ public final class HeadlessServerRunner implements AutoCloseable {
         return false;
     }
 
-    /**
-     * Finds the actual server JVM's pid by scanning {@code /proc/*}/cmdline}
-     * directly for one whose argv names both the ModLauncher bootstrap
-     * and this run's own {@code --gameDir}.
-     *
-     * <p>Gradle's daemon forks the {@code :neoforge:runServer} JVM as a
-     * descendant of the long-lived Gradle Daemon process, not of the
-     * {@code gradlew} subprocess this class starts, so walking {@code
-     * gradleProcess}'s own children wouldn't find it — a system-wide
-     * scan is unavoidable.
-     *
-     * <p>This reads {@code /proc} directly rather than using {@code
-     * ProcessHandle.Info.commandLine()}: that API truncates at 4096
-     * characters on Linux (confirmed live during Phase 7.4a
-     * implementation — this server's real command line, with its full
-     * NeoForge/mod classpath, is comfortably longer than that, and both
-     * the {@code BootstrapLauncher} main-class token and the {@code
-     * --gameDir} value land past the truncation point, past every mod
-     * jar and library on the classpath). Matching on the bootstrap class
-     * name alone is not enough either: it also matches any unrelated
-     * Minecraft client/server on the same machine using the same
-     * launcher (this dev box also runs a CurseForge-launched client that
-     * trips the same substring), so the match additionally requires this
-     * run's own {@link #runDir}, which every {@code runServer}
-     * invocation passes as {@code --gameDir} and which is unique per
-     * {@link HeadlessServerRunner} instance.
-     */
-    private Optional<Long> findServerJvmPid() {
-        String gameDirMarker = runDir.toAbsolutePath().toString();
-        Path procRoot = Path.of("/proc");
-        if (!Files.isDirectory(procRoot)) {
-            // Not Linux (or no /proc) — this harness targets the Linux
-            // dev box CLAUDE.md describes; RSS sampling is best-effort
-            // and simply won't have a pid to sample elsewhere.
-            return Optional.empty();
-        }
-        try (Stream<Path> pidDirs = Files.list(procRoot)) {
-            return pidDirs.filter(p -> p.getFileName().toString().chars().allMatch(Character::isDigit))
-                    .filter(p -> {
-                        List<String> args = readCmdlineArgs(p.resolve("cmdline"));
-                        boolean hasBootstrap =
-                                args.stream().anyMatch(a -> a.contains("bootstraplauncher.BootstrapLauncher"));
-                        boolean hasGameDir = args.stream().anyMatch(a -> a.equals(gameDirMarker));
-                        return hasBootstrap && hasGameDir;
-                    })
-                    .map(p -> Long.parseLong(p.getFileName().toString()))
-                    .findFirst();
-        } catch (IOException e) {
-            return Optional.empty();
-        }
-    }
-
-    /** Reads {@code /proc/<pid>/cmdline}'s NUL-separated argv, or an empty list if it can't be read (process gone, permission). */
-    private static List<String> readCmdlineArgs(Path cmdlinePath) {
-        try {
-            byte[] raw = Files.readAllBytes(cmdlinePath);
-            List<String> args = new ArrayList<>();
-            int start = 0;
-            for (int i = 0; i < raw.length; i++) {
-                if (raw[i] == 0) {
-                    args.add(new String(raw, start, i - start, StandardCharsets.UTF_8));
-                    start = i + 1;
-                }
-            }
-            if (start < raw.length) {
-                args.add(new String(raw, start, raw.length - start, StandardCharsets.UTF_8));
-            }
-            return args;
-        } catch (IOException e) {
-            return List.of();
-        }
-    }
-
     private void startRssSampler() {
-        if (serverPid <= 0) {
-            return;
-        }
-        rssSamplerThread = new Thread(
+        Thread rssSamplerThread = new Thread(
                 () -> {
-                    Path status = Path.of("/proc/" + serverPid + "/status");
+                    Path status = Path.of("/proc/" + serverProcess.pid() + "/status");
                     while (running.get()) {
                         try {
-                            if (Files.exists(status)) {
+                            if (running.get() && Files.exists(status)) {
                                 for (String line : Files.readAllLines(status)) {
                                     if (line.startsWith("VmRSS:")) {
                                         String digits = line.replaceAll("[^0-9]", "");
                                         if (!digits.isEmpty()) {
-                                            heapPeakKb.accumulateAndGet(Long.parseLong(digits), Math::max);
+                                            rssPeakKb.accumulateAndGet(Long.parseLong(digits), Math::max);
                                         }
                                         break;
                                     }
@@ -455,11 +459,11 @@ public final class HeadlessServerRunner implements AutoCloseable {
     }
 
     private void startLogTail() {
-        logTailThread = new Thread(
+        Thread logTailThread = new Thread(
                 () -> {
                     try (BufferedReader reader = new BufferedReader(
                             new InputStreamReader(Files.newInputStream(bootLog), StandardCharsets.UTF_8))) {
-                        while (running.get() || gradleProcess.isAlive()) {
+                        while (running.get() || serverProcess.isAlive()) {
                             String line = reader.readLine();
                             if (line == null) {
                                 Thread.sleep(300);
@@ -477,7 +481,7 @@ public final class HeadlessServerRunner implements AutoCloseable {
         logTailThread.start();
     }
 
-    private static void deleteRecursively(Path dir) throws IOException {
+    static void deleteRecursively(Path dir) throws IOException {
         if (!Files.exists(dir)) {
             return;
         }
@@ -492,7 +496,7 @@ public final class HeadlessServerRunner implements AutoCloseable {
         }
     }
 
-    private static void copyDirectory(Path src, Path dst) throws IOException {
+    static void copyDirectory(Path src, Path dst) throws IOException {
         Files.createDirectories(dst);
         try (Stream<Path> walk = Files.walk(src)) {
             for (Path p : (Iterable<Path>) walk::iterator) {

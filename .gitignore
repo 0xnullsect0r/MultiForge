@@ -99,3 +99,8 @@ node_modules/
 
 # Claude Code session state (subagent worktrees, plans, etc.).
 .claude/
+.kotlin/
+
+# jqwik failure database (property-test shrink cache)
+.jqwik-database
+__pycache__/

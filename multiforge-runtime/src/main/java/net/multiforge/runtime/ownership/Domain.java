@@ -27,8 +27,12 @@ public enum Domain {
     ENTITY,
 
     /**
-     * The dedicated global-region thread. Owns weather, time, world border,
-     * gamerules, ender dragon, wither, raids, scoreboards.
+     * Global work. On a NeoForge server the world-wide systems (weather,
+     * time, world border, raids, the dragon fight) run in Vanilla's code on
+     * the server thread; the synthetic global region that runs {@code
+     * ServerDomains.global()} tasks ticks under a REGION token for its own
+     * id, which {@link OwnershipEnforcer#canMutateAt} allows everywhere.
+     * Only {@code SingleThreadedSchedulerHost} stamps this domain.
      */
     GLOBAL,
 

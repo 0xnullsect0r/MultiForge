@@ -12,13 +12,14 @@
  */
 package net.multiforge.runtime.config;
 
+import com.electronwill.nightconfig.core.UnmodifiableConfig;
+import com.electronwill.nightconfig.core.io.ParsingException;
+import com.electronwill.nightconfig.toml.TomlParser;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Locale;
-import org.tomlj.Toml;
-import org.tomlj.TomlParseResult;
 
 /**
  * TOML read/write for {@link MultiForgeConfig}. Deliberately minimal —
@@ -38,27 +39,18 @@ public final class ConfigCodec {
     }
 
     public static MultiForgeConfig parse(String toml) {
-        TomlParseResult r = Toml.parse(toml);
-        if (r.hasErrors()) {
-            String err = r.errors().stream().map(Object::toString).findFirst().orElse("<unknown>");
-            throw new IllegalArgumentException("Invalid multiforge-server.toml: " + err);
-        }
+        UnmodifiableConfig r = parseToml(toml, "multiforge-server.toml");
         MultiForgeConfig d = MultiForgeConfig.defaults();
         int cores = intOr(r, "mtserver.cores", d.cores());
         int tpc = intOr(r, "mtserver.threadsPerCore", d.threadsPerCore());
         MultiForgeConfig.Mode mode = enumOr(r, "mtserver.mode", MultiForgeConfig.Mode.class, d.mode());
         int regionSize = intOr(r, "region.size", d.regionSize());
-        MultiForgeConfig.RegionMode regionMode =
-                enumOr(r, "region.mode", MultiForgeConfig.RegionMode.class, d.regionMode(), s -> s.replace('-', '_')
-                        .toUpperCase(Locale.ROOT));
-        double splitT = doubleOr(r, "region.msptSplitThreshold", d.msptSplitThreshold());
-        double mergeT = doubleOr(r, "region.msptMergeThreshold", d.msptMergeThreshold());
         MultiForgeConfig.ViolationPolicy vp = enumOr(
                 r, "violations.policy", MultiForgeConfig.ViolationPolicy.class, d.violationPolicy(), s -> s.replace(
                                 '-', '_')
                         .toUpperCase(Locale.ROOT));
         int warnPerMin = intOr(r, "violations.warnPerMin", d.warnPerMin());
-        return new MultiForgeConfig(cores, tpc, mode, regionSize, regionMode, splitT, mergeT, vp, warnPerMin);
+        return new MultiForgeConfig(cores, tpc, mode, regionSize, vp, warnPerMin);
     }
 
     public static String render(MultiForgeConfig c) {
@@ -72,12 +64,9 @@ public final class ConfigCodec {
         sb.append("threadsPerCore = ").append(c.threadsPerCore()).append("\n");
         sb.append("mode = \"").append(c.mode().name().toLowerCase(Locale.ROOT)).append("\"\n\n");
         sb.append("[region]\n");
-        sb.append("size = ").append(c.regionSize()).append("\n");
-        sb.append("mode = \"")
-                .append(c.regionMode().name().toLowerCase(Locale.ROOT).replace('_', '-'))
-                .append("\"\n");
-        sb.append("msptSplitThreshold = ").append(c.msptSplitThreshold()).append("\n");
-        sb.append("msptMergeThreshold = ").append(c.msptMergeThreshold()).append("\n\n");
+        sb.append("# Sections are 2^size chunks on a side (4 = 16). `/multiforge region size <chunks>`\n");
+        sb.append("# takes the edge in chunks instead.\n");
+        sb.append("size = ").append(c.regionSize()).append("\n\n");
         sb.append("[violations]\n");
         sb.append("policy = \"")
                 .append(c.violationPolicy().name().toLowerCase(Locale.ROOT).replace('_', '-'))
@@ -87,35 +76,48 @@ public final class ConfigCodec {
     }
 
     public static void save(Path file, MultiForgeConfig c) throws IOException {
-        Path parent = file.getParent();
-        if (parent != null) Files.createDirectories(parent);
-        Files.writeString(file, render(c), StandardCharsets.UTF_8);
+        AtomicFiles.writeString(file, render(c));
     }
 
-    private static int intOr(TomlParseResult r, String key, int fallback) {
-        Long v = r.getLong(key);
-        return v == null ? fallback : Math.toIntExact(v);
+    /**
+     * Parse TOML with night-config — the TOML library NeoForge itself ships, so
+     * the runtime adds no parser of its own to the server.
+     */
+    static UnmodifiableConfig parseToml(String toml, String fileName) {
+        try {
+            return new TomlParser().parse(toml);
+        } catch (ParsingException e) {
+            throw new IllegalArgumentException("Invalid " + fileName + ": " + e.getMessage(), e);
+        }
     }
 
-    private static double doubleOr(TomlParseResult r, String key, double fallback) {
-        Double d = r.getDouble(key);
-        if (d != null) return d;
-        Long l = r.getLong(key);
-        return l == null ? fallback : l.doubleValue();
+    private static Number number(UnmodifiableConfig r, String key) {
+        Object v = r.get(key);
+        if (v == null) return null;
+        if (v instanceof Number n && !(v instanceof Double) && !(v instanceof Float)) return n;
+        throw new IllegalArgumentException("Key '" + key + "' must be an integer, got: " + v);
     }
 
-    private static <E extends Enum<E>> E enumOr(TomlParseResult r, String key, Class<E> type, E fallback) {
+    private static int intOr(UnmodifiableConfig r, String key, int fallback) {
+        Number v = number(r, key);
+        return v == null ? fallback : Math.toIntExact(v.longValue());
+    }
+
+    private static <E extends Enum<E>> E enumOr(UnmodifiableConfig r, String key, Class<E> type, E fallback) {
         return enumOr(r, key, type, fallback, s -> s.toUpperCase(Locale.ROOT));
     }
 
     private static <E extends Enum<E>> E enumOr(
-            TomlParseResult r,
+            UnmodifiableConfig r,
             String key,
             Class<E> type,
             E fallback,
             java.util.function.Function<String, String> norm) {
-        String s = r.getString(key);
-        if (s == null) return fallback;
+        Object raw = r.get(key);
+        if (raw == null) return fallback;
+        if (!(raw instanceof String s)) {
+            throw new IllegalArgumentException("Key '" + key + "' must be a string, got: " + raw);
+        }
         try {
             return Enum.valueOf(type, norm.apply(s));
         } catch (IllegalArgumentException e) {

@@ -27,15 +27,7 @@ import net.multiforge.api.world.WorldRef;
 import org.junit.jupiter.api.Test;
 
 /**
- * Phase 4 task 4.5d — coverage for the routing invariant that {@link
- * net.multiforge.neoforge.chunk.MultiForgeLightEngine MultiForgeLightEngine}
- * relies on. Every mutating light call ({@code checkBlock},
- * {@code updateChunkStatus}, {@code updateSectionStatus}, and the batch
- * helpers) delegates to
- * {@link RegionizedTaskQueue#queueChunkTask(WorldRef, int, int, Runnable)}
- * — the facade itself extends {@code ThreadedLevelLightEngine} and cannot
- * be instantiated from the MC-free runtime module, so this suite exercises
- * the pure-Java queue semantics its correctness rests on:
+ * {@link RegionizedTaskQueue} routing, as used for every rerouted mutation:
  *
  * <ol>
  *   <li>owner resolution routes to the owning region's inbox,</li>

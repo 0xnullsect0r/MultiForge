@@ -8,7 +8,14 @@ Swap your `neoforge-<version>-server.jar` for MultiForge's. Your existing world,
 
 ## Status
 
-Pre-alpha. In active development. See [`docs/blueprint.md`](docs/blueprint.md) for the design and the roadmap.
+Pre-release, based on NeoForge **21.1.251** (Minecraft 1.21.1). A MultiForge server boots real modpacks, ticks its regions in parallel, and passes:
+
+- every NeoForge GameTest plus MultiForge's own region-tick tests;
+- a **vanilla-parity gate**: one fixed-seed world ticked on stock NeoForge and on MultiForge (1 and 4 workers) comes out identical, chunk for chunk;
+- live scenarios against stock NeoForge (cross-region teleports, a raid, the dragon fight, fixture mods that write across regions or assume a single thread);
+- a strict-mode swarm of real protocol clients with zero ownership violations.
+
+Numbers, and the runs that still need bigger hardware, are in [`docs/verification/README.md`](docs/verification/README.md). The design is [`docs/design/barrier-tick-model.md`](docs/design/barrier-tick-model.md); the history and roadmap are in [`docs/blueprint.md`](docs/blueprint.md).
 
 ---
 
@@ -45,7 +52,7 @@ directory, and leaves a `run.sh` that preflights the JDK. It needs internet on
 first run — the Minecraft server jar comes from Mojang and the patches are
 applied locally, since nothing derived from that jar may be redistributed.
 
-Rollback is documented in [docs/install.md § Rolling back](docs/install.md#rolling-back) — MultiForge's world data is a purely additive `world/multiforge/` subdirectory; your Vanilla world stays byte-compatible with upstream NeoForge.
+Rollback is documented in [docs/install.md § Rolling back](docs/install.md#rolling-back) — MultiForge saves the world through Vanilla's own code and adds nothing to it, so the world stays readable by upstream NeoForge; its settings live in `config/multiforge-*.toml`.
 
 ### 3. Pelican Panel / Pterodactyl egg
 
@@ -54,11 +61,12 @@ Panel hosts (Pelican Panel, Pterodactyl, forks) import `pelican-egg.json` from t
 ### In-game commands (op-only, once running)
 
 ```
-/multiforge config cores 8               # change worker-pool sizing
-/multiforge region mode player-only      # switch region partitioning
-/multiforge region list                  # see live regions
-/multiforge probe tps                    # TPS/MSPT histogram
-/multiforge probe event.dispatch         # event-routing counters (M12)
+/multiforge config cores 8               # resize the worker pool, live
+/multiforge region size 16               # region section size in chunks, live
+/multiforge region list                  # live regions per world
+/multiforge tickstats                    # mean/p50/p95/p99/max MSPT, 10-minute TPS
+/multiforge probes event.dispatch        # event-routing counters
+/multiforge help                         # everything else
 ```
 
 ---
@@ -67,11 +75,10 @@ Panel hosts (Pelican Panel, Pterodactyl, forks) import `pelican-egg.json` from t
 
 MultiForge is inspired by [Folia](https://github.com/PaperMC/Folia) but re-implements Folia's design against Vanilla Minecraft + NeoForge patches rather than porting Folia's Paper patch set. Key ideas:
 
-- **Regions own chunks.** Each region has one owning thread. All mutation of chunks / entities / block entities within a region happens on that thread.
-- **Regions form around players.** By default regions grow around clusters of players; hot regions split, cold regions merge.
-- **Cross-region access is automatic.** Any unaudited mod call that reaches into another region's data is silently rerouted to the owner thread via a task queue, with a rate-limited warn log. No mod needs to opt in.
-- **A dedicated `global region`** handles weather, time, world border, gamerules, ender dragon, wither, raids, scoreboards, and command dispatch.
-- **Per-region autosave + write-ahead journal.** No global save-all stall; crashes replay from the journal.
+- **Regions own chunks.** Loaded chunks group into regions (connected 16×16-chunk sections, so separate player bases are separate regions). Each tick, every region runs its chunks' random ticks and spawning, scheduled ticks, block events, entities and block entities on a worker, in parallel.
+- **Vanilla stays in charge of the rest.** The server thread runs Vanilla's loop — chunk loading and saving, lighting, weather, time, raids, the dragon fight, commands — and waits at a barrier while the regions tick. Vanilla's own code runs unchanged there, which keeps mixins that target it working.
+- **Cross-region access is automatic.** A mod call that reaches into another region is rerouted to the owner, still returning what Vanilla would, with a rate-limited warning. No mod needs to opt in.
+- **Mods that assume one thread keep working.** Event listeners of mods classified `legacy` (per mod, in `config/multiforge-mods.toml` or the mod's own metadata) run one at a time on the server thread.
 - **A companion client mod** visualizes region boundaries, MSPT, and live cross-region hops.
 
 Read the full design in [`docs/blueprint.md`](docs/blueprint.md).
@@ -89,7 +96,8 @@ multiforge/
 ├── multiforge-patches/      Patches applied to vendored NeoForge 1.21.1
 ├── multiforge-installer/    Repackages patched NeoForge + runtime
 ├── multiforge-client/       Client-side debug mod (F3 overlay, region renderer)
-├── multiforge-bench/        Headless bot-swarm TPS harness
+├── multiforge-bench/        Parity gate, scenarios, protocol-bot swarm, TPS benches
+├── multiforge-testmods/     Fixture mods for the scenarios and the scanner corpus
 ├── docs/                    Design docs
 └── upstream/neoforge-1.21.1 Vendored NeoForge source (patched)
 ```
@@ -101,11 +109,15 @@ multiforge/
 ```
 git clone https://github.com/0xnullsect0r/MultiForge.git
 cd MultiForge
-./gradlew :setup                # vendor NeoForge 1.21.1
-./gradlew build                 # build all pure-Java artifacts
+./gradlew build                                   # outer modules
+./gradlew :multiforge-api:publishToMavenLocal :multiforge-runtime:publishToMavenLocal
+cd upstream/neoforge-1.21.1
+./gradlew setup                                   # decompile + NeoForge patches
+./gradlew :neoforge:installerJar                  # MultiForge patches apply automatically
+ls projects/neoforge/build/libs/*-installer.jar
 ```
 
-Requires JDK 21 and ~20 GB free disk for the NeoForge workspace.
+Requires JDK 21 and ~20 GB free disk for the NeoForge workspace. `./gradlew :tests:runGameTestServer` runs the GameTests; the live checks are in [`docs/verification/README.md`](docs/verification/README.md).
 
 ---
 

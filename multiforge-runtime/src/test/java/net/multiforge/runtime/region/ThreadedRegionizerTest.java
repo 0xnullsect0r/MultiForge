@@ -70,6 +70,24 @@ class ThreadedRegionizerTest {
     }
 
     @Test
+    void aSectionStaysWhileAnyOfItsChunksIsLoaded() {
+        // 16-chunk sections: unloading one chunk at a player's view edge must
+        // not orphan the rest of its section.
+        ThreadedRegionizer r = new ThreadedRegionizer(WORLD, 4);
+        Region region = r.addChunk(new ChunkPos(0, 0));
+        r.addChunk(new ChunkPos(5, 7));
+        r.removeChunk(new ChunkPos(0, 0));
+        assertThat(r.regionAtChunk(5, 7)).isSameAs(region);
+        assertThat(r.regionAtChunk(0, 0)).isSameAs(region);
+        assertThat(r.isChunkLoaded(new ChunkPos(0, 0))).isFalse();
+        r.removeChunk(new ChunkPos(0, 0)); // not loaded: no-op
+        assertThat(r.regions()).containsExactly(region);
+        r.removeChunk(new ChunkPos(5, 7));
+        assertThat(r.regions()).isEmpty();
+        assertThat(region.state()).isEqualTo(RegionState.DEAD);
+    }
+
+    @Test
     void removingLastChunkDropsRegion() {
         ThreadedRegionizer r = new ThreadedRegionizer(WORLD, 0);
         Region region = r.addChunk(new ChunkPos(5, 5));

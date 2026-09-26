@@ -60,7 +60,7 @@ class RuleCatalogTest {
             Severity.ERROR, // R02
             Severity.ERROR, // R03
             Severity.WARN, // R04
-            Severity.ERROR, // R05
+            Severity.WARN, // R05
             Severity.WARN, // R06
             Severity.WARN, // R07
             Severity.WARN, // R08

@@ -36,6 +36,9 @@ public final class ServerDomains {
 
     private static volatile SchedulerHost HOST;
 
+    /** Whether {@link #HOST} came from the {@link ServiceLoader} fallback rather than {@link #install}. */
+    private static volatile boolean HOST_IS_FALLBACK;
+
     private ServerDomains() {}
 
     public static RegionDomain region(WorldRef world, ChunkPos pos) {
@@ -59,17 +62,26 @@ public final class ServerDomains {
      * SchedulerHost} implementation via this method during boot. Mods
      * must not call this — it is guarded so a second call throws
      * unless the caller passes the same instance already installed.
+     *
+     * <p>A host bound by the {@link ServiceLoader} fallback — a mod used
+     * {@code ServerDomains} before the server installed its runtime, e.g.
+     * during mod construction — is replaced, and hands its pending work to
+     * {@code host} ({@link SchedulerHost#replacedBy}).
      */
     @ApiStatus.Internal
-    public static void install(SchedulerHost host) {
+    public static synchronized void install(SchedulerHost host) {
         if (host == null) throw new NullPointerException("host");
         SchedulerHost current = HOST;
         if (current != null && current != host) {
-            throw new IllegalStateException(
-                    "SchedulerHost already installed (" + current.getClass().getName() + "); refusing to replace with "
-                            + host.getClass().getName());
+            if (!HOST_IS_FALLBACK) {
+                throw new IllegalStateException("SchedulerHost already installed ("
+                        + current.getClass().getName() + "); refusing to replace with "
+                        + host.getClass().getName());
+            }
+            current.replacedBy(host);
         }
         HOST = host;
+        HOST_IS_FALLBACK = false;
     }
 
     /**
@@ -83,8 +95,9 @@ public final class ServerDomains {
      * boundary.
      */
     @ApiStatus.Internal
-    public static void uninstall() {
+    public static synchronized void uninstall() {
         HOST = null;
+        HOST_IS_FALLBACK = false;
     }
 
     /** Test-only alias for {@link #uninstall()}; kept for source compatibility. */
@@ -109,6 +122,7 @@ public final class ServerDomains {
                 throw new IllegalStateException("Multiple SchedulerHost service bindings on classpath");
             }
             HOST = first;
+            HOST_IS_FALLBACK = true;
             return first;
         }
     }

@@ -27,14 +27,16 @@ import org.objectweb.asm.tree.MethodNode;
 /**
  * R05 — {@code entity-setpos-off-coord}. See {@code docs/design/scanner-rules.md} &sect;4 (R05).
  *
- * <p>ERROR: a direct call to {@code Entity.setPos}/{@code setPosRaw} from mod code, not made
- * from within {@code net.multiforge.runtime.entity.EntityMigrationCoordinator} itself.
+ * <p>WARN: a direct call to {@code Entity.setPos}/{@code setPosRaw} from mod code. Ownership
+ * follows position, so ordinary movement is fine; but a jump into another region's chunks from
+ * a region tick skips the deferral {@code teleportTo}/{@code changeDimension} get (MultiForge
+ * runs those on the server thread), and the entity keeps ticking in the old region until the
+ * next tick. Flagged so long moves can be checked.
  */
 public final class R05EntitySetPosOffCoord extends AbstractTreeRule {
 
     private static final String OWNER = "net/minecraft/world/entity/Entity";
     private static final Set<String> TARGET_NAMES = Set.of("setPos", "setPosRaw");
-    private static final String COORDINATOR_PACKAGE = "net/multiforge/runtime/entity/";
 
     @Override
     public String id() {
@@ -48,19 +50,16 @@ public final class R05EntitySetPosOffCoord extends AbstractTreeRule {
 
     @Override
     public String description() {
-        return "Entity.setPos/setPosRaw called directly instead of through EntityMigrationCoordinator.";
+        return "Entity.setPos/setPosRaw called directly; a long jump from a region tick should use teleportTo.";
     }
 
     @Override
     public Severity severity() {
-        return Severity.ERROR;
+        return Severity.WARN;
     }
 
     @Override
     protected void scanClass(ClassContext ctx, ClassNode cn, Consumer<Finding> emit) {
-        if (ctx.className().startsWith(COORDINATOR_PACKAGE)) {
-            return;
-        }
         String classFqn = ctx.className().replace('/', '.');
         for (MethodNode mn : cn.methods) {
             String methodKey = BytecodeUtil.methodKey(mn);
@@ -80,7 +79,8 @@ public final class R05EntitySetPosOffCoord extends AbstractTreeRule {
                         methodKey,
                         BytecodeUtil.lineOf(mn, call),
                         "Entity." + call.name + call.desc + " called directly from " + mn.name
-                                + " — cross-region entity movement must go through EntityMigrationCoordinator.",
+                                + " — a jump into another region should use teleportTo, which MultiForge defers to"
+                                + " the server thread.",
                         Fingerprint.compute(id(), classFqn, methodKey, mn, call)));
             }
         }

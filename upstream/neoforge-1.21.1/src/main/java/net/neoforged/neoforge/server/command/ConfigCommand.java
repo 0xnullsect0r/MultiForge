@@ -27,7 +27,7 @@ import net.neoforged.neoforge.client.command.ClientConfigCommand;
 import net.neoforged.neoforge.client.event.RegisterClientCommandsEvent;
 import net.neoforged.neoforge.internal.versions.neoforge.NeoForgeVersion;
 
-@EventBusSubscriber(value = Dist.CLIENT, bus = EventBusSubscriber.Bus.GAME, modid = NeoForgeVersion.MOD_ID)
+@EventBusSubscriber(value = Dist.CLIENT, modid = NeoForgeVersion.MOD_ID)
 public class ConfigCommand {
     @SubscribeEvent
     public static void onClientCommandsRegister(RegisterClientCommandsEvent event) {
@@ -68,11 +68,11 @@ public class ConfigCommand {
                     fileComponent.withStyle((style) -> style.withClickEvent(new ClickEvent(ClickEvent.Action.OPEN_FILE, f.getAbsolutePath())));
                 }
 
-                context.getSource().sendSuccess(() -> Component.translatable("commands.config.getwithtype",
+                context.getSource().sendSuccess(() -> CommandUtils.makeTranslatableWithFallback("commands.config.getwithtype",
                         modId, type.toString(), fileComponent), true);
             }
             if (configFileNames.isEmpty()) {
-                context.getSource().sendSuccess(() -> Component.translatable("commands.config.noconfig", modId, type.toString()),
+                context.getSource().sendSuccess(() -> CommandUtils.makeTranslatableWithFallback("commands.config.noconfig", modId, type.toString()),
                         true);
             }
             return 0;

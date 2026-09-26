@@ -26,49 +26,57 @@ License v3.0. Full design in `docs/blueprint.md`.
 3. **Vanilla parity first.** Every patch to `net.minecraft.*` must have a
    deterministic-mode regression run demonstrating byte-identical world save
    vs upstream NeoForge on a fixed seed. Break this at your peril.
-4. **No blocking calls on a region worker thread.** Ever. Cross-region work
+4. **No blocking calls on a region worker thread.** Cross-region work
    uses `RegionizedTaskQueue.queueChunkTask(...)`. A `Thread.sleep`, a
-   `.get()` on a `CompletableFuture`, or a `synchronized` block that could
-   contend with a foreign region — all bugs.
+   `.get()` on a `CompletableFuture`, or a lock that could be held while
+   foreign code runs — all bugs. Two bounded exceptions exist, both in
+   `docs/design/barrier-tick-model.md`: leaf locks around single Vanilla
+   structure updates, and a worker waiting for the server thread to load a
+   chunk (`MainThreadHandoff`, serviced while the server thread waits at
+   the barrier).
 5. **Auto-reroute + warn is the default.** Never make MultiForge refuse to
    load a mod, and never throw from a mod's code path just because it did
    something unsafe — reroute the call and log a rate-limited warning.
 6. **NeoForge upstream drift is a maintenance cost.** Keep the patch set
    thin and grouped into `01-ownership/` .. `09-events/` so rebasing onto
    newer NeoForge tags is scoped per group.
+7. **Patches keep Vanilla's members for mixins.** No new lambdas in a
+   patched Vanilla class (use a nested `MfLambdas` class or a method
+   reference), no Vanilla body moved out of its method, no change to what a
+   Vanilla lambda captures. `:neoforge:checkMixinTargets` enforces it; see
+   `multiforge-patches/README.md`.
 
-## M9 chunk-system conventions
+## Region-tick conventions
 
-The M9 chunk-system port replaces Vanilla's `ChunkMap`, `DistanceManager`,
-`ThreadedLevelLightEngine`, and `RegionFile` layer with per-region forks.
-New code that reads or writes chunk state must go through the fork surfaces,
-not the Vanilla ones.
+The server runs the barrier tick model (`docs/design/barrier-tick-model.md`):
+the server thread runs Vanilla's loop, and each level's regions tick in
+parallel between two barriers. New code must respect it.
 
-1. **Chunk work always goes through `ChunkHolderManager` (via the facade
-   at `net.multiforge.neoforge.chunk.MultiForgeChunkMap`), never Vanilla
-   `ChunkMap` directly.** Resolve a `NewChunkHolder` via
-   `ChunkHolderManager.holderAt(...)` and mutate through that. Do not
-   reach into `ServerLevel.getChunkSource().chunkMap`.
-2. **Tickets flow through `MultiForgeDistanceManager.addTicket/removeTicket`**,
-   which routes to per-region `PerRegionTicketMap` via
-   `ChunkHolderManager`. `ServerLevel.getChunkSource().addRegionTicket(...)`
-   still works for source compat, but bypasses per-region locality — do
-   not use it in new code.
-3. **Light updates flow through `MultiForgeLightEngine`** — the facade
-   routes `checkBlock` / `updateChunkStatus` / `updateSectionStatus` to
-   the region-owning worker via `RegionizedTaskQueue.queueChunkTask`.
-4. **MCA I/O is `net.multiforge.runtime.io.RegionFileReader` /
-   `RegionFileWriter` / `RegionFileCache`.** Do not call Vanilla
-   `net.minecraft.world.level.chunk.storage.RegionFile` directly. Round-trip
-   through the fork's `RegionChunkSerializer` if you need
-   `CompoundTag` ↔ `LevelChunk` conversion.
-5. **Every region worker has its own journal.** Chunk mutations queued
-   for save land in `RegionJournal` (WAL), flushed by `AutoSaveRunner` in
-   the `FLUSH_OUTBOUND` tick phase. Do not autosave synchronously from a
-   mod hook — enqueue via `AutoSaveRunner.markDirty(region, chunkPos)`.
+1. **Chunk loading, tickets, lighting and saving are Vanilla's**, on the
+   server thread. Do not add a parallel chunk system. The runtime's
+   `ChunkHolderManager` only indexes loaded chunks by owning region (fed by
+   `RegionizedChunkLifecycle` from `ChunkEvent.Load/Unload`).
+2. **Ownership is positional.** A region owns the chunks of its sections;
+   an entity, block entity or scheduled tick belongs to the region owning
+   its chunk. Mutation sites check `OwnershipGuard.canMutateAt` and reroute
+   with `OwnershipGuard.rerouteAt` (or `rerouteSetBlock` /
+   `rerouteAddFreshEntity` where the caller needs Vanilla's return value).
+3. **Cross-region work** goes through `RegionizedTaskQueue.queueChunkTask`
+   to the owner's mailbox. Work whose effects span regions (cross-region
+   teleports, player dimension changes, command execution) is deferred to
+   the server thread with `OwnershipGuard.deferToServerThread` /
+   `deferCrossRegionMove`.
+4. **Shared Vanilla state touched by region workers** needs a leaf lock or
+   a per-thread instance (see the table in the design doc). A leaf lock is
+   one under which no foreign code runs and nothing waits on another thread.
+5. **A designed wait on a region worker** (the two bounded exceptions to
+   rule 4: `MainThreadHandoff`, `SerialLane`) is bracketed with
+   `RegionTickWatchdog.beginWait()/endWait(kind)`, so the watchdog and the
+   barrier deadline do not count it as the region's own time. Do not use it
+   to hide any other wait.
 6. **`InstanceRegistry<K, V>`** (in `net.multiforge.runtime.chunk`) is the
-   standard `ServerLevel → facade` lookup used by the M9 fork facades.
-   Use it — not a raw `WeakHashMap` — when adding another facade.
+   standard weak-keyed per-server/per-level lookup. Use it, not a raw
+   `WeakHashMap`.
 
 ## Repository layout
 
@@ -85,17 +93,27 @@ See top-level `README.md`. Key directories:
 - `multiforge-installer/` — repackages patched NeoForge + runtime into
   installer jar.
 - `multiforge-client/` — client-side debug mod, ordinary NeoForge mod.
-- `multiforge-testmods/` — fixture mods.
-- `multiforge-bench/` — headless bot swarm + TPS harness.
+- `multiforge-scanner/` — ASM mod-jar safety scanner (`/multiforge certify`).
+- `multiforge-testmods/` — fixture mods (cross-region writer, legacy listener)
+  used by the bench scenarios and the scanner corpus.
+- `multiforge-bench/` — installed-server harness: parity gate, scenarios,
+  protocol-bot swarm (MCProtocolLib), TPS/MSPT benches.
 - `docs/` — design docs.
 
 ## Build
 
-- Requires **JDK 21**, ~20 GB free disk for NeoForge workspace.
-- `./gradlew :setup` vendors NeoForge 1.21.1 into `upstream/`.
-- `./gradlew build` runs the full build. `spotless` runs automatically.
-- Sub-projects that do not depend on Minecraft (api, runtime, scanner,
-  installer, bench) build standalone without the `:setup` step.
+- Requires **JDK 21**, ~20 GB free disk for the NeoForge workspace.
+- Outer modules: `./gradlew build` (api, runtime, scanner, installer, bench,
+  client, testmods). Spotless runs automatically.
+- The fork (`upstream/neoforge-1.21.1`, NeoForge 21.1.251, NeoDev build)
+  consumes api + runtime from mavenLocal. In order:
+  1. `./gradlew :multiforge-api:publishToMavenLocal :multiforge-runtime:publishToMavenLocal`
+  2. in `upstream/neoforge-1.21.1`: `./gradlew setup` (decompile + NeoForge
+     patches; the MultiForge patches are applied automatically before compile)
+  3. then `:neoforge:compileJava`, `:tests:runGameTestServer` (GameTests),
+     `:neoforge:installerJar` (installer in `projects/neoforge/build/libs`),
+     `immaculateCheck licenseCheck` (formatting, headers).
+- Patch work: `scripts/mf-patches.py` (see `multiforge-patches/README.md`).
 
 ## Code style
 
@@ -111,11 +129,20 @@ See top-level `README.md`. Key directories:
 ## Testing
 
 - Unit tests: JUnit 5 + AssertJ + jqwik. Live under `src/test/java`.
-- CI runs `./gradlew build spotlessCheck test`. Spotless enforces the
-  GPL-3 header — there is no separate licenseHeaderCheck task.
-- Deterministic-mode regression: `./gradlew :multiforge-bench:determinism`
-  (fixed seed, single worker, 20 min, world hash asserted).
-- Bench (nightly): `./gradlew :multiforge-bench:atm10`.
+- CI runs `./gradlew spotlessCheck` + the module builds, and the fork job
+  runs every GameTest (NeoForge's suite + `net.multiforge.testfixtures`).
+  Spotless enforces the GPL-3 header in the outer modules;
+  `immaculateCheck`/`licenseCheck` in the fork.
+- Live-server checks (`multiforge-bench`, need a built installer; see
+  `docs/verification/README.md`):
+  - `./gradlew :multiforge-bench:determinism -Pworkers=1,4` — the vanilla
+    parity gate: one fixed-seed world ticked on stock NeoForge and on
+    MultiForge, terrain compared chunk by chunk.
+  - `./gradlew :multiforge-bench:scenario` — Phase X behaviour checks on
+    stock vs MultiForge (teleport, raid, dragon, fixture mods).
+  - `:multiforge-bench:vanilla|swarm|atm10|x8StrictSwarm` — benches with
+    real protocol bots; `nightly.yml` runs a short set every night.
+- Scanner: `./gradlew :multiforge-scanner:scanCorpus` (gated in CI).
 
 ## Git workflow
 

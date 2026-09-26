@@ -1,5 +1,11 @@
 # Global-Region Contract — Design
 
+> **Historical — superseded.** The global systems this design moved onto a global-region
+> worker (weather, time, border, raids, dragon, scoreboards, commands) run in Vanilla's own code
+> on the server thread under the barrier tick model; the synthetic global region only runs
+> `ServerDomains.global()` tasks and GLOBAL-domain listeners. See
+> `docs/design/barrier-tick-model.md` and `docs/global-network.md`.
+
 **Status:** Phase 0 task 0.2 of the M4+M5+M6 landing plan
 (`plans/bubbly-jumping-comet.md`). Freezes the contract that Track B
 (M5 Global Subsystems, `multiforge-patches/08-globals/`) implements

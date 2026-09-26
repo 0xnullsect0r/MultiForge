@@ -1,5 +1,15 @@
 # M9 Phase 6 wave B — client + events + sweep audit
 
+> **Historical — superseded.** The M9 chunk-system fork this document describes was
+> retired: Vanilla's chunk system loads, ticks, lights and saves every chunk, and MultiForge
+> only tracks which region owns each loaded chunk. See `docs/design/barrier-tick-model.md`
+> (*Chunks*, *What this replaced*). Kept for the record; the classes and patches named here
+> no longer exist.
+>
+> The regression test this audit cites, `Cohort612EntityVisibilityRoutingTest`, was never
+> in the tree; the `ChunkLoadLevel` ladder it would have pinned was removed with the fork.
+> Entity visibility follows Vanilla's `FullChunkStatus` directly.
+
 **Scope:** cohorts 6.8–6.15 of the M9 Phase 6 "downstream caller migration"
 task list. Sibling wave A (cohorts 6.1–6.7) covers server-side callers and
 is documented separately in `m9-phase6-audit-server.md`.

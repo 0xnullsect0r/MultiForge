@@ -40,8 +40,8 @@ publishing {
                 description.set(project.description)
                 licenses {
                     license {
-                        name.set("MultiForge Proprietary")
-                        url.set("https://github.com/0xnullsect0r/MultiForge/blob/main/LICENSE")
+                        name.set("GNU General Public License, Version 3")
+                        url.set("https://www.gnu.org/licenses/gpl-3.0.txt")
                         distribution.set("repo")
                     }
                 }

@@ -1,52 +1,53 @@
 # MultiForge Concurrency Contract
 
-## Executive summary
+## Summary
 
-Every thread MultiForge schedules work on carries a **domain** — a tag
-saying what it's allowed to touch right now. Two independent layers read
-that tag: a passive, dev-only **assertion** layer that counts violations
-without changing behavior, and an active, production **enforcement** layer
-that decides whether a mutation runs inline or gets handed off elsewhere.
-This document is the source of truth for both, plus the rules that decide
-which domain may write what state. See `docs/blueprint.md` §Terminology
-for the design rationale; this page documents what's actually implemented
-under `multiforge-runtime/.../ownership/`.
+Every thread MultiForge runs work on carries an **owner token**: a domain
+tag plus, for a region worker, the id of the region it is ticking. The
+patched mutation sites read that token to decide whether a write may run
+inline or must be handed to the owner of the chunk it touches. This page
+documents that mechanism as implemented in
+`multiforge-runtime/src/main/java/net/multiforge/runtime/ownership/` and the
+fork glue `upstream/neoforge-1.21.1/src/main/java/net/multiforge/neoforge/OwnershipGuard.java`.
+
+The tick model the contract serves is
+[`design/barrier-tick-model.md`](design/barrier-tick-model.md): the server
+thread runs Vanilla's loop, and each level's regions tick in parallel
+between two barriers. Region work and server-thread work never overlap;
+the only concurrency is between regions of the same level.
 
 ## Domain
 
-`net.multiforge.runtime.ownership.Domain` is a plain enum with seven
-values:
+`net.multiforge.runtime.ownership.Domain` has seven values. Which of them
+the running server actually installs:
 
-| Value           | Meaning                                                                                          |
-|-----------------|---------------------------------------------------------------------------------------------------|
-| `REGION`        | A region worker thread. Owns some subset of the world's chunks and entities.                      |
-| `ENTITY`        | A per-entity affine executor — typically an alias for the region that currently owns the entity.  |
-| `GLOBAL`        | The dedicated global-region thread. Owns weather, time, world border, gamerules, ender dragon, wither, raids, scoreboards. |
-| `ASYNC`         | A worker on the shared async pool. May touch pure/immutable data only.                            |
-| `LEGACY_SERIAL` | Fallback single-threaded executor for legacy/unaudited mod callbacks.                             |
-| `NETWORK`       | Netty IO thread; never mutates game state directly.                                               |
-| `UNKNOWN`       | Anything else — main-thread bootstrap, shutdown, or a thread nobody tagged.                       |
+| Value           | Set by | Meaning in the barrier model |
+|-----------------|--------|------------------------------|
+| `REGION`        | `TickRegionScheduler`, around every region tick (including the synthetic global region's) | A region worker. May mutate only chunks its own region owns. |
+| `ASYNC`         | `MultiThreadedSchedulerHost`, around every `ServerDomains.async()` body | A shared async-pool thread. Must not touch game state. |
+| `UNKNOWN`       | Default for any thread without a token | The server thread, world generation, Netty threads, a mod's own threads. The server thread is recognised separately (the bound tick thread, below). |
+| `GLOBAL`        | Only `SingleThreadedSchedulerHost` (the MC-free reference host used in tests) | Not installed on a server. The server thread is Vanilla's single owner of world-wide state. |
+| `ENTITY`        | Only `SingleThreadedSchedulerHost` | Not installed on a server; entity work runs as `REGION`. |
+| `LEGACY_SERIAL` | Nothing | Declared constant. The serial event lane runs listeners under the *posting worker's* token, not this one (`docs/events.md`). |
+| `NETWORK`       | Nothing | Declared constant. Netty threads carry no token and read as `UNKNOWN`. |
 
-This is the same seven-value vocabulary used by `DispatchDomainKind`
-(events, four of the seven — see `docs/events.md`) and by the tick
-pipeline's own worker classification. `ENTITY` and `NETWORK` don't get
-their own worker pool; they're either an alias for a region worker
-(`ENTITY`) or a classification applied to Netty's own IO threads
-(`NETWORK`) so ownership checks can recognize them without pretending
-they're safe to mutate state from.
+The enum's own javadoc for `GLOBAL` ("the dedicated global-region thread.
+Owns weather, time, …") describes the retired M5 design; in the barrier
+model weather, time, world border, raids and the dragon fight run in
+Vanilla's `ServerLevel.tick` on the server thread.
 
 ## OwnerToken
 
-`OwnerToken` is a record — `(Domain domain, long regionId)` — carried on a
-`ThreadLocal` and read by every ownership check in the runtime.
+`OwnerToken` is a record `(Domain domain, long regionId)` held in a
+`ThreadLocal`.
 
 ```java
 public record OwnerToken(Domain domain, long regionId) {
     public static final long NO_REGION = Long.MIN_VALUE;
-    public static final OwnerToken GLOBAL = new OwnerToken(Domain.GLOBAL, NO_REGION);
-    public static final OwnerToken ASYNC = new OwnerToken(Domain.ASYNC, NO_REGION);
-    public static final OwnerToken NETWORK = new OwnerToken(Domain.NETWORK, NO_REGION);
-    public static final OwnerToken LEGACY_SERIAL = new OwnerToken(Domain.LEGACY_SERIAL, NO_REGION);
+    public static final OwnerToken GLOBAL = ...;
+    public static final OwnerToken ASYNC = ...;
+    public static final OwnerToken NETWORK = ...;
+    public static final OwnerToken LEGACY_SERIAL = ...;
 
     public static OwnerToken forRegion(long regionId) { ... }
     public static OwnerToken current() { ... }
@@ -54,198 +55,219 @@ public record OwnerToken(Domain domain, long regionId) {
 }
 ```
 
-- **`current()`** never returns `null`. If nothing has set a token on this
-  thread, it synthesizes `new OwnerToken(Domain.UNKNOWN, NO_REGION)`. Every
-  assertion and enforcement check treats a bare, untagged thread as
-  `UNKNOWN` rather than crashing on a missing token.
-- **Region worker threads set their own token** when they start ticking a
-  region (`OwnerToken.forRegion(regionId)`) and clear it when they finish.
-  This is bookkeeping internal to `TickRegionScheduler`; mod code never
-  calls `forRegion` directly.
-- **`runAs(token, work)`** installs `token` for the duration of `work`,
-  then restores whatever token was there before — including `null` if
-  there wasn't one. Nesting is supported: an `ASYNC`-tagged callback that
-  internally calls back into region code via `runAs(OwnerToken.forRegion(id),
-  …)` restores the `ASYNC` token on the way out, not `UNKNOWN`.
-  `MultiThreadedSchedulerHost`'s async domain implementation uses exactly
-  this pattern — every async body runs wrapped in
-  `OwnerToken.runAs(OwnerToken.ASYNC, () -> body.accept(handle))`.
+- **`current()`** never returns `null`; a thread with no token gets
+  `(UNKNOWN, NO_REGION)`.
+- **`runAs(token, work)`** installs `token` for the duration of `work` and
+  restores the previous token (or none) afterwards. Nesting is supported.
+- `TickRegionScheduler.tickClaimed` wraps each region tick — mailbox drain,
+  tick body, second mailbox drain — in
+  `OwnerToken.runAs(OwnerToken.forRegion(region.id().value()), …)`. Mod
+  code never calls `forRegion`.
+- `SerialLane.drain` runs a handed-off listener under the token of the
+  worker that handed it off, so a listener's world writes on the server
+  thread are checked exactly as the worker's own would be.
 
-## DomainAssertions (dev/CI only)
+## OwnershipEnforcer and OwnershipGuard
 
-`DomainAssertions` is the **passive** half of the contract: a set of
-assertion sites patched into Vanilla/NeoForge call sites purely for
-telemetry. It is off by default and, critically, **never throws, even
-when enabled** — it bumps a probe counter and logs a rate-limited warning.
-
-- Gated by `-Dmultiforge.assert=on` (default `off`). Hot paths check
-  `DomainAssertions.enabled()` first and skip the probe call entirely when
-  disabled, so the assertion layer has effectively zero cost in
-  production.
-- Three assertion methods, each taking a short symbolic `site` id (e.g.
-  `"ServerLevel.setBlock"`) used both as the probe key and in the log
-  message:
-  - `assertGlobal(site)` — current domain must be `GLOBAL`.
-  - `assertRegion(site, regionId)` — current domain must be `REGION` *and*
-    `OwnerToken.current().regionId()` must equal `regionId`. A region
-    worker ticking the wrong region trips this just as hard as a
-    non-region thread would.
-  - `assertTickThread(site)` — current domain must be `REGION` or
-    `GLOBAL`. Used at read-mostly sites where cross-region reads are
-    tolerated but async/legacy reads are suspect.
-- On failure, each bumps `ProbeRegistry.bump(site + ":" + reason)` (e.g.
-  `"ServerLevel.setBlock:not-global"`, `"...:wrong-region"`,
-  `"...:not-tick-thread"`) and logs via `ViolationLogger.warn(site, …)`.
-
-**DomainAssertions is not the thing that decides whether a mutation is
-safe to run.** It's a dev/CI instrument for finding domain-crossing bugs
-before they ship; the M2 tick pipeline's auto-reroute path (below) is what
-actually changes control flow in production. Today there is no dedicated
-`DomainAssertionsTest` — coverage comes indirectly through
-`OwnershipEnforcerTest`/`OwnerTokenTest` exercising the shared `OwnerToken`
-plumbing both classes read.
-
-## OwnershipEnforcer (production)
-
-`OwnershipEnforcer` is the **active** half — the thing patched call sites
-under `multiforge-patches/01-ownership/` actually call to decide whether
-to run inline or hand off. Default-on, unlike `DomainAssertions`.
+`OwnershipEnforcer` (runtime, MC-free) holds the decision logic.
+`OwnershipGuard` (fork, `net.multiforge.neoforge`) is the thin adapter the
+patched `net.minecraft.*` sites call; it converts a `Level` to its
+`WorldRef` (`Level.mfWorldRef()`, added by `01-ownership`) and skips client
+levels.
 
 ### Modes
 
 ```java
 public enum Mode {
-    OFF,      // Skip the check entirely; every call runs inline. Escape hatch for audited modpacks.
-    REROUTE,  // Default. Off-owner-thread mutations are warned about and rerouted.
-    STRICT,   // Off-owner-thread mutations throw OwnershipViolationException. Regression-testing only.
+    OFF,      // Every check passes; every call runs inline.
+    REROUTE,  // Default. A violation is warned about and rerouted.
+    STRICT,   // A violation throws OwnershipViolationException. For testing.
 }
 ```
 
-Selected via `-Dmultiforge.ownership.mode` (default `"reroute"`). An
-unrecognized value also falls back to `REROUTE` — `parseMode` swallows the
-`IllegalArgumentException` from `Mode.valueOf` and returns `Mode.REROUTE`
-rather than failing boot over a typo'd system property.
+The initial value comes from `-Dmultiforge.ownership.mode` (default
+`reroute`; an unrecognised value falls back to `REROUTE`). On a server,
+`MultiForgeServerState.applyConfig` then sets it from
+`config/multiforge-server.toml` at startup and on every config change:
+`STRICT` when `[mtserver] mode = "strict"` or `[violations] policy = "fail"`,
+otherwise `REROUTE`. `applyConfig` never selects `OFF`; `mode = "off"`
+instead skips installing the regionized runtime, so no region workers
+exist and every guard falls through.
 
-### The decision: `canMutate` / `reroute`
+### Positional check: `canMutateAt` / `rerouteAt`
+
+Every patched mutation site uses the positional pair:
 
 ```java
-public static boolean canMutate(String site);       // may I run inline right now?
-public static void reroute(String site, Runnable mutation);  // hand it off
+if (!OwnershipGuard.canMutateAt("Level.setBlock", level, pos)) {
+    return OwnershipGuard.rerouteSetBlock(level, pos, state, () -> this.setBlock(...));
+}
 ```
 
-`canMutate(site)`:
+`OwnershipEnforcer.canMutateAt(site, world, chunkX, chunkZ)`:
 
-1. `Mode.OFF` → always `true`.
-2. Current domain is `REGION` or `GLOBAL` → `true`. These are always
-   legitimate mutation contexts regardless of which region/world they're
-   ticking.
-3. Current thread is the bound **legacy tick thread** (set once via
-   `bindTickThread`, see below) → `true`. This is the pre-existing
-   single-threaded main-server executor, still a legitimate mutation
-   context during the transition to full regionization.
-4. Otherwise: a genuine violation. Bumps
-   `ProbeRegistry.bump(site + ":off-thread")`, logs via
-   `ViolationLogger.warn`, and:
-   - `Mode.REROUTE` → returns `false` (caller must hand off via `reroute`).
-   - `Mode.STRICT` → throws `OwnershipViolationException(site, thread, domain)`.
+1. `Mode.OFF` → `true`.
+2. Caller is not a region worker (`domain != REGION`) → falls back to the
+   thread check `canMutate(site)` below.
+3. No position router bound (runtime not installed) → `true`.
+4. The caller's region owns the chunk → `true`.
+5. Otherwise the probe `<site>:cross-region` is bumped, a rate-limited
+   warning is logged (`ViolationLogger`), and in `STRICT` mode
+   `OwnershipViolationException` is thrown; in `REROUTE` mode it returns
+   `false`.
 
-`reroute(site, mutation)` hands `mutation` to the bound `RerouteTarget`.
-Callers only call this after `canMutate` returned `false` for the same
-site — never speculatively.
+`rerouteAt(site, world, chunkX, chunkZ, mutation)` queues `mutation` on the
+owning region's mailbox with `RegionizedTaskQueue.queueChunkTask`, where it
+runs at that region's next drain. If no region owns the chunk, it goes to
+the server-thread reroute target instead.
+
+The patched sites (`multiforge-patches/01-ownership/`, `05-entity-migration/`):
+
+| Site id | Where |
+|---|---|
+| `Level.setBlock` | `Level.setBlock` |
+| `LevelAccessor.scheduleTick` | the `scheduleTick` overloads |
+| `ServerLevel.addFreshEntity`, `ServerLevel.addEntity` | entity add |
+| `Entity.remove` | entity removal |
+| `BlockEntity.setChanged` | block-entity dirty marking |
+| `LevelChunk.addAndRegisterBlockEntity` | block-entity registration |
+
+### Predicted return values
+
+Some callers use Vanilla's return value (consume an item if `setBlock`
+returned `true`, count a spawned entity). A rerouted call has not run yet,
+so `OwnershipGuard` returns a prediction:
+
+- `rerouteSetBlock` predicts `true` if the target block state differs from
+  the requested one (or the chunk is not loaded), `false` otherwise.
+- `rerouteAddFreshEntity` predicts `true` unless the entity is already
+  removed or its UUID is already in the level.
+
+When the owner applies the write and gets a different result, the probe
+`reroute.<site>.mismatch` is bumped and a warning is logged under site
+`<site>.mismatch`.
+
+### Thread check: `canMutate`
+
+`canMutate(site)` handles callers that are not region workers:
+
+1. `Mode.OFF` → `true`.
+2. Domain `REGION` or `GLOBAL` → `true`.
+3. The calling thread is the bound tick thread (the server thread) → `true`.
+4. Otherwise (async pool, Netty, world-gen, a mod's own thread) the probe
+   `<site>:off-thread` is bumped, a warning logged, and `STRICT` throws;
+   `REROUTE` returns `false` and the call site reroutes.
+
+`reroute(site, mutation)` hands `mutation` to the bound `RerouteTarget`
+(the server thread).
+
+### Deferral to the server thread
+
+Operations whose effects are not confined to one region are deferred when
+a region worker starts them. They run on the server thread after the
+barrier, while no region runs. These are not violations; each bumps a
+probe but logs nothing.
+
+| Helper | Used by | Probe |
+|---|---|---|
+| `OwnershipGuard.deferCrossRegionMove` | `Entity.teleportTo`, `Entity.changeDimension` (same level), `ServerPlayer.teleportTo`, `teleportRelative`, `changeDimension` | `<site>:deferred-cross-region`, `<site>:deferred-player-dimension-change` |
+| `OwnershipGuard.deferToServerThread` | `Commands.performPrefixedCommand`, `Commands.performCommand`, `ServerFunctionManager.execute` | `<site>:deferred-to-server-thread` |
+
+A move within the caller's region, and any call from a thread that is not
+a region worker, runs inline. A non-player entity changing dimension runs
+inline (only this level's regions are ticking). `OwnershipEnforcer.isCrossRegionFromWorker`
+is the probe-free query behind `deferCrossRegionMove`.
 
 ### Bootstrap bindings
 
-- `bindTickThread(Thread)` — records the thread that is currently the
-  legitimate single-threaded tick executor. Called once during bootstrap
-  from an existing NeoForge lifecycle hook that already runs on that
-  thread — **never** from a Vanilla patch site, and never from
-  `MinecraftServer.runServer` itself.
-- `bindRerouteTarget(RerouteTarget)` — binds where deferred mutations go.
-  If never called, a misconfigured build still runs the mutation inline
-  rather than crashing a mod's code path (`runInlineUnconfigured`), but
-  logs loudly that this happened — consistent with CLAUDE.md rule 5
-  ("never throw from a mod's code path").
-- `unbindTickThreadAndRerouteTarget()` — called from
-  `MultiForgeRegionizedRuntime.shutdown()` so a reroute target bound to a
-  specific server executor doesn't outlive the server that captured it.
-  Matters for the dedi GameTestServer, which reuses one JVM across
-  successive servers — without this, the next off-thread mutation between
-  server-stop and next-server-start would submit into a dead
-  `MinecraftServer.execute` and throw `RejectedExecutionException`.
+Wired in the fork's `ServerLifecycleHooks.handleServerAboutToStart`, on the
+server thread:
 
-### M7 scope note
-
-Until `RegionizedTaskQueue` is wired to real `ServerLevel`s, the only real
-reroute target is the pre-existing single-threaded main-server executor
-(bound via `bindRerouteTarget`, driven from `ServerLifecycleHooks`).
-`reroute` is written against the `RerouteTarget` functional interface
-specifically so a later milestone can swap that binding for a real
-per-region mailbox (`RegionizedTaskQueue.queueChunkTask`) without touching
-any patched call site again. See `docs/legacy-compat.md` for what this
-means for mods hitting REROUTE warnings today.
+- `bindTickThread(Thread)` — records the server thread.
+- `bindRerouteTarget(RerouteTarget)` — `server::execute`, wrapped so a
+  `RejectedExecutionException` after shutdown becomes a warning instead of
+  an exception in the caller. If never bound, a reroute runs inline and
+  logs that it did (`runInlineUnconfigured`).
+- `bindPositionRouter(PositionRouter)` — done by
+  `MultiThreadedSchedulerHost.install()`; resolves chunk owners from the
+  level's regionizer and queues on the owner's mailbox.
+- `MultiForgeRegionizedRuntime.shutdown()` calls
+  `unbindTickThreadAndRerouteTarget()`, and the host's `close()` calls
+  `unbindPositionRouter()`, so a GameTest JVM that starts several servers
+  never routes into a dead one.
 
 ### OwnershipViolationException
 
-Thrown by `OwnershipEnforcer` **only** in `Mode.STRICT`. Never thrown in
-the default `REROUTE` mode — see CLAUDE.md rule 5. Carries the call-site
-id, the offending thread, and the actual domain observed, all exposed via
-`site()` and `actualDomain()` accessors for test assertions.
+Thrown only in `STRICT` mode, from `canMutate` or `canMutateAt`. Exposes
+`site()` and `actualDomain()`. Like any exception in a region tick, it is
+rethrown on the server thread once the barrier completes, where Vanilla's
+"Exception ticking world" handling stops the server. Strict mode is for
+test and regression runs, never production.
 
-## Rules: which domain may write what state
+## The global region
 
-| Domain          | May mutate                                                                 | May read                              | Notes |
-|-----------------|------------------------------------------------------------------------------|----------------------------------------|-------|
-| `REGION`        | Chunks/entities/block state owned by its own region id                      | Its own region freely; cross-region reads should still go through the task queue | Never touch another region's state inline — even a read can race a concurrent merge/split. |
-| `GLOBAL`        | Weather, time, world border, gamerules, ender dragon, wither, raids, scoreboards, command dispatch | Same as write scope | Runs on its own dedicated worker, ticked like any other region. |
-| `ENTITY`        | Whatever the underlying region-alias may mutate                             | Same                                   | Not a separate thread pool — an affinity concept layered on `REGION`. |
-| `ASYNC`         | Nothing that's live game state                                              | Immutable/pure data only               | CLAUDE.md rule 4: no blocking calls, and no mutation, ever. |
-| `NETWORK`       | Nothing directly                                                            | Decode-only; handler must re-dispatch to the owning domain before mutating anything | Netty IO thread. |
-| `LEGACY_SERIAL` | Whatever the bound legacy tick thread was already allowed to mutate (today: the single-threaded main-server executor) | Same | Default for unannotated event handlers and unported mod code; see `docs/legacy-compat.md`. |
-| `UNKNOWN`       | Nothing, by default                                                         | Nothing guaranteed                     | Bootstrap/shutdown/untagged threads. Treated as a violation by every enforcement/assertion check unless it happens to be the bound tick thread. |
+The runtime keeps a synthetic **global region** (world
+`multiforge:global`, chunk 0,0). `RegionizedTickCoordinator` drives it once
+per server tick on the worker pool, before the first level's regions. It
+runs `ServerDomains.global()` tasks and GLOBAL-domain event listeners that
+an async-pool task posted. It runs under a `REGION` token carrying the
+global region's id, so a world write made from it is not owned by that
+region: `canMutateAt` treats it as cross-region, warns, and reroutes it to
+the chunk's owner (or throws in strict mode). World writes belong in
+`ServerDomains.region(...)` tasks.
 
-The overarching policy, per CLAUDE.md rules 4 and 5:
+## DomainAssertions
 
-- **No blocking calls on a region worker thread, ever.** A `Thread.sleep`,
-  a `.get()` on a `CompletableFuture`, or a `synchronized` block that
-  could contend with a foreign region are all bugs regardless of which
-  domain issued them.
+`DomainAssertions` is a passive checker, gated by `-Dmultiforge.assert=on`
+(default off). It never throws. `assertGlobal(site)`,
+`assertRegion(site, regionId)` and `assertTickThread(site)` bump
+`<site>:not-global` / `:wrong-region` / `:not-tick-thread` and log a
+warning. No patched site calls these methods today; only
+`DomainAssertions.enabled()` is read, by `RegionizedData` (a runtime
+utility the server does not currently use).
+
+## Who may write what
+
+| Thread | May mutate | Notes |
+|---|---|---|
+| Region worker (`REGION`) | Chunks, entities, block entities and scheduled ticks in chunks its region owns | An entity belongs to the region owning the chunk it is in. Anything else is rerouted, or deferred to the server thread for teleports, dimension changes and commands. |
+| Server thread | Everything, as in Vanilla | Runs only while no region runs. Also runs serial-lane listeners, under the posting worker's token. |
+| Global region | Only through the mailbox of the owning region | See above. |
+| Async pool (`ASYNC`) | Nothing live | A write is an `:off-thread` violation and is rerouted. |
+| Any other thread (`UNKNOWN`, not the server thread) | Nothing directly | Violation → rerouted to the owner, or to the server thread if no region owns the chunk. The read side is not protected. |
+
+Shared Vanilla state that region workers touch concurrently (entity
+storage, `LevelTicks`, POI manager, scoreboard, random and neighbour
+updater, …) is made safe with leaf locks or per-thread instances; the
+table is in [`design/barrier-tick-model.md`](design/barrier-tick-model.md#shared-vanilla-state-made-safe).
+
+The policy, per CLAUDE.md rules 4 and 5:
+
+- **No blocking calls on a region worker.** A `Thread.sleep`, a
+  `Future.get()`/`join()`, or a lock that could be held while foreign code
+  runs are bugs. The two designed waits — a worker waiting for the server
+  thread to load a chunk (`MainThreadHandoff`) and a worker waiting for its
+  serial-lane listener (`SerialLane`) — are bracketed with
+  `RegionTickWatchdog.beginWait()/endWait(kind)`, totalled in
+  `region-tick.wait-ms.<kind>`, and excluded from the overrun check.
 - **Auto-reroute + warn is the default.** MultiForge never refuses to load
-  a mod and never throws from a mod's code path just because it did
-  something unsafe — `OwnershipEnforcer` reroutes the call and logs a
-  rate-limited warning. `STRICT` mode (hard failure) exists purely for
-  regression testing, never for production.
+  a mod and never throws from a mod's code path in the default mode.
 
 ## Test coverage
 
-- `net.multiforge.runtime.ownership.OwnershipEnforcerTest` — 11 cases:
-  `offModeAlwaysAllowsInline`, `regionDomainPassesThroughEvenOffTickThread`,
-  `globalDomainPassesThrough`, `boundTickThreadPassesThroughWithUnknownDomain`,
-  `offThreadUnknownDomainIsViolationAndRerouteModeReturnsFalse`,
-  `strictModeThrowsInsteadOfReturningFalse`,
-  `strictModeNeverThrowsForTheBoundTickThread`,
-  `rerouteDelegatesToBoundTarget`,
-  `unconfiguredRerouteTargetRunsInlineRatherThanCrashing`,
-  `unrecognizedModePropertyFallsBackToReroute`.
-- `net.multiforge.runtime.ownership.OwnerTokenTest` — token
-  construction, `current()`'s UNKNOWN default, and `runAs` nesting/restore
-  behavior.
+- `net.multiforge.runtime.ownership.OwnershipEnforcerTest` — thread check:
+  off mode, `REGION`/`GLOBAL` pass-through, bound tick thread, off-thread
+  violation in reroute and strict mode, reroute target delegation,
+  unconfigured target, unrecognised mode property.
+- `net.multiforge.runtime.ownership.OwnershipEnforcerPositionalTest` —
+  `canMutateAt`: own region, foreign region, unowned chunk, strict mode,
+  off mode, `rerouteAt` to owner or server target, no router bound.
+- `net.multiforge.runtime.ownership.OwnerTokenTest` — `current()` default,
+  `runAs` apply/restore and nesting.
+- `net.multiforge.runtime.event.SerialLaneTest` — lane jobs run under the
+  worker's token, one at a time; exceptions reach the worker.
+- `RegionTickBehaviourTests` (fork GameTests under
+  `upstream/neoforge-1.21.1/tests/`) — cross-region reroute on a live
+  server.
 
-There is currently no dedicated `DomainAssertionsTest` — the class is
-exercised indirectly wherever `OwnerToken.current()` is already under
-test. Adding a focused unit test (mode-off no-op, mode-on probe-bump
-per assertion method) is open work, not yet scheduled against a milestone.
-
-## What's not built yet
-
-- A dedicated `LEGACY_SERIAL` single-thread executor with per-mod
-  isolation — today `LEGACY_SERIAL` is a domain *tag*, and the actual
-  reroute target for `OwnershipEnforcer` violations is still the
-  pre-existing single-threaded main-server executor. See
-  `docs/legacy-compat.md`.
-- `RegionizedTaskQueue` as the sole reroute target — the M7 scope note
-  above still applies; the swap to a real per-region mailbox is scoped to
-  a later milestone.
-- Enforcement of `@DispatchDomain` at event-dispatch time (blueprint M12).
-  The annotation and its four-value `DispatchDomainKind` enum are defined
-  today; no listener registration path reads them yet. See
-  `docs/events.md`.
+There is no dedicated `DomainAssertionsTest`.

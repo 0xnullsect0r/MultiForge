@@ -1,0 +1,21 @@
+{
+  "profile": "atm10",
+  "workers": 4,
+  "ticks": 12000,
+  "wall_clock_ms": 98016,
+  "avg_mspt": 0.32,
+  "p50_mspt": 0.2,
+  "p95_mspt": 0.3,
+  "p99_mspt": 15.0,
+  "max_mspt": 15.0,
+  "tps_sustained_last_10min": null,
+  "rss_peak_mb": 9299,
+  "boot_ok": true,
+  "clean_stop": true,
+  "timing_source": "tick-query",
+  "sprint_tps": 2994,
+  "server": "stock",
+  "pacing": "sprint",
+  "modpack": "All the Mods 10 8.2 server files",
+  "mod_jar_count": 464
+}

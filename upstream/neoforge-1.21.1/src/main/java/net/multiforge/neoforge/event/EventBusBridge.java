@@ -36,7 +36,7 @@ import net.neoforged.bus.api.IEventBus;
  * production path. {@code NeoForge.EVENT_BUS} is initialized (by
  * the {@code 09-events/NeoForge.java.patch} hunk) as a {@link
  * LazyDispatchingEventBus} directly, with no executor attached yet.
- * {@code MultiForgeGlobalSystemsInit.install(...)} calls {@code
+ * {@code RegionRuntimeInit.install(...)} calls {@code
  *       attach} once a real host exists (at {@code ServerAboutToStart}),
  * swapping in the real {@link SchedulerBackedDispatchExecutor}.
  * </ul>

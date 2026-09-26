@@ -18,12 +18,13 @@ import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
-import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.PriorityBlockingQueue;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.locks.LockSupport;
+import java.util.function.BooleanSupplier;
 import net.multiforge.runtime.ownership.OwnerToken;
 
 /**
@@ -36,13 +37,39 @@ import net.multiforge.runtime.ownership.OwnerToken;
  * oldest {@code nextFireNanos} runs next. Slow regions accumulate a
  * deficit and get more back-to-back time until they catch up, but
  * cannot starve peers.
+ *
+ * <p>Two execution modes (see {@link Mode}):
+ *
+ * <ul>
+ * <li>{@link Mode#FREE_RUNNING} — the pure-runtime model above: each
+ *     worker self-schedules regions on its own 20 TPS cadence. Only sound
+ *     when nothing else mutates world state concurrently, so it is used by
+ *     the MC-free runtime tests and headless harnesses.</li>
+ * <li>{@link Mode#BARRIER} — the production model on a NeoForge server,
+ *     where the server thread still owns the Vanilla main loop (network,
+ *     chunk loading, commands). Workers never self-schedule; the server
+ *     thread calls {@link #driveTick} once per level tick, which runs every
+ *     region's tick body exactly once in parallel and returns only after
+ *     all of them finished. Region work and server-thread work therefore
+ *     never overlap, which is what makes running Vanilla entity/block code
+ *     on region workers sound.</li>
+ * </ul>
  */
 public final class TickRegionScheduler implements AutoCloseable, RegionListener {
 
+    /** Execution model — see the class javadoc. */
+    public enum Mode {
+        FREE_RUNNING,
+        BARRIER
+    }
+
     private static final long TICK_NANOS = 50L * 1_000_000L; // 20 TPS
 
-    private final int workerCount;
-    private final ExecutorService pool;
+    private volatile int workerCount;
+    // FREE_RUNNING only: worker loops currently running; loops beyond
+    // workerCount exit after a shrink.
+    private final AtomicInteger liveLoops = new AtomicInteger();
+    private final java.util.concurrent.ThreadPoolExecutor pool;
     private final PriorityBlockingQueue<ScheduleEntry> queue = new PriorityBlockingQueue<>();
     private final ConcurrentMap<RegionId, RegionState_> perRegion = new ConcurrentHashMap<>();
     // Volatile so a mid-run swap via setBody() publishes to every worker
@@ -56,21 +83,30 @@ public final class TickRegionScheduler implements AutoCloseable, RegionListener 
     private final RegionizedTaskQueue taskQueue;
     private final int mailboxDrainBatch;
     private final AtomicBoolean running = new AtomicBoolean(true);
+    private final Mode mode;
 
     public TickRegionScheduler(
             int workerCount, RegionTickBody body, RegionizedTaskQueue taskQueue, int mailboxDrainBatch) {
+        this(workerCount, body, taskQueue, mailboxDrainBatch, Mode.FREE_RUNNING);
+    }
+
+    public TickRegionScheduler(
+            int workerCount, RegionTickBody body, RegionizedTaskQueue taskQueue, int mailboxDrainBatch, Mode mode) {
         if (workerCount < 1) throw new IllegalArgumentException("workerCount must be >= 1");
+        this.mode = Objects.requireNonNull(mode, "mode");
         this.workerCount = workerCount;
         this.body = Objects.requireNonNull(body, "body");
         this.taskQueue = Objects.requireNonNull(taskQueue, "taskQueue");
         this.mailboxDrainBatch = mailboxDrainBatch;
         AtomicInteger seq = new AtomicInteger();
-        this.pool = Executors.newFixedThreadPool(workerCount, r -> {
+        this.pool = (java.util.concurrent.ThreadPoolExecutor) Executors.newFixedThreadPool(workerCount, r -> {
             Thread t = new Thread(r, "multiforge-tick-" + seq.incrementAndGet());
             t.setDaemon(true);
             return t;
         });
-        for (int i = 0; i < workerCount; i++) pool.execute(this::runWorker);
+        if (mode == Mode.FREE_RUNNING) {
+            for (int i = 0; i < workerCount; i++) startWorkerLoop();
+        }
     }
 
     public int workerCount() {
@@ -78,13 +114,42 @@ public final class TickRegionScheduler implements AutoCloseable, RegionListener 
     }
 
     /**
+     * Change the number of worker threads. In {@link Mode#BARRIER} call it
+     * between ticks (the server thread, outside {@link #driveTick}); the next
+     * tick uses the new size. Idle surplus threads exit on their own.
+     */
+    public synchronized void resize(int newWorkerCount) {
+        if (newWorkerCount < 1) throw new IllegalArgumentException("workerCount must be >= 1");
+        int old = this.workerCount;
+        if (newWorkerCount == old) return;
+        if (newWorkerCount > old) {
+            pool.setMaximumPoolSize(newWorkerCount);
+            pool.setCorePoolSize(newWorkerCount);
+        } else {
+            pool.setCorePoolSize(newWorkerCount);
+            pool.setMaximumPoolSize(newWorkerCount);
+        }
+        this.workerCount = newWorkerCount;
+        if (mode == Mode.FREE_RUNNING) {
+            for (int i = old; i < newWorkerCount; i++) startWorkerLoop();
+        }
+    }
+
+    private void startWorkerLoop() {
+        liveLoops.incrementAndGet();
+        pool.execute(this::runWorker);
+    }
+
+    public Mode mode() {
+        return mode;
+    }
+
+    /**
      * Swap in a new per-region tick body. Applied on the next tick each
      * worker starts — no in-flight tick is preempted. Callers must not
-     * pass {@code null}. Used by Phase 5 wiring in {@link
-     * net.multiforge.runtime.scheduler.MultiThreadedSchedulerHost} to
-     * install a {@link PhasedRegionTickBody} with M9 wiring
-     * (pollFullLoadUpdate, ChunkTaskScheduler.drainInto, AutoSaveRunner)
-     * after the host has constructed its per-world managers.
+     * pass {@code null}. Used by {@code
+     * MultiThreadedSchedulerHost.installRegionTickBody} once the server's
+     * runners are bound.
      */
     public void setBody(RegionTickBody body) {
         this.body = Objects.requireNonNull(body, "body");
@@ -109,7 +174,7 @@ public final class TickRegionScheduler implements AutoCloseable, RegionListener 
         Objects.requireNonNull(region, "region");
         RegionState_ fresh = new RegionState_(region);
         RegionState_ existing = perRegion.putIfAbsent(region.id(), fresh);
-        if (existing == null) {
+        if (existing == null && mode == Mode.FREE_RUNNING) {
             queue.add(new ScheduleEntry(System.nanoTime(), region.id(), fresh));
         }
     }
@@ -183,9 +248,13 @@ public final class TickRegionScheduler implements AutoCloseable, RegionListener 
      * @return a {@link TickAllResult} carrying the total region count and
      *         the ids of regions that did not complete within the
      *         deadline. Never {@code null}.
+     *         In {@link Mode#BARRIER} this delegates to {@link #driveTick}
+     *         with no pump, i.e. it drives the ticks instead of observing
+     *         them.
      */
     public TickAllResult tickAll(Collection<Region> regions, long deadlineNanos) {
         Objects.requireNonNull(regions, "regions");
+        if (mode == Mode.BARRIER) return driveTick(regions, deadlineNanos, () -> false);
         if (regions.isEmpty()) return TickAllResult.EMPTY;
         long deadline = System.nanoTime() + Math.max(0L, deadlineNanos);
         List<RegionId> overrun = new ArrayList<>();
@@ -213,6 +282,86 @@ public final class TickRegionScheduler implements AutoCloseable, RegionListener 
      * uses {@link #allCompleted()} to decide whether to route to the
      * warn (default) or STRICT-mode throw path.
      */
+    /**
+     * {@link Mode#BARRIER} driver: tick every region in {@code regions}
+     * exactly once, in parallel on the worker pool, and return once all of
+     * them finished. While waiting, the calling thread repeatedly invokes
+     * {@code pump} (the server thread passes its main-thread task executor
+     * here) so a region worker that needs a main-thread round trip — e.g.
+     * Vanilla's off-thread {@code ServerChunkCache.getChunk} — can never
+     * deadlock against the barrier.
+     *
+     * <p>The deadline never cuts a tick short: two server ticks must not
+     * overlap, so this always waits for completion. Regions still running
+     * when the deadline passes are reported as overruns in the result.
+     * A region that cannot be claimed ({@link Region#tryMarkTicking()}
+     * fails — it is mid-merge or already dead) is skipped this tick.
+     *
+     * <p>A throwable escaping a region's tick is rethrown here, on the
+     * caller, once every region has finished — the first one, with any
+     * others attached as suppressed. On a server that is the server thread,
+     * whose Vanilla crash handling ("Exception ticking world") then applies
+     * exactly as it would to an exception from an inline level tick.
+     *
+     * @throws IllegalStateException in {@link Mode#FREE_RUNNING}
+     */
+    public TickAllResult driveTick(Collection<Region> regions, long deadlineNanos, BooleanSupplier pump) {
+        Objects.requireNonNull(regions, "regions");
+        Objects.requireNonNull(pump, "pump");
+        if (mode != Mode.BARRIER) throw new IllegalStateException("driveTick requires Mode.BARRIER");
+        if (regions.isEmpty()) return TickAllResult.EMPTY;
+        long deadline = System.nanoTime() + Math.max(0L, deadlineNanos);
+        List<Region> batch = List.copyOf(regions);
+        AtomicInteger remaining = new AtomicInteger(batch.size());
+        long[] finishedAt = new long[batch.size()];
+        // Designed waits (a main-thread chunk load, a serial-lane listener) are not
+        // the region's own time: RegionTickWatchdog leaves them out per region, and
+        // so does the deadline.
+        long[] waited = new long[batch.size()];
+        Throwable[] failures = new Throwable[batch.size()];
+        Thread waiter = Thread.currentThread();
+        for (int i = 0; i < batch.size(); i++) {
+            final int idx = i;
+            Region region = batch.get(i);
+            RegionState_ s = perRegion.computeIfAbsent(region.id(), id -> new RegionState_(region));
+            pool.execute(() -> {
+                try {
+                    if (region.tryMarkTicking()) {
+                        failures[idx] = tickClaimed(s, region, false);
+                        waited[idx] = RegionTickWatchdog.lastTickWaitNanos();
+                    }
+                } finally {
+                    finishedAt[idx] = System.nanoTime();
+                    if (remaining.decrementAndGet() == 0) LockSupport.unpark(waiter);
+                }
+            });
+        }
+        while (remaining.get() > 0) {
+            boolean didWork;
+            try {
+                didWork = pump.getAsBoolean();
+            } catch (RuntimeException e) {
+                // A failing main-thread task must not wedge the barrier; the
+                // pump's own owner reports it. Keep waiting on the regions.
+                didWork = true;
+            }
+            if (!didWork && remaining.get() > 0) LockSupport.parkNanos(100_000L);
+        }
+        List<RegionId> overrun = new ArrayList<>();
+        Throwable first = null;
+        for (int i = 0; i < batch.size(); i++) {
+            if (finishedAt[i] - waited[i] > deadline) overrun.add(batch.get(i).id());
+            if (failures[i] != null) {
+                if (first == null) first = failures[i];
+                else if (first != failures[i]) first.addSuppressed(failures[i]);
+            }
+        }
+        if (first instanceof RuntimeException re) throw re;
+        if (first instanceof Error err) throw err;
+        if (first != null) throw new IllegalStateException("region tick failed", first);
+        return new TickAllResult(batch.size(), overrun);
+    }
+
     public static final class TickAllResult {
         static final TickAllResult EMPTY = new TickAllResult(0, List.of());
 
@@ -250,6 +399,8 @@ public final class TickRegionScheduler implements AutoCloseable, RegionListener 
 
     private void runWorker() {
         while (running.get()) {
+            int live = liveLoops.get();
+            if (live > workerCount && liveLoops.compareAndSet(live, live - 1)) return; // pool shrank
             ScheduleEntry entry;
             try {
                 entry = queue.poll(50, TimeUnit.MILLISECONDS);
@@ -279,23 +430,9 @@ public final class TickRegionScheduler implements AutoCloseable, RegionListener 
             }
 
             long start = System.nanoTime();
-            RegionTickWatchdog.enterTick(region);
             try {
-                OwnerToken.runAs(OwnerToken.forRegion(region.id().value()), () -> {
-                    taskQueue.drain(region, mailboxDrainBatch);
-                    body.tickOnce(region);
-                    taskQueue.drain(region, mailboxDrainBatch);
-                });
-                RegionTickWatchdog.exitTick(region);
-            } catch (Throwable t) {
-                // exitTick did not run (either body threw or the watchdog itself threw in STRICT mode);
-                // ensure the watchdog's per-thread state is cleared before routing the exception.
-                RegionTickWatchdog.exitTickAfterThrow();
-                Thread.currentThread().getUncaughtExceptionHandler().uncaughtException(Thread.currentThread(), t);
+                tickClaimed(s, region, true);
             } finally {
-                long elapsed = System.nanoTime() - start;
-                s.mspt.recordNanos(elapsed);
-                region.markNotTicking();
                 // Deadline = start-of-tick + one tick period, not
                 // now + one period — so slow regions catch up rather
                 // than drift.
@@ -303,6 +440,36 @@ public final class TickRegionScheduler implements AutoCloseable, RegionListener 
                 queue.add(new ScheduleEntry(nextFire, region.id(), s));
             }
         }
+    }
+
+    /**
+     * Run one tick of an already-claimed ({@link Region#tryMarkTicking()}
+     * succeeded) region on the current worker, then release it. Shared by
+     * both modes. A throwable from the tick is handed to the worker's
+     * uncaught-exception handler when {@code reportUncaught} (free-running:
+     * nobody else will see it), otherwise returned to the caller.
+     */
+    private Throwable tickClaimed(RegionState_ s, Region region, boolean reportUncaught) {
+        long start = System.nanoTime();
+        RegionTickWatchdog.enterTick(region);
+        try {
+            OwnerToken.runAs(OwnerToken.forRegion(region.id().value()), () -> {
+                taskQueue.drain(region, mailboxDrainBatch);
+                body.tickOnce(region);
+                taskQueue.drain(region, mailboxDrainBatch);
+            });
+            RegionTickWatchdog.exitTick(region);
+        } catch (Throwable t) {
+            // exitTick did not run (either body threw or the watchdog itself threw in STRICT mode);
+            // ensure the watchdog's per-thread state is cleared before routing the exception.
+            RegionTickWatchdog.exitTickAfterThrow();
+            if (!reportUncaught) return t;
+            Thread.currentThread().getUncaughtExceptionHandler().uncaughtException(Thread.currentThread(), t);
+        } finally {
+            s.mspt.recordNanos(System.nanoTime() - start);
+            region.markNotTicking();
+        }
+        return null;
     }
 
     private static final class ScheduleEntry implements Comparable<ScheduleEntry> {

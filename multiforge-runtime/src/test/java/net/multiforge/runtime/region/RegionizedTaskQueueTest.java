@@ -218,4 +218,19 @@ class RegionizedTaskQueueTest {
             throw new AssertionError("rwLock field missing on ThreadedRegionizer (Phase 1 task 1.2)", e);
         }
     }
+
+    @Test
+    void afterASplitEachInboxHoldsOnlyItsOwnChunks() {
+        ThreadedRegionizer regionizer = new ThreadedRegionizer(WORLD, 0);
+        RegionizedTaskQueue queue = RegionizedTaskQueue.of(regionizer);
+        regionizer.addListener(queue);
+        regionizer.addChunk(new ChunkPos(0, 0));
+        regionizer.addChunk(new ChunkPos(1, 0));
+        regionizer.addChunk(new ChunkPos(2, 0));
+        for (int i = 0; i < 3; i++) queue.queueChunkTask(WORLD, 2, 0, () -> {});
+        queue.queueChunkTask(WORLD, 0, 0, () -> {});
+        regionizer.removeChunk(new ChunkPos(1, 0));
+        assertThat(queue.inboxSize(regionizer.regionAtChunk(0, 0))).isEqualTo(1);
+        assertThat(queue.inboxSize(regionizer.regionAtChunk(2, 0))).isEqualTo(3);
+    }
 }

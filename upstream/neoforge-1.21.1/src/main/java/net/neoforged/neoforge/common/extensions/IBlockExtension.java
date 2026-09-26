@@ -157,6 +157,19 @@ public interface IBlockExtension {
     }
 
     /**
+     * Called when lava is updating, checks if a block face can catch fire from lava.
+     *
+     * @param state     The current state
+     * @param level     The current level
+     * @param pos       Block position in level
+     * @param direction The direction that the fire is coming from
+     * @return True if the face can catch fire from lava, false otherwise.
+     */
+    default boolean ignitedByLava(BlockState state, BlockGetter level, BlockPos pos, Direction direction) {
+        return state.ignitedByLava();
+    }
+
+    /**
      * Checks if a player or entity can use this block to 'climb' like a ladder.
      *
      * @param state  The current state
@@ -250,7 +263,7 @@ public interface IBlockExtension {
      * @param fluid         The current fluid state at current position
      */
     default void onDestroyedByPushReaction(BlockState state, Level level, BlockPos pos, Direction pushDirection, FluidState fluid) {
-        level.setBlock(pos, Blocks.AIR.defaultBlockState(), level.isClientSide ? 11 : 3);
+        level.setBlock(pos, Blocks.AIR.defaultBlockState(), Block.UPDATE_KNOWN_SHAPE | Block.UPDATE_CLIENTS);
         level.gameEvent(GameEvent.BLOCK_DESTROY, pos, GameEvent.Context.of(state));
     }
 
@@ -1018,5 +1031,17 @@ public interface IBlockExtension {
         } else {
             return BubbleColumnDirection.NONE;
         }
+    }
+
+    /**
+     * Determines if a fluid adjacent to the block on the given side should not be rendered.
+     *
+     * @param state         the block state of the block
+     * @param selfFace      the face of this block that the fluid is adjacent to
+     * @param adjacentFluid the fluid that is touching that face
+     * @return true if this block should cause the fluid's face to not render
+     */
+    default boolean shouldHideAdjacentFluidFace(BlockState state, Direction selfFace, FluidState adjacentFluid) {
+        return state.getFluidState().getType().isSame(adjacentFluid.getType());
     }
 }

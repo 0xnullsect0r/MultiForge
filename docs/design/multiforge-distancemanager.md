@@ -1,5 +1,11 @@
 # MultiForgeDistanceManager — Design
 
+> **Historical — superseded.** The M9 chunk-system fork this document describes was
+> retired: Vanilla's chunk system loads, ticks, lights and saves every chunk, and MultiForge
+> only tracks which region owns each loaded chunk. See `docs/design/barrier-tick-model.md`
+> (*Chunks*, *What this replaced*). Kept for the record; the classes and patches named here
+> no longer exist.
+
 **Status:** Phase 4 task 4.2a of the M9 landing plan
 (`plans/bubbly-jumping-comet.md`).
 **Verdict:** REPLACE (`docs/design/m9-patch-strategy.md:75-108`).

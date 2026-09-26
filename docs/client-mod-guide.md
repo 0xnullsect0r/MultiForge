@@ -8,7 +8,7 @@ You don't need it to *play* on a MultiForge server — MultiForge is a drop-in N
 
 ## 1. Install
 
-1. Have a working NeoForge 1.21.1 client (any launcher — vanilla launcher, Prism, CurseForge, ATLauncher, Modrinth App). NeoForge 21.1.90 or newer, JDK 21.
+1. Have a working NeoForge 1.21.1 client (any launcher — vanilla launcher, Prism, CurseForge, ATLauncher, Modrinth App). NeoForge 21.1.251 or newer, JDK 21.
 2. Download the mod jar from the latest release:
    ```
    https://github.com/0xnullsect0r/MultiForge/releases/latest/download/multiforge-client.jar

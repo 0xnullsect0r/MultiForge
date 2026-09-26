@@ -17,10 +17,16 @@ import net.multiforge.api.world.ChunkPos;
 import net.multiforge.api.world.WorldRef;
 
 /**
- * An operator-created rectangle of chunks that must live in one
- * dedicated region — never merged with adjacent regions, never split.
- * Used to keep two nearby bases isolated so one lag spike doesn't
- * bleed into the other.
+ * An operator-created rectangle of chunks whose loaded chunks always tick
+ * in one region: the regionizer merges every region holding a section of
+ * the pin and never splits the pinned area apart, even when the loaded
+ * chunks inside it are not adjacent. Used to keep a build that spans an
+ * unloaded gap (two farms fed by one item line, a base and its chunk
+ * loaders) on one thread.
+ *
+ * <p>A pin cannot isolate its area from loaded chunks next to it: regions
+ * whose sections touch always merge, because that is what makes ticking
+ * them in parallel safe (docs/design/barrier-tick-model.md).
  *
  * <p>Coordinates are inclusive on both ends. Bounds are normalized in
  * the compact ctor so callers can pass any two opposing corners.

@@ -29,6 +29,16 @@ dependencyResolutionManagement {
         // so :multiforge-client can resolve its runtime dep without
         // needing to re-publish through Maven Central.
         mavenLocal()
+        // multiforge-bench's protocol bots: MCProtocolLib (MIT) and the two
+        // artifacts of its dependency tree that are not on Maven Central.
+        maven("https://repo.opencollab.dev/main") {
+            name = "OpenCollab"
+            content {
+                includeGroup("org.geysermc.mcprotocollib")
+                includeGroup("com.nukkitx.fastutil")
+                includeGroup("org.cloudburstmc.math")
+            }
+        }
     }
 }
 
@@ -49,6 +59,9 @@ include(
     // Static ASM-based mod-jar safety scanner. No Minecraft/NeoForge dep —
     // see docs/design/scanner-rules.md §1.1.
     "multiforge-scanner",
+    // Fixture mods for the bench scenarios (see multiforge-testmods/README.md).
+    "multiforge-testmods:writer",
+    "multiforge-testmods:legacy",
 )
 
 // MultiForge patches under `multiforge-patches/<NN-group>/` are applied

@@ -17,6 +17,7 @@ import net.multiforge.api.scheduler.ServerDomains;
 import net.multiforge.runtime.config.MultiForgeConfig;
 import net.multiforge.runtime.ownership.OwnershipEnforcer;
 import net.multiforge.runtime.region.RegionTickBody;
+import net.multiforge.runtime.region.TickRegionScheduler;
 import net.multiforge.runtime.telemetry.OtelExporter;
 
 /**
@@ -82,7 +83,18 @@ public final class MultiForgeRegionizedRuntime {
      *         swallow it.
      */
     public static MultiThreadedSchedulerHost install(MultiForgeConfig config, RegionTickBody body) {
-        MultiThreadedSchedulerHost host = new MultiThreadedSchedulerHost(config, body);
+        return install(config, body, TickRegionScheduler.Mode.FREE_RUNNING);
+    }
+
+    /**
+     * As {@link #install(MultiForgeConfig, RegionTickBody)}, choosing the
+     * scheduler's execution model. A NeoForge server installs with {@link
+     * TickRegionScheduler.Mode#BARRIER}: the server thread drives every
+     * region tick through {@link MultiThreadedSchedulerHost#driveRegions}.
+     */
+    public static MultiThreadedSchedulerHost install(
+            MultiForgeConfig config, RegionTickBody body, TickRegionScheduler.Mode mode) {
+        MultiThreadedSchedulerHost host = new MultiThreadedSchedulerHost(config, body, mode);
         if (!CURRENT.compareAndSet(null, host)) {
             host.close();
             throw new AlreadyInstalledException();
@@ -99,7 +111,7 @@ public final class MultiForgeRegionizedRuntime {
             throw e;
         }
         // Opt-in only: a no-op unless -Dmultiforge.otel.endpoint is set (see
-        // docs/operator-handbook.md and OtelExporter's class doc).
+        // OtelExporter's class doc).
         OtelExporter.startFromSystemProperty();
         return host;
     }

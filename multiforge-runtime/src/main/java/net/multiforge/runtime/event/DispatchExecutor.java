@@ -12,51 +12,22 @@
  */
 package net.multiforge.runtime.event;
 
-import java.util.Optional;
-import net.multiforge.runtime.region.RegionId;
-
 /**
- * MC-free abstraction over "where can {@link DomainDispatcher} actually
- * hand off a deferred invocation." Lets {@link DomainDispatcher} be unit
- * tested without a live {@code MultiThreadedSchedulerHost}.
- *
- * <p>The fork bridge (M12.2, {@code net.multiforge.neoforge.event.EventBusBridge})
- * provides the production implementation, backed by {@code
- * RegionizedTaskQueue.queueChunkTask(...)} for {@link #enqueueRegion} /
- * {@link #enqueueGlobal} and a shared async executor (either {@link
- * AsyncEventPool} or the existing {@code ServerDomains.async()} pool — see
- * {@code docs/design/m12-event-routing.md} §5's note on reusing rather than
- * duplicating the async pool) for {@link #enqueueAsync}.
+ * Where {@link DomainDispatcher} hands off invocations that do not run
+ * inline. MC-free so the dispatcher is unit-testable; the fork's {@code
+ * SchedulerBackedDispatchExecutor} is the production implementation.
  */
 public interface DispatchExecutor {
 
     /**
-     * Hand {@code task} to the region identified by {@code destination}.
-     * The task lands in that region's inbox and runs the next time its
-     * worker drains it — never blocks the calling thread.
+     * Run {@code task} on the serial lane and return once it finished (see
+     * {@link SerialLane}). Exceptions propagate to the caller.
      */
-    void enqueueRegion(RegionId destination, Runnable task);
+    void runSerial(Runnable task);
 
-    /**
-     * Hand {@code task} to the global region's inbox. Never blocks the
-     * calling thread.
-     */
+    /** Hand {@code task} to the global region; runs at its next tick. Never blocks. */
     void enqueueGlobal(Runnable task);
 
-    /**
-     * Hand {@code task} to the shared async pool. Never blocks the calling
-     * thread; the task must not touch region-owned game state.
-     */
+    /** Hand {@code task} to the shared async pool. Never blocks. */
     void enqueueAsync(Runnable task);
-
-    /**
-     * Resolves the region that "owns" {@code event}'s target, per the
-     * per-event-shape table in {@code docs/design/m12-event-routing.md}
-     * §5.1 (block/entity/chunk position → region). Returns {@link
-     * Optional#empty()} when the event has no derivable spatial location
-     * (a mod-author error for a {@code REGION}-domain listener, or a
-     * genuinely non-spatial event) — {@link DomainDispatcher} treats that
-     * defensively rather than throwing.
-     */
-    Optional<RegionId> resolveEventLocation(Object event);
 }

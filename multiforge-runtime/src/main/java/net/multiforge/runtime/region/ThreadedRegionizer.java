@@ -27,8 +27,10 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 import java.util.function.Consumer;
+import java.util.function.Supplier;
 import net.multiforge.api.world.ChunkPos;
 import net.multiforge.api.world.WorldRef;
+import net.multiforge.runtime.region.pin.RegionPin;
 
 /**
  * Per-world regionizer: maintains the section→region map and enforces
@@ -61,6 +63,14 @@ public final class ThreadedRegionizer {
     private final ConcurrentMap<SectionPos, Region> sectionToRegion = new ConcurrentHashMap<>();
 
     /**
+     * The loaded chunks of each occupied section (packed {@code x, z}). A
+     * section stays in its region until its last chunk is removed; removing
+     * one chunk of a section that still has others loaded changes nothing.
+     * Guarded by the write lock.
+     */
+    private final Map<SectionPos, Set<Long>> sectionChunks = new HashMap<>();
+
+    /**
      * Structural mutation lock. Write side is held by {@link #addChunk} /
      * {@link #removeChunk} (and the {@link #mergeInto} / {@link
      * #splitIfDisconnected} helpers they call). Read side is exposed via
@@ -76,6 +86,9 @@ public final class ThreadedRegionizer {
 
     private final List<RegionListener> listeners = new CopyOnWriteArrayList<>();
 
+    /** Every pin of every world; filtered to this world on use. Empty until {@link #setPins}. */
+    private volatile Supplier<? extends Collection<RegionPin>> pins = List::of;
+
     public ThreadedRegionizer(WorldRef world, int sectionChunkShift) {
         if (sectionChunkShift < 0 || sectionChunkShift > 8) {
             throw new IllegalArgumentException("sectionChunkShift out of range: " + sectionChunkShift);
@@ -86,6 +99,21 @@ public final class ThreadedRegionizer {
 
     public WorldRef world() {
         return world;
+    }
+
+    /** Whether chunk {@code pos} is loaded (added and not removed). */
+    public boolean isChunkLoaded(ChunkPos pos) {
+        rwLock.readLock().lock();
+        try {
+            Set<Long> loaded = sectionChunks.get(SectionPos.ofChunk(pos.x(), pos.z(), sectionChunkShift));
+            return loaded != null && loaded.contains(packChunk(pos));
+        } finally {
+            rwLock.readLock().unlock();
+        }
+    }
+
+    private static long packChunk(ChunkPos pos) {
+        return ((long) pos.x() << 32) | (pos.z() & 0xFFFFFFFFL);
     }
 
     public int sectionChunkShift() {
@@ -138,16 +166,18 @@ public final class ThreadedRegionizer {
     }
 
     /**
-     * Mark the chunk containing {@code pos} as occupied. Creates a new
-     * region if necessary, or merges neighbouring regions if the new
-     * section bridges them.
+     * Mark the chunk {@code pos} as loaded. The first chunk of a section
+     * adds the section: a new region, or the neighbouring region (merging
+     * neighbours the section bridges). Adding a chunk that is already
+     * loaded is a no-op.
      *
-     * @return the region that owns the section after the call.
+     * @return the region that owns the chunk's section after the call.
      */
     public Region addChunk(ChunkPos pos) {
         SectionPos section = SectionPos.ofChunk(pos.x(), pos.z(), sectionChunkShift);
         rwLock.writeLock().lock();
         try {
+            sectionChunks.computeIfAbsent(section, k -> new HashSet<>()).add(packChunk(pos));
             Region existing = sectionToRegion.get(section);
             if (existing != null) return existing;
 
@@ -170,6 +200,7 @@ public final class ThreadedRegionizer {
                 target.markReady(); // safe: transient → ready
                 fireRegionCreated(target);
             }
+            for (RegionPin pin : pinsOverlapping(section)) mergePin(pin, target);
             return target;
         } finally {
             rwLock.writeLock().unlock();
@@ -177,14 +208,19 @@ public final class ThreadedRegionizer {
     }
 
     /**
-     * Remove the section containing {@code pos} from its region. If the
-     * removal disconnects the region, the connected components become
-     * independent regions.
+     * Mark the chunk {@code pos} as unloaded. When it was its section's last
+     * loaded chunk, the section leaves its region; if that disconnects the
+     * region, the connected components become independent regions. Removing
+     * a chunk that is not loaded is a no-op.
      */
     public void removeChunk(ChunkPos pos) {
         SectionPos section = SectionPos.ofChunk(pos.x(), pos.z(), sectionChunkShift);
         rwLock.writeLock().lock();
         try {
+            Set<Long> loaded = sectionChunks.get(section);
+            if (loaded == null || !loaded.remove(packChunk(pos))) return;
+            if (!loaded.isEmpty()) return;
+            sectionChunks.remove(section);
             Region region = sectionToRegion.remove(section);
             if (region == null) return;
             region.removeSection(section);
@@ -195,6 +231,27 @@ public final class ThreadedRegionizer {
             }
             // Recompute connected components; each becomes its own region.
             splitIfDisconnected(region);
+        } finally {
+            rwLock.writeLock().unlock();
+        }
+    }
+
+    /**
+     * Remove every chunk: each live region dies ({@link
+     * RegionListener#onRegionDied}) and the regionizer is empty. Used to
+     * re-partition a world with a different section size.
+     */
+    public void clear() {
+        rwLock.writeLock().lock();
+        try {
+            Collection<Region> live = regions();
+            sectionToRegion.clear();
+            sectionChunks.clear();
+            for (Region region : live) {
+                region.drainSections();
+                region.markDead();
+                fireRegionDied(region);
+            }
         } finally {
             rwLock.writeLock().unlock();
         }
@@ -271,6 +328,100 @@ public final class ThreadedRegionizer {
                 target.markReadyFromFolding();
             }
         }
+    }
+
+    /**
+     * Supply the region pins (see {@link RegionPin}) this regionizer honours,
+     * then apply them to the current regions. Pins of other worlds are ignored.
+     */
+    public void setPins(Supplier<? extends Collection<RegionPin>> pins) {
+        this.pins = Objects.requireNonNull(pins, "pins");
+        refreshPins();
+    }
+
+    /**
+     * Re-apply the pins after one was added or removed: merge the regions
+     * holding sections of each pin, then split every region whose sections
+     * are no longer connected (by adjacency or a shared pin).
+     */
+    public void refreshPins() {
+        rwLock.writeLock().lock();
+        try {
+            for (RegionPin pin : worldPins()) mergePin(pin, null);
+            for (Region region : regions()) {
+                if (region.state() != RegionState.DEAD) splitIfDisconnected(region);
+            }
+        } finally {
+            rwLock.writeLock().unlock();
+        }
+    }
+
+    private List<RegionPin> worldPins() {
+        Collection<RegionPin> all = pins.get();
+        if (all.isEmpty()) return List.of();
+        List<RegionPin> out = new ArrayList<>(all.size());
+        for (RegionPin p : all) {
+            if (p.world().dimensionId().equals(world.dimensionId())) out.add(p);
+        }
+        return out;
+    }
+
+    private List<RegionPin> pinsOverlapping(SectionPos section) {
+        List<RegionPin> worldPins = worldPins();
+        if (worldPins.isEmpty()) return List.of();
+        int minX = section.x() << sectionChunkShift;
+        int minZ = section.z() << sectionChunkShift;
+        int maxX = minX + (1 << sectionChunkShift) - 1;
+        int maxZ = minZ + (1 << sectionChunkShift) - 1;
+        List<RegionPin> out = new ArrayList<>(1);
+        for (RegionPin p : worldPins) {
+            if (p.fromChunkX() <= maxX && p.toChunkX() >= minX && p.fromChunkZ() <= maxZ && p.toChunkZ() >= minZ) {
+                out.add(p);
+            }
+        }
+        return out;
+    }
+
+    /**
+     * Invoke {@code visitor} for every section of {@code candidates} that
+     * overlaps {@code pin} — walking the pin's section range or the
+     * candidates, whichever is smaller.
+     */
+    private void forEachPinSection(RegionPin pin, Set<SectionPos> candidates, Consumer<SectionPos> visitor) {
+        int fromX = pin.fromChunkX() >> sectionChunkShift;
+        int toX = pin.toChunkX() >> sectionChunkShift;
+        int fromZ = pin.fromChunkZ() >> sectionChunkShift;
+        int toZ = pin.toChunkZ() >> sectionChunkShift;
+        long span = (long) (toX - fromX + 1) * (toZ - fromZ + 1);
+        if (span > candidates.size()) {
+            for (SectionPos s : List.copyOf(candidates)) {
+                if (s.x() >= fromX && s.x() <= toX && s.z() >= fromZ && s.z() <= toZ) visitor.accept(s);
+            }
+            return;
+        }
+        for (int x = fromX; x <= toX; x++) {
+            for (int z = fromZ; z <= toZ; z++) {
+                SectionPos s = new SectionPos(x, z);
+                if (candidates.contains(s)) visitor.accept(s);
+            }
+        }
+    }
+
+    /**
+     * Merge every live region holding a section of {@code pin} into one —
+     * into {@code into} when non-null, else into the largest. Caller holds
+     * the write lock.
+     */
+    private void mergePin(RegionPin pin, Region into) {
+        Set<Region> holders = new HashSet<>();
+        forEachPinSection(pin, sectionToRegion.keySet(), s -> {
+            Region r = sectionToRegion.get(s);
+            if (r != null && r.state() != RegionState.DEAD) holders.add(r);
+        });
+        if (holders.isEmpty()) return;
+        Region target = into != null && into.state() != RegionState.DEAD ? into : pickAnchor(holders);
+        holders.remove(target);
+        for (Region other : holders) mergeInto(target, other);
     }
 
     private Set<Region> neighbouringRegions(SectionPos section) {
@@ -358,16 +509,28 @@ public final class ThreadedRegionizer {
         }
     }
 
+    /**
+     * Sections of {@code universe} reachable from {@code start}, where two
+     * sections are connected when they touch (8-neighbourhood) or overlap
+     * the same pin.
+     */
     private Set<SectionPos> floodFill(Set<SectionPos> universe, SectionPos start) {
         Set<SectionPos> reached = new HashSet<>();
         ArrayDeque<SectionPos> stack = new ArrayDeque<>();
         stack.push(start);
         reached.add(start);
+        Set<RegionPin> pinsVisited = new HashSet<>();
         while (!stack.isEmpty()) {
             SectionPos p = stack.pop();
             for (int[] delta : NEIGHBOURS) {
                 SectionPos n = new SectionPos(p.x() + delta[0], p.z() + delta[1]);
                 if (universe.contains(n) && reached.add(n)) stack.push(n);
+            }
+            for (RegionPin pin : pinsOverlapping(p)) {
+                if (!pinsVisited.add(pin)) continue;
+                forEachPinSection(pin, universe, n -> {
+                    if (reached.add(n)) stack.push(n);
+                });
             }
         }
         return reached;

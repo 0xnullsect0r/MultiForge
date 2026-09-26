@@ -21,16 +21,10 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
-import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 class ModpackFetcherTest {
-
-    @AfterEach
-    void clearSystemProperty() {
-        System.clearProperty(ModpackFetcher.MODPACK_URL_PROPERTY);
-    }
 
     @Test
     void ensureDownloadedFetchesAndUnzipsAFileUrl(@TempDir Path tmp) throws IOException {
@@ -96,14 +90,18 @@ class ModpackFetcherTest {
     }
 
     @Test
-    void resolveUrlPrefersSystemPropertyOverDefault() {
-        System.setProperty(ModpackFetcher.MODPACK_URL_PROPERTY, "https://example.invalid/atm10.zip");
-        assertThat(ModpackFetcher.resolveUrl()).isEqualTo("https://example.invalid/atm10.zip");
+    void networkSourcesNeedADigest(@TempDir Path tmp) {
+        assertThatThrownBy(() -> ModpackFetcher.ensureDownloaded(tmp, "https://example.invalid/pack.zip", null))
+                .isInstanceOf(IOException.class)
+                .hasMessageContaining("SHA-256");
     }
 
     @Test
-    void resolveUrlFallsBackToDefaultWhenUnset() {
-        assertThat(ModpackFetcher.resolveUrl()).isEqualTo(ModpackFetcher.DEFAULT_MODPACK_URL);
+    void findServerRootDescendsIntoANestedPackFolder(@TempDir Path tmp) throws IOException {
+        Files.createDirectories(tmp.resolve("Server-Files-4.2/mods"));
+        assertThat(ModpackFetcher.findServerRoot(tmp)).isEqualTo(tmp.resolve("Server-Files-4.2"));
+        Files.createDirectories(tmp.resolve("mods"));
+        assertThat(ModpackFetcher.findServerRoot(tmp)).isEqualTo(tmp);
     }
 
     private static void writeZip(Path zip, String entryName, String content) throws IOException {

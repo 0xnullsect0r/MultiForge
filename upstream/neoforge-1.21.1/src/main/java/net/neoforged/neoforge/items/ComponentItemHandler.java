@@ -124,7 +124,7 @@ public class ComponentItemHandler implements IItemHandlerModifiable {
             return ItemStack.EMPTY;
         }
 
-        int toExtract = Math.min(amount, existing.getMaxStackSize());
+        int toExtract = Math.min(amount, existing.getCount());
 
         if (!simulate) {
             this.updateContents(contents, existing.copyWithCount(existing.getCount() - toExtract), slot);
@@ -140,7 +140,7 @@ public class ComponentItemHandler implements IItemHandlerModifiable {
 
     @Override
     public boolean isItemValid(int slot, ItemStack stack) {
-        return stack.getItem().canFitInsideContainerItems();
+        return stack.canFitInsideContainerItems();
     }
 
     /**

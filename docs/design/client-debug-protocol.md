@@ -388,12 +388,13 @@ naturally throttled upstream by `ViolationLogger`'s own token bucket
 
 ### 7.6 `SUBSCRIBE` (0x10) — `DebugPayload.Subscribe`
 
-Source: `DebugPacketCodec.encodeSubscribe`/`decodeSubscribe`
-(`DebugPacketCodec.java:155-163`), record at `DebugPayload.java:77-86`.
+Source: `DebugPacketCodec.encodeSubscribe`/`decodeSubscribe`, record
+`DebugPayload.Subscribe`.
 
 | Field | Wire type | Meaning |
 |---|---|---|
-| `flags` | i32 | Bitmask per §5. No list, no string — the entire body is 4 bytes. |
+| `flags` | i32 | Bitmask per §5. |
+| `clientProtocol` | i32, optional | The protocol version the client speaks. Absent in bodies from clients before v1.6 (a 4-byte body), which the server reads as protocol 1. |
 
 ---
 
@@ -447,18 +448,12 @@ Semantics:
 - **Client obligation:** a client mod MUST read `HELLO.protocolVersion`
   before sending `SUBSCRIBE` and MUST NOT send `SUBSCRIBE` (or assume
   any stream will arrive) if it does not understand that version.
-- **Server obligation:** the server defines a `MIN_SUPPORTED_PROTOCOL`
-  floor (named in `DebugPacketCodec` as of v1.4.0). On receiving
-  `SUBSCRIBE`, if the connection's advertised
-  client protocol version (learned out-of-band, e.g. via a client-echo
-  mechanism Track C1 defines, or conservatively assumed to be the
-  client's own compiled-against `PROTOCOL_VERSION` when no echo exists)
-  is below that floor, the server refuses to raise the mask above `0`
-  — identical failure shape to a permission failure (§6): silent from
-  the wire's perspective, logged rate-limited server-side. This
-  protocol does not mandate how the server learns the client's version;
-  it only mandates the refusal behavior once a below-floor version is
-  known.
+- **Server obligation:** on `SUBSCRIBE`, the server reads the client's
+  `clientProtocol` (§7.6). If `DebugPacketCodec.supportsProtocol` rejects
+  it, the server keeps that player's mask at `0` and logs the mismatch
+  once — the same shape as a permission failure (§6). Otherwise it masks
+  the requested streams with `Subscribe.streamsFor(clientProtocol)`, so a
+  protocol-1 client never receives a protocol-2 stream (`CHUNK_OWNERSHIP`).
 - **Backward-compatible changes** (allowed within `multiforge:debug/v1`
   without a channel rename):
   - Adding a new packet kind at a reserved ID (§2).

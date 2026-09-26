@@ -1,14 +1,5 @@
 --- a/net/minecraft/client/Minecraft.java
 +++ b/net/minecraft/client/Minecraft.java
-@@ -254,7 +_,7 @@
- import org.slf4j.Logger;
- 
- @OnlyIn(Dist.CLIENT)
--public class Minecraft extends ReentrantBlockableEventLoop<Runnable> implements WindowEventHandler {
-+public class Minecraft extends ReentrantBlockableEventLoop<Runnable> implements WindowEventHandler, net.neoforged.neoforge.client.extensions.IMinecraftExtension {
-     static Minecraft instance;
-     private static final Logger LOGGER = LogUtils.getLogger();
-     public static final boolean ON_OSX = Util.getPlatform() == Util.OS.OSX;
 @@ -435,7 +_,6 @@
              }
          }, Util.nonCriticalIoPool());
@@ -326,15 +317,17 @@
      }
  
      private boolean isLevelRunningNormally() {
-@@ -2056,6 +_,7 @@
+@@ -2056,7 +_,8 @@
      }
  
      public void setLevel(ClientLevel p_91157_, ReceivingLevelScreen.Reason p_341652_) {
+-        this.updateScreenAndTick(new ReceivingLevelScreen(() -> false, p_341652_));
 +        if (this.level != null) net.neoforged.neoforge.common.NeoForge.EVENT_BUS.post(new net.neoforged.neoforge.event.level.LevelEvent.Unload(this.level));
-         this.updateScreenAndTick(new ReceivingLevelScreen(() -> false, p_341652_));
++        this.updateScreenAndTick(net.neoforged.neoforge.client.DimensionTransitionScreenManager.getScreenFromLevel(p_91157_, this.level).create(() -> false, p_341652_));
          this.level = p_91157_;
          this.updateLevelInEngines(p_91157_);
-@@ -2093,6 +_,7 @@
+         if (!this.isLocalServer) {
+@@ -2093,13 +_,16 @@
          IntegratedServer integratedserver = this.singleplayerServer;
          this.singleplayerServer = null;
          this.gameRenderer.resetData();
@@ -342,7 +335,8 @@
          this.gameMode = null;
          this.narrator.clear();
          this.clientLevelTeardownInProgress = true;
-@@ -2100,6 +_,7 @@
+ 
++        var shouldRevertRegistriesToFrozen = this.getConnection() != null && this.getConnection().getConnection() != null; // Neo: Track whether to revert registries after disconnect
          try {
              this.updateScreenAndTick(p_320248_);
              if (this.level != null) {
@@ -350,6 +344,22 @@
                  if (integratedserver != null) {
                      this.profiler.push("waitForServer");
  
+@@ -2122,6 +_,7 @@
+         }
+ 
+         SkullBlockEntity.clear();
++        if(shouldRevertRegistriesToFrozen) net.neoforged.neoforge.registries.RegistryManager.revertToFrozen(); // Neo: Revert registries to frozen on disconnect
+     }
+ 
+     public void clearDownloadedResourcePacks() {
+@@ -2145,6 +_,7 @@
+         this.clientLevelTeardownInProgress = true;
+ 
+         try {
++            if (this.level != null) net.neoforged.neoforge.common.NeoForge.EVENT_BUS.post(new net.neoforged.neoforge.event.level.LevelEvent.Unload(this.level));
+             this.updateScreenAndTick(p_294558_);
+             this.gui.onDisconnected();
+             this.level = null;
 @@ -2258,6 +_,7 @@
  
      private void pickBlock() {

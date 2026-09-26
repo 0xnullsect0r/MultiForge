@@ -13,9 +13,8 @@
 package net.multiforge.runtime;
 
 /**
- * Runtime metadata and version constants. This is a placeholder-only
- * façade for M0; the M1 milestone lands the public API surface under
- * {@code net.multiforge.api} that wraps this runtime.
+ * Runtime name and version. Mods should read {@code
+ * net.multiforge.api.MultiForgeApi#VERSION} instead; this class is internal.
  */
 public final class MultiForge {
 

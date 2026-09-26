@@ -14,6 +14,7 @@ package net.multiforge.runtime.event;
 
 import java.util.Objects;
 import java.util.function.Consumer;
+import net.multiforge.api.event.DispatchDomainKind;
 import net.multiforge.runtime.event.AnnotationScanner.MetadataEntry;
 
 /**
@@ -39,15 +40,26 @@ final class RoutingListenerWrapper<T> implements Consumer<T> {
     private final Consumer<T> delegate;
     private final MetadataEntry metadata;
     private final DomainDispatcher dispatcher;
+    private final Class<?> listenerClass;
 
     RoutingListenerWrapper(Consumer<T> delegate, MetadataEntry metadata, DomainDispatcher dispatcher) {
+        this(delegate, metadata, dispatcher, delegate.getClass());
+    }
+
+    /** @param listenerClass the class whose mod decides the {@link ModSafety} of an unannotated listener */
+    RoutingListenerWrapper(
+            Consumer<T> delegate, MetadataEntry metadata, DomainDispatcher dispatcher, Class<?> listenerClass) {
         this.delegate = Objects.requireNonNull(delegate, "delegate");
         this.metadata = Objects.requireNonNull(metadata, "metadata");
         this.dispatcher = Objects.requireNonNull(dispatcher, "dispatcher");
+        this.listenerClass = Objects.requireNonNull(listenerClass, "listenerClass");
     }
 
     @Override
     public void accept(T event) {
-        dispatcher.dispatch(event, metadata.domain(), metadata.ordering(), () -> delegate.accept(event));
+        DispatchDomainKind domain = metadata.explicit()
+                ? metadata.domain()
+                : metadata.effectiveDomain(ModClassifier.safetyOf(listenerClass));
+        dispatcher.dispatch(event, domain, metadata.ordering(), () -> delegate.accept(event));
     }
 }

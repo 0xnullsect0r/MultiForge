@@ -1,0 +1,23 @@
+# Fixture mod for MultiForge's bench scenarios (multiforge-testmods/README.md).
+modLoader = "javafml"
+loaderVersion = "[4,)"
+license = "GPL-3.0-only"
+
+[[mods]]
+modId = "mftest_legacy"
+version = "${version}"
+displayName = "MultiForge test: legacy listener"
+description = "Keeps per-tick state in plain collections, as pre-MultiForge mods do. Test fixture; not for real servers."
+authors = "MultiForge authors"
+
+# Declares itself not thread-safe: MultiForge runs every one of its
+# listeners on the serial lane (docs/legacy-compat.md).
+[modproperties.mftest_legacy]
+multiforge_safety = "legacy"
+
+[[dependencies.mftest_legacy]]
+modId = "neoforge"
+type = "required"
+versionRange = "[21.1,)"
+ordering = "NONE"
+side = "SERVER"

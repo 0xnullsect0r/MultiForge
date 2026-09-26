@@ -67,6 +67,15 @@
              }
          }
      }
+@@ -477,7 +_,7 @@
+                 DifficultyInstance difficultyinstance = this.getCurrentDifficultyAt(blockpos);
+                 boolean flag1 = this.getGameRules().getBoolean(GameRules.RULE_DOMOBSPAWNING)
+                     && this.random.nextDouble() < (double)difficultyinstance.getEffectiveDifficulty() * 0.01
+-                    && !this.getBlockState(blockpos.below()).is(Blocks.LIGHTNING_ROD);
++                        && !(this.getBlockState(blockpos.below()).getBlock() instanceof net.minecraft.world.level.block.LightningRodBlock); // Neo: support custom LightningRodBlocks
+                 if (flag1) {
+                     SkeletonHorse skeletonhorse = EntityType.SKELETON_HORSE.create(this);
+                     if (skeletonhorse != null) {
 @@ -542,6 +_,7 @@
          BlockPos blockpos = this.getHeightmapPos(Heightmap.Types.MOTION_BLOCKING, p_295060_);
          BlockPos blockpos1 = blockpos.below();
@@ -112,11 +121,14 @@
          this.getProfiler().pop();
  
          for (Entity entity : p_8648_.getPassengers()) {
-@@ -807,6 +_,7 @@
+@@ -807,6 +_,10 @@
              } else {
                  this.entityManager.autoSave();
              }
 +            net.neoforged.neoforge.common.NeoForge.EVENT_BUS.post(new net.neoforged.neoforge.event.level.LevelEvent.Save(this));
++            if (p_8645_) {
++                net.neoforged.neoforge.common.IOUtilities.waitUntilIOWorkerComplete();
++            }
          }
      }
  
@@ -214,7 +226,7 @@
                      ServerLevel.this.dragonParts.put(enderdragonpart.getId(), enderdragonpart);
                  }
              }
-@@ -1733,24 +_,106 @@
+@@ -1733,24 +_,111 @@
                  if (ServerLevel.this.isUpdatingNavigations) {
                      String s = "onTrackingStart called during navigation iteration";
                      Util.logAndPauseIfInIde(
@@ -248,6 +260,11 @@
 +    @Override
 +    public java.util.Collection<net.neoforged.neoforge.entity.PartEntity<?>> getPartEntities() {
 +        return this.dragonParts.values();
++    }
++
++    @Override
++    public final void syncData(net.neoforged.neoforge.attachment.AttachmentType<?> type) {
++        net.neoforged.neoforge.attachment.AttachmentSync.syncLevelUpdate(this, type);
 +    }
 +
 +    private final net.neoforged.neoforge.capabilities.CapabilityListenerHolder capListenerHolder = new net.neoforged.neoforge.capabilities.CapabilityListenerHolder();

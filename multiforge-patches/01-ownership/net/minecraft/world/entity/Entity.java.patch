@@ -1,22 +1,15 @@
 --- a/net/minecraft/world/entity/Entity.java
 +++ b/net/minecraft/world/entity/Entity.java
-@@ -356,7 +356,19 @@
+@@ -356,6 +356,12 @@ public abstract class Entity extends net.neoforged.neoforge.attachment.Attachmen
      }
  
      public void remove(Entity.RemovalReason p_146834_) {
 +        // MultiForge (multiforge-patches/01-ownership/): see Level.setBlock for rationale.
-+        if (!net.multiforge.neoforge.OwnershipGuard.canMutate("Entity.remove")) {
-+            net.multiforge.neoforge.OwnershipGuard.reroute("Entity.remove", () -> this.remove(p_146834_));
++        if (!net.multiforge.neoforge.OwnershipGuard.canMutateAt("Entity.remove", this.level(), this.blockPosition())) {
++            net.multiforge.neoforge.OwnershipGuard.rerouteAt(
++                    "Entity.remove", this.level(), this.blockPosition(), () -> this.remove(p_146834_));
 +            return;
 +        }
          this.setRemoved(p_146834_);
-+        // MultiForge (multiforge-patches/05-entity-migration/, M4 Track A2 — extends this
-+        // 01-ownership hunk rather than adding a second patch on the same file/method): on the
-+        // RESIDENT -> RETIRED transition, retire this entity's MigratingEntityRef so
-+        // EntityRegistry's 200-tick TTL window (docs/design/entity-migration.md §4) starts now
-+        // rather than whenever some other call site happens to notice. Idempotent — a second
-+        // remove() on an already-retired (or never-tracked) entity is a no-op.
-+        net.multiforge.neoforge.entity.EntityMigrationBridge.onRemoved(this);
      }
  
-     public void onClientRemoval() {

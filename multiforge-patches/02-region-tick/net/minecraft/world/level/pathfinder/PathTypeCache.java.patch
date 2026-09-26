@@ -1,0 +1,46 @@
+--- a/net/minecraft/world/level/pathfinder/PathTypeCache.java
++++ b/net/minecraft/world/level/pathfinder/PathTypeCache.java
+@@ -8,8 +8,13 @@ import org.jetbrains.annotations.Nullable;
+ public class PathTypeCache {
+     private static final int SIZE = 4096;
+     private static final int MASK = 4095;
+-    private final long[] positions = new long[4096];
+-    private final PathType[] pathTypes = new PathType[4096];
++    // MultiForge (multiforge-patches/02-region-tick/): region workers path-find
++    // and invalidate concurrently. Vanilla's parallel position/type arrays could
++    // pair a new position with the previous position's type; one immutable
++    // entry per slot, replaced as a single reference write, cannot.
++    private final Entry[] entries = new Entry[4096];
++
++    private record Entry(long pos, PathType type) {}
+ 
+     public PathType getOrCompute(BlockGetter p_330930_, BlockPos p_331162_) {
+         long i = p_331162_.asLong();
+@@ -20,21 +25,22 @@ public class PathTypeCache {
+ 
+     @Nullable
+     private PathType get(int p_330588_, long p_331771_) {
+-        return this.positions[p_330588_] == p_331771_ ? this.pathTypes[p_330588_] : null;
++        Entry entry = this.entries[p_330588_];
++        return entry != null && entry.pos() == p_331771_ ? entry.type() : null;
+     }
+ 
+     private PathType compute(BlockGetter p_330773_, BlockPos p_330311_, int p_330671_, long p_332065_) {
+         PathType pathtype = WalkNodeEvaluator.getPathTypeFromState(p_330773_, p_330311_);
+-        this.positions[p_330671_] = p_332065_;
+-        this.pathTypes[p_330671_] = pathtype;
++        this.entries[p_330671_] = new Entry(p_332065_, pathtype);
+         return pathtype;
+     }
+ 
+     public void invalidate(BlockPos p_331507_) {
+         long i = p_331507_.asLong();
+         int j = index(i);
+-        if (this.positions[j] == i) {
+-            this.pathTypes[j] = null;
++        Entry entry = this.entries[j];
++        if (entry != null && entry.pos() == i) {
++            this.entries[j] = null;
+         }
+     }
+ 

@@ -1,0 +1,21 @@
+{
+  "profile": "atm10",
+  "workers": 4,
+  "ticks": 6000,
+  "wall_clock_ms": 29964,
+  "avg_mspt": 0.06,
+  "p50_mspt": 0.0,
+  "p95_mspt": 0.3,
+  "p99_mspt": 11.8,
+  "max_mspt": 11.8,
+  "tps_sustained_last_10min": null,
+  "rss_peak_mb": 1536,
+  "boot_ok": true,
+  "clean_stop": true,
+  "timing_source": "tick-query",
+  "sprint_tps": 9898,
+  "server": "stock",
+  "pacing": "sprint",
+  "modpack": "17 Modrinth mods (docs/verification/README.md)",
+  "mod_jar_count": 17
+}

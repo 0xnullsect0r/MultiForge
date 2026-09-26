@@ -190,8 +190,8 @@ class MainTest {
     @Test
     void defaultConfigIsTomlWithTheDocumentedKeys() {
         String toml = Main.defaultConfig();
-        assertThat(toml).contains("cores = ").contains("threads-per-core = ");
-        assertThat(toml).contains("[regions]").contains("[persistence]").contains("[diagnostics]");
+        assertThat(toml).contains("cores = ").contains("threadsPerCore = ").contains("mode = \"hybrid\"");
+        assertThat(toml).contains("[mtserver]").contains("[region]").contains("[violations]");
     }
 
     @Test

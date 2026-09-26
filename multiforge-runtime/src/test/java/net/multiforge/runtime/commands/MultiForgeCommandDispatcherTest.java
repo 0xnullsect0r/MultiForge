@@ -56,6 +56,51 @@ class MultiForgeCommandDispatcherTest {
     }
 
     @Test
+    void configModePolicyAndWarnRateAreStoredAndNotifySubscribers(@TempDir Path tmp) throws IOException {
+        MultiForgeConfigStore store = new MultiForgeConfigStore(tmp.resolve("mf.toml"), MultiForgeConfig.defaults());
+        MultiForgeCommandDispatcher d =
+                new MultiForgeCommandDispatcher(store, new RegionPinManager(tmp.resolve("pins.toml")));
+        List<MultiForgeConfig> seen = new ArrayList<>();
+        store.subscribe(seen::add);
+        List<String> out = new ArrayList<>();
+        assertThat(d.dispatch(new String[] {"config", "mode", "strict"}, out::add))
+                .isTrue();
+        assertThat(d.dispatch(new String[] {"config", "policy", "reroute-only"}, out::add))
+                .isTrue();
+        assertThat(d.dispatch(new String[] {"config", "warnPerMin", "0"}, out::add))
+                .isTrue();
+        assertThat(store.get().mode()).isEqualTo(MultiForgeConfig.Mode.STRICT);
+        assertThat(store.get().violationPolicy()).isEqualTo(MultiForgeConfig.ViolationPolicy.REROUTE_ONLY);
+        assertThat(store.get().warnPerMin()).isZero();
+        assertThat(seen).hasSize(4); // initial snapshot + three updates
+        assertThat(out).anyMatch(l -> l.contains("Mode strict is active"));
+        assertThat(java.nio.file.Files.readString(tmp.resolve("mf.toml"))).contains("mode = \"strict\"");
+
+        out.clear();
+        assertThat(d.dispatch(new String[] {"config", "mode", "off"}, out::add)).isTrue();
+        assertThat(out).anyMatch(l -> l.contains("next server start"));
+        out.clear();
+        assertThat(d.dispatch(new String[] {"config", "policy", "bogus"}, out::add))
+                .isFalse();
+        assertThat(out).anyMatch(l -> l.contains("reroute-only"));
+    }
+
+    @Test
+    void configReloadRereadsTheFile(@TempDir Path tmp) throws IOException {
+        Path file = tmp.resolve("mf.toml");
+        MultiForgeConfigStore store = new MultiForgeConfigStore(file, MultiForgeConfig.defaults());
+        MultiForgeCommandDispatcher d =
+                new MultiForgeCommandDispatcher(store, new RegionPinManager(tmp.resolve("pins.toml")));
+        java.nio.file.Files.writeString(file, "[mtserver]\ncores = 3\nthreadsPerCore = 2\n");
+        List<String> out = new ArrayList<>();
+        assertThat(d.dispatch(new String[] {"config", "reload"}, out::add)).isTrue();
+        assertThat(store.get().tickWorkerCount()).isEqualTo(6);
+        out.clear();
+        assertThat(d.dispatch(new String[] {"config", "show"}, out::add)).isTrue();
+        assertThat(out.get(0)).contains("cores = 3").contains("threadsPerCore = 2");
+    }
+
+    @Test
     void regionSizePowerOfTwoOnly(@TempDir Path tmp) throws IOException {
         MultiForgeCommandDispatcher d = make(tmp);
         List<String> out = new ArrayList<>();
@@ -138,16 +183,15 @@ class MultiForgeCommandDispatcherTest {
         assertThat(out).anyMatch(l -> l.contains("no probes matching prefix 'nomatch'"));
     }
 
-    // M9 sub-step 1: /multiforge chunks — reports chunk-holder counts by ChunkLoadLevel,
-    // using the ChunkHolderManager the fork bridge populates from Vanilla ticket events.
+    // /multiforge chunks — loaded chunks per region, from the world's ChunkHolderManager.
     @Test
     void chunksNotInstalledReportsFailure(@TempDir Path tmp) throws IOException {
-        // The 2-arg constructor leaves chunkManagers null (bridge not wired).
+        // The 2-arg constructor leaves chunkManagers null (no runtime).
         MultiForgeCommandDispatcher d = make(tmp);
         List<String> out = new ArrayList<>();
         assertThat(d.dispatch(new String[] {"chunks", "minecraft:overworld"}, out::add))
                 .isFalse();
-        assertThat(out).anyMatch(l -> l.contains("bridge not installed"));
+        assertThat(out).anyMatch(l -> l.contains("runtime not installed"));
     }
 
     @Test
@@ -161,22 +205,16 @@ class MultiForgeCommandDispatcherTest {
     }
 
     @Test
-    void chunksReportsPerLevelCounts(@TempDir Path tmp) throws IOException {
+    void chunksReportsLoadedChunksPerRegion(@TempDir Path tmp) throws IOException {
         net.multiforge.api.world.WorldRef world = net.multiforge.api.world.WorldRef.of("minecraft:overworld");
         net.multiforge.runtime.chunk.ChunkHolderManager manager =
                 new net.multiforge.runtime.chunk.ChunkHolderManager(world);
-        net.multiforge.runtime.region.RegionId regionId = net.multiforge.runtime.region.RegionId.next();
-        net.multiforge.runtime.chunk.NewChunkHolder h1 =
-                manager.createHolder(new net.multiforge.api.world.ChunkPos(0, 0), regionId);
-        h1.setLevel(net.multiforge.runtime.chunk.ChunkLoadLevel.TICKING);
-        net.multiforge.runtime.chunk.NewChunkHolder h2 =
-                manager.createHolder(new net.multiforge.api.world.ChunkPos(1, 0), regionId);
-        h2.setLevel(net.multiforge.runtime.chunk.ChunkLoadLevel.TICKING);
-        net.multiforge.runtime.chunk.NewChunkHolder h3 =
-                manager.createHolder(new net.multiforge.api.world.ChunkPos(2, 0), regionId);
-        h3.setLevel(net.multiforge.runtime.chunk.ChunkLoadLevel.BORDER);
-        // h4 stays at the default INACCESSIBLE
-        manager.createHolder(new net.multiforge.api.world.ChunkPos(3, 0), regionId);
+        net.multiforge.runtime.region.RegionId a = net.multiforge.runtime.region.RegionId.next();
+        net.multiforge.runtime.region.RegionId b = net.multiforge.runtime.region.RegionId.next();
+        manager.createHolder(new net.multiforge.api.world.ChunkPos(0, 0), a);
+        manager.createHolder(new net.multiforge.api.world.ChunkPos(1, 0), a);
+        manager.createHolder(new net.multiforge.api.world.ChunkPos(2, 0), a);
+        manager.createHolder(new net.multiforge.api.world.ChunkPos(90, 0), b);
 
         java.util.Map<net.multiforge.api.world.WorldRef, net.multiforge.runtime.chunk.ChunkHolderManager> map =
                 new java.util.HashMap<>();
@@ -185,10 +223,9 @@ class MultiForgeCommandDispatcherTest {
         List<String> out = new ArrayList<>();
         assertThat(d.dispatch(new String[] {"chunks", "minecraft:overworld"}, out::add))
                 .isTrue();
-        assertThat(out).anyMatch(l -> l.contains("holders=4"));
-        assertThat(out).anyMatch(l -> l.contains("TICKING") && l.contains(": 2"));
-        assertThat(out).anyMatch(l -> l.contains("BORDER") && l.contains(": 1"));
-        assertThat(out).anyMatch(l -> l.contains("INACCESSIBLE") && l.contains(": 1"));
+        assertThat(out).anyMatch(l -> l.contains("loaded chunks=4") && l.contains("regions=2"));
+        assertThat(out).anyMatch(l -> l.contains("region " + a) && l.contains(": 3 chunk(s)"));
+        assertThat(out).anyMatch(l -> l.contains("region " + b) && l.contains(": 1 chunk(s)"));
     }
 
     @Test
@@ -199,7 +236,7 @@ class MultiForgeCommandDispatcherTest {
         List<String> out = new ArrayList<>();
         assertThat(d.dispatch(new String[] {"chunks", "minecraft:bogus"}, out::add))
                 .isTrue();
-        assertThat(out).anyMatch(l -> l.contains("No chunk manager"));
+        assertThat(out).anyMatch(l -> l.contains("No chunks of"));
     }
 
     // /multiforge warn — operator view over ViolationLogger's recent-violation history.

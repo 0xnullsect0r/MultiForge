@@ -1,140 +1,71 @@
-# MultiForge Entity Migration (M4)
+# Entities crossing regions
 
-## The problem
+MultiForge does not migrate entities between regions. Ownership follows chunk
+position, and moves that could cross regions within one tick are deferred to
+the server thread. This page explains why that is enough. The full model is in
+[`design/barrier-tick-model.md`](design/barrier-tick-model.md#ownership).
 
-An entity in region A moves across a chunk boundary owned by region B.
-Or portal-teleports to the Nether. Or gets pearl-thrown. The mid-tick
-"just update the position" approach used by single-threaded Vanilla is
-unsafe in parallel: two workers could touch the entity at once, or an
-observer holds a stale pointer to a region that no longer owns it.
+## Ownership follows position
 
-## The Folia-inspired protocol
+An entity belongs to the region that owns the chunk it is in. There is no
+entity ownership table and no per-entity state to move. When an entity walks,
+flies or is pushed into a chunk owned by another region, it is ticked by that
+region the next time that region ticks, because at that point its chunk is
+owned by that region.
 
-Everything is a **two-phase remove-then-add**, coordinated through
-`RegionizedTaskQueue`.
+This cannot race between two workers: two distinct regions are always
+separated by at least one fully unloaded section (see
+[`regions.md`](regions.md#how-regions-form)), so an entity moving normally
+cannot leave its region's chunks within one tick without first entering
+unloaded chunks. If regions merge or split between ticks, the entity simply
+belongs to whichever region owns its chunk afterwards.
 
-```
-source region worker                      destination region worker
-─────────────────────                     ───────────────────────
-1. CAS RESIDENT → MIGRATING (recursive
-   over passenger tree). If any CAS fails
-   the whole tree is rolled back.
+Passengers and vehicles need no special handling: they are ticked with their
+vehicle, as in Vanilla.
 
-2. Snapshot the entity + passengers into
-   an immutable EntitySnapshot (uuid,
-   destWorld, destPos, opaque payload,
-   nested passenger list).
+## Moves that are deferred
 
-3. Remove every ref from the source
-   world's EntityRegistry.
+Some moves can jump arbitrarily far in one step. When a region worker starts
+one, it is deferred to the server thread and runs after the barrier, while no
+region is ticking (`OwnershipGuard.deferCrossRegionMove` /
+`deferToServerThread`):
 
-4. taskQueue.queueChunkTask(destWorld,
-   destChunk, () -> migrator.completeAt)
-                                          ─→ 5. Recursively re-materialize:
-                                                 - new MigratingEntityRef with
-                                                   updated (world, chunkPos)
-                                                 - registry.add(ref, payload)
-                                                 - ref.completeMigration()
-                                                   (CAS MIGRATING → RESIDENT)
-                                                 - for each passenger, recurse
-```
+- an entity teleporting into a chunk owned by another region
+  (`Entity.teleportTo`, same-level `changeDimension`,
+  `ServerPlayer.teleportTo`, `teleportRelative`), which includes ender pearls
+  and chorus fruit;
+- a player changing dimension, because removing a player from a level updates
+  every tracked entity's viewer set;
+- command and function execution, since `/tp @e` or `/fill` from a command
+  block can reach any chunk.
 
-## Why remove-then-add
+A non-player entity changing dimension (for example an item through a nether
+portal) proceeds inline: only the current level's regions are running, so the
+destination level is idle.
 
-Trying to atomically move a live entity between owners requires
-locking both regions — which is exactly what MultiForge is designed
-to avoid. Snapshot-based transfer decouples the two sides: the source
-finalizes its detach in isolation, the destination runs its attach in
-isolation, and the mailbox handoff provides the ordering guarantee.
+Teleports that stay within the entity's own region run immediately, as in
+Vanilla.
 
-## MigrationState machine
+## Player login and respawn
 
-```
-                 ┌───────────┐
-     ┌─────CAS───│ RESIDENT  │◀────completeMigration────┐
-     ▼           └───────────┘                           │
-┌──────────┐                                        (new world/pos
-│ MIGRATING│──abort──▶ RESIDENT                      published)
-└────┬─────┘
-     │
-   retire()
-     ▼
-  RETIRED (terminal)
-```
+Logins, respawns and player list changes are handled by Vanilla on the server
+thread, outside the region barrier. There is no separate join path.
 
-- `beginMigration()` — CAS `RESIDENT → MIGRATING`. Fails if the
-  entity is already migrating or retired.
-- `completeMigration(newWorld, newChunkPos)` — publish new location
-  and CAS `MIGRATING → RESIDENT`. If the entity was retired mid-flight,
-  state stays `RETIRED`.
-- `abortMigration()` — best-effort return to `RESIDENT` when the
-  destination refuses (rare — full chunk unloaded, teleport quota).
-- `retire()` — terminal. All observers see `isRetired() == true`
-  immediately.
+## Entity creation and removal across regions
 
-## Vehicle + passenger tree
+Adding an entity in a chunk the current region does not own
+(`ServerLevel.addFreshEntity` / `addEntity`) and removing one (`Entity.remove`)
+are ownership-checked like any other mutation. From a region worker they are
+rerouted to the owning region's mailbox, or to the server thread if no region
+owns the chunk. `addFreshEntity` returns Vanilla's expected result to the
+caller immediately; if the owner's actual result differs when it applies the
+change, the probe `reroute.ServerLevel.addFreshEntity.mismatch` is bumped and
+a warning logged.
 
-Passengers move atomically with their vehicle. The source captures the
-whole tree in one snapshot; the destination re-materializes bottom-up
-so parents exist before children are re-mounted.
+## What this replaced
 
-`beginMigrationWithTree(vehicle, destWorld, destPos, passengerSpec)`
-takes an explicit tree — the M4 patch fills it from Vanilla's
-`Entity.getPassengers()` walk; tests provide one directly. The CAS is
-applied to every ref in the tree in one pass; if any fails, all are
-rolled back.
-
-## Player join
-
-Players are the special case where the "source" is a Netty IO thread,
-not a region worker. Two hops:
-
-1. Netty thread → global region (via `queueChunkTask` on the global
-   world). Global region assigns UUID row in the shared datastore.
-2. Global region → spawn-chunk region. Spawn region materializes the
-   player, adds it to its `EntityRegistry`, and releases the initial
-   game packets.
-
-`PlayerJoinCoordinator.onPlayerLoginCompleted(playerUuid, spawnWorld,
-spawnPos, payload)` does the whole flow — the M4 patch calls it from
-`ServerConnectionListener` after successful login.
-
-## Invariants the pure-Java M4 layer proves
-
-- Exactly one owner at any time — no two workers can hold an
-  `EntityRef` in `RESIDENT` state simultaneously.
-- No dupes on transfer — `registry.remove(uuid)` on source before
-  `registry.add(freshRef)` on destination.
-- Passenger tree is all-or-nothing — CAS on every ref before snapshot,
-  rollback if any fails.
-- Cross-dimension crosses region **and** regionizer boundaries — the
-  `taskQueue`'s ownerLookup finds the destination regionizer by
-  `WorldRef.dimensionId()`.
-- Retired mid-flight — destination discovers `RETIRED` on
-  `completeMigration` and leaves the entity absent from the target
-  registry (never rematerialized).
-
-## What the M4 patch adds on top
-
-- Snapshot payload becomes a Vanilla `CompoundTag` populated by
-  `Entity.saveWithoutId`.
-- Rematerialization at the destination uses
-  `ServerLevel.addFreshEntity` after `Entity.loadWithId`.
-- `Entity#teleportAsync(...)` is the operator-visible entry that
-  wraps `EntityMigrationCoordinator.beginMigration`.
-- Ender-pearl fix couples with the M3 `TicketType.ENDER_PEARL` — each
-  pearl migration adds/removes its own per-entityId ticket so target
-  chunks stay loaded through the flight.
-- The M4 patch also binds `PlayerJoinCoordinator` into
-  `ServerConnectionListener` so login → global → spawn happens on the
-  region timer, not on Netty.
-
-## Test coverage
-
-- `MigratingEntityRefTest` — RESIDENT initial, `beginMigration`
-  once-per-round-trip, abort returns to RESIDENT, retire is terminal.
-- `EntityMigrationCoordinatorTest` — single-entity cross-region,
-  cross-dimension, vehicle+rider+pet atomic tree transfer, double
-  migration attempt rejected, retired-entity migration rejected.
-- `PlayerJoinCoordinatorTest` — full Netty → global → spawn hop
-  produces exactly one entry in the target world's registry.
+The M4 design removed an entity from its source region, serialised it to NBT,
+and re-created it in the destination region, holding a player's movement
+packets while a hop was in flight. It broke references to the entity and made
+players rubber-band. It was removed when ownership became positional; see
+[`design/barrier-tick-model.md`](design/barrier-tick-model.md#what-this-replaced).

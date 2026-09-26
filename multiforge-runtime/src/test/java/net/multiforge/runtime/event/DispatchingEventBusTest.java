@@ -14,16 +14,12 @@ package net.multiforge.runtime.event;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-import java.util.List;
-import java.util.Optional;
-import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicInteger;
 import net.multiforge.api.event.DispatchDomain;
 import net.multiforge.api.event.DispatchDomainKind;
 import net.multiforge.runtime.diagnostics.ProbeRegistry;
 import net.multiforge.runtime.diagnostics.ViolationLogger;
 import net.multiforge.runtime.ownership.OwnerToken;
-import net.multiforge.runtime.region.RegionId;
 import net.neoforged.bus.api.BusBuilder;
 import net.neoforged.bus.api.Event;
 import net.neoforged.bus.api.SubscribeEvent;
@@ -64,23 +60,23 @@ class DispatchingEventBusTest {
     }
 
     @Test
-    void registerHonorsDispatchDomainAnnotationForEndToEndRouting() {
-        RegionId target = RegionId.next();
+    void registerHonorsDispatchDomainAnnotations() {
         RecordingDispatchExecutor executor = new RecordingDispatchExecutor();
-        executor.location = Optional.of(target);
         DispatchingEventBus bus = new DispatchingEventBus(BusBuilder.builder().build(), executor);
-        RegionRoutedListener listener = new RegionRoutedListener();
-        bus.register(listener);
+        RegionRoutedListener region = new RegionRoutedListener();
+        GlobalRoutedListener global = new GlobalRoutedListener();
+        bus.register(region);
+        bus.register(global);
 
-        // Caller is a different region than the event resolves to -> expect a real hand-off.
-        OwnerToken.runAs(OwnerToken.forRegion(target.value() + 1), () -> bus.post(new TestEvent()));
+        OwnerToken.runAs(OwnerToken.forRegion(1L), () -> bus.post(new TestEvent()));
 
-        assertThat(listener.calls.get()).isEqualTo(1);
-        assertThat(executor.regionEnqueues).containsExactly(target);
+        assertThat(region.calls.get()).isEqualTo(1);
+        assertThat(global.calls.get()).isEqualTo(1);
+        assertThat(executor.serial.get()).isEqualTo(1); // only the GLOBAL listener used the lane
     }
 
     @Test
-    void unannotatedSubscribeEventMethodDefaultsToLegacySerialAndWarns() {
+    void unannotatedListenerOfAnUnmappedEventRunsOnTheSerialLane() {
         RecordingDispatchExecutor executor = new RecordingDispatchExecutor();
         DispatchingEventBus bus = new DispatchingEventBus(BusBuilder.builder().build(), executor);
         InstanceListener listener = new InstanceListener();
@@ -89,33 +85,58 @@ class DispatchingEventBusTest {
         OwnerToken.runAs(OwnerToken.forRegion(1L), () -> bus.post(new TestEvent()));
 
         assertThat(listener.calls.get()).isEqualTo(1);
-        assertThat(ProbeRegistry.get("event.dispatch.legacy")).isEqualTo(1);
-        assertThat(ViolationLogger.recent())
-                .anySatisfy(e -> assertThat(e.site()).isEqualTo("DomainDispatcher.legacySerial"));
+        assertThat(executor.serial.get()).isEqualTo(1);
+        assertThat(ProbeRegistry.get("event.dispatch.serial")).isEqualTo(1);
     }
 
     @Test
-    void addListenerConsumerFamilyIsPassedThroughUnwrapped() {
-        // See DispatchingEventBus's class Javadoc: wrapping a bare
-        // Consumer in RoutingListenerWrapper breaks NeoForge's ASM
-        // consumer-type introspection at boot. The addListener family
-        // passes the caller's Consumer through unmodified, so the
-        // listener runs with Vanilla semantics (inline on the poster's
-        // thread) and the event.dispatch.* counters do not increment.
-        // @DispatchDomain routing only applies to @SubscribeEvent
-        // methods registered via register(Object).
+    void lambdaListenersAreRoutedWithTheirResolvedEventType() {
         RecordingDispatchExecutor executor = new RecordingDispatchExecutor();
         DispatchingEventBus bus = new DispatchingEventBus(BusBuilder.builder().build(), executor);
         AtomicInteger calls = new AtomicInteger();
-        long legacyBefore = ProbeRegistry.get("event.dispatch.legacy");
+        java.util.function.Consumer<TestEvent> listener = (TestEvent event) -> calls.incrementAndGet();
 
-        bus.addListener(TestEvent.class, event -> calls.incrementAndGet());
+        bus.addListener(listener);
+        assertThat(DispatchingEventBus.eventTypeOf(listener)).isEqualTo(TestEvent.class);
         OwnerToken.runAs(OwnerToken.forRegion(1L), () -> bus.post(new TestEvent()));
+        bus.post(new OtherEvent()); // a different event type does not reach it
 
         assertThat(calls.get()).isEqualTo(1);
-        // No dispatcher-side counters increment because the listener
-        // wasn't wrapped — inner bus dispatched it directly.
-        assertThat(ProbeRegistry.get("event.dispatch.legacy")).isEqualTo(legacyBefore);
+        assertThat(executor.serial.get()).isEqualTo(1);
+    }
+
+    @Test
+    void strictSafeModsRunUnannotatedListenersInline() {
+        RecordingDispatchExecutor executor = new RecordingDispatchExecutor();
+        DispatchingEventBus bus = new DispatchingEventBus(BusBuilder.builder().build(), executor);
+        InstanceListener listener = new InstanceListener();
+        bus.register(listener);
+        ModClassifier.bind(c -> c == InstanceListener.class ? ModSafety.STRICT_SAFE : ModSafety.HYBRID_SAFE);
+        try {
+            OwnerToken.runAs(OwnerToken.forRegion(1L), () -> bus.post(new TestEvent()));
+        } finally {
+            ModClassifier.reset();
+        }
+        assertThat(listener.calls.get()).isEqualTo(1);
+        assertThat(executor.serial.get()).isZero();
+    }
+
+    @Test
+    void unregisterRemovesWrappedListeners() {
+        DispatchingEventBus bus =
+                new DispatchingEventBus(BusBuilder.builder().build(), new RecordingDispatchExecutor());
+        InstanceListener listener = new InstanceListener();
+        AtomicInteger lambdaCalls = new AtomicInteger();
+        java.util.function.Consumer<TestEvent> lambda = event -> lambdaCalls.incrementAndGet();
+        bus.register(listener);
+        bus.addListener(TestEvent.class, lambda);
+
+        bus.unregister(listener);
+        bus.unregister(lambda);
+        bus.post(new TestEvent());
+
+        assertThat(listener.calls.get()).isZero();
+        assertThat(lambdaCalls.get()).isZero();
     }
 
     @Test
@@ -161,6 +182,18 @@ class DispatchingEventBusTest {
         }
     }
 
+    private static final class GlobalRoutedListener {
+        final AtomicInteger calls = new AtomicInteger();
+
+        @SubscribeEvent
+        @DispatchDomain(DispatchDomainKind.GLOBAL)
+        public void on(TestEvent event) {
+            calls.incrementAndGet();
+        }
+    }
+
+    private static final class OtherEvent extends Event {}
+
     private static final class StaticListener {
         static final AtomicInteger CALLS = new AtomicInteger();
 
@@ -171,12 +204,11 @@ class DispatchingEventBusTest {
     }
 
     private static final class RecordingDispatchExecutor implements DispatchExecutor {
-        final List<RegionId> regionEnqueues = new CopyOnWriteArrayList<>();
-        volatile Optional<RegionId> location = Optional.empty();
+        final AtomicInteger serial = new AtomicInteger();
 
         @Override
-        public void enqueueRegion(RegionId destination, Runnable task) {
-            regionEnqueues.add(destination);
+        public void runSerial(Runnable task) {
+            serial.incrementAndGet();
             task.run();
         }
 
@@ -188,11 +220,6 @@ class DispatchingEventBusTest {
         @Override
         public void enqueueAsync(Runnable task) {
             task.run();
-        }
-
-        @Override
-        public Optional<RegionId> resolveEventLocation(Object event) {
-            return location;
         }
     }
 }

@@ -12,7 +12,6 @@
  */
 package net.multiforge.scanner.rules;
 
-import java.util.List;
 import java.util.Set;
 import java.util.function.Consumer;
 import net.multiforge.scanner.BytecodeUtil;
@@ -23,7 +22,6 @@ import net.multiforge.scanner.Severity;
 import net.multiforge.scanner.TickReachability;
 import net.multiforge.scanner.TypeHierarchy;
 import org.objectweb.asm.Opcodes;
-import org.objectweb.asm.tree.AnnotationNode;
 import org.objectweb.asm.tree.ClassNode;
 import org.objectweb.asm.tree.MethodInsnNode;
 import org.objectweb.asm.tree.MethodNode;
@@ -34,9 +32,10 @@ import org.objectweb.asm.tree.MethodNode;
  * <p>ERROR: a blocking wait method ({@code .get()}, {@code .get(long, TimeUnit)}, {@code
  * .join()}, {@code .getNow(Object)}, {@code .awaitUninterruptibly()}) invoked on a receiver whose
  * static type is, or is a subtype of, {@code java.util.concurrent.Future}, {@code
- * java.util.concurrent.CompletionStage}, or {@code java.util.concurrent.ForkJoinTask} — lexically
- * inside a method annotated {@code @RegionThread}. Direct bytecode expression of CLAUDE.md rule
- * 4.
+ * java.util.concurrent.CompletionStage}, or {@code java.util.concurrent.ForkJoinTask} — inside a
+ * tick-reachable method ({@link TickReachability}: {@code @RegionThread} methods or classes, tick
+ * event handlers, and what they call in the same class). Direct bytecode expression of CLAUDE.md
+ * rule 4.
  *
  * <p>Subtype resolution walks a per-scan {@link TypeHierarchy} (round-6 fork C HIGH finding: a
  * literal two-name owner check misses a mod-defined receiver like {@code class MyFuture extends
@@ -85,8 +84,11 @@ public final class R03BlockingFuture extends AbstractTreeRule {
     protected void scanClass(ClassContext ctx, ClassNode cn, Consumer<Finding> emit) {
         String classFqn = ctx.className().replace('/', '.');
         TypeHierarchy hierarchy = ctx.typeHierarchy();
+        // Tick-reachable: @RegionThread methods or classes, tick-event handlers,
+        // and what they call within the class (TickReachability).
+        var tickReachable = TickReachability.compute(cn);
         for (MethodNode mn : cn.methods) {
-            if (!isRegionThread(mn)) {
+            if (!tickReachable.contains(mn.name + mn.desc)) {
                 continue;
             }
             String methodKey = BytecodeUtil.methodKey(mn);
@@ -108,26 +110,9 @@ public final class R03BlockingFuture extends AbstractTreeRule {
                         methodKey,
                         BytecodeUtil.lineOf(mn, call),
                         call.owner.substring(call.owner.lastIndexOf('/') + 1) + "." + call.name
-                                + " blocks the region worker — called from @RegionThread method " + mn.name,
+                                + " blocks the region worker — called from tick-reachable method " + mn.name,
                         Fingerprint.compute(id(), classFqn, methodKey, mn, call)));
             }
         }
-    }
-
-    private static boolean isRegionThread(MethodNode mn) {
-        return hasDesc(mn.visibleAnnotations, TickReachability.REGION_THREAD_DESC)
-                || hasDesc(mn.invisibleAnnotations, TickReachability.REGION_THREAD_DESC);
-    }
-
-    private static boolean hasDesc(List<AnnotationNode> nodes, String desc) {
-        if (nodes == null) {
-            return false;
-        }
-        for (AnnotationNode n : nodes) {
-            if (desc.equals(n.desc)) {
-                return true;
-            }
-        }
-        return false;
     }
 }

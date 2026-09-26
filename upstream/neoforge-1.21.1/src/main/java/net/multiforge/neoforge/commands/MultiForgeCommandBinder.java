@@ -16,13 +16,11 @@ import com.mojang.brigadier.arguments.IntegerArgumentType;
 import com.mojang.brigadier.arguments.StringArgumentType;
 import com.mojang.brigadier.builder.LiteralArgumentBuilder;
 import com.mojang.brigadier.context.CommandContext;
-import java.io.IOException;
-import java.nio.file.Files;
-import java.nio.file.Path;
 import java.util.stream.Stream;
 import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.commands.Commands;
 import net.minecraft.commands.SharedSuggestionProvider;
+import net.minecraft.commands.arguments.ResourceLocationArgument;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.MinecraftServer;
 import net.multiforge.neoforge.MultiForgeServerState;
@@ -52,20 +50,7 @@ public final class MultiForgeCommandBinder {
     private MultiForgeCommandBinder() {}
 
     public static void register(MinecraftServer server) {
-        Path serverDir = server.getServerDirectory().toAbsolutePath();
-        Path configFile = serverDir.resolve("config").resolve("multiforge-server.toml");
-
-        MultiForgeConfigStore configStore;
-        try {
-            Files.createDirectories(configFile.getParent());
-            configStore = MultiForgeConfigStore.load(configFile);
-        } catch (IOException e) {
-            ViolationLogger.warn(
-                    "MultiForgeCommandBinder.register",
-                    "failed to load " + configFile + " — /multiforge config subcommands will not persist: " + e.getMessage());
-            configStore = new MultiForgeConfigStore(
-                    configFile, net.multiforge.runtime.config.MultiForgeConfig.defaults());
-        }
+        MultiForgeConfigStore configStore = MultiForgeServerState.configStoreFor(server);
 
         // v1.3.16: share ONE RegionPinManager instance with
         // DebugChannelServer via MultiForgeServerState so /multiforge
@@ -104,17 +89,33 @@ public final class MultiForgeCommandBinder {
                 .then(probesSubtree(dispatcher))
                 .then(chunksSubtree(dispatcher))
                 .then(warnSubtree(dispatcher))
+                .then(Commands.literal("tickstats")
+                        .executes(ctx -> run(dispatcher, ctx, "tickstats"))
+                        .then(Commands.literal("reset").executes(ctx -> run(dispatcher, ctx, "tickstats", "reset"))))
                 .then(certifySubtree(dispatcher));
     }
 
     private static LiteralArgumentBuilder<CommandSourceStack> configSubtree(MultiForgeCommandDispatcher dispatcher) {
         return Commands.literal("config")
+                .then(Commands.literal("show").executes(ctx -> run(dispatcher, ctx, "config", "show")))
+                .then(Commands.literal("reload").executes(ctx -> run(dispatcher, ctx, "config", "reload")))
                 .then(Commands.literal("cores")
-                        .then(Commands.argument("n", IntegerArgumentType.integer(1, 128))
+                        .then(Commands.argument("n", IntegerArgumentType.integer(1, 4096))
                                 .executes(ctx -> run(dispatcher, ctx, "config", "cores", intArg(ctx, "n")))))
                 .then(Commands.literal("threads")
-                        .then(Commands.argument("n", IntegerArgumentType.integer(1, 8))
-                                .executes(ctx -> run(dispatcher, ctx, "config", "threads", intArg(ctx, "n")))));
+                        .then(Commands.argument("n", IntegerArgumentType.integer(1, 64))
+                                .executes(ctx -> run(dispatcher, ctx, "config", "threads", intArg(ctx, "n")))))
+                .then(Commands.literal("mode")
+                        .then(Commands.argument("mode", StringArgumentType.word())
+                                .suggests((ctx, b) -> SharedSuggestionProvider.suggest(Stream.of("hybrid", "strict", "off"), b))
+                                .executes(ctx -> run(dispatcher, ctx, "config", "mode", strArg(ctx, "mode")))))
+                .then(Commands.literal("policy")
+                        .then(Commands.argument("policy", StringArgumentType.word())
+                                .suggests((ctx, b) -> SharedSuggestionProvider.suggest(Stream.of("warn", "reroute-only", "fail"), b))
+                                .executes(ctx -> run(dispatcher, ctx, "config", "policy", strArg(ctx, "policy")))))
+                .then(Commands.literal("warnPerMin")
+                        .then(Commands.argument("n", IntegerArgumentType.integer(0, 100000))
+                                .executes(ctx -> run(dispatcher, ctx, "config", "warnPerMin", intArg(ctx, "n")))));
     }
 
     private static LiteralArgumentBuilder<CommandSourceStack> regionSubtree(MultiForgeCommandDispatcher dispatcher) {
@@ -123,11 +124,6 @@ public final class MultiForgeCommandBinder {
                 .then(Commands.literal("size")
                         .then(Commands.argument("chunks", IntegerArgumentType.integer(1, 256))
                                 .executes(ctx -> run(dispatcher, ctx, "region", "size", intArg(ctx, "chunks")))))
-                .then(Commands.literal("mode")
-                        .then(Commands.argument("mode", StringArgumentType.word())
-                                .suggests((ctx, b) -> SharedSuggestionProvider.suggest(
-                                        Stream.of("player-only", "full-world"), b))
-                                .executes(ctx -> run(dispatcher, ctx, "region", "mode", strArg(ctx, "mode")))))
                 .then(pinSubtree(dispatcher))
                 .then(Commands.literal("unpin")
                         .then(Commands.argument("id", StringArgumentType.word())
@@ -148,7 +144,7 @@ public final class MultiForgeCommandBinder {
                         "region",
                         "pin",
                         strArg(ctx, "id"),
-                        strArg(ctx, "world"),
+                        worldArg(ctx),
                         intArg(ctx, "fromCX"),
                         intArg(ctx, "fromCZ"),
                         intArg(ctx, "toCX"),
@@ -156,7 +152,7 @@ public final class MultiForgeCommandBinder {
         var toCX = Commands.argument("toCX", IntegerArgumentType.integer()).then(toCZ);
         var fromCZ = Commands.argument("fromCZ", IntegerArgumentType.integer()).then(toCX);
         var fromCX = Commands.argument("fromCX", IntegerArgumentType.integer()).then(fromCZ);
-        var world = Commands.argument("world", StringArgumentType.string())
+        var world = Commands.argument("world", ResourceLocationArgument.id())
                 .suggests((ctx, b) -> SharedSuggestionProvider.suggestResource(
                         ctx.getSource().levels().stream().map(level -> level.location()), b))
                 .then(fromCX);
@@ -175,10 +171,10 @@ public final class MultiForgeCommandBinder {
 
     private static LiteralArgumentBuilder<CommandSourceStack> chunksSubtree(MultiForgeCommandDispatcher dispatcher) {
         return Commands.literal("chunks")
-                .then(Commands.argument("world", StringArgumentType.string())
+                .then(Commands.argument("world", ResourceLocationArgument.id())
                         .suggests((ctx, b) -> SharedSuggestionProvider.suggestResource(
                                 ctx.getSource().levels().stream().map(level -> level.location()), b))
-                        .executes(ctx -> run(dispatcher, ctx, "chunks", strArg(ctx, "world"))));
+                        .executes(ctx -> run(dispatcher, ctx, "chunks", worldArg(ctx))));
     }
 
     private static LiteralArgumentBuilder<CommandSourceStack> warnSubtree(MultiForgeCommandDispatcher dispatcher) {
@@ -189,9 +185,9 @@ public final class MultiForgeCommandBinder {
 
     private static LiteralArgumentBuilder<CommandSourceStack> certifySubtree(MultiForgeCommandDispatcher dispatcher) {
         return Commands.literal("certify")
-                .then(Commands.literal("all").executes(ctx -> run(dispatcher, ctx, "certify", "all")))
+                .then(Commands.literal("all").executes(ctx -> runOffThread(dispatcher, ctx, "certify", "all")))
                 .then(Commands.argument("modId", StringArgumentType.word())
-                        .executes(ctx -> run(dispatcher, ctx, "certify", strArg(ctx, "modId"))));
+                        .executes(ctx -> runOffThread(dispatcher, ctx, "certify", strArg(ctx, "modId"))));
     }
 
     private static int run(MultiForgeCommandDispatcher dispatcher, CommandContext<CommandSourceStack> ctx, String... args) {
@@ -199,8 +195,32 @@ public final class MultiForgeCommandBinder {
         return 1;
     }
 
+    /**
+     * For slow subcommands ({@code certify} runs the scanner as a child
+     * process, seconds per jar): dispatch on a background thread so the
+     * server keeps ticking, and deliver each output line on the server thread.
+     */
+    private static int runOffThread(
+            MultiForgeCommandDispatcher dispatcher, CommandContext<CommandSourceStack> ctx, String... args) {
+        CommandSourceStack source = ctx.getSource();
+        MinecraftServer server = source.getServer();
+        source.sendSuccess(() -> Component.literal("Running in the background..."), false);
+        Thread worker = new Thread(
+                () -> dispatcher.dispatch(
+                        args, msg -> server.execute(() -> source.sendSuccess(() -> Component.literal(msg), false))),
+                "multiforge-" + args[0]);
+        worker.setDaemon(true);
+        worker.start();
+        return 1;
+    }
+
     private static String strArg(CommandContext<CommandSourceStack> ctx, String name) {
         return StringArgumentType.getString(ctx, name);
+    }
+
+    /** The {@code world} argument: a dimension id such as {@code minecraft:overworld}. */
+    private static String worldArg(CommandContext<CommandSourceStack> ctx) {
+        return ResourceLocationArgument.getId(ctx, "world").toString();
     }
 
     private static String intArg(CommandContext<CommandSourceStack> ctx, String name) {

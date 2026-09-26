@@ -1,0 +1,21 @@
+{
+  "profile": "atm10",
+  "workers": 4,
+  "ticks": 12000,
+  "wall_clock_ms": 13797,
+  "avg_mspt": 0.02,
+  "p50_mspt": 0.0,
+  "p95_mspt": 4.3,
+  "p99_mspt": 11.2,
+  "max_mspt": 11.2,
+  "tps_sustained_last_10min": null,
+  "rss_peak_mb": 1170,
+  "boot_ok": true,
+  "clean_stop": true,
+  "timing_source": "tick-query",
+  "sprint_tps": 19930,
+  "server": "stock",
+  "pacing": "sprint",
+  "modpack": "top-20 Modrinth NeoForge 1.21.1 mods (docs/verification/README.md)",
+  "mod_jar_count": 21
+}

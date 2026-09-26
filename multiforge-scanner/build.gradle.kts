@@ -49,3 +49,22 @@ tasks.jar {
     exclude("META-INF/*.SF", "META-INF/*.DSA", "META-INF/*.RSA", "META-INF/versions/**/module-info.class")
     duplicatesStrategy = DuplicatesStrategy.EXCLUDE
 }
+
+// The scanner's gate on real mod jars (CorpusCheck): the fixture mods and the
+// client debug mod, scanned and compared with corpus/expected.txt.
+// ./gradlew :multiforge-scanner:scanCorpus [-PupdateCorpus]
+tasks.register<JavaExec>("scanCorpus") {
+    group = "verification"
+    description = "Scan the mod-jar corpus and compare with corpus/expected.txt (-PupdateCorpus rewrites it)."
+    val corpusJars = listOf(":multiforge-testmods:writer", ":multiforge-testmods:legacy", ":multiforge-client")
+            .map { project(it).tasks.named<Jar>("jar") }
+    dependsOn(corpusJars)
+    classpath = sourceSets["test"].runtimeClasspath
+    mainClass.set("net.multiforge.scanner.CorpusCheck")
+    val expected = layout.projectDirectory.file("corpus/expected.txt").asFile.absolutePath
+    val update = project.hasProperty("updateCorpus")
+    doFirst {
+        args = listOf(expected) + (if (update) listOf("--update") else listOf()) +
+                corpusJars.map { it.get().archiveFile.get().asFile.absolutePath }
+    }
+}

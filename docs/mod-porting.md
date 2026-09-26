@@ -1,75 +1,103 @@
 # Mod Porting Cookbook
 
-This is a recipe book for getting an existing NeoForge 1.21.1 mod
-running cleanly under MultiForge. Most mods need zero changes — they
-only touch the world from inside a tick handler or an event callback,
-which already runs on the correct region thread. The mods that need
-work are the ones that reach across region boundaries: static state
-shared between regions, direct references to internals MultiForge
-replaces, or work dispatched from a thread that was never
-region-owned to begin with (network IO, async downloads, scheduled
-executors).
+Recipes for getting an existing NeoForge 1.21.1 mod to run cleanly under
+MultiForge. Most mods need no changes. The tick model
+([`design/barrier-tick-model.md`](design/barrier-tick-model.md)) keeps
+Vanilla's main loop, chunk loading, commands, weather, raids and so on on
+the server thread, and runs only per-chunk work (random ticks, spawning,
+scheduled ticks, block events, entities, block entities) on region
+workers, in parallel between two barriers. Code that touches only the
+block, entity or chunk it was called for already runs on the right thread.
 
-Each recipe below is **before / after / why**. "Before" is the
-pattern that either breaks outright or silently degrades under
-MultiForge's threading model; "after" is the MultiForge-safe
-equivalent; "why" explains the hazard.
+The mods that need work are the ones that reach further: code on a region
+worker that touches a distant part of the world, static state shared
+between regions, and work done on a thread that is not a region worker or
+the server thread (network IO, a mod's own executor, a
+`ServerDomains.async()` task).
 
-For automated detection instead of manual auditing, see
-[`docs/design/scanner-rules.md`](design/scanner-rules.md) — the
-mod-safety scanner's 12 frozen rules (R01–R12) catch most of the
-patterns below in bytecode, before the jar ever touches a region
-worker. `/multiforge certify <modId>` (see
-[`certification.md`](certification.md)) runs the scanner against a jar
-already sitting in `./mods` and prints pass/fail per rule.
+None of these stop a mod from loading. A world write from the wrong thread
+is rerouted to the chunk's owner with a rate-limited warning
+(`docs/debugging-violations.md`); the recipes below remove the cause.
 
-## 1. Chunk access
+Each recipe is **before / after / why**.
 
-**Before:**
-```java
-ChunkMap cm = (ChunkMap) ((ServerChunkCache) level.getChunkSource()).chunkMap;
-LevelChunk chunk = cm.getVisibleChunkIfPresent(pos.toLong());
-```
+For automated detection, the mod-safety scanner
+([`certification.md`](certification.md),
+[`design/scanner-rules.md`](design/scanner-rules.md)) checks a jar's
+bytecode for the patterns below. `/multiforge certify <modId>` runs it
+against a jar in `./mods`.
 
-**After:**
-```java
-LevelChunk chunk = (LevelChunk) level.getChunkSource().getChunkNow(pos.x, pos.z);
-```
-
-**Why:** `ChunkMap`'s field layout survives for reflective-mod
-compatibility, but under MultiForge it's a thin delegate shell over
-the per-region holder pipeline (`docs/chunks.md`). Calls that reach
-past it into raw internal state skip the region-aware ticket/holder
-bookkeeping every mutation needs. `ChunkSource`'s public surface stays
-stable and correctly routed. Caught by scanner rule **R01**
-(`direct-ChunkMap-invoke`, WARN).
-
-## 2. Entity teleport across regions
+## 1. Reaching into another part of the world from tick code
 
 **Before:**
 ```java
-// called from anywhere, assumes single-threaded world
-entity.setPos(destX, destY, destZ);
-if (destLevel != entity.level()) {
-    entity.changeDimension(destLevel);
+// In a block entity's tick: pull items from a linked chest 500 blocks away.
+BlockEntity remote = level.getBlockEntity(linkedPos);
+if (remote instanceof Container c) {
+    ItemStack taken = c.removeItem(0, 1);
+    ...
 }
 ```
 
 **After:**
 ```java
-// go through the migration protocol — see docs/migration.md
-migrationCoordinator.migrate(entity, destLevel, new Vec3(destX, destY, destZ));
+// Run the remote half on whichever region owns linkedPos.
+WorldRef world = WorldRef.of(level.dimension().location().toString());
+ServerDomains.region(world, net.multiforge.api.world.ChunkPos.ofBlock(linkedPos.getX(), linkedPos.getZ()))
+    .execute(MOD, () -> {
+        if (level.getBlockEntity(linkedPos) instanceof Container c) {
+            ItemStack taken = c.removeItem(0, 1);
+            // hand the result back with another ServerDomains.region(...) call
+        }
+    });
 ```
 
-**Why:** A destination position may belong to a different region (or
-a different world's global region) than the one currently ticking the
-entity. MultiForge owns cross-region entity movement through a
-two-phase remove/add protocol (`MigrationState` machine,
-passenger-tree atomicity) so the entity is never visible to two
-region workers at once. A raw `setPos`/`changeDimension` call from the
-wrong thread races the destination region's tick.
+**Why:** A region worker owns only its region's chunks. A chunk more than
+one section away can belong to another region that is ticking at the same
+moment, so reading or changing it races that region. World writes through
+the patched sites (`Level.setBlock`, `scheduleTick`, `addFreshEntity`,
+`Entity.remove`, `BlockEntity.setChanged`, …) are rerouted automatically,
+but direct mutation of a block entity's own fields (`removeItem` above) is
+not intercepted. If the remote chunk is not loaded, the task waits until
+it loads.
 
-## 3. Static caches
+Reading chunks through `ChunkMap` internals instead of `ChunkSource`
+(`getChunkNow`, `getChunk`) is flagged by scanner rule **R01**
+(`direct-ChunkMap-invoke`, WARN). `ChunkMap` is Vanilla's, unchanged, but
+its internal maps are updated on the server thread; `ServerChunkCache`'s
+public methods are the ones MultiForge makes safe to call from a region
+worker.
+
+## 2. Moving entities
+
+**Before:**
+```java
+entity.setPos(destX, destY, destZ);   // may land in another region
+```
+
+**After:**
+```java
+entity.teleportTo(destX, destY, destZ);
+// or, across dimensions:
+entity.changeDimension(new DimensionTransition(destLevel, destPos, Vec3.ZERO, yRot, xRot, DimensionTransition.DO_NOTHING));
+```
+
+**Why:** `Entity.teleportTo`, `ServerPlayer.teleportTo`,
+`teleportRelative` and `changeDimension` are the entry points MultiForge
+patches. Called on a region worker with a destination in another region
+(or, for a player, another dimension), the whole call is deferred to the
+server thread and runs after the tick barrier, while no region runs. The
+entity's position is therefore not updated when the call returns. A raw
+`setPos`/`moveTo` is not intercepted; use it only for short moves that
+stay in the same region.
+
+Scanner rule **R05** (`entity-setpos-off-coord`, ERROR) flags every direct
+`Entity.setPos`/`setPosRaw` call. Its message refers to an
+`EntityMigrationCoordinator` from the retired M4 design, which no longer
+exists; for a short in-region move, suppress the finding with a
+justification (`certification.md`).
+
+## 3. Static state
 
 **Before:**
 ```java
@@ -78,7 +106,7 @@ public class ExampleMod {
     static int activeEffects = 0; // not volatile, not atomic
 
     @SubscribeEvent
-    static void onLevelTick(LevelTickEvent e) {
+    static void onEntityTick(EntityTickEvent.Post e) {
         activeEffects++; // races across regions
     }
 }
@@ -91,78 +119,79 @@ public class ExampleMod {
     static final AtomicInteger activeEffects = new AtomicInteger();
 
     @SubscribeEvent
-    static void onLevelTick(LevelTickEvent e) {
+    static void onEntityTick(EntityTickEvent.Post e) {
         activeEffects.incrementAndGet();
     }
 }
 ```
 
-If the value is conceptually per-region rather than truly global (a
-counter for "effects active near this base," say), prefer
-`net.multiforge.runtime.region.RegionizedData` so each region gets its
-own slot instead of forcing atomics onto state that was never meant to
-be shared in the first place.
+Use `ConcurrentHashMap` for maps, or keep one structure per level or
+position key.
 
-**Why:** Multiple regions tick concurrently on different worker
-threads — the whole point of the project. An unsynchronized static
-field written from tick-reachable code races the moment two regions
-both host the mod's blocks/entities. Caught by scanner rule **R04**
+**Why:** Region workers tick in parallel. An entity tick event is posted
+on the worker ticking the entity, and a `hybrid-safe` mod's listener for
+it runs right there (`docs/events.md`), so two regions can run it at once.
+If the mod has many such listeners, classifying it `legacy` in
+`config/multiforge-mods.toml` runs all of them on the serial lane, one at
+a time, at the cost of parallelism. Caught by scanner rule **R04**
 (`unsync-static-mutation`, WARN).
 
-## 4. Off-thread block reads
+## 4. Work from a network, async or mod-owned thread
 
 **Before:**
 ```java
-// called from a Netty IO callback thread, not a region worker
-public void onDownloadComplete(BlockPos pos) {
-    BlockState state = level.getBlockState(pos); // reads whatever region owns pos
+// Runs on a mod's download thread.
+public void onDownloadComplete(ServerLevel level, BlockPos pos, BlockState state) {
+    level.setBlock(pos, state, Block.UPDATE_ALL);
 }
 ```
 
 **After:**
 ```java
-public void onDownloadComplete(WorldRef world, BlockPos pos) {
-    taskQueue.queueChunkTask(world, new ChunkPos(pos), () -> {
-        BlockState state = world.level().getBlockState(pos);
-        // ... use state here, still on the owning region thread
-    });
+public void onDownloadComplete(ServerLevel level, BlockPos pos, BlockState state) {
+    WorldRef world = WorldRef.of(level.dimension().location().toString());
+    ServerDomains.region(world, net.multiforge.api.world.ChunkPos.ofBlock(pos.getX(), pos.getZ()))
+        .execute(MOD, () -> level.setBlock(pos, state, Block.UPDATE_ALL));
 }
 ```
 
-**Why:** Even a *read* of `Level`/chunk state from a thread that
-doesn't own the target region is racing the owning worker's writes —
-`Level`'s internal section arrays have no synchronization of their own
-(CLAUDE.md rule 4 extended to reads, not just writes). Route through
-`RegionizedTaskQueue.queueChunkTask(world, chunkX, chunkZ, task)` and
-do the read inside the task.
+**Why:** The write from the download thread is an `:off-thread`
+violation: it is rerouted, but the thread still reads world state (the
+return value, neighbour states) without any protection. Doing the work in
+a region task runs it on the owning region's worker. The same applies to
+`ServerDomains.async()` tasks, which must not touch game state at all.
+Reads count too: `level.getBlockState(pos)` from a foreign thread races
+the owning worker's writes.
 
-## 5. Block-entity mutation off-thread
+## 5. Block-entity mutation from a packet handler
 
 **Before:**
 ```java
-public void applyUpgrade(BlockEntity be, ItemStack upgrade) {
-    be.getInventory().insertItem(0, upgrade, false); // called from a GUI packet handler
+public void handle(UpgradePayload payload, IPayloadContext ctx) {
+    BlockEntity be = ctx.player().level().getBlockEntity(payload.pos());
+    ((MachineBlockEntity) be).installUpgrade(payload.upgrade()); // on the network thread
 }
 ```
 
 **After:**
 ```java
-public void applyUpgrade(WorldRef world, BlockPos pos, ItemStack upgrade) {
-    taskQueue.queueChunkTask(world, new ChunkPos(pos), () -> {
-        BlockEntity be = world.level().getBlockEntity(pos);
-        if (be != null) {
-            be.getInventory().insertItem(0, upgrade, false);
+public void handle(UpgradePayload payload, IPayloadContext ctx) {
+    ctx.enqueueWork(() -> {
+        if (ctx.player().level().getBlockEntity(payload.pos()) instanceof MachineBlockEntity m) {
+            m.installUpgrade(payload.upgrade());
         }
     });
 }
 ```
 
-**Why:** Same hazard as block mutation in general
-(`Level.setBlock` is scanner rule **R02**, ERROR — a definite race,
-not just a suspicious pattern), extended to any `BlockEntity` field a
-mod owns. Don't hold a `BlockEntity` reference across a thread
-boundary and mutate it later; re-look it up inside a queued task on
-the owning region.
+**Why:** `IPayloadContext.enqueueWork` is unchanged NeoForge: it runs the
+work on the server thread, which under MultiForge never overlaps region
+work and may write anywhere. Running handler logic directly on the
+network thread races the region ticking that block entity, and a
+block entity's own fields are not guarded. Don't hold a `BlockEntity`
+reference across threads; look it up inside the queued work. Off-thread
+`Level.setBlock` and `BlockEntity.setChanged` are scanner rules **R02**
+(ERROR) and **R08** (WARN).
 
 ## 6. Config reload
 
@@ -171,7 +200,7 @@ the owning region.
 static ExampleConfig CONFIG; // mutated in place on /reload
 
 public static void reload() {
-    CONFIG.maxEffects = readFromFile(); // other regions may be reading CONFIG.maxEffects right now
+    CONFIG.maxEffects = readFromFile(); // region workers may be reading it now
 }
 ```
 
@@ -184,78 +213,60 @@ public static void reload() {
 }
 ```
 
-**Why:** This is exactly the pattern
-`net.multiforge.runtime.config.MultiForgeConfig` itself uses: config
-is an immutable record, and a reload produces a new instance published
-to subscribers, never mutated in place. A region worker that read a
-field mid-mutation on another thread gets a torn read; publishing a
-new reference is atomic and lock-free for readers.
+**Why:** A worker reading fields while another thread rewrites them can
+see a half-updated config. Publishing a new immutable object through a
+`volatile` field is atomic for readers. MultiForge's own
+`MultiForgeConfig` is an immutable record handled the same way.
 
-## 7. World-wide broadcasts
+## 7. Server-wide broadcasts and other players
 
 **Before:**
 ```java
-// called from inside a region's tick
+// In a block entity tick: reward every online player.
 for (ServerPlayer p : server.getPlayerList().getPlayers()) {
-    p.connection.send(myPacket);
+    p.getInventory().add(reward.copy()); // other players belong to other regions
 }
 ```
 
 **After:**
 ```java
-router.routeToGlobal(() -> {
-    for (ServerPlayer p : server.getPlayerList().getPlayers()) {
-        p.connection.send(myPacket);
-    }
-});
-```
-
-**Why:** Iterating every player from inside a region worker touches
-players owned by other regions. `NetworkPacketRouter.routeToGlobal`
-(`docs/global-network.md`) hands the broadcast to the dedicated global
-region thread, which is the one place server-wide iteration is safe.
-If the broadcast is really player-scoped (e.g. "everyone near this
-event"), prefer iterating the region's own tracked players instead of
-reaching for the global player list at all.
-
-## 8. Packet handling
-
-**Before:**
-```java
-// bypasses enqueueWork, runs whatever thread decoded the packet
-public void handle(MyPayload payload, IPayloadContext ctx) {
-    applyEffect(payload.pos(), payload.effect()); // wrong thread
+for (ServerPlayer p : server.getPlayerList().getPlayers()) {
+    p.connection.send(packet);                       // sending is fine
+    WorldRef world = WorldRef.of(p.level().dimension().location().toString());
+    ServerDomains.region(world, new net.multiforge.api.world.ChunkPos(p.chunkPosition().x, p.chunkPosition().z))
+        .execute(MOD, () -> p.getInventory().add(reward.copy()));
 }
 ```
 
-**After:**
-```java
-public void handle(MyPayload payload, IPayloadContext ctx) {
-    ctx.enqueueWork(() -> applyEffect(payload.pos(), payload.effect()));
-}
-```
-
-**Why:** The M5 patch replaces NeoForge's default
-`IPayloadContext#enqueueWork` body with
-`ModPacketContext.of(router, senderRef).enqueueWork(...)`, which
-routes the work to the region owning the packet's target (or the
-player's current region, if it crosses a border between decode and
-dispatch). Mods that already use `enqueueWork` correctly get this for
-free on recompile — the bug is mods that skip it and run handler logic
-directly on the network thread.
+**Why:** The player list only changes on the server thread (logins,
+logouts, dimension changes), which never overlaps region work, so
+iterating it and sending packets from a region worker is safe. A player
+entity belongs to the region owning its chunk, so changing another
+player's state from your region races that region's tick; run it on the
+player's region. The chunk is resolved when the task is queued, so a
+player who moves to another region before it runs will be modified from
+the wrong region; keep such work idempotent or re-check the player's
+position inside the task.
 
 ## Detecting this automatically
 
-Every recipe above maps to one of the scanner's 12 frozen rules
-(`docs/design/scanner-rules.md` §4). Running the scanner against a mod
-jar before shipping it catches most of these patterns in bytecode:
+The scanner (`multiforge-scanner`) runs 12 rules. Severities, from the
+rule classes in `multiforge-scanner/src/main/java/net/multiforge/scanner/rules/`:
 
-| Pattern | Rule | Severity |
+| Rule | Name | Severity |
 |---|---|---|
-| Direct `ChunkMap` internals access | R01 | WARN |
-| Off-thread `Level.setBlock` | R02 | ERROR |
-| Blocking `.get()`/`.join()` on `@RegionThread` | R03 | ERROR |
-| Unsynchronized static mutation from tick-reachable code | R04 | WARN |
+| R01 | `direct-ChunkMap-invoke` | WARN |
+| R02 | `off-thread-Level.setBlock` | ERROR |
+| R03 | `blocking-future` | ERROR |
+| R04 | `unsync-static-mutation` | WARN |
+| R05 | `entity-setpos-off-coord` | ERROR |
+| R06 | `direct-ServerChunkCache-mutation` | WARN |
+| R07 | `raw-DistanceManager-ticket` | WARN |
+| R08 | `off-thread-BlockEntity-setChanged` | WARN |
+| R09 | `sync-io-in-tick` | ERROR |
+| R10 | `thread-start-in-mod-ctor` | WARN |
+| R11 | `reflect-on-neoforged-internal` | WARN |
+| R12 | `capture-server-in-lambda` | ERROR |
 
 Run it directly:
 
@@ -263,11 +274,11 @@ Run it directly:
 java -jar multiforge-scanner.jar --severity=warn mods/examplemod-1.2.3.jar
 ```
 
-or via the in-server convenience command:
+or in game:
 
 ```
 /multiforge certify examplemod
 ```
 
-See [`certification.md`](certification.md) for the full checklist and
-what "MultiForge-certified" means.
+See [`certification.md`](certification.md) for what the scanner checks
+and what "MultiForge-certified" means.

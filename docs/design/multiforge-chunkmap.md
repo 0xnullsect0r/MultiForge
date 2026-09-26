@@ -1,5 +1,11 @@
 # MultiForgeChunkMap — Fork Facade Design
 
+> **Historical — superseded.** The M9 chunk-system fork this document describes was
+> retired: Vanilla's chunk system loads, ticks, lights and saves every chunk, and MultiForge
+> only tracks which region owns each loaded chunk. See `docs/design/barrier-tick-model.md`
+> (*Chunks*, *What this replaced*). Kept for the record; the classes and patches named here
+> no longer exist.
+
 **Status:** Phase 4 task 4.1a of the M9 landing plan
 (`plans/bubbly-jumping-comet.md`). Locks the design that Phase 4.1b's
 ~1200-LOC implementation will follow.

@@ -42,7 +42,7 @@ import net.multiforge.scanner.rules.R12CaptureServerInLambda;
  */
 public final class Main {
 
-    private static final List<Rule> ACTIVE_RULES = List.of(
+    static final List<Rule> ACTIVE_RULES = List.of(
             new R01DirectChunkMapInvoke(),
             new R02OffThreadLevelSetBlock(),
             new R03BlockingFuture(),

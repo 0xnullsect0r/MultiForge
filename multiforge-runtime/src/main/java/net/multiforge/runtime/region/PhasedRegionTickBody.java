@@ -66,15 +66,22 @@ public final class PhasedRegionTickBody implements RegionTickBody {
         // /67 round-4 fix (B7): each phase runs inside its own try/catch so
         // one throwing phase (say REGION_EVENTS from a mod handler) doesn't
         // strand the FLUSH_OUTBOUND phase and lose cross-region messages.
-        // Exceptions route to the uncaught handler — same shape as
-        // RegionizedTaskQueue.drain — so the tick pipeline stays alive.
+        // The first throwable is rethrown once every phase ran (later ones
+        // attached as suppressed), so the failure still reaches the caller —
+        // in barrier mode the server thread, where Vanilla's crash handling
+        // applies — instead of vanishing into a worker's uncaught handler.
+        Throwable first = null;
         for (Phase p : Phase.values()) {
             try {
                 phases.getOrDefault(p, NOOP).tickOnce(region);
             } catch (Throwable t) {
-                Thread.currentThread().getUncaughtExceptionHandler().uncaughtException(Thread.currentThread(), t);
+                if (first == null) first = t;
+                else first.addSuppressed(t);
             }
         }
+        if (first instanceof RuntimeException re) throw re;
+        if (first instanceof Error err) throw err;
+        if (first != null) throw new IllegalStateException("region phase failed", first);
     }
 
     /** Retrieve the body wired to {@code phase}; {@link #NOOP} if none. */
@@ -122,10 +129,10 @@ public final class PhasedRegionTickBody implements RegionTickBody {
         /**
          * Append {@code body} to whatever is currently wired at
          * {@code phase}. If nothing is wired, this is equivalent to
-         * {@link #set(Phase, RegionTickBody)}. Used by Phase 5 M9 wiring
-         * so runtime-internal drain calls (e.g. {@code
-         * ChunkTaskScheduler.drainInto}, {@code AutoSaveRunner.runOnce})
-         * fire <em>after</em> a user-supplied body for the same phase.
+         * {@link #set(Phase, RegionTickBody)}. Used by {@code
+         * MultiThreadedSchedulerHost.installRegionTickBody} so the region's
+         * own work fires <em>after</em> a caller-supplied body for the same
+         * phase.
          */
         public Builder append(Phase phase, RegionTickBody body) {
             if (body == null) return this;
