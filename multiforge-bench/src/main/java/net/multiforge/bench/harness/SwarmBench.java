@@ -106,7 +106,33 @@ public final class SwarmBench {
 
             boolean ok;
             if (mode.equals("bots")) {
-                ok = runBots(runner, metrics, players, spread, renderDistance, churnDuration, extra);
+                try {
+                    ok = runBots(runner, metrics, players, spread, renderDistance, churnDuration, extra);
+                } catch (IOException e) {
+                    // The server died mid-run (RCON dropped): record that instead of
+                    // leaving no result behind.
+                    System.err.println("SwarmBench: lost the server mid-run: " + e);
+                    extra.put("server_crashed", true);
+                    extra.put(
+                            "crash_phase",
+                            extra.containsKey("bots_placed")
+                                    ? "measurement"
+                                    : extra.containsKey("bots_placement_started") ? "placement" : "join");
+                    BenchResult.from(
+                                    "swarm",
+                                    workers,
+                                    ticks,
+                                    elapsedMs(start),
+                                    metrics,
+                                    runner.rssPeakMb(),
+                                    true,
+                                    false,
+                                    extra)
+                            .writeTo(outputFile);
+                    System.out.println("SwarmBench: wrote " + outputFile.toAbsolutePath());
+                    System.exit(1);
+                    return;
+                }
             } else {
                 spawnArmorStands(runner, players);
                 runner.beginMeasurement();
@@ -156,6 +182,10 @@ public final class SwarmBench {
             Map<String, Object> extra)
             throws IOException, InterruptedException {
         try (BotSwarm swarm = new BotSwarm("127.0.0.1", runner.gamePort(), renderDistance)) {
+            // Bots stand still until they are placed: hundreds of players walking at
+            // the spawn point is quadratic entity-tracking work no server survives,
+            // and not what a real server sees.
+            swarm.setWalking(false);
             swarm.connect(BOT_PREFIX, players, 10);
             int joined = swarm.awaitJoined(players, 120_000 + players * 500L);
             System.out.println("SwarmBench: " + joined + "/" + players + " bots joined");
@@ -168,10 +198,11 @@ public final class SwarmBench {
             runner.rcon().command("gamemode creative @a");
             runner.rcon().command("give @a minecraft:dirt 64");
             if (spread > 0) {
-                extra.put("bots_placed", placeBots(runner, swarm.names(), spread, renderDistance));
+                extra.put("bots_placed", placeBots(runner, swarm.names(), spread, renderDistance, extra));
             }
             // Let the spread's chunk generation and sends settle before measuring.
             Thread.sleep(15_000);
+            swarm.setWalking(true);
             swarm.enableBlockWork();
 
             runner.beginMeasurement();
@@ -212,10 +243,12 @@ public final class SwarmBench {
      *
      * @return how many bots reached the surface of their spot
      */
-    private static int placeBots(HeadlessServerRunner runner, List<String> names, int spread, int renderDistance)
+    private static int placeBots(
+            HeadlessServerRunner runner, List<String> names, int spread, int renderDistance, Map<String, Object> extra)
             throws IOException, InterruptedException {
         int placed = 0;
         for (int i = 0; i < names.size(); i++) {
+            extra.put("bots_placement_started", i + 1);
             double angle = 2 * Math.PI * i / names.size();
             double r = spread * (0.35 + 0.65 * ((i * 7) % names.size()) / Math.max(1, names.size()));
             int[] spot = {(int) Math.round(Math.cos(angle) * r), (int) Math.round(Math.sin(angle) * r)};

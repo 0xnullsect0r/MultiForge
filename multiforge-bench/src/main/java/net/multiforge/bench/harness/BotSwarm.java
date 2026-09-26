@@ -283,7 +283,9 @@ public final class BotSwarm implements AutoCloseable {
                 x += Math.cos(heading) * STEP;
                 z += Math.sin(heading) * STEP;
             }
-            session.send(new ServerboundMovePlayerPosPacket(false, x, y, z));
+            // Like a vanilla client: a position packet when the player moved, and
+            // otherwise once a second.
+            if (walking || ticks % 20 == 0) session.send(new ServerboundMovePlayerPosPacket(false, x, y, z));
 
             if (blockWork && ticks % ACTION_PERIOD_TICKS == 0) {
                 if (!placedLast) {
