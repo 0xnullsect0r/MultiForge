@@ -1,0 +1,22 @@
+{
+  "profile": "atm10",
+  "workers": 24,
+  "ticks": 12000,
+  "wall_clock_ms": 96687,
+  "avg_mspt": 0.46,
+  "p50_mspt": 0.37,
+  "p95_mspt": 0.51,
+  "p99_mspt": 1.97,
+  "max_mspt": 322.09,
+  "tps_sustained_last_10min": null,
+  "rss_peak_mb": 8001,
+  "boot_ok": true,
+  "clean_stop": true,
+  "timing_source": "tickstats",
+  "sprint_tps": 1998,
+  "ticks_measured": 12005,
+  "server": "multiforge",
+  "pacing": "sprint",
+  "modpack": "All the Mods 10 8.2 server files",
+  "mod_jar_count": 464
+}

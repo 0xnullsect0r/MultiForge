@@ -3,8 +3,7 @@
 What proves MultiForge works, how to rerun it, and the latest results. Every
 number here comes from a run against a server installed from the repository's
 own installer; the raw results are the JSON files under
-[`results/`](results/). Runs that need more hardware than a development
-container are listed at the end as runbooks, not as results.
+[`results/`](results/). What has not been run yet is listed at the end.
 
 ## What gates every change
 
@@ -12,6 +11,7 @@ container are listed at the end as runbooks, not as results.
 |---|---|---|
 | Unit tests, Spotless, GPL header | `ci.yml` → `build`, `client-build` | Runtime, API, scanner, installer and bench logic; jqwik properties for the regionizer's merge/split |
 | Fork build + GameTests | `ci.yml` → `fork-build` | The patches apply to NeoForge 21.1.251, the fork compiles, and the 169 required GameTests pass on a server with regions ticking. That is NeoForge's own suite, which exercises Vanilla and NeoForge behaviour on the patched server, plus MultiForge's: scheduled block ticks, entity, block-entity and random ticks inside regions, rerouted cross-region and off-thread writes and their return values, event dispatch domains and the legacy serial lane, and region indexing |
+| Mixin-target parity | `ci.yml` → `fork-build` (`:neoforge:checkMixinTargets`) | Every method and lambda of each Vanilla class MultiForge patches still exists with the same descriptor, so mods' mixins find their targets (see `multiforge-patches/README.md`) |
 | Scanner corpus | `scanner.yml` | Every scanner finding on the fixture mods and the client mod matches `multiforge-scanner/corpus/expected.txt` |
 | Vanilla parity, scenarios, strict swarm | `nightly.yml` | The live checks below, each night, on the installer built from that commit |
 
@@ -35,7 +35,83 @@ clients: they log in, walk, place and break blocks over the real protocol.
 
 Every bench task takes `-PoutputFile=<json>` and `-PbootLog=<log>`.
 
-## Results — 2026-09-26
+## Results — 2026-09-26, 32-core workstation
+
+Build: branch `claude/epic-archimedes-ndcba6` at the fixes below, NeoForge
+21.1.251. Machine: 32 threads, 61 GB. The bots run in the bench JVM on the same
+machine. Server heap `-Xmx16G` for the swarms, `-Xmx12G` for ATM10; MultiForge
+with 24 workers. Raw results: [`results/2026-09-26-32core/`](results/2026-09-26-32core/).
+
+### Parity and scenarios
+
+- **Vanilla-parity gate: PASS** at 1, 4, 8 and 16 workers (196 chunks, the same
+  digest as stock).
+- **Phase X scenarios x1–x4: PASS** at 16 workers.
+
+### Real modpacks
+
+| Pack | Stock NeoForge | MultiForge | result |
+|---|---|---|---|
+| **All the Mods 10 8.2** (464 mods, server files from CurseForge) | boots; sprint 12,000 ticks: mean 0.32 ms, p99 15.0 ms | boots; sprint 12,000 ticks: mean 0.46 ms, p99 1.97 ms, max 322 ms; clean stop | [`atm10-stock.json`](results/2026-09-26-32core/atm10-stock.json), [`atm10-multiforge-w24.json`](results/2026-09-26-32core/atm10-multiforge-w24.json) |
+| **Top 20 NeoForge 1.21.1 mods on Modrinth** (Lithium, ModernFix, FerriteCore, JEI, Jade, GeckoLib, Simple Voice Chat, Xaero's maps, … 21 jars with dependencies) | boots; mean 0.02 ms | boots; mean 0.13 ms, p99 0.28 ms; clean stop | [`top20-stock.json`](results/2026-09-26-32core/top20-stock.json), [`top20-multiforge-w24.json`](results/2026-09-26-32core/top20-multiforge-w24.json) |
+
+Before the fixes below, neither pack loaded on MultiForge: Ad Astra (ATM10) and
+Lithium failed to apply their mixins, and with Lithium the server then hung on
+its first tick.
+
+### Player swarms
+
+| Run | Stock NeoForge | MultiForge (24 workers) | result |
+|---|---|---|---|
+| 50 bots, rings to 4000 blocks, 10 min | **crashed**: mean tick 121 ms, then the watchdog stopped it | **19.0 TPS**, mean 25.7 ms, p99 42.3 ms, max 227 ms; 14 regions; 0 violations, 0 overruns; all 50 connected; clean stop | [`swarm50-spread4000-stock.json`](results/2026-09-26-32core/swarm50-spread4000-stock.json), [`swarm50-spread4000-multiforge-w24.json`](results/2026-09-26-32core/swarm50-spread4000-multiforge-w24.json) |
+| 100 bots, rings to 512 blocks (one region), 10 min | 6.3 TPS, mean 55.6 ms, p99 337 ms, max 42 s | **10.9 TPS**, mean 41.2 ms, p99 53.2 ms, max 1.3 s; 0 violations, 0 overruns | [`swarm100-spread512-stock.json`](results/2026-09-26-32core/swarm100-spread512-stock.json), [`swarm100-spread512-multiforge-w24.json`](results/2026-09-26-32core/swarm100-spread512-multiforge-w24.json) |
+| 100 bots, rings to 4000 blocks | **crashed** (watchdog: one tick over 60 s) | **crashed** the same way | [`swarm100-spread4000-stock.json`](results/2026-09-26-32core/swarm100-spread4000-stock.json); MultiForge left no result file (the bench fix for that came after) |
+
+**X.8 strict mode, 50 bots, rings to 4000 blocks, 60 minutes: 0 ownership
+violations, 0 region overruns**, 15 regions, 18.6 TPS, mean tick 25.2 ms, p99
+51.2 ms, all 50 bots connected for the hour, 30,070 blocks placed and 30,050
+broken ([`x8-strict-swarm50-60min.json`](results/2026-09-26-32core/x8-strict-swarm50-60min.json)).
+The file says `clean_stop: false`. That is the bench, not the server: its
+`save-all flush` of the explored world took 40 s, past the RCON timeout, so it
+never sent `stop`. The bench now stops with `stop` alone.
+
+#### Where 100 far-apart players stop both servers
+
+Both servers die in the same Vanilla code, on the server thread:
+`ServerGamePacketListenerImpl.handleMovePlayer` → `ChunkMap.move`. For every
+movement packet, Vanilla re-checks **every tracked entity in the level**
+against that player (`TrackedEntity.updatePlayer`). With 100 players each
+loading their own terrain and spawning their own mobs, that is millions of
+checks a second, and one tick's backlog passes the watchdog's 60 s. It is
+independent of regions: the packets are handled on the server thread in both
+servers. Clustered players load fewer chunks and fewer entities, which is why
+100 bots within 512 blocks survive. Removing this limit means indexing tracked
+entities by chunk, so that a move only checks the entities near the player
+(Paper does this). That changes a Vanilla hot path under the parity rule, so it
+is left for a decision rather than made here. The 500-bot runs were not
+repeated: they stop at the same point.
+
+### Found by these runs, and fixed
+
+- **Mixin targets.** Patches renumbered or moved Vanilla's lambda methods in
+  nine classes, so Lithium (`LevelChunk.lambda$updateBlockEntityTicker$6`)
+  and Ad Astra (`Level.lambda$getEntities$1`) failed to load. Fixed, and
+  enforced by `:neoforge:checkMixinTargets` in CI.
+- **Lithium deadlock.** Lithium replaces `ServerChunkCache.getChunk`, so a
+  region waiting for a chunk load never told the barrier, and the barrier
+  never ran the load. The chunk executor now tracks every task a region
+  worker submits.
+- **Chunk ticks after a region split.** A chunk queued for its region's random
+  ticks could pass to a split-off region before it ran; strict mode caught a
+  kelp head growing from the wrong region. A region now leaves such chunks to
+  the server thread.
+- **The bench:** bots now stand still until placed and send positions like a
+  vanilla client; each bot is dropped to the surface as soon as its area
+  loads; a server that dies mid-run is recorded; big worlds stop cleanly; the
+  fork resolves `net.multiforge` only from mavenLocal (a 502 from NeoForge's
+  Maven had failed CI).
+
+## Results — 2026-09-26, 4-vCPU container
 
 Build: branch `claude/epic-archimedes-ndcba6`, NeoForge 21.1.251, with the
 entity-phase change in `perf(region-tick): tick each region's share of
@@ -265,32 +341,18 @@ Live servers surfaced defects that unit tests and GameTests had not:
   raised the 20-bot swarm from 11.8 to 15.6 TPS (one region) and from 10.5 to
   20 TPS (19 regions).
 
-## Pending hardware
+## Not yet run
 
-These need more than a 4-vCPU container. The commands are ready.
-
-- **100 and 500 bots** (the M9 7.4 targets): the swarm with
-  `-Pplayers=100 -Pspread=4000` and `-Pplayers=500 -Pspread=8000`, on stock
-  and on MultiForge (`-Pworkers=<cores − 2>`), on a machine with at least
-  16 cores. The bots run in the bench JVM on the same machine, so leave them
-  cores. Give the server heap: `-PextraJvmArgs=-Xmx16G`.
-- **X.8 at full size**: `./gradlew :multiforge-bench:x8StrictSwarm
-  -PextraJvmArgs=-Xmx16G` (100 bots, 60 minutes).
-- **ATM10**: `./gradlew :multiforge-bench:atm10 -PmodpackUrl=<ATM10 server
-  pack zip> -PmodpackSha256=<hex> -PextraJvmArgs=-Xmx10G`, then the same
-  with `-Pserver=stock` for the baseline.
-- **24-hour soak**: `./gradlew :multiforge-bench:x8StrictSwarm
-  -Pticks=1728000 -Pplayers=100 -PextraJvmArgs=-Xmx16G` for the no-mods
-  soak. For ATM10, add `-PmodpackDir=<pack> -PswarmMode=armor-stand`: the
-  protocol bots are vanilla clients, and ATM10 requires client mods, so a
-  modded soak uses the RCON-driven armor-stand swarm. Watch
-  `/multiforge probes` and RSS.
+- **A 24-hour soak.** Running: 50 bots, rings to 4000 blocks, strict mode
+  (`./gradlew :multiforge-bench:x8StrictSwarm -Pplayers=50 -Pspread=4000
+  -Pticks=1728000 -PextraJvmArgs=-Xmx16G`).
+- **100+ far-apart players**, after the entity-tracking change above.
 - **X.4 client HUD**: join with the `multiforge-client` debug mod and check
-  the region overlay against `/multiforge region list`. This needs a
-  graphical client.
-- **Mod matrix**: `scripts/fetch-modrinth-mods.py <dir>/mods <slugs…>` for
-  the 20 most-downloaded NeoForge 1.21.1 mods, then the modpack bench on
-  both servers, plus `/multiforge certify all` for the scanner verdicts.
+  the region overlay against `/multiforge region list`. This needs a person
+  at a graphical client.
+- **A modded swarm.** The protocol bots are vanilla clients and ATM10 requires
+  client mods, so a modded soak would use `-PswarmMode=armor-stand` with
+  `-PmodpackDir=<pack>`.
 
 ## Older material
 
