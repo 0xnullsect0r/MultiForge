@@ -12,6 +12,8 @@ Everything since v1.5.1, on branch `claude/epic-archimedes-ndcba6`. The short ve
 - **Regions no longer flicker.** Unloading one chunk used to drop its whole 16×16 section, orphaning every other loaded chunk in it — constantly, around moving players. Sections now leave a region with their last chunk (jqwik property test).
 - **No merge deadlock.** A chunk loaded while regions tick (a worker handed the load to the server thread) used to be able to merge the ticking region and wait for it forever; such changes are applied after the barrier. Queued tasks follow their chunk through splits.
 - **Designed waits are not overruns.** Time a region spends waiting for the server thread to generate a chunk, or for a serial-lane listener, is excluded from the watchdog and the barrier deadline and totalled in `region-tick.wait-ms.*`. Strict mode used to crash a server as soon as players explored new terrain.
+- **Entities tick from Vanilla's list.** Each region ticks its share of `entityTickList`, split by owning region on the server thread, in Vanilla's order. It used to query the entity section tree for every chunk it owned, every tick: the 20-bot swarm went from 11.8 to 15.6 TPS in one region and from 10.5 to 20 TPS across 19.
+- **Block drops are captured per thread.** Vanilla's static `Block.capturedDrops` crashed a server when two regions broke blocks at once (leaf decay was enough).
 - **Retired:** the M9 shadow chunk system (it observed Vanilla but never drove anything), M4 entity migration, the M5 re-run of global systems on a worker. Vanilla's own code runs those on the server thread, which also restores compatibility with mixins targeting them.
 
 ### Events and mods
@@ -40,6 +42,7 @@ Rebased from 21.1.1 to 21.1.251, the latest 1.21.1 release, so mods requiring an
 - Real protocol bots (MCProtocolLib, MIT; bench-only) for the swarm bench; `x8StrictSwarm`; a nightly workflow.
 - `multiforge-testmods`: fixture mods for a cross-region writer and a legacy listener.
 - The scanner recognises NeoForge 21 tick handlers (nested `EntityTickEvent$Post` etc., `addListener` handlers) and is gated on a corpus of mod jars.
+- Results of every live check, with the runbooks for hardware-sized runs: `docs/verification/README.md`. `scripts/fetch-modrinth-mods.py` builds mod sets for compatibility runs; the swarm accepts a modpack.
 - The bench boots installer-built servers directly (no nested `gradlew runServer`, no hardcoded JDK) and reports only measured numbers.
 
 ### Dependencies added

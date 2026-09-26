@@ -59,8 +59,8 @@ public final class SwarmBench {
         int spread = Integer.getInteger("bench.spread", 512);
         int renderDistance = Integer.getInteger("bench.renderDistance", 8);
         String mode = System.getProperty("bench.swarmMode", "bots");
-        Path outputFile = Path.of(
-                System.getProperty("bench.outputFile", "docs/verification/m9/7.4/swarm-" + players + "/patched.json"));
+        Path outputFile = Path.of(System.getProperty(
+                "bench.outputFile", "multiforge-bench/build/bench-results/swarm-" + players + ".json"));
         Path bootLog = Path.of(System.getProperty(
                 "bench.bootLog", "multiforge-bench/build/bench-logs/swarm-" + players + "-boot.log"));
         String extraJvmArgs = System.getProperty("bench.extraJvmArgs", "");
@@ -77,6 +77,14 @@ public final class SwarmBench {
                 .withMaxPlayers(Math.max(players + 4, 20))
                 .withExtraJvmArgs(extraJvmArgs)
                 .withProperties(Map.of("allow-flight", "true", "view-distance", String.valueOf(renderDistance)));
+        // Optional modpack (same properties as :atm10). Protocol bots are vanilla
+        // clients, so with a pack that requires client mods use swarmMode=armor-stand.
+        Path modpackDir = Atm10Bench.resolveModpack();
+        if (modpackDir != null) {
+            Path configDir = modpackDir.resolve("config");
+            config = config.withMods(modpackDir.resolve("mods"), Files.isDirectory(configDir) ? configDir : null);
+            System.out.println("SwarmBench: modpack=" + modpackDir.toAbsolutePath());
+        }
         MetricsCollector metrics = new MetricsCollector();
         Instant start = Instant.now();
 
@@ -85,6 +93,7 @@ public final class SwarmBench {
         extra.put("players", players);
         extra.put("swarm_mode", mode);
         extra.put("pacing", "real-time");
+        if (modpackDir != null) extra.put("modpack", modpackDir.toAbsolutePath().toString());
 
         try (HeadlessServerRunner runner = new HeadlessServerRunner(config, bootLog)) {
             if (!runner.boot(metrics)) {

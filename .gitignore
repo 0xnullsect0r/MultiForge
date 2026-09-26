@@ -103,3 +103,4 @@ node_modules/
 
 # jqwik failure database (property-test shrink cache)
 .jqwik-database
+__pycache__/

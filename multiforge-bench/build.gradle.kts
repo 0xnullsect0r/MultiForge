@@ -63,7 +63,7 @@ tasks.register<JavaExec>("worldDiff") {
 // -PoutputFile=<json>, -PbootLog=<log>.
 // -------------------------------------------------------------------------
 
-val benchVerificationDir = rootProject.projectDir.resolve("docs/verification/m9/7.4")
+val benchResultsDir = layout.buildDirectory.dir("bench-results").get().asFile
 
 fun JavaExec.benchCommon(profile: String) {
     group = "verification"
@@ -87,6 +87,9 @@ fun JavaExec.benchCommon(profile: String) {
             "stockInstaller" to "bench.stockInstaller",
             "workers" to "bench.workers",
             "extraJvmArgs" to "bench.extraJvmArgs",
+            "modpackDir" to "bench.modpackDir",
+            "modpackUrl" to "bench.modpackUrl",
+            "modpackSha256" to "bench.modpackSha256",
             "outputFile" to "bench.outputFile")
     passThrough.forEach { (prop, sys) -> (project.findProperty(prop) as String?)?.let { systemProperty(sys, it) } }
 }
@@ -141,9 +144,6 @@ tasks.register<JavaExec>("atm10") {
             "[-Pticks] [-Pworkers] [-Pserver=stock]. Exits 2 when no pack is given."
     benchCommon("atm10")
     mainClass.set("net.multiforge.bench.harness.Atm10Bench")
-    listOf("modpackDir", "modpackUrl", "modpackSha256").forEach { prop ->
-        (project.findProperty(prop) as String?)?.let { systemProperty("bench.$prop", it) }
-    }
 }
 
 tasks.register<JavaExec>("vanilla") {
@@ -155,13 +155,14 @@ tasks.register<JavaExec>("vanilla") {
 tasks.register<JavaExec>("swarm") {
     description = "Real-time player swarm: -Pplayers protocol bots walk, place and break for ticks/20 s. " +
             "[-Pplayers=20] [-Pticks=12000] [-Pworkers] [-Pspread=512] [-PrenderDistance=8] " +
-            "[-PswarmMode=bots|armor-stand] [-Pserver=stock]."
+            "[-PswarmMode=bots|armor-stand] [-PmodpackDir=<dir>] [-Pserver=stock]."
     val players = (project.findProperty("players") as String?) ?: "20"
     benchCommon("swarm-$players")
     mainClass.set("net.multiforge.bench.harness.SwarmBench")
     systemProperty("bench.players", players)
     if (project.findProperty("outputFile") == null) {
-        systemProperty("bench.outputFile", benchVerificationDir.resolve("swarm-$players/patched.json").absolutePath)
+        val server = (project.findProperty("server") as String?) ?: "multiforge"
+        systemProperty("bench.outputFile", benchResultsDir.resolve("swarm-$players-$server.json").absolutePath)
     }
     listOf("spread", "renderDistance", "swarmMode").forEach { prop ->
         (project.findProperty(prop) as String?)?.let { systemProperty("bench.$prop", it) }
@@ -183,7 +184,7 @@ tasks.register<JavaExec>("x8StrictSwarm") {
     if (project.findProperty("outputFile") == null) {
         systemProperty(
                 "bench.outputFile",
-                rootProject.projectDir.resolve("docs/verification/m456/x8/swarm-$players.json").absolutePath)
+                benchResultsDir.resolve("x8-swarm-$players.json").absolutePath)
     }
     listOf("spread", "renderDistance").forEach { prop ->
         (project.findProperty(prop) as String?)?.let { systemProperty("bench.$prop", it) }

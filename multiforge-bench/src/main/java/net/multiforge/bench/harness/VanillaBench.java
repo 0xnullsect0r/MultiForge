@@ -32,7 +32,7 @@ import java.util.Map;
  *   <li>{@code bench.ticks} — default {@code 12000} (10 game-minutes)</li>
  *   <li>{@code bench.workers} — default {@code 1}</li>
  *   <li>{@code bench.outputFile} — default {@code
- *       docs/verification/m9/7.4/vanilla/<patched|baseline>.json}</li>
+ *       multiforge-bench/build/bench-results/vanilla-<flavour>.json}</li>
  *   <li>{@code bench.bootLog} — where the server's console output is captured</li>
  * </ul>
  */
@@ -43,8 +43,7 @@ public final class VanillaBench {
         int workers = Integer.getInteger("bench.workers", 1);
         String flavour = BenchSetup.flavour();
         Path outputFile = Path.of(System.getProperty(
-                "bench.outputFile",
-                "docs/verification/m9/7.4/vanilla/" + (flavour.equals("stock") ? "baseline" : "patched") + ".json"));
+                "bench.outputFile", "multiforge-bench/build/bench-results/vanilla-" + flavour + ".json"));
         Path bootLog = Path.of(System.getProperty(
                 "bench.bootLog", "multiforge-bench/build/bench-logs/vanilla-" + flavour + "-boot.log"));
 

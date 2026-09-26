@@ -79,8 +79,7 @@ public final class Atm10Bench {
         int workers = Integer.getInteger("bench.workers", 4);
         String flavour = BenchSetup.flavour();
         Path outputFile = Path.of(System.getProperty(
-                "bench.outputFile",
-                "docs/verification/m9/7.4/atm10/" + (flavour.equals("stock") ? "baseline" : "patched") + ".json"));
+                "bench.outputFile", "multiforge-bench/build/bench-results/atm10-" + flavour + ".json"));
         Path bootLog = Path.of(System.getProperty(
                 "bench.bootLog", "multiforge-bench/build/bench-logs/atm10-" + flavour + "-boot.log"));
 
@@ -124,8 +123,11 @@ public final class Atm10Bench {
         }
     }
 
-    /** The unpacked pack's server root, or null when neither property is set. */
-    private static Path resolveModpack() throws IOException {
+    /**
+     * The unpacked pack's server root from {@code bench.modpackDir} or {@code
+     * bench.modpackUrl}/{@code bench.modpackSha256}, or null when neither is set.
+     */
+    static Path resolveModpack() throws IOException {
         String dir = System.getProperty("bench.modpackDir", "").trim();
         if (!dir.isEmpty()) {
             Path p = Path.of(dir);
