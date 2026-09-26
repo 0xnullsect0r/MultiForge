@@ -64,9 +64,8 @@ Main.main(String[] args)
 None of the 12 rules need computed stack-map frames (they match on
 invocation opcodes, field access opcodes, and annotation presence — not
 inferred types at merge points), and `SKIP_FRAMES` roughly halves parse
-time on obfuscated/heavily-optimized mod jars, which matters because CI
-(Track C4.5, `.github/workflows/scanner.yml`) runs this on every PR
-touching `upstream/`. `RuleEngine.NEEDED_FLAGS` is the single source of
+time on obfuscated/heavily-optimized mod jars, which matters when a
+server operator runs it over a whole modpack (`/multiforge certify all`). `RuleEngine.NEEDED_FLAGS` is the single source of
 truth on this so a future rule that *does* need frames fails loudly in
 `RuleEngineTest` rather than silently getting corrupted frame data.
 
@@ -107,10 +106,12 @@ precisely from a single class file (it has no closed-world view of the
 mod jar, let alone NeoForge's event bus wiring). The scanner uses a
 conservative **name/signature heuristic** instead of true reachability:
 
-- A method is **tick-reachable** if its name matches a known
-  NeoForge/Forge tick-adjacent event handler signature (`@SubscribeEvent`
-  present + parameter type `ServerTickEvent`, `LevelTickEvent`,
-  `PlayerTickEvent`, or anything ending in `TickEvent`), **or** it is
+- A method is **tick-reachable** if its sole parameter is a tick event
+  — a type whose name ends in `TickEvent`, or a class nested in one
+  (NeoForge 21's `EntityTickEvent$Post`, `LevelTickEvent$Pre`,
+  `ServerTickEvent$Post`, `PlayerTickEvent$Post`) — with or without
+  `@SubscribeEvent` (handlers registered through
+  `IEventBus.addListener(...)` carry no annotation), **or** it is
   annotated `@RegionThread` (§1.5), **or** it is reachable by a direct
   (non-virtual-dispatch) call chain of depth ≤ 3 from such a method,
   resolved within the same class file only — no cross-class call-graph;
@@ -947,6 +948,22 @@ java -jar multiforge-scanner.jar --sarif mods/*.jar > scanner-results.sarif
 ```
 
 ---
+
+## 7a. The corpus gate
+
+CI (`.github/workflows/scanner.yml`) checks the scanner against mod jars
+with known answers: the `multiforge-testmods` fixture mods and the client
+debug mod. `./gradlew :multiforge-scanner:scanCorpus` scans them with
+every active rule and compares one line per finding (`<jar> <rule>
+<severity> <class>#<method>`) with `multiforge-scanner/corpus/expected.txt`;
+a rule change that adds, drops or moves a finding on a known jar fails
+until the expectation is regenerated on purpose (`-PupdateCorpus`). Today
+the legacy fixture's two unsynchronised static counters are the only
+findings (R04); the cross-region writer's `setBlock` runs from a tick
+handler, so R02 is correctly silent.
+
+The fork jar is not a target: it embeds all of patched Vanilla, so almost
+every finding would be against Vanilla code.
 
 ## 8. Test invariants
 
