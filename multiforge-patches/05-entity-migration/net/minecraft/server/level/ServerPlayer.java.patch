@@ -1,0 +1,98 @@
+--- a/net/minecraft/server/level/ServerPlayer.java
++++ b/net/minecraft/server/level/ServerPlayer.java
+@@ -864,6 +864,14 @@ public class ServerPlayer extends Player {
+     @Nullable
+     @Override
+     public Entity changeDimension(DimensionTransition p_350472_) {
++        // MultiForge (multiforge-patches/05-entity-migration/): a player moving into
++        // another region, or to another dimension, from a region worker is moved on
++        // the server thread after the tick barrier (see OwnershipGuard.deferCrossRegionMove).
++        if (net.multiforge.neoforge.OwnershipGuard.deferCrossRegionMove(
++                "ServerPlayer.changeDimension", this, p_350472_.newLevel(), p_350472_.pos().x, p_350472_.pos().z,
++                ServerPlayer.MfLambdas.changeDimension(this, p_350472_))) {
++            return this;
++        }
+         if (!net.neoforged.neoforge.common.CommonHooks.onTravelToDimension(this, p_350472_.newLevel().dimension())) return null;
+         if (this.isRemoved()) {
+             return null;
+@@ -1489,11 +1497,20 @@ public class ServerPlayer extends Player {
+ 
+     @Override
+     public void teleportTo(double p_8969_, double p_8970_, double p_8971_) {
++        if (net.multiforge.neoforge.OwnershipGuard.deferCrossRegionMove(
++                "ServerPlayer.teleportTo", this, this.level(), p_8969_, p_8971_, ServerPlayer.MfLambdas.teleportTo(this, p_8969_, p_8970_, p_8971_))) {
++            return;
++        }
+         this.connection.teleport(p_8969_, p_8970_, p_8971_, this.getYRot(), this.getXRot(), RelativeMovement.ROTATION);
+     }
+ 
+     @Override
+     public void teleportRelative(double p_251611_, double p_248861_, double p_252266_) {
++        if (net.multiforge.neoforge.OwnershipGuard.deferCrossRegionMove(
++                "ServerPlayer.teleportRelative", this, this.level(), this.getX() + p_251611_, this.getZ() + p_252266_,
++                ServerPlayer.MfLambdas.teleportRelative(this, p_251611_, p_248861_, p_252266_))) {
++            return;
++        }
+         this.connection
+             .teleport(this.getX() + p_251611_, this.getY() + p_248861_, this.getZ() + p_252266_, this.getYRot(), this.getXRot(), RelativeMovement.ALL);
+     }
+@@ -1502,6 +1519,11 @@ public class ServerPlayer extends Player {
+     public boolean teleportTo(
+         ServerLevel p_265564_, double p_265424_, double p_265680_, double p_265312_, Set<RelativeMovement> p_265192_, float p_265059_, float p_265266_
+     ) {
++        if (net.multiforge.neoforge.OwnershipGuard.deferCrossRegionMove(
++                "ServerPlayer.teleportTo", this, p_265564_, p_265424_, p_265312_,
++                ServerPlayer.MfLambdas.teleportTo(this, p_265564_, p_265424_, p_265680_, p_265312_, p_265192_, p_265059_, p_265266_))) {
++            return true;
++        }
+         ChunkPos chunkpos = new ChunkPos(BlockPos.containing(p_265424_, p_265680_, p_265312_));
+         p_265564_.getChunkSource().addRegionTicket(TicketType.POST_TELEPORT, chunkpos, 1, this.getId());
+         this.stopRiding();
+@@ -1762,6 +1784,11 @@ public class ServerPlayer extends Player {
+     }
+ 
+     public void teleportTo(ServerLevel p_9000_, double p_9001_, double p_9002_, double p_9003_, float p_9004_, float p_9005_) {
++        if (net.multiforge.neoforge.OwnershipGuard.deferCrossRegionMove(
++                "ServerPlayer.teleportTo", this, p_9000_, p_9001_, p_9003_,
++                ServerPlayer.MfLambdas.teleportTo(this, p_9000_, p_9001_, p_9002_, p_9003_, p_9004_, p_9005_))) {
++            return;
++        }
+         this.setCamera(this);
+         this.stopRiding();
+         if (p_9000_ == this.level()) {
+@@ -2130,4 +2157,35 @@ public class ServerPlayer extends Player {
+             return (float)Mth.wrapDegrees(Mth.atan2(vec3.z, vec3.x) * 180.0F / (float)Math.PI - 90.0);
+         }
+     }
++
++    /**
++     * MultiForge: the lambdas MultiForge's patches need, kept out of ServerPlayer itself.
++     * javac numbers a class's synthetic lambda methods in source order, so a lambda
++     * added to ServerPlayer would renumber Vanilla's, and mixins that target those by name
++     * would fail to apply.
++     */
++    static final class MfLambdas {
++        private MfLambdas() {}
++
++        static Runnable changeDimension(ServerPlayer player, DimensionTransition transition) {
++            return () -> player.changeDimension(transition);
++        }
++
++        static Runnable teleportTo(ServerPlayer player, double x, double y, double z) {
++            return () -> player.teleportTo(x, y, z);
++        }
++
++        static Runnable teleportRelative(ServerPlayer player, double dx, double dy, double dz) {
++            return () -> player.teleportRelative(dx, dy, dz);
++        }
++
++        static Runnable teleportTo(
++                ServerPlayer player, ServerLevel level, double x, double y, double z, Set<RelativeMovement> relative, float yRot, float xRot) {
++            return () -> player.teleportTo(level, x, y, z, relative, yRot, xRot);
++        }
++
++        static Runnable teleportTo(ServerPlayer player, ServerLevel level, double x, double y, double z, float yRot, float xRot) {
++            return () -> player.teleportTo(level, x, y, z, yRot, xRot);
++        }
++    }
+ }

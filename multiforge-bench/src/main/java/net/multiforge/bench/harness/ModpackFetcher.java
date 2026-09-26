@@ -29,83 +29,40 @@ import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
 
 /**
- * Downloads and unpacks the ATM10 server pack for {@code
- * :multiforge-bench:atm10}.
+ * Downloads (or copies), verifies and unpacks a modpack server zip for
+ * {@link Atm10Bench}.
  *
- * <p><b>Note on {@link Atm10Bench}:</b> as of this writing {@code
- * Atm10Bench} deliberately does <i>not</i> call this class — its class
- * doc documents an explicit decision to require an operator-provided
- * {@code -PmodpackDir} instead of auto-fetching, citing network flake,
- * CurseForge auth walls, and pack-redistribution licensing terms. This
- * class exists as the auto-download building block for whoever revisits
- * that trade-off (e.g. a CI nightly run with its own hosting for the
- * pack); it is intentionally self-contained and does not change {@code
- * Atm10Bench}'s current behavior.
- *
- * <p><b>{@link #DEFAULT_MODPACK_URL}:</b> CurseForge file IDs are
- * per-upload and change every time the ATM10 modpack is updated, and
- * there is no stable canonical direct-download URL without hitting the
- * CurseForge API with a key (out of scope for a bench-harness default).
- * The constant below is therefore a documented placeholder, not a
- * verified live link. Point at a real pack instead via {@code
- * -PmodpackUrl=<url>} (see {@link #MODPACK_URL_PROPERTY}), or update the
- * constant once a stable mirror (e.g. a project-hosted Modrinth version
- * file URL, which — unlike CurseForge — allows a stable
- * "latest version of this project" API query) is chosen.
+ * <p>There is no built-in default pack URL: CurseForge file downloads need
+ * an API key and change with every pack release, so the operator passes the
+ * server-pack zip's URL (or a local path) with its SHA-256. A digest is
+ * required for any network source — a bench that silently measured whatever
+ * a URL served that day would not be reproducible. Unpacked packs usually
+ * nest their server files one directory down; {@link #findServerRoot} finds
+ * the directory that holds {@code mods/}.
  */
 public final class ModpackFetcher {
-
-    /** {@code -PmodpackUrl=<url>} system property read by {@link #resolveUrl()}. */
-    public static final String MODPACK_URL_PROPERTY = "modpackUrl";
-
-    /**
-     * Placeholder ATM10 server-pack URL — see class doc. Update this (or
-     * pass {@value #MODPACK_URL_PROPERTY}) before relying on {@link
-     * #ensureDownloaded(Path)} to fetch a real pack.
-     */
-    static final String DEFAULT_MODPACK_URL =
-            "https://www.curseforge.com/api/v1/mods/UPDATE_ME_WITH_REAL_ATM10_FILE_ID/download-url";
 
     private static final String ZIP_FILE_NAME = "atm10-server-pack.zip";
     private static final String EXTRACT_DIR_NAME = "atm10";
 
     private ModpackFetcher() {}
 
-    /** Resolves the modpack URL: {@code -DmodpackUrl}/{@code -PmodpackUrl} if set, else {@link #DEFAULT_MODPACK_URL}. */
-    public static String resolveUrl() {
-        String prop = System.getProperty(MODPACK_URL_PROPERTY);
-        return (prop == null || prop.isBlank()) ? DEFAULT_MODPACK_URL : prop.trim();
-    }
-
     /**
-     * Ensures the ATM10 pack is downloaded to {@code buildDir/modpack/}
-     * and unzipped to {@code buildDir/modpack/atm10/}, using {@link
-     * #resolveUrl()} as the source. Idempotent: a second call with the
-     * same inputs and an already-populated extract directory is a no-op.
+     * Ensure the pack from {@code sourceUrl} is downloaded to {@code
+     * buildDir/modpack/} and unzipped to {@code buildDir/modpack/atm10/}.
+     * When {@code expectedSha256} is given, the zip is verified against it and
+     * an existing download is reused only while it still matches; without one
+     * (only allowed for {@code file:} sources) an existing non-empty extract
+     * is reused as is.
      *
-     * @return the extracted pack directory ({@code buildDir/modpack/atm10})
-     */
-    public static Path ensureDownloaded(Path buildDir) throws IOException {
-        return ensureDownloaded(buildDir, resolveUrl(), null);
-    }
-
-    /**
-     * Same as {@link #ensureDownloaded(Path)} but with an explicit
-     * source URL and, optionally, an expected sha256 hex digest of the
-     * downloaded zip. When {@code expectedSha256} is non-null, a
-     * previously-downloaded zip is re-verified against it and only
-     * skipped (both download and re-extraction) when it still matches —
-     * this is the "sha256-verify, idempotent" contract C4.4 asks for.
-     * When {@code expectedSha256} is {@code null}, idempotency instead
-     * falls back to "zip and extract dir both already exist and the
-     * extract dir is non-empty" — a real digest isn't known for every
-     * caller (see {@link #DEFAULT_MODPACK_URL}'s placeholder status).
-     *
-     * @param sourceUrl any URL {@link HttpClient} — or, for tests, a
-     *        {@code file://} URI via {@link URI#toURL()} — can fetch
+     * @param sourceUrl an {@code http(s):} URL, or a {@code file:} URI
      * @return the extracted pack directory
      */
     public static Path ensureDownloaded(Path buildDir, String sourceUrl, String expectedSha256) throws IOException {
+        URI source = URI.create(sourceUrl);
+        if (expectedSha256 == null && !"file".equalsIgnoreCase(source.getScheme())) {
+            throw new IOException("a SHA-256 is required for a network modpack source: " + sourceUrl);
+        }
         Path modpackDir = buildDir.resolve("modpack");
         Files.createDirectories(modpackDir);
         Path zip = modpackDir.resolve(ZIP_FILE_NAME);
@@ -115,7 +72,7 @@ public final class ModpackFetcher {
             return extractDir;
         }
 
-        download(URI.create(sourceUrl), zip);
+        download(source, zip);
 
         if (expectedSha256 != null) {
             String actual = sha256Hex(zip);
@@ -128,6 +85,22 @@ public final class ModpackFetcher {
         deleteRecursively(extractDir);
         unzip(zip, extractDir);
         return extractDir;
+    }
+
+    /**
+     * The directory under {@code extracted} that holds {@code mods/}: {@code
+     * extracted} itself, or the first match up to two levels down.
+     */
+    public static Path findServerRoot(Path extracted) throws IOException {
+        if (Files.isDirectory(extracted.resolve("mods"))) return extracted;
+        try (var walk = Files.walk(extracted, 3)) {
+            return walk.filter(p ->
+                            Files.isDirectory(p) && p.getFileName().toString().equals("mods"))
+                    .map(Path::getParent)
+                    .sorted(java.util.Comparator.comparingInt(Path::getNameCount))
+                    .findFirst()
+                    .orElseThrow(() -> new IOException("no mods/ directory in the modpack under " + extracted));
+        }
     }
 
     private static boolean isAlreadyGood(Path zip, Path extractDir, String expectedSha256) throws IOException {

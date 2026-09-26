@@ -1,0 +1,77 @@
+--- a/net/minecraft/server/level/ChunkMap.java
++++ b/net/minecraft/server/level/ChunkMap.java
+@@ -1095,11 +1095,24 @@ public class ChunkMap extends ChunkStorage implements ChunkHolder.PlayerProvider
+             int i = entitytype.clientTrackingRange() * 16;
+             if (i != 0) {
+                 int j = entitytype.updateInterval();
+-                if (this.entityMap.containsKey(p_140200_.getId())) {
++                // MultiForge (multiforge-patches/05-entity-migration/): region workers
++                // start and stop tracking their entities concurrently; the map is
++                // only touched under its own monitor, and the tracker work below runs
++                // outside it. Players are only added and removed on the server thread
++                // (OwnershipGuard.deferCrossRegionMove), so the player branch below
++                // never runs concurrently with a region.
++                ChunkMap.TrackedEntity chunkmap$trackedentity;
++                synchronized (this.entityMap) {
++                    if (this.entityMap.containsKey(p_140200_.getId())) {
++                        chunkmap$trackedentity = null;
++                    } else {
++                        chunkmap$trackedentity = new ChunkMap.TrackedEntity(p_140200_, i, j, entitytype.trackDeltas());
++                        this.entityMap.put(p_140200_.getId(), chunkmap$trackedentity);
++                    }
++                }
++                if (chunkmap$trackedentity == null) {
+                     throw (IllegalStateException)Util.pauseInIde(new IllegalStateException("Entity is already tracked!"));
+                 } else {
+-                    ChunkMap.TrackedEntity chunkmap$trackedentity = new ChunkMap.TrackedEntity(p_140200_, i, j, entitytype.trackDeltas());
+-                    this.entityMap.put(p_140200_.getId(), chunkmap$trackedentity);
+                     chunkmap$trackedentity.updatePlayers(this.level.players());
+                     if (p_140200_ instanceof ServerPlayer serverplayer) {
+                         this.updatePlayerStatus(serverplayer, true);
+@@ -1124,7 +1137,10 @@ public class ChunkMap extends ChunkStorage implements ChunkHolder.PlayerProvider
+             }
+         }
+ 
+-        ChunkMap.TrackedEntity chunkmap$trackedentity1 = this.entityMap.remove(p_140332_.getId());
++        ChunkMap.TrackedEntity chunkmap$trackedentity1;
++        synchronized (this.entityMap) {
++            chunkmap$trackedentity1 = this.entityMap.remove(p_140332_.getId());
++        }
+         if (chunkmap$trackedentity1 != null) {
+             chunkmap$trackedentity1.broadcastRemoved();
+         }
+@@ -1165,14 +1181,20 @@ public class ChunkMap extends ChunkStorage implements ChunkHolder.PlayerProvider
+     }
+ 
+     public void broadcast(Entity p_140202_, Packet<?> p_140203_) {
+-        ChunkMap.TrackedEntity chunkmap$trackedentity = this.entityMap.get(p_140202_.getId());
++        ChunkMap.TrackedEntity chunkmap$trackedentity;
++        synchronized (this.entityMap) {
++            chunkmap$trackedentity = this.entityMap.get(p_140202_.getId());
++        }
+         if (chunkmap$trackedentity != null) {
+             chunkmap$trackedentity.broadcast(p_140203_);
+         }
+     }
+ 
+     protected void broadcastAndSend(Entity p_140334_, Packet<?> p_140335_) {
+-        ChunkMap.TrackedEntity chunkmap$trackedentity = this.entityMap.get(p_140334_.getId());
++        ChunkMap.TrackedEntity chunkmap$trackedentity;
++        synchronized (this.entityMap) {
++            chunkmap$trackedentity = this.entityMap.get(p_140334_.getId());
++        }
+         if (chunkmap$trackedentity != null) {
+             chunkmap$trackedentity.broadcastAndSend(p_140335_);
+         }
+@@ -1222,7 +1244,10 @@ public class ChunkMap extends ChunkStorage implements ChunkHolder.PlayerProvider
+ 
+     // Neo: Getter for players watching an entity.
+     public List<ServerPlayer> getPlayersWatching(Entity entity) {
+-        var trackedEntity = entityMap.get(entity.getId());
++        ChunkMap.TrackedEntity trackedEntity;
++        synchronized (this.entityMap) { // MultiForge: attachment syncs call this from region workers
++            trackedEntity = entityMap.get(entity.getId());
++        }
+         if (trackedEntity != null) {
+             var ret = new java.util.ArrayList<ServerPlayer>(trackedEntity.seenBy.size());
+             for (var connection : trackedEntity.seenBy) {

@@ -64,9 +64,8 @@ Main.main(String[] args)
 None of the 12 rules need computed stack-map frames (they match on
 invocation opcodes, field access opcodes, and annotation presence — not
 inferred types at merge points), and `SKIP_FRAMES` roughly halves parse
-time on obfuscated/heavily-optimized mod jars, which matters because CI
-(Track C4.5, `.github/workflows/scanner.yml`) runs this on every PR
-touching `upstream/`. `RuleEngine.NEEDED_FLAGS` is the single source of
+time on obfuscated/heavily-optimized mod jars, which matters when a
+server operator runs it over a whole modpack (`/multiforge certify all`). `RuleEngine.NEEDED_FLAGS` is the single source of
 truth on this so a future rule that *does* need frames fails loudly in
 `RuleEngineTest` rather than silently getting corrupted frame data.
 
@@ -107,10 +106,12 @@ precisely from a single class file (it has no closed-world view of the
 mod jar, let alone NeoForge's event bus wiring). The scanner uses a
 conservative **name/signature heuristic** instead of true reachability:
 
-- A method is **tick-reachable** if its name matches a known
-  NeoForge/Forge tick-adjacent event handler signature (`@SubscribeEvent`
-  present + parameter type `ServerTickEvent`, `LevelTickEvent`,
-  `PlayerTickEvent`, or anything ending in `TickEvent`), **or** it is
+- A method is **tick-reachable** if its sole parameter is a tick event
+  — a type whose name ends in `TickEvent`, or a class nested in one
+  (NeoForge 21's `EntityTickEvent$Post`, `LevelTickEvent$Pre`,
+  `ServerTickEvent$Post`, `PlayerTickEvent$Post`) — with or without
+  `@SubscribeEvent` (handlers registered through
+  `IEventBus.addListener(...)` carry no annotation), **or** it is
   annotated `@RegionThread` (§1.5), **or** it is reachable by a direct
   (non-virtual-dispatch) call chain of depth ≤ 3 from such a method,
   resolved within the same class file only — no cross-class call-graph;
@@ -124,17 +125,12 @@ conservative **name/signature heuristic** instead of true reachability:
 
 ### 1.5 The `@RegionThread` marker
 
-This spec assumes `multiforge-api` grows a
-`net.multiforge.api.annotation.RegionThread` marker annotation (`RUNTIME`
-retention, `METHOD` target) before Track C2 lands — it does not exist in
-the runtime today (no `@interface RegionThread` anywhere in the tree as
-of this freeze). Its introduction is **not** part of this task; it is a
-Phase 1/Track A dependency Track C2 blocks on. The scanner reads it
-purely as a bytecode-visible descriptor string
-(`Lnet/multiforge/api/annotation/RegionThread;`) and never loads the
-annotation class, so it has no runtime dependency on `multiforge-api`
-either — consistent with the "no Minecraft, no MultiForge runtime"
-constraint in §1.1.
+`multiforge-api` ships the `net.multiforge.api.RegionThread` marker
+annotation (`RUNTIME` retention, `METHOD` and `TYPE` targets). The scanner
+reads it purely as a bytecode-visible descriptor string
+(`Lnet/multiforge/api/RegionThread;`) and never loads the annotation class,
+so it has no runtime dependency on `multiforge-api` either — consistent with
+the "no Minecraft, no MultiForge runtime" constraint in §1.1.
 
 ---
 
@@ -425,30 +421,23 @@ public class ExampleMod {
 
 ### R05 — `entity-setpos-off-coord`
 
-**Severity:** ERROR. **Detects:** a direct call to
-`Entity.setPos(double,double,double)` or `setPosRaw` from mod code, not
-made from within
-`net.multiforge.runtime.entity.EntityMigrationCoordinator` itself.
+**Severity:** WARN (was ERROR while M4 entity migration existed). **Detects:**
+a direct call to `Entity.setPos(double,double,double)` or `setPosRaw` from
+mod code.
 
 **Bytecode pattern:**
 ```
 visitMethodInsn(INVOKEVIRTUAL, "net/minecraft/world/entity/Entity", "setPos"|"setPosRaw", "(DDD)V", false)
-  guarded by: ClassContext.className does NOT start with "net/multiforge/runtime/entity/"
 ```
 
-**Rationale:** Cross-region entity movement is not just "set the
-coordinate fields" — `EntityMigrationCoordinator.beginMigration`/
-`completeAt`
-(`multiforge-runtime/src/main/java/net/multiforge/runtime/entity/EntityMigrationCoordinator.java:56,89`)
-exists because a boundary-crossing position write must also transfer
-ownership, drain in-flight per-region state, and (per
-`beginMigrationWithTree`, line 115) carry passengers atomically. A raw
-`setPos` silently desyncs region ownership bookkeeping from the entity's
-actual coordinates.
+**Rationale:** Ownership follows position, so ordinary movement needs
+nothing special. But a jump into another region's chunks from a region
+tick skips the deferral MultiForge gives `teleportTo`/`changeDimension`
+(they run on the server thread), and the entity keeps being ticked by the
+old region until the next tick. Flagged so long moves can be reviewed.
 
-**Escape hatch:** `.multiforgeignore` fingerprint — legitimate for small,
-same-region cosmetic nudges that never cross a boundary in practice; the
-scanner cannot prove that, so it flags all direct calls.
+**Escape hatch:** `.multiforgeignore` fingerprint — for short moves that
+never leave the region.
 
 **Buggy:**
 ```java
@@ -952,6 +941,22 @@ java -jar multiforge-scanner.jar --sarif mods/*.jar > scanner-results.sarif
 ```
 
 ---
+
+## 7a. The corpus gate
+
+CI (`.github/workflows/scanner.yml`) checks the scanner against mod jars
+with known answers: the `multiforge-testmods` fixture mods and the client
+debug mod. `./gradlew :multiforge-scanner:scanCorpus` scans them with
+every active rule and compares one line per finding (`<jar> <rule>
+<severity> <class>#<method>`) with `multiforge-scanner/corpus/expected.txt`;
+a rule change that adds, drops or moves a finding on a known jar fails
+until the expectation is regenerated on purpose (`-PupdateCorpus`). Today
+the legacy fixture's two unsynchronised static counters are the only
+findings (R04); the cross-region writer's `setBlock` runs from a tick
+handler, so R02 is correctly silent.
+
+The fork jar is not a target: it embeds all of patched Vanilla, so almost
+every finding would be against Vanilla code.
 
 ## 8. Test invariants
 

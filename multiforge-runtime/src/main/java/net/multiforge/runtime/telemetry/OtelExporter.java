@@ -25,8 +25,8 @@ import net.multiforge.runtime.diagnostics.ProbeRegistry;
 
 /**
  * Hand-rolled OTLP-HTTP metrics exporter. No OpenTelemetry SDK
- * dependency — {@code docs/operator-handbook.md} promises {@code
- * -Dmultiforge.otel.endpoint=<url>} as an operational knob, and pulling
+ * dependency — {@code -Dmultiforge.otel.endpoint=<url>} is an opt-in
+ * operational knob (documented in {@code docs/perf-tuning.md}), and pulling
  * in the full OTel Java SDK for one counters-only export loop is a
  * binary-size and dependency-review cost this doesn't justify (see
  * CLAUDE.md "adding a new dependency").
@@ -66,7 +66,7 @@ public final class OtelExporter {
      * Reads {@link #ENDPOINT_PROPERTY}; if set and non-blank, starts (or
      * restarts) the export thread against that endpoint. If unset, this
      * is a no-op — no thread, no export, matching the "opt-in only"
-     * contract in {@code docs/operator-handbook.md}.
+     * contract.
      */
     public static void startFromSystemProperty() {
         start(System.getProperty(ENDPOINT_PROPERTY));

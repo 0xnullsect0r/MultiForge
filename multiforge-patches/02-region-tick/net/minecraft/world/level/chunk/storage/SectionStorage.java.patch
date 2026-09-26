@@ -1,0 +1,69 @@
+--- a/net/minecraft/world/level/chunk/storage/SectionStorage.java
++++ b/net/minecraft/world/level/chunk/storage/SectionStorage.java
+@@ -59,23 +59,26 @@ public class SectionStorage<R> implements AutoCloseable {
+         this.levelHeightAccessor = p_223516_;
+     }
+ 
+-    protected void tick(BooleanSupplier p_63812_) {
++    // MultiForge (multiforge-patches/02-region-tick/): region workers read and
++    // write this storage (POI) concurrently; every access holds this
++    // storage's monitor. See PoiManager.
++    protected synchronized void tick(BooleanSupplier p_63812_) {
+         while (this.hasWork() && p_63812_.getAsBoolean()) {
+             ChunkPos chunkpos = SectionPos.of(this.dirty.firstLong()).chunk();
+             this.writeColumn(chunkpos);
+         }
+     }
+ 
+-    public boolean hasWork() {
++    public synchronized boolean hasWork() {
+         return !this.dirty.isEmpty();
+     }
+ 
+     @Nullable
+-    protected Optional<R> get(long p_63819_) {
++    protected synchronized Optional<R> get(long p_63819_) {
+         return this.storage.get(p_63819_);
+     }
+ 
+-    protected Optional<R> getOrLoad(long p_63824_) {
++    protected synchronized Optional<R> getOrLoad(long p_63824_) {
+         if (this.outsideStoredRange(p_63824_)) {
+             return Optional.empty();
+         } else {
+@@ -99,7 +102,7 @@ public class SectionStorage<R> implements AutoCloseable {
+         return this.levelHeightAccessor.isOutsideBuildHeight(i);
+     }
+ 
+-    protected R getOrCreate(long p_63828_) {
++    protected synchronized R getOrCreate(long p_63828_) {
+         if (this.outsideStoredRange(p_63828_)) {
+             throw (IllegalArgumentException)Util.pauseInIde(new IllegalArgumentException("sectionPos out of bounds"));
+         } else {
+@@ -209,7 +212,7 @@ public class SectionStorage<R> implements AutoCloseable {
+     protected void onSectionLoad(long p_63813_) {
+     }
+ 
+-    protected void setDirty(long p_63788_) {
++    protected synchronized void setDirty(long p_63788_) {
+         Optional<R> optional = this.storage.get(p_63788_);
+         if (optional != null && !optional.isEmpty()) {
+             this.dirty.add(p_63788_);
+@@ -222,7 +225,7 @@ public class SectionStorage<R> implements AutoCloseable {
+         return p_63806_.get("DataVersion").asInt(1945);
+     }
+ 
+-    public void flush(ChunkPos p_63797_) {
++    public synchronized void flush(ChunkPos p_63797_) {
+         if (this.hasWork()) {
+             for (int i = this.levelHeightAccessor.getMinSection(); i < this.levelHeightAccessor.getMaxSection(); i++) {
+                 long j = getKey(p_63797_, i);
+@@ -243,7 +246,7 @@ public class SectionStorage<R> implements AutoCloseable {
+      * Neo: Removes the data for the given chunk position.
+      * See PR #937
+      */
+-    public void remove(long sectionPosAsLong) {
++    public synchronized void remove(long sectionPosAsLong) {
+         this.storage.remove(sectionPosAsLong);
+     }
+ }

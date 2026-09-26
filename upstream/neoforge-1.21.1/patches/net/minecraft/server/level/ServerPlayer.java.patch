@@ -57,7 +57,7 @@
                  serverlevel1.getProfiler().push("moving");
                  if (resourcekey == Level.OVERWORLD && serverlevel.dimension() == Level.NETHER) {
                      this.enteredNetherPosition = this.position();
-@@ -895,10 +_,12 @@
+@@ -895,10 +_,14 @@
                  playerlist.sendLevelInfo(this, serverlevel);
                  playerlist.sendAllPlayerInfo(this);
                  playerlist.sendActivePlayerEffects(this);
@@ -66,6 +66,8 @@
                  this.lastSentExp = -1;
                  this.lastSentHealth = -1.0F;
                  this.lastSentFood = -1;
++                // Neo: On the client all attachments are lost on dimension change and need to be re-sent
++                net.neoforged.neoforge.attachment.AttachmentSync.syncInitialPlayerAttachments(this);
 +                net.neoforged.neoforge.event.EventHooks.firePlayerChangedDimensionEvent(this, resourcekey, p_350472_.newLevel().dimension());
                  return this;
              }
@@ -137,16 +139,32 @@
              }
  
              this.nextContainerCounter();
-@@ -1090,10 +_,16 @@
+@@ -1090,10 +_,32 @@
  
                  return OptionalInt.empty();
              } else {
-+                if (extraDataWriter == null) {
++                // Neo: Support sending additional arbitrary data to menu factories on the client-side
++                var extraData = net.neoforged.neoforge.common.util.FriendlyByteBufUtil.writeCustomData(
++                        buffer -> {
++                            p_9033_.writeClientSideData(abstractcontainermenu, buffer);
++                            if (extraDataWriter != null) {
++                                extraDataWriter.accept(buffer);
++                            }
++                        },
++                        registryAccess()
++                );
++                if (extraData.length != 0) {
++                    this.connection.send(
++                        new net.neoforged.neoforge.network.payload.AdvancedOpenScreenPayload(
++                            abstractcontainermenu.containerId,
++                            abstractcontainermenu.getType(),
++                            p_9033_.getDisplayName(),
++                            extraData
++                        )
++                    );
++                } else {
                  this.connection
                      .send(new ClientboundOpenScreenPacket(abstractcontainermenu.containerId, abstractcontainermenu.getType(), p_9033_.getDisplayName()));
-+                } else {
-+                    this.connection
-+                        .send(new net.neoforged.neoforge.network.payload.AdvancedOpenScreenPayload(abstractcontainermenu.containerId, abstractcontainermenu.getType(), p_9033_.getDisplayName(), net.neoforged.neoforge.common.util.FriendlyByteBufUtil.writeCustomData(extraDataWriter, registryAccess())));
 +                }
                  this.initMenu(abstractcontainermenu);
                  this.containerMenu = abstractcontainermenu;
@@ -323,12 +341,3 @@
      }
  
      public boolean allowsListing() {
-@@ -1958,7 +_,7 @@
-         this.awardStat(Stats.ITEM_BROKEN.get(p_348565_));
-     }
- 
--    static record RespawnPosAngle(Vec3 position, float yaw) {
-+    public static record RespawnPosAngle(Vec3 position, float yaw) {
-         public static ServerPlayer.RespawnPosAngle of(Vec3 p_348670_, BlockPos p_348504_) {
-             return new ServerPlayer.RespawnPosAngle(p_348670_, calculateLookAtYaw(p_348670_, p_348504_));
-         }

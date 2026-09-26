@@ -85,6 +85,23 @@ class DebugPacketCodecTest {
     }
 
     @Test
+    void subscribeCarriesTheClientProtocolAndOldClientsDecodeAsProtocolOne() throws IOException {
+        DebugPayload.Subscribe s = new DebugPayload.Subscribe(DebugPayload.Subscribe.F_ALL);
+        DebugPayload.Subscribe back = DebugPacketCodec.decodeSubscribe(
+                DebugPacketCodec.readFrame(DebugPacketCodec.encodeSubscribe(s)).body());
+        assertThat(back.clientProtocol()).isEqualTo(DebugPacketCodec.PROTOCOL_VERSION);
+
+        // A protocol-1 client sends only the flags.
+        byte[] v1Body = java.nio.ByteBuffer.allocate(4)
+                .putInt(DebugPayload.Subscribe.F_ALL)
+                .array();
+        DebugPayload.Subscribe old = DebugPacketCodec.decodeSubscribe(v1Body);
+        assertThat(old.clientProtocol()).isEqualTo(1);
+        assertThat(old.flags() & DebugPayload.Subscribe.streamsFor(old.clientProtocol()))
+                .isEqualTo(DebugPayload.Subscribe.F_ALL & ~DebugPayload.Subscribe.F_OWNERSHIP);
+    }
+
+    @Test
     void frameTooShortThrows() {
         assertThatThrownBy(() -> DebugPacketCodec.readFrame(new byte[3])).isInstanceOf(IOException.class);
     }

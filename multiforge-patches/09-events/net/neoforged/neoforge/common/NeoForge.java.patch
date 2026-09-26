@@ -12,7 +12,7 @@
 +    // registered — but with no DispatchExecutor attached yet, so every dispatch runs inline
 +    // (pre-M12 Vanilla-equivalent behavior) until net.multiforge.neoforge.event.EventBusBridge
 +    // .attach(...) swaps in the real SchedulerBackedDispatchExecutor from
-+    // MultiForgeGlobalSystemsInit.install(...) at ServerAboutToStart. Respects
++    // RegionRuntimeInit.install(...) at ServerAboutToStart. Respects
 +    // -Dmultiforge.event-dispatch=off (LazyDispatchingEventBus/DispatchingEventBus's own
 +    // DISABLE_PROPERTY check) as the safety valve (CLAUDE.md rule 5).
 +    public static final IEventBus EVENT_BUS = new net.multiforge.runtime.event.LazyDispatchingEventBus(BusBuilder.builder().startShutdown().classChecker(eventType -> {

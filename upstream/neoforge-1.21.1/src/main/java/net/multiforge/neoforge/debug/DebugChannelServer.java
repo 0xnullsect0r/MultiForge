@@ -254,6 +254,10 @@ public final class DebugChannelServer {
 
     private static void onPlayerLoggedIn(PlayerEvent.PlayerLoggedInEvent event) {
         if (!(event.getEntity() instanceof ServerPlayer player)) return;
+        // Only clients that negotiated the channel (the debug client mod) are
+        // tracked; sending to a vanilla client, or a NeoForge one without the
+        // mod, is refused by NeoForge's payload check.
+        if (!player.connection.hasChannel(DebugFramePayload.TYPE)) return;
         PLAYERS.put(player.getUUID(), player);
         SUBSCRIPTIONS.put(player.getUUID(), 0); // waits for the client to send SUBSCRIBE
 
@@ -482,7 +486,21 @@ public final class DebugChannelServer {
             DebugPacketCodec.Frame frame = DebugPacketCodec.readFrame(raw);
             if (frame.kind() != DebugPacketKind.SUBSCRIBE) return; // ignore unexpected
             DebugPayload.Subscribe sub = DebugPacketCodec.decodeSubscribe(frame.body());
-            int mask = sub.flags() & DebugPayload.Subscribe.F_ALL; // strip unknown bits per §5
+            if (!DebugPacketCodec.supportsProtocol(sub.clientProtocol())) {
+                // A client we cannot talk to: stream nothing, say why once.
+                Integer prevMask = SUBSCRIPTIONS.put(sp.getUUID(), 0);
+                if (prevMask == null || prevMask != 0) {
+                    LOGGER.warn(
+                            "multiforge:debug/v1 — {} speaks protocol {}; this server supports {}..{}. Not streaming to it.",
+                            sp.getName().getString(),
+                            sub.clientProtocol(),
+                            DebugPacketCodec.MIN_SUPPORTED_PROTOCOL,
+                            DebugPacketCodec.PROTOCOL_VERSION);
+                }
+                return;
+            }
+            // Strip unknown bits (§5) and streams the client's protocol predates.
+            int mask = sub.flags() & DebugPayload.Subscribe.streamsFor(sub.clientProtocol());
 
             // Protocol §6: the SUBSCRIBE handler is the sole enforcement
             // point for multiforge.debug.view, re-evaluated on every

@@ -1,31 +1,46 @@
 --- a/net/minecraft/server/level/ServerChunkCache.java
 +++ b/net/minecraft/server/level/ServerChunkCache.java
-@@ -139,6 +139,7 @@
+@@ -135,7 +135,27 @@ public class ServerChunkCache extends ChunkSource implements net.neoforged.neofo
+     @Override
+     public ChunkAccess getChunk(int p_8360_, int p_8361_, ChunkStatus p_330876_, boolean p_8363_) {
+         if (Thread.currentThread() != this.mainThread) {
+-            return CompletableFuture.<ChunkAccess>supplyAsync(() -> this.getChunk(p_8360_, p_8361_, p_330876_, p_8363_), this.mainThreadProcessor).join();
++            // MultiForge (multiforge-patches/04-chunk-system/): region workers
++            // tick while the server thread waits at the barrier, so the Vanilla
++            // hop below would stall every block read. A chunk that already
++            // reached the requested status is read directly from the visible
++            // holder (volatile copy-on-write map + atomic futures — safe off
++            // thread); only a real load still goes through the server thread,
++            // announced to the barrier via MainThreadHandoff so it is serviced.
++            ChunkHolder mf$holder = this.getVisibleChunkIfPresent(ChunkPos.asLong(p_8360_, p_8361_));
++            if (mf$holder != null) {
++                ChunkAccess mf$loaded = mf$holder.getChunkIfPresent(p_330876_);
++                if (mf$loaded != null) return mf$loaded;
++            }
++            if (!p_8363_) return null;
++            boolean mf$regionWorker = net.multiforge.runtime.ownership.OwnerToken.current().domain()
++                    == net.multiforge.runtime.ownership.Domain.REGION;
++            if (mf$regionWorker) net.multiforge.neoforge.chunk.MainThreadHandoff.enter();
++            try {
++                return CompletableFuture.<ChunkAccess>supplyAsync(() -> this.getChunk(p_8360_, p_8361_, p_330876_, p_8363_), this.mainThreadProcessor).join();
++            } finally {
++                if (mf$regionWorker) net.multiforge.neoforge.chunk.MainThreadHandoff.exit();
++            }
          } else {
              ProfilerFiller profilerfiller = this.level.getProfiler();
              profilerfiller.incrementCounter("getChunk");
-+            net.multiforge.neoforge.chunk.ServerChunkCacheBridge.observeGet(this, p_8360_, p_8361_, p_330876_, p_8363_);
-             long i = ChunkPos.asLong(p_8360_, p_8361_);
-
-             for (int j = 0; j < 4; j++) {
-@@ -299,10 +299,12 @@
-     public void save(boolean p_8420_) {
-         this.runDistanceManagerUpdates();
-         this.chunkMap.saveAllChunks(p_8420_);
-+        net.multiforge.neoforge.chunk.ServerChunkCacheBridge.afterSave(this, p_8420_);
-     }
-
+@@ -172,7 +192,13 @@ public class ServerChunkCache extends ChunkSource implements net.neoforged.neofo
      @Override
-     public void close() throws IOException {
-+        net.multiforge.neoforge.chunk.ServerChunkCacheBridge.beforeClose(this);
-         this.save(true);
-         this.lightEngine.close();
-         this.chunkMap.close();
-@@ -326,6 +326,7 @@
-         this.chunkMap.tick(p_201913_);
-         this.level.getProfiler().pop();
-         this.clearCache();
-+        net.multiforge.neoforge.chunk.ServerChunkCacheBridge.afterTickChunks(this, p_201913_);
-     }
-
-     private void tickChunks() {
+     public LevelChunk getChunkNow(int p_8357_, int p_8358_) {
+         if (Thread.currentThread() != this.mainThread) {
+-            return null;
++            // MultiForge (multiforge-patches/04-chunk-system/): Vanilla answers
++            // null off the server thread, which would make every region worker
++            // see the world as unloaded. Read the visible holder directly
++            // instead (see getChunk above for why this is safe).
++            ChunkHolder mf$holder = this.getVisibleChunkIfPresent(ChunkPos.asLong(p_8357_, p_8358_));
++            if (mf$holder == null) return null;
++            return mf$holder.getChunkIfPresent(ChunkStatus.FULL) instanceof LevelChunk mf$chunk ? mf$chunk : null;
+         } else {
+             this.level.getProfiler().incrementCounter("getChunkNow");
+             long i = ChunkPos.asLong(p_8357_, p_8358_);

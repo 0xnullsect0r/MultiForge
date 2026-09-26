@@ -52,7 +52,9 @@ public interface IAttachmentHolder {
      *
      * <p>If there is no data attachment of the given type, an empty optional is returned.
      */
-    <T> Optional<T> getExistingData(AttachmentType<T> type);
+    default <T> Optional<T> getExistingData(AttachmentType<T> type) {
+        return Optional.ofNullable(getExistingDataOrNull(type));
+    }
 
     /**
      * {@return an optional possibly containing a data attachment value of the given type}
@@ -61,6 +63,23 @@ public interface IAttachmentHolder {
      */
     default <T> Optional<T> getExistingData(Supplier<AttachmentType<T>> type) {
         return getExistingData(type.get());
+    }
+
+    /**
+     * @return an existing data attachment value of the given type, or null if there is no data attachment of the given type
+     */
+    @Nullable
+    default <T> T getExistingDataOrNull(AttachmentType<T> type) {
+        // Backwards-compatible override. Will be removed in 1.21.5+.
+        return getExistingData(type).orElse(null);
+    }
+
+    /**
+     * @return an existing data attachment value of the given type, or null if there is no data attachment of the given type
+     */
+    @Nullable
+    default <T> T getExistingDataOrNull(Supplier<AttachmentType<T>> type) {
+        return getExistingDataOrNull(type.get());
     }
 
     /**
@@ -93,5 +112,29 @@ public interface IAttachmentHolder {
      */
     default <T> @Nullable T removeData(Supplier<AttachmentType<T>> type) {
         return removeData(type.get());
+    }
+
+    /**
+     * Syncs a data attachment of the given type with all relevant clients.
+     *
+     * <p>If there is currently no attachment of the given type,
+     * the removal of the attachment is synced to the client.
+     *
+     * @see AttachmentSyncHandler
+     */
+    default void syncData(AttachmentType<?> type) {
+        // Do nothing by default, implementers should override this method if needed.
+    }
+
+    /**
+     * Syncs a data attachment of the given type with all relevant clients.
+     *
+     * <p>If there is currently no attachment of the given type,
+     * the removal of the attachment is synced to the client.
+     *
+     * @see AttachmentSyncHandler
+     */
+    default void syncData(Supplier<? extends AttachmentType<?>> type) {
+        syncData(type.get());
     }
 }

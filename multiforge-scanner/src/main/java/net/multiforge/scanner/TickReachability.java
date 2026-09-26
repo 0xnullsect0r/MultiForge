@@ -34,9 +34,12 @@ import org.objectweb.asm.tree.MethodNode;
  * <p>A method is tick-reachable if:
  *
  * <ul>
- *   <li>it carries {@code @RegionThread}, or
- *   <li>it carries a NeoForge/Forge {@code @SubscribeEvent}-family annotation and its sole event
- *       parameter type name ends in {@code TickEvent}, or
+ *   <li>it carries {@code @RegionThread}, or its class does, or
+ *   <li>its sole parameter is a tick event — a type whose name ends in {@code TickEvent}, or a
+ *       class nested in one ({@code EntityTickEvent$Post}, {@code LevelTickEvent$Pre}: NeoForge
+ *       21's tick events are all nested {@code Pre}/{@code Post} classes). The method need not
+ *       carry {@code @SubscribeEvent}: handlers registered with {@code IEventBus.addListener(...)}
+ *       have no annotation, and a method taking only a tick event is a tick handler either way; or
  *   <li>it is reachable by a direct (non-virtual-dispatch-resolved) call chain of depth &le; 3
  *       from such a method, resolved within the same class file only.
  * </ul>
@@ -66,8 +69,9 @@ public final class TickReachability {
         Deque<String> frontier = new ArrayDeque<>();
         Map<String, Integer> depthOf = new HashMap<>();
 
+        boolean regionThreadClass = hasClassAnnotation(cn, REGION_THREAD_DESC);
         for (MethodNode m : methods) {
-            if (isSeed(m)) {
+            if (regionThreadClass || isSeed(m)) {
                 String k = key(m);
                 if (reachable.add(k)) {
                     depthOf.put(k, 0);
@@ -111,28 +115,28 @@ public final class TickReachability {
         if (hasAnnotation(m, TickReachability.REGION_THREAD_DESC)) {
             return true;
         }
-        if (!hasSubscribeEventAnnotation(m)) {
-            return false;
-        }
         Type[] args = Type.getArgumentTypes(m.desc);
-        for (Type arg : args) {
-            if (arg.getSort() == Type.OBJECT && arg.getInternalName().endsWith("TickEvent")) {
-                return true;
-            }
-        }
-        return false;
+        return args.length == 1 && args[0].getSort() == Type.OBJECT && isTickEvent(args[0].getInternalName());
     }
 
-    private static boolean hasSubscribeEventAnnotation(MethodNode m) {
-        return hasAnnotationSuffix(m, "SubscribeEvent;");
+    /** {@code .../XTickEvent} or a class nested in one ({@code .../XTickEvent$Post}). */
+    static boolean isTickEvent(String internalName) {
+        String simple = internalName.substring(internalName.lastIndexOf('/') + 1);
+        int nested = simple.indexOf('$');
+        String outer = nested < 0 ? simple : simple.substring(0, nested);
+        return outer.endsWith("TickEvent") || simple.endsWith("TickEvent");
     }
 
     private static boolean hasAnnotation(MethodNode m, String descriptor) {
         return annotationDescriptors(m).stream().anyMatch(d -> d.equals(descriptor));
     }
 
-    private static boolean hasAnnotationSuffix(MethodNode m, String suffix) {
-        return annotationDescriptors(m).stream().anyMatch(d -> d.endsWith(suffix));
+    private static boolean hasClassAnnotation(ClassNode cn, String descriptor) {
+        for (List<AnnotationNode> nodes : java.util.Arrays.asList(cn.visibleAnnotations, cn.invisibleAnnotations)) {
+            if (nodes == null) continue;
+            for (AnnotationNode n : nodes) if (n.desc.equals(descriptor)) return true;
+        }
+        return false;
     }
 
     private static List<String> annotationDescriptors(MethodNode m) {

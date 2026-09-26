@@ -1,5 +1,15 @@
 # M9 Phase 7 — Verification Runbook
 
+> **Historical — superseded.** The M9 chunk-system fork this document describes was
+> retired: Vanilla's chunk system loads, ticks, lights and saves every chunk, and MultiForge
+> only tracks which region owns each loaded chunk. See `docs/design/barrier-tick-model.md`
+> (*Chunks*, *What this replaced*). Kept for the record; the classes and patches named here
+> no longer exist.
+>
+> Its verification steps are replaced by `:multiforge-bench:determinism` (vanilla parity
+> against stock NeoForge), `:multiforge-bench:scenario` and the swarm bench; see
+> `docs/verification/README.md`.
+
 This runbook covers the four wall-clock verification runs required to
 close M9 and cut `v0.9.0-m9`. Each run takes 15–45 min of real server
 time; they cannot be executed inside a subagent budget and are

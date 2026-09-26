@@ -135,8 +135,14 @@ public final class EventTypeDomainMap {
         put("net.neoforged.neoforge.event.entity.EntityJoinLevelEvent", DispatchDomainKind.REGION);
         put("net.neoforged.neoforge.event.entity.EntityLeaveLevelEvent", DispatchDomainKind.REGION);
         put("net.neoforged.neoforge.event.entity.living.LivingDeathEvent", DispatchDomainKind.REGION);
-        put("net.neoforged.neoforge.event.entity.living.LivingSpawnEvent$CheckSpawn", DispatchDomainKind.REGION);
-        put("net.neoforged.neoforge.event.entity.living.LivingHurtEvent", DispatchDomainKind.REGION);
+        put("net.neoforged.neoforge.event.entity.living.LivingIncomingDamageEvent", DispatchDomainKind.REGION);
+        put("net.neoforged.neoforge.event.entity.living.LivingDamageEvent$Pre", DispatchDomainKind.REGION);
+        put("net.neoforged.neoforge.event.entity.living.LivingDamageEvent$Post", DispatchDomainKind.REGION);
+        put("net.neoforged.neoforge.event.entity.living.LivingDropsEvent", DispatchDomainKind.REGION);
+        put("net.neoforged.neoforge.event.entity.living.MobSpawnEvent$PositionCheck", DispatchDomainKind.REGION);
+        put("net.neoforged.neoforge.event.entity.living.MobSpawnEvent$SpawnPlacementCheck", DispatchDomainKind.REGION);
+        put("net.neoforged.neoforge.event.entity.living.FinalizeSpawnEvent", DispatchDomainKind.REGION);
+        put("net.neoforged.neoforge.event.entity.EntityEvent$Size", DispatchDomainKind.REGION);
 
         // Player events.
         put("net.neoforged.neoforge.event.entity.player.PlayerEvent$PlayerLoggedInEvent", DispatchDomainKind.GLOBAL);
@@ -163,6 +169,11 @@ public final class EventTypeDomainMap {
         put("net.neoforged.neoforge.event.level.BlockEvent$PortalSpawnEvent", DispatchDomainKind.REGION);
         put("net.neoforged.neoforge.event.level.BlockEvent$FarmlandTrampleEvent", DispatchDomainKind.REGION);
         put("net.neoforged.neoforge.event.level.BlockEvent$NeighborNotifyEvent", DispatchDomainKind.REGION);
+        put("net.neoforged.neoforge.event.level.BlockEvent$BreakEvent", DispatchDomainKind.REGION);
+        put("net.neoforged.neoforge.event.level.BlockEvent$EntityPlaceEvent", DispatchDomainKind.REGION);
+        put("net.neoforged.neoforge.event.level.BlockEvent$EntityMultiPlaceEvent", DispatchDomainKind.REGION);
+        put("net.neoforged.neoforge.event.level.block.CropGrowEvent$Pre", DispatchDomainKind.REGION);
+        put("net.neoforged.neoforge.event.level.block.CropGrowEvent$Post", DispatchDomainKind.REGION);
 
         // Server lifecycle.
         put("net.neoforged.neoforge.event.server.ServerAboutToStartEvent", DispatchDomainKind.GLOBAL);

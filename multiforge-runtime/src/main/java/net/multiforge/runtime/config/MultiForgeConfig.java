@@ -30,26 +30,15 @@ import org.slf4j.LoggerFactory;
  *   mode = "hybrid"         # off | hybrid | strict
  *
  *   [region]
- *   size = 16               # chunks per section side (2^n where 0..8)
- *   mode = "player-only"    # player-only | full-world
- *   msptSplitThreshold = 35.0
- *   msptMergeThreshold = 5.0
+ *   size = 4                # log2 of chunks per section side (0..8); 4 = 16 chunks
  *
  *   [violations]
  *   policy = "warn"         # warn | reroute-only | fail
- *   warnPerMin = 5
+ *   warnPerMin = 5          # warnings per minute per violation site
  * </pre>
  */
 public record MultiForgeConfig(
-        int cores,
-        int threadsPerCore,
-        Mode mode,
-        int regionSize,
-        RegionMode regionMode,
-        double msptSplitThreshold,
-        double msptMergeThreshold,
-        ViolationPolicy violationPolicy,
-        int warnPerMin) {
+        int cores, int threadsPerCore, Mode mode, int regionSize, ViolationPolicy violationPolicy, int warnPerMin) {
 
     public enum Mode {
         OFF,
@@ -57,14 +46,16 @@ public record MultiForgeConfig(
         STRICT
     }
 
-    public enum RegionMode {
-        PLAYER_ONLY,
-        FULL_WORLD
-    }
-
+    /**
+     * What happens when code on a region worker mutates a chunk its region
+     * does not own (see {@code OwnershipEnforcer}).
+     */
     public enum ViolationPolicy {
+        /** Reroute the mutation to the owning region and log a rate-limited warning. */
         WARN,
+        /** Reroute silently (the probe counter still records it). */
         REROUTE_ONLY,
+        /** Throw — the same as {@code mode = "strict"} for ownership. */
         FAIL
     }
 
@@ -114,82 +105,65 @@ public record MultiForgeConfig(
         return Math.max(1, cores * threadsPerCore);
     }
 
+    /**
+     * The mode the server actually runs in: {@code -Dmultiforge.mode=off|hybrid|strict}
+     * when set (so an operator can switch MultiForge off, or into strict
+     * regression mode, without editing the file), otherwise {@link #mode()}.
+     * An unrecognised property value is ignored.
+     *
+     * <ul>
+     * <li>{@link Mode#OFF} — the regionized runtime is not installed; the
+     *     server runs Vanilla's single-threaded tick.</li>
+     * <li>{@link Mode#HYBRID} — regions tick in parallel; an ownership
+     *     violation is rerouted to its owner with a rate-limited warning.</li>
+     * <li>{@link Mode#STRICT} — as hybrid, but ownership violations and
+     *     region-tick overruns throw (regression runs).</li>
+     * </ul>
+     */
+    public Mode effectiveMode() {
+        String override = System.getProperty("multiforge.mode");
+        if (override != null && !override.isBlank()) {
+            try {
+                return Mode.valueOf(override.trim().toUpperCase(java.util.Locale.ROOT));
+            } catch (IllegalArgumentException ignored) {
+                LOG.warn("ignoring unrecognised -Dmultiforge.mode={} (expected off, hybrid or strict)", override);
+            }
+        }
+        return mode;
+    }
+
     public static MultiForgeConfig defaults() {
         return new MultiForgeConfig(
                 Runtime.getRuntime().availableProcessors(),
                 1,
                 Mode.HYBRID,
                 4, // 2^4 = 16 chunks per section side (Folia default)
-                RegionMode.PLAYER_ONLY,
-                35.0,
-                5.0,
                 ViolationPolicy.WARN,
                 5);
     }
 
     /** Builder-style with-methods so /multiforge commands can produce a new snapshot. */
     public MultiForgeConfig withCores(int v) {
-        return new MultiForgeConfig(
-                v,
-                threadsPerCore,
-                mode,
-                regionSize,
-                regionMode,
-                msptSplitThreshold,
-                msptMergeThreshold,
-                violationPolicy,
-                warnPerMin);
+        return new MultiForgeConfig(v, threadsPerCore, mode, regionSize, violationPolicy, warnPerMin);
     }
 
     public MultiForgeConfig withThreadsPerCore(int v) {
-        return new MultiForgeConfig(
-                cores,
-                v,
-                mode,
-                regionSize,
-                regionMode,
-                msptSplitThreshold,
-                msptMergeThreshold,
-                violationPolicy,
-                warnPerMin);
+        return new MultiForgeConfig(cores, v, mode, regionSize, violationPolicy, warnPerMin);
     }
 
     public MultiForgeConfig withMode(Mode v) {
-        return new MultiForgeConfig(
-                cores,
-                threadsPerCore,
-                v,
-                regionSize,
-                regionMode,
-                msptSplitThreshold,
-                msptMergeThreshold,
-                violationPolicy,
-                warnPerMin);
+        return new MultiForgeConfig(cores, threadsPerCore, v, regionSize, violationPolicy, warnPerMin);
     }
 
     public MultiForgeConfig withRegionSize(int v) {
-        return new MultiForgeConfig(
-                cores,
-                threadsPerCore,
-                mode,
-                v,
-                regionMode,
-                msptSplitThreshold,
-                msptMergeThreshold,
-                violationPolicy,
-                warnPerMin);
+        return new MultiForgeConfig(cores, threadsPerCore, mode, v, violationPolicy, warnPerMin);
     }
 
-    public MultiForgeConfig withRegionMode(RegionMode v) {
-        return new MultiForgeConfig(
-                cores,
-                threadsPerCore,
-                mode,
-                regionSize,
-                v,
-                msptSplitThreshold,
-                msptMergeThreshold,
-                violationPolicy,
-                warnPerMin);
+    public MultiForgeConfig withViolationPolicy(ViolationPolicy v) {
+        return new MultiForgeConfig(cores, threadsPerCore, mode, regionSize, v, warnPerMin);
+    }
+
+    public MultiForgeConfig withWarnPerMin(int v) {
+        return new MultiForgeConfig(cores, threadsPerCore, mode, regionSize, violationPolicy, v);
     }
 }

@@ -360,26 +360,26 @@ public final class Main {
                 """;
     }
 
+    /**
+     * The example {@code config/multiforge-server.toml}. Same keys and layout
+     * as the runtime's {@code ConfigCodec.render}; a missing key takes its
+     * default.
+     */
     static String defaultConfig() {
         return """
-                # MultiForge server config. Reloadable via /multiforge config reload.
-                cores = 8
-                threads-per-core = 2
+                # MultiForge server configuration.
 
-                [regions]
-                size = 16
-                mode = "player-only"       # or "full-world"
-                mspt-split-threshold = 30.0
-                mspt-merge-threshold = 5.0
+                [mtserver]
+                cores = 8               # worker cores for region ticking (default: all)
+                threadsPerCore = 1      # workers per core
+                mode = "hybrid"         # off | hybrid | strict
 
-                [persistence]
-                autosave-per-tick-chunks = 8
-                autosave-per-tick-nanos  = 2000000
-                journal-fsync = true
+                [region]
+                size = 4                # section edge = 2^size chunks
 
-                [diagnostics]
-                warn-per-mod-per-second = 5
-                debug-channel-enabled = true
+                [violations]
+                policy = "warn"         # warn | reroute-only | fail
+                warnPerMin = 5          # warnings per minute per violation site
                 """;
     }
 

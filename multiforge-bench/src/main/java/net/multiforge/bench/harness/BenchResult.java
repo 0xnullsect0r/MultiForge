@@ -25,13 +25,9 @@ import java.util.Map;
  * serialised to the JSON shape specified for Phase 7.4a — see
  * {@code docs/design/m9-phase7-runbook.md} §5.
  *
- * <p>This is a hand-rolled JSON writer, not Gson: as of Phase 7.4a
- * {@code multiforge-bench/build.gradle.kts} has no JSON library on its
- * classpath, and CLAUDE.md requires a license-compat + binary-size
- * review before adding any new dependency. For a dozen scalar fields plus
- * a small flat extras map, a ~40-line writer is cheaper than that review
- * and keeps the "no new external deps" constraint from Phase 7.4a's task
- * brief intact.
+ * <p>The JSON writer is hand-rolled: a dozen scalars and a flat extras map
+ * do not need a JSON library, and the one on the classpath (Gson, via
+ * MCProtocolLib) is a transitive dependency this class should not lean on.
  */
 public record BenchResult(
         String profile,
@@ -44,7 +40,7 @@ public record BenchResult(
         double p99Mspt,
         double maxMspt,
         double tpsSustainedLast10Min,
-        long heapPeakMb,
+        long rssPeakMb,
         boolean bootOk,
         boolean cleanStop,
         Map<String, Object> extra) {
@@ -54,14 +50,13 @@ public record BenchResult(
     }
 
     /**
-     * Builds a result from a {@link MetricsCollector}, deriving {@code
-     * tps_sustained_last_10min} from the measured average MSPT: if the
-     * average per-tick compute cost stayed at {@code avgMspt} for a
-     * sustained real-time window, the server could hold {@code
-     * min(20, 1000/avgMspt)} ticks per second. This is a projection, not
-     * a measurement of a literal 10-real-minute window — see {@link
-     * HeadlessServerRunner#runSprintProfile(long)} javadoc for why the
-     * sprint profile intentionally does not run in real time.
+     * Builds a result from a {@link MetricsCollector}. Every figure is a
+     * measurement (see {@link MetricsCollector}); {@code
+     * tps_sustained_last_10min} is {@link MetricsCollector#sustainedTps()},
+     * written as JSON {@code null} when nothing was measured. The timing source
+     * goes into the extras as {@code timing_source}. For a {@code pacing=sprint}
+     * run the measured rate moves to {@code sprint_tps} and the sustained TPS
+     * field is {@code null}: an unpaced sprint says nothing about holding 20 TPS.
      */
     public static BenchResult from(
             String profile,
@@ -69,12 +64,21 @@ public record BenchResult(
             long ticks,
             long wallClockMs,
             MetricsCollector metrics,
-            long heapPeakMb,
+            long rssPeakMb,
             boolean bootOk,
             boolean cleanStop,
             Map<String, Object> extra) {
         double avg = metrics.avgMspt();
-        double sustainedTps = avg <= 0 ? 20.0 : Math.min(20.0, 1000.0 / avg);
+        double sustainedTps = metrics.sustainedTps();
+        Map<String, Object> allExtra = new LinkedHashMap<>();
+        allExtra.put("timing_source", metrics.timingSource());
+        if (extra != null && "sprint".equals(extra.get("pacing"))) {
+            // An unpaced sprint's tick rate is a throughput figure, not sustained TPS.
+            allExtra.put("sprint_tps", Double.isNaN(sustainedTps) ? null : Math.round(sustainedTps));
+            sustainedTps = Double.NaN;
+        }
+        metrics.tickStats().ifPresent(t -> allExtra.put("ticks_measured", t.ticks()));
+        if (extra != null) allExtra.putAll(extra);
         return new BenchResult(
                 profile,
                 workers,
@@ -86,10 +90,10 @@ public record BenchResult(
                 metrics.p99Mspt(),
                 metrics.maxMspt(),
                 sustainedTps,
-                heapPeakMb,
+                rssPeakMb,
                 bootOk,
                 cleanStop,
-                extra);
+                allExtra);
     }
 
     public String toJson() {
@@ -105,7 +109,7 @@ public record BenchResult(
         field(sb, "p99_mspt", round(p99Mspt), false);
         field(sb, "max_mspt", round(maxMspt), false);
         field(sb, "tps_sustained_last_10min", round(tpsSustainedLast10Min), false);
-        field(sb, "heap_peak_mb", heapPeakMb, false);
+        field(sb, "rss_peak_mb", rssPeakMb, false);
         field(sb, "boot_ok", bootOk, false);
         field(sb, "clean_stop", cleanStop, extra.isEmpty());
         int i = 0;
@@ -128,7 +132,8 @@ public record BenchResult(
         }
     }
 
-    private static double round(double v) {
+    private static Object round(double v) {
+        if (Double.isNaN(v) || Double.isInfinite(v)) return null;
         return Math.round(v * 100.0) / 100.0;
     }
 
@@ -141,6 +146,9 @@ public record BenchResult(
     }
 
     private static String jsonValue(Object value) {
+        if (value == null) {
+            return "null";
+        }
         if (value instanceof String s) {
             return '"' + escape(s) + '"';
         }

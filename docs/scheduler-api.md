@@ -1,254 +1,278 @@
-# MultiForge Scheduler API Guide (runtime internals)
+# MultiForge Scheduler Internals
 
-## Executive summary
-
-`docs/api.md` documents the **mod-facing** surface — `ServerDomains` and
-the Folia-shaped mirror. This page documents the **engine-facing**
-machinery underneath it: how `MultiForgeRegionizedRuntime` boots and holds
-the live scheduler, how `RegionizedTaskQueue.queueChunkTask` actually
-delivers cross-region work, how `ChunkHolderManager` intersects with
-scheduling, and the do's/don'ts that keep the tick pipeline honest. If
-you're writing a mod, read `docs/api.md`. If you're writing runtime or
-patch code that calls into the scheduler directly, read this.
+[`api.md`](api.md) documents the mod-facing surface (`ServerDomains` and
+the Folia-shaped wrappers). This page documents the runtime machinery
+under it, for people writing runtime or fork code: how the runtime is
+installed, how the server thread drives region ticks, how
+`RegionizedTaskQueue.queueChunkTask` delivers cross-region work, and what
+`ChunkHolderManager` still does. The tick model itself is
+[`design/barrier-tick-model.md`](design/barrier-tick-model.md).
 
 ## MultiForgeRegionizedRuntime
 
-`net.multiforge.runtime.scheduler.MultiForgeRegionizedRuntime` is the
-process-wide singleton holder for the live `MultiThreadedSchedulerHost`.
-It's deliberately thin — it doesn't know how a host is constructed or how
-its worker pool is configured, so the M8 fork patches (hand-written glue
-under `upstream/neoforge-1.21.1/src/main/java/net/multiforge/`) never need
-to know either.
+`net.multiforge.runtime.scheduler.MultiForgeRegionizedRuntime` holds the
+process-wide `MultiThreadedSchedulerHost`.
 
 ```java
-public static MultiThreadedSchedulerHost install(MultiForgeConfig config, RegionTickBody body);
+public static MultiThreadedSchedulerHost install(MultiForgeConfig config, RegionTickBody body);          // FREE_RUNNING
+public static MultiThreadedSchedulerHost install(MultiForgeConfig config, RegionTickBody body,
+                                                 TickRegionScheduler.Mode mode);
 public static MultiThreadedSchedulerHost current();
 public static void shutdown();
 ```
 
-- **`install`** constructs a `MultiThreadedSchedulerHost`, installs it as
-  the `ServerDomains` binding, and records it as the process-wide current
-  runtime. Called once from an early server-lifecycle hook. Not
-  thread-safe against concurrent `install` calls — the intended pattern is
-  one call per JVM lifetime from the server's own bootstrap thread, before
-  any region worker starts.
-- If a MultiForge runtime is already installed, `install` throws
-  `AlreadyInstalledException` — a subclass of `IllegalStateException`
-  specifically so the fork's `ServerLifecycleHooks` handler can swallow
-  *this* case silently (idempotent bootstrap on a dedi GameTestServer
-  reusing one JVM across successive servers) without also swallowing a
-  **foreign** `SchedulerHost` bound to `ServerDomains` — that case
-  propagates as a raw `IllegalStateException` and must not be masked.
-- **`current()`** returns the installed host, or `null` if nothing has
-  been installed yet.
-- **`shutdown()`** closes the host, clears the holder, unbinds
-  `ServerDomains`, and unbinds `OwnershipEnforcer`'s tick-thread/reroute
-  bindings (see `docs/concurrency-contract.md`) so a reroute target bound
-  to a specific server executor doesn't outlive the server that captured
-  it. Idempotent — a second call is a no-op. Uses try/finally so the
-  unbind still happens even if `host.close()` throws.
+- **`install`** constructs the host, binds it as the `ServerDomains`
+  host and as `OwnershipEnforcer`'s position router, and records it as
+  current. The two-argument form uses `TickRegionScheduler.Mode.FREE_RUNNING`
+  (regions tick on their own 20 TPS cadence), which only MC-free runtime
+  code and tests use. A server installs with `Mode.BARRIER`.
+- If a host is already installed, `install` throws
+  `AlreadyInstalledException` (a subclass of `IllegalStateException`); the
+  fork's lifecycle hook swallows exactly that case, for a GameTest JVM that
+  starts several servers. If a different `SchedulerHost` is already bound
+  to `ServerDomains` (for example the `ServiceLoader`-found
+  `SingleThreadedSchedulerHost`, bound because a mod called
+  `ServerDomains` before server start), `install` rolls back and throws a
+  plain `IllegalStateException`, which the hook logs and rethrows.
+- `install` also starts `OtelExporter` when `-Dmultiforge.otel.endpoint`
+  is set (off by default).
+- **`current()`** returns the host, or `null` (not installed, or
+  `mode = "off"`).
+- **`shutdown()`** closes the host (which also unbinds the position
+  router), clears it, unbinds `ServerDomains`, unbinds `OwnershipEnforcer`'s
+  tick thread and reroute target, and stops `OtelExporter`. Idempotent;
+  the unbinding runs in a `finally`.
 
-## RegionizedTaskQueue.queueChunkTask — cross-region delivery
+### Server bootstrap
 
-`net.multiforge.runtime.region.RegionizedTaskQueue` is the mailbox
-primitive every cross-region handoff in MultiForge goes through — mod
-scheduler calls, network packets landing on their target, entity
-teleports, event-bus fan-out.
+`ServerLifecycleHooks.handleServerAboutToStart` (fork), on the server
+thread:
+
+1. `OwnershipEnforcer.bindTickThread`, `SerialLane.bind`,
+   `ModSafetyClassifier.bind(server)`, `OwnershipEnforcer.bindRerouteTarget(server::execute)`.
+2. Load `config/multiforge-server.toml` (`MultiForgeServerState.loadConfig`)
+   and apply it (`applyConfig`: ownership mode, watchdog mode, warning
+   budget).
+3. If the effective mode is `off`, stop here: no runtime, Vanilla tick.
+4. `MultiForgeRegionizedRuntime.install(config, region -> {}, BARRIER)`.
+5. `RegionizedChunkLifecycle.installOnEventBus()` — `ChunkEvent.Load` adds
+   the chunk to the regionizer and `ChunkHolderManager`, and re-delivers
+   tasks waiting for that chunk; `ChunkEvent.Unload` removes it.
+6. On a fresh install: `RegionRuntimeInit.install` (materialise
+   regionizers, bind the scheduled-tick, entity and block-entity runners,
+   attach the event-bus dispatch executor),
+   `installRegionTickBody(PhasedRegionTickBody.builder())`, and
+   `bindPins` for `config/multiforge-region-pins.toml`.
+7. Subscribe to config changes so `/multiforge config …` applies live
+   (`applyConfig` on both `MultiForgeServerState` and the host: pool
+   size, region size).
+
+`handleServerStopping` runs every task still waiting in a region mailbox
+on the server thread (`drainMailboxesOnCaller`), after the tick loop has
+ended and before the world is saved.
+
+## Driving a tick (barrier mode)
+
+The patched `MinecraftServer.tickChildren` calls
+`RegionizedTickCoordinator.dispatchLevelTick(level, haveTime)` instead of
+`level.tick(haveTime)`:
+
+1. For the overworld only: `host.driveGlobalTick(deadline, pump)` runs the
+   synthetic global region once.
+2. `level.tick(haveTime)` — Vanilla's level tick, on the server thread,
+   minus the work regions own.
+3. If the level has no regionizer yet (no chunk loaded), everything ran
+   inline; the probe `region-tick.no-regionizer-inline` counts it.
+4. Otherwise `host.driveRegions(world, deadline, pump)` →
+   `TickRegionScheduler.driveTick`: every live region of the level is
+   submitted to the worker pool; the server thread runs `pump` while it
+   waits and returns when all have finished.
+5. `ServerChunkCache.mfAfterRegions()` — chunk work a region could not
+   take, then the block-change broadcast.
+
+`pump` is `MainThreadHandoff.pumpFor(server)`: it drains the `SerialLane`
+(event listeners handed over by workers) and, only while a worker is
+blocked in `MainThreadHandoff`, runs one pending chunk-source task per
+level.
+
+Each region tick (`TickRegionScheduler.tickClaimed`) runs under
+`OwnerToken.forRegion(id)`: drain up to 128 mailbox tasks, run the tick
+body, drain up to 128 more. `RegionTickWatchdog.enterTick/exitTick`
+bracket it; designed waits (`beginWait`/`endWait`) are subtracted before
+comparing with the 500 ms threshold. A region still running after the
+dispatch deadline (500 ms, `-Dmultiforge.regiontick.dispatch-ms`, designed
+waits excluded) is reported as `region-tick.dispatch.overrun`; the server
+thread still waits for it. An exception in a region's tick is rethrown on
+the server thread after the barrier.
+
+## RegionizedTaskQueue.queueChunkTask
+
+`net.multiforge.runtime.region.RegionizedTaskQueue` holds one mailbox per
+region. Every cross-region hand-off goes through it: `ServerDomains`
+region, entity and global tasks, and writes rerouted by
+`OwnershipEnforcer.rerouteAt`.
 
 ```java
 public void queueChunkTask(WorldRef world, int chunkX, int chunkZ, Runnable task);
 public void queueChunkTask(WorldRef world, ChunkPos pos, Runnable task);
 ```
 
-Key properties:
+- **The owner is resolved at enqueue time**, under the world
+  regionizer's read lock, so the region cannot merge away or die between
+  the lookup and the enqueue. The task is added to that region's inbox.
+- **Merges.** `onRegionsMerging` (under the regionizer's write lock) moves
+  the dying region's inbox to the survivor.
+- **Splits.** Tasks already queued stay in the source region's inbox,
+  including tasks for chunks that moved to the new region; they run on
+  the source region's worker. Guarded writes they make are checked again
+  by `canMutateAt` and rerouted if needed.
+- **Unloaded chunks.** If no region owns the chunk, the task goes to an
+  orphan bucket keyed by world and 16×16-chunk section. `RegionizedChunkLifecycle`
+  calls `rerouteAtChunk(world, x, z)` on every `ChunkEvent.Load`, which
+  re-delivers that bucket's tasks whose chunk now has an owner. A task
+  whose chunk never loads never runs. (`reroute()`, which retries every
+  bucket, has no production caller.)
+- **Draining.** `drain(region, max)` runs up to `max` tasks on the calling
+  thread (the region's worker). A task that throws is passed to the
+  thread's uncaught-exception handler; draining continues.
 
-- **Enqueue-time vs. drain-time.** The task is delivered to the region
-  owning `(chunkX, chunkZ)` **at drain time**, not at the moment you call
-  `queueChunkTask`. The owning region's worker drains its inbox at the
-  start and end of every tick. This is what lets a task survive a
-  merge/split that happens between enqueue and drain — see below.
-- **Unloaded chunks land in the orphan queue.** If the chunk isn't
-  currently loaded, `ownerLookup` returns `null` and the task is bucketed
-  by section (`ORPHAN_SECTION_SHIFT = 4`, matching the regionizer's
-  default section size) rather than dropped. It's re-delivered the next
-  time `reroute()` (whole-queue) or `rerouteAtChunk(world, x, z)`
-  (single-bucket, called once per `ChunkEvent.Load`) runs.
-- **Resolve-then-enqueue is lock-protected.** `queueChunkTask` takes the
-  regionizer's read lock (via the `ReadLockLookup` the queue was
-  constructed with) for the duration of the *(look up owner) → (add to
-  that owner's inbox)* pair. This blocks any concurrent `mergeInto` or
-  last-chunk-removal for that span, so the region you resolved cannot die
-  or fold into another region before your enqueue commits. On the merge
-  side, `onRegionsMerging` runs under the same regionizer's *write* lock
-  and moves any inbox entries the dying region had just received into the
-  survivor — no task is ever silently lost to a race with a merge.
-  Legacy/test construction (`new RegionizedTaskQueue(ownerLookup)` with no
-  `ReadLockLookup`) degrades to the lock-free shape; production wiring in
-  `MultiThreadedSchedulerHost` always supplies a real lock.
-- **Draining.** `drain(Region region, int max)` pops up to `max` runnables
-  from one region's inbox and runs them in caller context (i.e., on that
-  region's worker thread). A task that throws is never allowed to drop
-  the tick pipeline — the exception goes to the current thread's uncaught
-  exception handler instead of propagating.
+`RegionizedTaskQueue.of(ThreadedRegionizer)` builds a queue over one
+regionizer, for tests and single-world callers.
 
-Convenience constructor for callers already holding a `ThreadedRegionizer`
-directly:
+## ChunkHolderManager
+
+`net.multiforge.runtime.chunk.ChunkHolderManager` is one world's index of
+**loaded chunks by owning region**, plus each region's
+`HolderManagerRegionData` (its block-entity tickers). It does not load,
+ticket, light or save chunks; Vanilla does all of that on the server
+thread.
 
 ```java
-RegionizedTaskQueue.of(ThreadedRegionizer regionizer);
+public NewChunkHolder holderAt(ChunkPos pos);                 // loaded chunk, or null
+public NewChunkHolder createHolder(ChunkPos pos, RegionId owner);
+public NewChunkHolder dropHolder(ChunkPos pos);
+public Collection<NewChunkHolder> holders();
+public int holderCount();
+public List<NewChunkHolder> holdersOwnedBy(RegionId region);
+public HolderManagerRegionData regionData(RegionId region);
 ```
 
-## ChunkHolderManager — the scheduling-relevant subset
+It is a `RegionListener` on the world's regionizer, so holders and
+block-entity tickers follow every merge and split.
+`RegionizedChunkLifecycle` feeds it from `ChunkEvent.Load/Unload`;
+`/multiforge chunks <world>` prints it. Get one with
+`host.chunkManagerFor(world)` or `chunkManagerForOrNull(world)`.
 
-`net.multiforge.runtime.chunk.ChunkHolderManager` owns per-chunk holders
-and per-region ticket state. The full ticket/load-level model (ticket
-types, `ChunkLoadLevel` ladder, merge/split folding) is documented in
-`docs/chunks.md`; the methods that matter for scheduling are:
+CLAUDE.md names `net.multiforge.runtime.chunk.InstanceRegistry<K, V>`
+(weak-keyed) as the standard per-server/per-level lookup for new code. No
+production code uses it yet; `MultiForgeServerState` still keeps its
+per-server config and pin stores in raw `WeakHashMap`s.
 
-```java
-public NewChunkHolder holderAt(ChunkPos pos);
-public boolean addTicket(RegionId owner, ChunkPos pos, Ticket ticket);
-public boolean removeTicket(RegionId owner, ChunkPos pos, Ticket ticket);
-```
+## The four domains
 
-- `holderAt(pos)` — look up the holder for a chunk position, or `null` if
-  none exists yet. Cheap, read-only; safe from any thread that's allowed
-  to read the manager (in practice: the owning region worker, or a
-  diagnostics/observability call site).
-- `addTicket` / `removeTicket` — the ticket-write path. Like
-  `RegionizedTaskQueue.queueChunkTask`, these pin the section→region
-  mapping across their resolve→write pair against the world's regionizer
-  (the manager is constructed with a `Supplier<ThreadedRegionizer>`
-  accessor for exactly this reason), so a ticket write can't land on a
-  region id that dies mid-call. A successful `addTicket`/`removeTicket`
-  may promote or demote the holder's `ChunkLoadLevel` and enqueue it on
-  `HolderManagerRegionData.pendingFullLoadUpdate` for the owning region's
-  next tick to drain.
+`MultiThreadedSchedulerHost implements SchedulerHost`:
 
-`ChunkTaskScheduler.scheduleChunkTask(world, x, z, run, priority)` is the
-priority-aware sibling of `queueChunkTask` — see `docs/chunks.md` §Priority
-routing for the full BLOCKING→IDLE deque model. It shares the same
-underlying `RegionizedTaskQueue` for wake-up delivery.
+| Domain | Method | Mechanism |
+|---|---|---|
+| Region | `region(WorldRef, ChunkPos)` | `taskQueue.queueChunkTask(world, x, z, …)`. Delayed and repeating tasks re-queue (and so re-resolve the owner) on every fire. |
+| Entity | `entity(EntityRef)` | As region, at `entity.chunkPos()` read on each queueing; `isRetired()` checked on the worker before the body, which then runs the `retired` callback and cancels the task instead. |
+| Global | `global()` | A private `enqueueOnGlobal` → `queueChunkTask(GLOBAL_WORLD, 0, 0, …)`. The global region is a real `Region` in the synthetic world `multiforge:global`, created with the host and driven once per server tick by `driveGlobalTick`. It runs under a `REGION` token, so world writes from it are cross-region (see `concurrency-contract.md`). |
+| Async | `async()` | A `ScheduledExecutorService` of `max(2, cores / 2)` threads; bodies run under `OwnerToken.ASYNC`. `cancelTasks(mod)` cancels a mod's async tasks. |
 
-## The four domains today
+Delays for region, entity and global tasks are timed on a single
+`multiforge-delayed` thread at 50 ms per tick; each fire only enqueues, so
+the body always runs on the owning worker.
 
-`MultiThreadedSchedulerHost implements SchedulerHost` and exposes exactly
-the four domains `docs/api.md` documents for mods:
-
-| Domain   | `SchedulerHost` method            | Dispatch mechanism                                                                 |
-|----------|------------------------------------|--------------------------------------------------------------------------------------|
-| Region   | `region(WorldRef, ChunkPos)`       | `taskQueue.queueChunkTask(world, pos.x(), pos.z(), …)` — re-resolved on every fire.  |
-| Entity   | `entity(EntityRef)`                | Same as region, but re-reads `entity.chunkPos()` on every fire — safe across border crossings. Retirement checked before running the body. |
-| Global   | `global()`                         | `taskQueue.queueChunkTask(globalWorld, 0, 0, …)` via a private `enqueueOnGlobal` helper — the "global region" is a synthetic region pinned at `(0,0)` in a synthetic world, ticked by the pool exactly like any other region. |
-| Async    | `async()`                          | A separate `ScheduledExecutorService` pool, sized `max(2, cores/2)`. Every body runs wrapped in `OwnerToken.runAs(OwnerToken.ASYNC, …)`. |
-
-> **There is no public `scheduleGlobal` method.** The global path is
-> `ServerDomains.global().execute(...)` /
-> `.run(...)` / `.runDelayed(...)` / `.runAtFixedRate(...)`, same shape as
-> every other domain. Internally, `MultiThreadedSchedulerHost` implements
-> this via a private `enqueueOnGlobal(Runnable)` helper that calls
-> `taskQueue.queueChunkTask(globalRegionizer.world(), 0, 0, r)` — worth
-> knowing if you're reading the source, but not something patch code
-> should call directly; go through `ServerDomains.global()` like any mod
-> would.
-
-Delayed and repeating tasks (`runDelayed`, `runAtFixedRate`) never run
-their body directly on the `delayedExec` scheduling thread. Each fire
-re-enqueues through the same `queueChunkTask`/`enqueueOnGlobal` path used
-for immediate dispatch — this is what makes a repeating region task safe
-across a merge or split that happens between iterations: ownership is
-re-resolved every time, never captured once and reused.
+`MultiThreadedSchedulerHost.scheduleGlobal(Runnable, long periodMillis)`
+is unrelated to the global domain: it schedules a fixed-rate job on a
+separate diagnostics executor, used only by the debug-channel emitters
+(`net.multiforge.runtime.diagnostics.emitters`). Gameplay code must not use
+it.
 
 ## Do's and don'ts
 
-- **Do** always route cross-region work through
-  `RegionizedTaskQueue.queueChunkTask` (or the `ServerDomains`/`ScheduledTask`
-  wrappers built on top of it). Never reach into another region's holder
-  map, entity list, or block state directly, even for a read — a
-  concurrent merge/split can invalidate what you're holding mid-read.
-- **Don't** call `.get()` or `.join()` on a `CompletableFuture` from a
-  region worker thread. CLAUDE.md rule 4 is absolute here: no blocking
-  calls on a region worker, ever. If you need a result from cross-region
-  or async work, structure it as a continuation (`ScheduledTask` callback
-  or a follow-up `queueChunkTask` call), not a blocking wait.
-- **Don't** hold a `synchronized` block on a region worker that could
-  contend with a foreign region's worker. Region-to-region coordination
-  goes through the task queue, not shared locks.
-- **Do** treat every `ScheduledTask` as re-resolving its target on each
-  fire, not capturing it once. This is true of `region`, `entity`, and
-  `global` dispatch; only `async` bodies genuinely run on a fixed pool
-  thread with no re-resolution concept (because async work isn't supposed
-  to touch region-owned state at all).
-- **Don't** assume a chunk task landing in the orphan queue is lost. It
-  isn't — but it also isn't instantaneous. If your logic needs
-  "guaranteed eventually delivered, once the chunk loads," that's exactly
-  what the orphan-bucket + `rerouteAtChunk` path gives you; if it needs
-  "delivered now or not at all," check `holderAt`/ownership first and
-  branch instead of enqueueing blindly.
+- **Do** route cross-region work through `RegionizedTaskQueue.queueChunkTask`
+  or the `ServerDomains` wrappers. Don't read or write another region's
+  chunks, entities or block entities directly.
+- **Don't** block on a region worker: no `Future.get()`/`join()`, no
+  `Thread.sleep`, no lock held while foreign code runs (CLAUDE.md rule 4).
+  Use a continuation (a follow-up `queueChunkTask` or scheduled task). The
+  two designed exceptions — a worker waiting on `MainThreadHandoff` for a
+  chunk load, and on `SerialLane` for a listener — are bracketed with
+  `RegionTickWatchdog.beginWait()/endWait(kind)`. Any new designed wait
+  must be bracketed the same way and serviced by the barrier's pump.
+- **Do** use a leaf lock or a per-thread instance for shared Vanilla state
+  a region worker touches (the table in the barrier-tick-model doc). A leaf
+  lock is one under which no foreign code runs and nothing waits on
+  another thread.
+- **Don't** assume a queued task runs promptly: it runs at the owner's
+  next drain, or, for an unloaded chunk, when the chunk loads. If the work
+  must happen now or not at all, check ownership first
+  (`regionizerForOrNull(world).regionAtChunk(x, z)`).
+- **Do** defer work whose effects span regions (teleports, player
+  dimension changes, commands) to the server thread with
+  `OwnershipGuard.deferToServerThread` / `deferCrossRegionMove`.
 
 ## Recipes
 
-**Run this on chunk X:**
+**Run this on chunk (cx, cz):**
 
 ```java
 ServerDomains.region(world, new ChunkPos(cx, cz))
     .execute(MOD, () -> {
-        // Runs on whichever region worker currently owns (cx, cz).
+        // On the region worker owning (cx, cz).
     });
 ```
 
-**Run this once at global tick N (a fixed number of ticks from now):**
+**Run once, N ticks from now, on the global region:**
 
 ```java
 ServerDomains.global()
     .runDelayed(MOD, handle -> {
-        // Runs on the global-region thread, N ticks from now.
+        // On the global region, about N × 50 ms from now. No world writes here.
     }, /* delayTicks */ N);
 ```
 
-**Poll every 20 ticks:**
+**Every 20 ticks on the region owning `pos`:**
 
 ```java
 ServerDomains.region(world, pos)
     .runAtFixedRate(MOD, handle -> {
-        // Runs on the region owning `pos`, every 20 ticks, starting
-        // 20 ticks from now. `handle.cancel()` stops future iterations.
+        // handle.cancel() stops future iterations.
     }, /* initialTicks */ 20L, /* periodTicks */ 20L);
 ```
 
-**React once a specific entity is retired (killed/unloaded/gone
-cross-dimension) instead of firing again:**
+**Stop when an entity is gone:**
 
 ```java
-ServerDomains.entity(mob).runAtFixedRate(MOD,
-    handle -> mob.hurt(0.5f),
-    () -> log.info("mob {} retired; task stopped", mob.uuid()),
+ServerDomains.entity(ref).runAtFixedRate(MOD,
+    handle -> mob.heal(1.0f),
+    () -> LOGGER.info("mob {} retired; task stopped", ref.uuid()),
     /* initial */ 20L,
     /* period  */ 20L);
 ```
 
-All four recipes above are safe to call from any thread — the actual
-mutation body only ever runs once dispatch has resolved (or re-resolved)
-the correct owning domain.
+All of these can be called from any thread; the body runs only once the
+task reaches its owner.
 
 ## Test coverage
 
-- `net.multiforge.runtime.scheduler.MultiForgeRegionizedRuntimeTest` —
-  install/current/shutdown lifecycle, `AlreadyInstalledException` vs.
-  foreign-host `IllegalStateException`.
-- `net.multiforge.runtime.scheduler.MultiThreadedSchedulerHostTest` —
-  end-to-end region/global/async/entity scheduling and repeating tasks
-  against the parallel host (also referenced from `docs/regions.md`).
-- `net.multiforge.runtime.scheduler.SingleThreadedSchedulerHostTest` —
-  the M1 reference implementation mods can compile/test against before
-  parallel dispatch exists.
-- `net.multiforge.runtime.scheduler.RuntimeLifecycleReviewFixesTest` —
-  regression coverage for lifecycle edge cases found in review passes
-  (reroute-target rebinding across shutdown/restart, journal lifecycle
-  interaction).
-- `net.multiforge.runtime.region.RegionizedTaskQueueTest` — FIFO
-  ordering, orphan reroute, exception isolation (also referenced from
-  `docs/regions.md`).
-- `net.multiforge.runtime.chunk.ChunkHolderManagerTest` — ticket
-  promotion/demotion, merge/split folding (also referenced from
-  `docs/chunks.md`).
+- `scheduler/MultiForgeRegionizedRuntimeTest` — install/current/shutdown,
+  `AlreadyInstalledException` vs. foreign-host `IllegalStateException`.
+- `scheduler/RuntimeLifecycleReviewFixesTest` — install rollback,
+  shutdown unbinding `OwnershipEnforcer`, robust parsing of the watchdog
+  and warning-budget properties.
+- `scheduler/MultiThreadedSchedulerHostTest` — region, entity, global and
+  async scheduling and repeating tasks on the parallel host.
+- `scheduler/SingleThreadedSchedulerHostTest` — the reference host.
+- `scheduler/LiveConfigTest` — pool resize and region-size repartition.
+- `scheduler/DispatchLevelTickTest` — inline ticks counted per world.
+- `region/TickRegionSchedulerBarrierModeTest` — `driveTick`: every region
+  once and in parallel, pump on the caller, designed waits excluded from
+  the deadline, overruns reported, mailboxes drained.
+- `region/RegionizedTaskQueueTest` — FIFO order, orphan re-delivery,
+  exception isolation.
+- `chunk/ChunkHolderManagerTest` — holder create/drop, merge and split
+  moving chunks and tickers.
+
+(All under `multiforge-runtime/src/test/java/net/multiforge/runtime/`.)

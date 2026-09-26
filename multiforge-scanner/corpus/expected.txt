@@ -1,0 +1,7 @@
+# Expected scanner findings on the corpus (see CorpusCheck). Regenerate with
+# ./gradlew :multiforge-scanner:scanCorpus -PupdateCorpus after a deliberate rule change.
+mftest-legacy R04 WARN net.multiforge.testmods.legacy.LegacyMod#<field:offServerThread>
+mftest-legacy R04 WARN net.multiforge.testmods.legacy.LegacyMod#<field:total>
+mftest-legacy scanned
+mftest-writer scanned
+multiforge-client scanned

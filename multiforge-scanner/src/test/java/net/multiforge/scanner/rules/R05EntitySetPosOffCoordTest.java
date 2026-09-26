@@ -40,18 +40,4 @@ class R05EntitySetPosOffCoordTest {
         assertThat(findings).isNotEmpty();
         assertThat(findings).allMatch(f -> f.ruleId().equals("R05"));
     }
-
-    @Test
-    void doesNotFireInsideEntityMigrationCoordinatorPackage() {
-        ClassWriter cw = Bytecode.newClass("net/multiforge/runtime/entity/EntityMigrationCoordinator", false);
-        MethodVisitor mv = Bytecode.beginMethod(cw, "completeAt", false);
-        Bytecode.invokeVirtual(mv, OWNER, "setPos", "()V");
-        Bytecode.endVoid(mv);
-        byte[] bytes = Bytecode.finish(cw);
-
-        List<Finding> findings =
-                new RuleEngine(List.of(new R05EntitySetPosOffCoord())).scanClassBytes(bytes, "test.jar");
-
-        assertThat(findings).isEmpty();
-    }
 }

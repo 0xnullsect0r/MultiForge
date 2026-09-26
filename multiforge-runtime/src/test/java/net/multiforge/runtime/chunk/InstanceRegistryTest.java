@@ -24,15 +24,10 @@ import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.Test;
 
 /**
- * Unit tests for {@link InstanceRegistry} — the shared registry helper
- * extracted from {@code MultiForgeChunkMap}, {@code
- * MultiForgeDistanceManager} and {@code MultiForgeLightEngine}'s
- * observability-seam wiring in Phase 4.1d.
- *
- * <p>The facades themselves live on the Minecraft classpath and can't
- * be exercised from this module, so the pure registry logic is tested
- * here instead: happy-path lookups, unregister, null-key tolerance, weak
- * -key reclamation, concurrent registration, and re-register-replaces.
+ * Unit tests for {@link InstanceRegistry}, the weak-keyed per-server lookup
+ * the fork uses for per-server state: happy-path lookups, unregister,
+ * null-key tolerance, weak-key reclamation, concurrent registration, and
+ * re-register-replaces.
  */
 class InstanceRegistryTest {
 

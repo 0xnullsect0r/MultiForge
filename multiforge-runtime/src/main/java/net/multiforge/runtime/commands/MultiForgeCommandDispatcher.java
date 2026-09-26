@@ -30,14 +30,19 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import net.multiforge.api.world.WorldRef;
 import net.multiforge.runtime.chunk.ChunkHolderManager;
-import net.multiforge.runtime.chunk.ChunkLoadLevel;
 import net.multiforge.runtime.chunk.NewChunkHolder;
+import net.multiforge.runtime.config.ConfigCodec;
 import net.multiforge.runtime.config.MultiForgeConfig;
 import net.multiforge.runtime.config.MultiForgeConfigStore;
 import net.multiforge.runtime.diagnostics.ProbeRegistry;
+import net.multiforge.runtime.diagnostics.TickStats;
 import net.multiforge.runtime.diagnostics.ViolationLogger;
+import net.multiforge.runtime.region.Region;
+import net.multiforge.runtime.region.ThreadedRegionizer;
 import net.multiforge.runtime.region.pin.RegionPin;
 import net.multiforge.runtime.region.pin.RegionPinManager;
+import net.multiforge.runtime.scheduler.MultiForgeRegionizedRuntime;
+import net.multiforge.runtime.scheduler.MultiThreadedSchedulerHost;
 
 /**
  * Pure-Java argument parser + dispatcher for the /multiforge tree.
@@ -48,20 +53,20 @@ import net.multiforge.runtime.region.pin.RegionPinManager;
  * <p>Supported grammar:
  *
  * <pre>
- *   /multiforge config cores &lt;n&gt;
- *   /multiforge config threads &lt;n&gt;
+ *   /multiforge config show | reload
+ *   /multiforge config cores &lt;n&gt; | threads &lt;n&gt;
+ *   /multiforge config mode &lt;hybrid|strict|off&gt; | policy &lt;warn|reroute-only|fail&gt;
+ *   /multiforge config warnPerMin &lt;n&gt;
  *   /multiforge region size &lt;chunks&gt;
- *   /multiforge region mode player-only|full-world
  *   /multiforge region pin &lt;id&gt; &lt;world&gt; &lt;fromCX&gt; &lt;fromCZ&gt; &lt;toCX&gt; &lt;toCZ&gt;
  *   /multiforge region unpin &lt;id&gt;
  *   /multiforge region list
  *   /multiforge probes           — dump all ProbeRegistry counters (diagnostics)
  *   /multiforge probes &lt;prefix&gt;  — dump counters whose key starts with prefix
- *   /multiforge chunks &lt;world&gt;   — summarize the M9-bridge chunk shadow
- *                                  (counts by ChunkLoadLevel; requires the fork
- *                                  ChunkMap bridge to be installed)
+ *   /multiforge chunks &lt;world&gt;   — loaded chunks of a world, per owning region
  *   /multiforge warn list         — show recent violations from ViolationLogger
  *   /multiforge warn clear        — reset the violation history ring buffer
+ *   /multiforge tickstats [reset] — tick times: mean, p50/p95/p99, true max, 10-min TPS
  *   /multiforge certify &lt;modId&gt;  — run the scanner against a jar in ./mods,
  *                                  print pass/fail per rule (see docs/certification.md)
  *   /multiforge certify all       — same, for every jar under ./mods
@@ -162,6 +167,7 @@ public final class MultiForgeCommandDispatcher {
             case "probes" -> handleProbes(args, output);
             case "chunks" -> handleChunks(args, output);
             case "warn" -> handleWarn(args, output);
+            case "tickstats" -> handleTickStats(args, output);
             case "certify" -> handleCertify(args, output);
             default -> {
                 output.accept("Unknown subcommand: " + args[0] + ". Try `/multiforge help`.");
@@ -179,22 +185,29 @@ public final class MultiForgeCommandDispatcher {
     private void printHelp(Consumer<String> output) {
         output.accept("=== MultiForge commands (op only) ===");
         output.accept("");
-        output.accept("Worker pool + region sizing (persists to config/multiforge-server.toml):");
-        output.accept("  /multiforge config cores <n>       — worker-pool cores (1..N-1 physical)");
+        output.accept("Configuration (applied live, persisted to config/multiforge-server.toml):");
+        output.accept("  /multiforge config show            — print the active configuration");
+        output.accept("  /multiforge config reload          — re-read config/multiforge-server.toml");
+        output.accept("  /multiforge config cores <n>       — worker-pool cores");
         output.accept("  /multiforge config threads <n>     — threads per core (1 or 2 typical)");
+        output.accept("  /multiforge config mode <hybrid|strict|off>");
+        output.accept("  /multiforge config policy <warn|reroute-only|fail>");
+        output.accept("  /multiforge config warnPerMin <n>  — violation warnings per minute per site");
         output.accept("");
         output.accept("Region topology:");
         output.accept("  /multiforge region list            — show materialized regions + owners");
         output.accept("  /multiforge region size <chunks>   — square region edge in chunks (power of 2, 1..256)");
-        output.accept("  /multiforge region mode <m>        — m = player-only | full-world");
         output.accept("  /multiforge region pin <id> <world> <fromCX> <fromCZ> <toCX> <toCZ>");
-        output.accept("                                     — pin a rectangle to prevent auto merge/split");
+        output.accept("                                     — tick a rectangle's loaded chunks as one region");
         output.accept("  /multiforge region unpin <id>      — release a pinned region");
         output.accept("");
         output.accept("Diagnostics:");
         output.accept("  /multiforge probes                 — dump every ProbeRegistry counter");
         output.accept("  /multiforge probes <prefix>        — filter, e.g. `probes region-tick`");
-        output.accept("  /multiforge chunks <world>         — M9 chunk-shadow summary for one world");
+        output.accept(
+                "  /multiforge tickstats              — tick times since reset: mean, p50/p95/p99, max, 10-min TPS");
+        output.accept("  /multiforge tickstats reset        — start a new measurement window");
+        output.accept("  /multiforge chunks <world>         — loaded chunks per region for one world");
         output.accept("                                     — world = namespaced id, e.g. minecraft:overworld");
         output.accept("  /multiforge warn list              — recent ViolationLogger events");
         output.accept("  /multiforge warn clear             — reset the violation history ring buffer");
@@ -210,18 +223,14 @@ public final class MultiForgeCommandDispatcher {
     }
 
     /**
-     * Summarize the M9-bridge chunk shadow for one world: counts by
-     * {@link ChunkLoadLevel}. Requires the fork bridge
-     * ({@code net.multiforge.neoforge.ChunkHolderManagerBridge}) to be
-     * installed so that Vanilla ticket-level updates propagate into
-     * {@link ChunkHolderManager}.
+     * Summarize one world's loaded chunks by owning region.
      *
      * <p>Usage: {@code /multiforge chunks <world>} where {@code <world>}
      * is a namespaced dimension id like {@code minecraft:overworld}.
      */
     private boolean handleChunks(String[] args, Consumer<String> output) {
         if (chunkManagers == null) {
-            output.accept("Chunk-system bridge not installed. Ensure ChunkHolderManagerBridge is wired.");
+            output.accept("Regionized runtime not installed (mode = off).");
             return false;
         }
         if (args.length < 2) {
@@ -231,18 +240,16 @@ public final class MultiForgeCommandDispatcher {
         WorldRef world = WorldRef.of(args[1]);
         ChunkHolderManager manager = chunkManagers.apply(world);
         if (manager == null) {
-            output.accept("No chunk manager for world '" + args[1] + "' (never touched by the bridge).");
+            output.accept("No chunks of '" + args[1] + "' are loaded.");
             return true;
         }
-        java.util.EnumMap<ChunkLoadLevel, Integer> counts = new java.util.EnumMap<>(ChunkLoadLevel.class);
-        for (ChunkLoadLevel l : ChunkLoadLevel.values()) counts.put(l, 0);
+        java.util.Map<String, Integer> byRegion = new java.util.TreeMap<>();
         for (NewChunkHolder h : manager.holders()) {
-            counts.merge(h.level(), 1, Integer::sum);
+            byRegion.merge(String.valueOf(h.owningRegion()), 1, Integer::sum);
         }
-        int total = manager.holderCount();
-        output.accept("world=" + args[1] + " holders=" + total);
-        for (ChunkLoadLevel l : ChunkLoadLevel.values()) {
-            output.accept("  " + l.name() + " (distance=" + l.distance() + "): " + counts.get(l));
+        output.accept("world=" + args[1] + " loaded chunks=" + manager.holderCount() + " regions=" + byRegion.size());
+        for (java.util.Map.Entry<String, Integer> e : byRegion.entrySet()) {
+            output.accept("  region " + e.getKey() + ": " + e.getValue() + " chunk(s)");
         }
         return true;
     }
@@ -274,35 +281,87 @@ public final class MultiForgeCommandDispatcher {
         return true;
     }
 
+    /** {@code /multiforge tickstats [reset]} — see {@link TickStats}. */
+    private boolean handleTickStats(String[] args, Consumer<String> output) {
+        if (args.length == 2 && args[1].equals("reset")) {
+            TickStats.reset();
+            output.accept("Tick statistics reset.");
+            return true;
+        }
+        if (args.length != 1) {
+            output.accept("Usage: /multiforge tickstats [reset]");
+            return false;
+        }
+        output.accept(TickStats.snapshot().render());
+        return true;
+    }
+
     private boolean handleConfig(String[] args, Consumer<String> output) {
+        if (args.length == 2 && args[1].equals("show")) {
+            output.accept(ConfigCodec.render(configStore.get()).strip());
+            return true;
+        }
+        if (args.length == 2 && args[1].equals("reload")) {
+            try {
+                MultiForgeConfig before = configStore.get();
+                MultiForgeConfig next = configStore.reload();
+                output.accept(
+                        "Reloaded config/multiforge-server.toml (worker pool " + next.tickWorkerCount() + " threads)");
+                if (next.effectiveMode() != before.effectiveMode())
+                    reportModeChange(before.effectiveMode(), next.effectiveMode(), output);
+                return true;
+            } catch (IOException | IllegalArgumentException e) {
+                output.accept("Failed to reload config: " + e.getMessage());
+                return false;
+            }
+        }
         if (args.length < 3) {
-            output.accept("Usage: /multiforge config <cores|threads> <n>");
+            output.accept("Usage: /multiforge config <show|reload|cores|threads|mode|policy|warnPerMin> [value]");
             return false;
         }
-        int n;
+        String key = args[1];
+        String value = args[2];
         try {
-            n = Integer.parseInt(args[2]);
-        } catch (NumberFormatException e) {
-            output.accept("Not a number: " + args[2]);
-            return false;
-        }
-        if (n < 1 || n > 4096) {
-            output.accept("Value out of range: " + n);
-            return false;
-        }
-        try {
-            MultiForgeConfig next =
-                    switch (args[1]) {
-                        case "cores" -> configStore.update(c -> c.withCores(n));
-                        case "threads" -> configStore.update(c -> c.withThreadsPerCore(n));
+            java.util.function.UnaryOperator<MultiForgeConfig> change =
+                    switch (key) {
+                        case "cores", "threads", "warnPerMin" -> {
+                            int n;
+                            try {
+                                n = Integer.parseInt(value);
+                            } catch (NumberFormatException e) {
+                                output.accept("Not a number: " + value);
+                                yield null;
+                            }
+                            int min = key.equals("warnPerMin") ? 0 : 1;
+                            if (n < min || n > 100_000) {
+                                output.accept("Value out of range: " + n);
+                                yield null;
+                            }
+                            yield switch (key) {
+                                case "cores" -> c -> c.withCores(n);
+                                case "threads" -> c -> c.withThreadsPerCore(n);
+                                default -> c -> c.withWarnPerMin(n);
+                            };
+                        }
+                        case "mode" -> {
+                            MultiForgeConfig.Mode mode = parseEnum(MultiForgeConfig.Mode.class, value, output);
+                            yield mode == null ? null : c -> c.withMode(mode);
+                        }
+                        case "policy" -> {
+                            MultiForgeConfig.ViolationPolicy policy =
+                                    parseEnum(MultiForgeConfig.ViolationPolicy.class, value, output);
+                            yield policy == null ? null : c -> c.withViolationPolicy(policy);
+                        }
                         default -> {
-                            output.accept("Unknown config key: " + args[1]);
+                            output.accept("Unknown config key: " + key);
                             yield null;
                         }
                     };
-            if (next == null) return false;
-            output.accept("Set " + args[1] + " = " + n + " (worker pool now " + next.tickWorkerCount() + " threads)");
-            output.accept(RESTART_HINT);
+            if (change == null) return false;
+            MultiForgeConfig before = configStore.get();
+            MultiForgeConfig next = configStore.update(change);
+            output.accept("Set " + key + " = " + value + " (worker pool " + next.tickWorkerCount() + " threads)");
+            if (key.equals("mode")) reportModeChange(before.effectiveMode(), next.effectiveMode(), output);
             return true;
         } catch (IOException e) {
             output.accept("Failed to persist config: " + e.getMessage());
@@ -310,18 +369,39 @@ public final class MultiForgeCommandDispatcher {
         }
     }
 
-    /** v1.3.16: shown after every config-persisting subcommand reply. */
-    private static final String RESTART_HINT =
-            "(applied on next server restart — live-reload not yet wired; see docs/multiforge-command.md)";
+    /**
+     * Hybrid and strict switch live; switching to or from {@code off}
+     * installs or removes the whole regionized runtime, which only happens
+     * at server start.
+     */
+    private static void reportModeChange(
+            MultiForgeConfig.Mode from, MultiForgeConfig.Mode to, Consumer<String> output) {
+        if (from == MultiForgeConfig.Mode.OFF || to == MultiForgeConfig.Mode.OFF) {
+            output.accept("Mode " + to.name().toLowerCase(Locale.ROOT) + " takes effect at the next server start.");
+        } else {
+            output.accept("Mode " + to.name().toLowerCase(Locale.ROOT) + " is active.");
+        }
+    }
+
+    private static <E extends Enum<E>> E parseEnum(Class<E> type, String value, Consumer<String> output) {
+        try {
+            return Enum.valueOf(type, value.replace('-', '_').toUpperCase(Locale.ROOT));
+        } catch (IllegalArgumentException e) {
+            output.accept("Unknown value '" + value + "'; expected one of "
+                    + java.util.Arrays.stream(type.getEnumConstants())
+                            .map(v -> v.name().toLowerCase(Locale.ROOT).replace('_', '-'))
+                            .toList());
+            return null;
+        }
+    }
 
     private boolean handleRegion(String[] args, Consumer<String> output) {
         if (args.length < 2) {
-            output.accept("Usage: /multiforge region <size|mode|pin|unpin|list> ...");
+            output.accept("Usage: /multiforge region <size|pin|unpin|list> ...");
             return false;
         }
         return switch (args[1]) {
             case "size" -> handleRegionSize(args, output);
-            case "mode" -> handleRegionMode(args, output);
             case "pin" -> handlePin(args, output);
             case "unpin" -> handleUnpin(args, output);
             case "list" -> handleList(output);
@@ -351,31 +431,8 @@ public final class MultiForgeCommandDispatcher {
         int shift = Integer.numberOfTrailingZeros(chunks);
         try {
             configStore.update(c -> c.withRegionSize(shift));
-            output.accept("Region size set to " + chunks + " chunks per side (shift=" + shift + ")");
-            output.accept(RESTART_HINT);
-            return true;
-        } catch (IOException e) {
-            output.accept("Failed to persist: " + e.getMessage());
-            return false;
-        }
-    }
-
-    private boolean handleRegionMode(String[] args, Consumer<String> output) {
-        if (args.length < 3) {
-            output.accept("Usage: /multiforge region mode player-only|full-world");
-            return false;
-        }
-        MultiForgeConfig.RegionMode mode;
-        try {
-            mode = MultiForgeConfig.RegionMode.valueOf(args[2].replace('-', '_').toUpperCase(Locale.ROOT));
-        } catch (IllegalArgumentException e) {
-            output.accept("Unknown mode: " + args[2] + " (accepted: player-only, full-world)");
-            return false;
-        }
-        try {
-            configStore.update(c -> c.withRegionMode(mode));
-            output.accept("Region mode set to " + args[2]);
-            output.accept(RESTART_HINT);
+            output.accept(
+                    "Region size set to " + chunks + " chunks per side (shift=" + shift + "); regions re-partitioned");
             return true;
         } catch (IOException e) {
             output.accept("Failed to persist: " + e.getMessage());
@@ -435,6 +492,25 @@ public final class MultiForgeCommandDispatcher {
     }
 
     private boolean handleList(Consumer<String> output) {
+        MultiThreadedSchedulerHost host = MultiForgeRegionizedRuntime.current();
+        if (host == null) {
+            output.accept("Regionized runtime not installed (mode = off).");
+        } else {
+            java.util.Map<String, ThreadedRegionizer> byWorld = new java.util.TreeMap<>(host.regionizers());
+            byWorld.remove(MultiThreadedSchedulerHost.GLOBAL_WORLD.dimensionId());
+            if (byWorld.isEmpty()) output.accept("No regions (no chunks loaded).");
+            for (java.util.Map.Entry<String, ThreadedRegionizer> e : byWorld.entrySet()) {
+                List<Region> regions = new java.util.ArrayList<>(e.getValue().regions());
+                regions.sort(
+                        java.util.Comparator.comparingInt(Region::sectionCount).reversed());
+                int sectionChunks = 1 << (2 * e.getValue().sectionChunkShift());
+                output.accept(e.getKey() + ": " + regions.size() + " region(s)");
+                for (Region r : regions) {
+                    output.accept("  region " + r.id() + " — " + r.sectionCount() + " section(s), up to "
+                            + (long) r.sectionCount() * sectionChunks + " chunks, " + r.state());
+                }
+            }
+        }
         List<RegionPin> all = List.copyOf(pins.all());
         if (all.isEmpty()) {
             output.accept("No pinned regions.");
@@ -532,13 +608,20 @@ public final class MultiForgeCommandDispatcher {
         if (!Files.isReadable(scannerJar)) {
             return new ScanResult(2, "", "scanner jar not found or unreadable: " + scannerJar);
         }
-        ProcessBuilder pb = new ProcessBuilder(
-                "java", "-jar", scannerJar.toString(), "--json", "--severity=warn", modJar.toString());
-        Process proc = pb.start();
-        String stdout = new String(proc.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
-        String stderr = new String(proc.getErrorStream().readAllBytes(), StandardCharsets.UTF_8);
-        int exit = proc.waitFor();
-        return new ScanResult(exit, stdout, stderr);
+        // stderr goes to a file: reading stdout to EOF first while stderr filled
+        // its pipe would leave the scanner blocked on a write, forever.
+        Path stderrFile = Files.createTempFile("multiforge-scanner-", ".err");
+        try {
+            ProcessBuilder pb = new ProcessBuilder(
+                            "java", "-jar", scannerJar.toString(), "--json", "--severity=warn", modJar.toString())
+                    .redirectError(stderrFile.toFile());
+            Process proc = pb.start();
+            String stdout = new String(proc.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
+            int exit = proc.waitFor();
+            return new ScanResult(exit, stdout, Files.readString(stderrFile, StandardCharsets.UTF_8));
+        } finally {
+            Files.deleteIfExists(stderrFile);
+        }
     }
 
     private boolean handleCertify(String[] args, Consumer<String> output) {

@@ -174,15 +174,56 @@ public final class WorldDiff {
      */
     static String hashFile(Path file, String name, DiffMode mode) {
         if (!name.endsWith(".mca")) return sha256(file);
+        return canonicalMcaHash(file, mode);
+    }
+
+    /**
+     * Loads the payload of an oversized chunk that Vanilla stored outside
+     * the region file ({@code c.<x>.<z>.mcc}, flagged by the high bit of the
+     * slot's compression byte); {@code null} when absent.
+     */
+    @FunctionalInterface
+    interface ExternalChunks {
+        ExternalChunks NONE = slot -> null;
+
+        byte[] load(int slot);
+    }
+
+    /** External-chunk loader for the region file {@code mcaFile} ({@code r.<rx>.<rz>.mca}). */
+    static ExternalChunks externalChunksNextTo(Path mcaFile) {
+        String[] parts = mcaFile.getFileName().toString().split("\\.");
+        if (parts.length != 4 || !parts[0].equals("r")) return ExternalChunks.NONE;
+        int rx;
+        int rz;
         try {
-            byte[] bytes = Files.readAllBytes(file);
-            return canonicalMcaHash(bytes, mode);
-        } catch (IOException e) {
-            throw new UncheckedIOException(e);
+            rx = Integer.parseInt(parts[1]);
+            rz = Integer.parseInt(parts[2]);
+        } catch (NumberFormatException e) {
+            return ExternalChunks.NONE;
         }
+        Path dir = mcaFile.toAbsolutePath().getParent();
+        return slot -> {
+            Path mcc = dir.resolve("c." + (rx * 32 + (slot & 31)) + "." + (rz * 32 + (slot >> 5)) + ".mcc");
+            try {
+                return Files.isRegularFile(mcc) ? Files.readAllBytes(mcc) : null;
+            } catch (IOException e) {
+                throw new UncheckedIOException(e);
+            }
+        };
+    }
+
+    /** Marks an external slot whose {@code .mcc} file is missing. */
+    private static final byte[] EXTERNAL_MISSING_TAG = {(byte) 0xEC, (byte) 0x4D, (byte) 0x15, (byte) 0x5E};
+
+    private static boolean isExternal(byte[] bytes, int payloadStart) {
+        return (bytes[payloadStart + 4] & 0x80) != 0;
     }
 
     static String canonicalMcaHash(byte[] bytes) {
+        return canonicalMcaHash(bytes, ExternalChunks.NONE);
+    }
+
+    static String canonicalMcaHash(byte[] bytes, ExternalChunks external) {
         try {
             MessageDigest md = MessageDigest.getInstance("SHA-256");
             // Files smaller than the location table can't be a valid MCA — hash as-is
@@ -225,6 +266,10 @@ public final class WorldDiff {
                 // Feed slot index (fixed order) + payload bytes (length-prefixed).
                 md.update(slotIndexBytes(slot));
                 md.update(bytes, payloadStart, 4 + chunkLength);
+                if (isExternal(bytes, payloadStart)) {
+                    byte[] ext = external.load(slot);
+                    md.update(ext == null ? EXTERNAL_MISSING_TAG : ext);
+                }
             }
             return toHex(md.digest());
         } catch (NoSuchAlgorithmException e) {
@@ -269,11 +314,17 @@ public final class WorldDiff {
      *     shape of every other path in {@link WorldDiff}.
      */
     public static String canonicalMcaHash(Path mcaFile, DiffMode mode) {
+        byte[] bytes;
         try {
-            return canonicalMcaHash(Files.readAllBytes(mcaFile), mode);
+            bytes = Files.readAllBytes(mcaFile);
         } catch (IOException e) {
             throw new UncheckedIOException(e);
         }
+        ExternalChunks external = externalChunksNextTo(mcaFile);
+        return switch (mode) {
+            case BYTE_IDENTICAL -> canonicalMcaHash(bytes, external);
+            case SEMANTIC -> semanticMcaHash(bytes, external);
+        };
     }
 
     /**
@@ -303,6 +354,10 @@ public final class WorldDiff {
      * without the semantic-normalise pass).
      */
     static String semanticMcaHash(byte[] bytes) {
+        return semanticMcaHash(bytes, ExternalChunks.NONE);
+    }
+
+    static String semanticMcaHash(byte[] bytes, ExternalChunks external) {
         try {
             MessageDigest md = MessageDigest.getInstance("SHA-256");
             if (bytes.length < 4096) {
@@ -329,10 +384,14 @@ public final class WorldDiff {
                     continue;
                 }
                 md.update(slotIndexBytes(slot));
-                byte[] canonical = tryCanonicaliseSlotPayload(bytes, payloadStart, chunkLength);
+                byte[] ext = isExternal(bytes, payloadStart) ? external.load(slot) : null;
+                byte[] canonical = tryCanonicaliseSlotPayload(bytes, payloadStart, chunkLength, ext);
                 if (canonical != null) {
                     md.update(SLOT_SEMANTIC_TAG);
                     md.update(canonical);
+                } else if (ext != null) {
+                    md.update(SLOT_RAW_FALLBACK_TAG);
+                    md.update(ext);
                 } else {
                     // NBT parse or decompress failed — fall back to the raw slot bytes so the
                     // slot is still deterministic. Distinguish with a raw-tag prefix so a
@@ -352,14 +411,21 @@ public final class WorldDiff {
      * payload. Returns {@code null} on any failure so the caller can
      * fall back to raw-bytes hashing.
      */
-    private static byte[] tryCanonicaliseSlotPayload(byte[] bytes, int payloadStart, int chunkLength) {
+    private static byte[] tryCanonicaliseSlotPayload(byte[] bytes, int payloadStart, int chunkLength, byte[] external) {
         try {
             byte compressionByte = bytes[payloadStart + 4];
             int compressionType = compressionByte & 0x7F; // strip external-stream MSB
-            int compressedStart = payloadStart + 5;
-            int compressedLen = chunkLength - 1; // chunkLength includes the compression byte
-            if (compressedLen < 0) return null;
-            byte[] raw = decompressSlotPayload(compressionType, bytes, compressedStart, compressedLen);
+            byte[] raw;
+            if ((compressionByte & 0x80) != 0) {
+                // Oversized chunk: the stream lives in c.<x>.<z>.mcc, same compression.
+                if (external == null) return null;
+                raw = decompressSlotPayload(compressionType, external, 0, external.length);
+            } else {
+                int compressedStart = payloadStart + 5;
+                int compressedLen = chunkLength - 1; // chunkLength includes the compression byte
+                if (compressedLen < 0) return null;
+                raw = decompressSlotPayload(compressionType, bytes, compressedStart, compressedLen);
+            }
             if (raw == null) return null;
             NbtCompound root = readNbtRoot(raw);
             if (root == null) return null;
@@ -371,35 +437,29 @@ public final class WorldDiff {
     }
 
     /**
-     * Decompress a chunk payload. Matches Vanilla {@code
-     * RegionFileVersion} numeric ids for deflate (2) and none (3). Gzip
-     * (1) is uncommon in practice for chunk payloads (Vanilla writes 2);
-     * skip it here to keep the WorldDiff module dependency-free — the
-     * raw-payload fallback will still hash deterministically.
-     *
-     * <p>Returns {@code null} on unknown compression or any inflate
-     * error so the caller falls back to raw hashing.
+     * Decompress a chunk payload by Vanilla's {@code RegionFileVersion} id:
+     * 1 gzip, 2 deflate (Vanilla's default), 3 none, 4 LZ4 ({@code
+     * region-file-compression=lz4}). Returns {@code null} on an unknown id
+     * (e.g. 127, a mod-registered custom compressor) or a corrupt stream, so
+     * the caller falls back to hashing the raw bytes.
      */
-    private static byte[] decompressSlotPayload(int compressionType, byte[] bytes, int off, int len) {
+    static byte[] decompressSlotPayload(int compressionType, byte[] bytes, int off, int len) {
         if (compressionType == 3) {
-            // COMPRESSION_NONE — payload is the NBT tree directly.
+            // No compression: the payload is the NBT tree directly.
             byte[] out = new byte[len];
             System.arraycopy(bytes, off, out, 0, len);
             return out;
         }
-        if (compressionType != 2) {
-            // COMPRESSION_DEFLATE (2) is the only inflate we support here. Others fall through.
-            return null;
-        }
-        try (ByteArrayInputStream bais = new ByteArrayInputStream(bytes, off, len);
-                InflaterInputStream iis = new InflaterInputStream(bais)) {
-            ByteArrayOutputStream out = new ByteArrayOutputStream();
-            byte[] buf = new byte[8192];
-            int n;
-            while ((n = iis.read(buf)) > 0) {
-                out.write(buf, 0, n);
-            }
-            return out.toByteArray();
+        ByteArrayInputStream bais = new ByteArrayInputStream(bytes, off, len);
+        try (java.io.InputStream in =
+                switch (compressionType) {
+                    case 1 -> new java.util.zip.GZIPInputStream(bais);
+                    case 2 -> new InflaterInputStream(bais);
+                    case 4 -> new net.jpountz.lz4.LZ4BlockInputStream(bais);
+                    default -> null;
+                }) {
+            if (in == null) return null;
+            return in.readAllBytes();
         } catch (IOException e) {
             return null;
         }

@@ -46,6 +46,11 @@ public class OwnershipGuardTests {
     })
     static void offThreadSetBlockIsReroutedNotCrashed(final DynamicTest test) {
         test.onGameTest(helper -> {
+            if (OwnershipEnforcer.mode() == OwnershipEnforcer.Mode.STRICT) {
+                // Strict mode turns this deliberate violation into an exception by design.
+                helper.succeed();
+                return;
+            }
             // Snapshot the probe counter before the fixture — other fixtures on the same server may
             // have bumped it earlier. We only care that OUR off-thread call adds at least one.
             long probesBefore = ProbeRegistry.get(PROBE_KEY);

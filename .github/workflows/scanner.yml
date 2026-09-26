@@ -1,16 +1,35 @@
 name: scanner
 
-# Track C4.5 (ops hardening): runs the mod-safety scanner
-# (multiforge-scanner/, Track C2 — see docs/design/scanner-rules.md)
-# against the compiled upstream/neoforge-1.21.1 fork whenever a PR
-# touches upstream/, so a patch that introduces an unsafe pattern
-# (direct ChunkMap access, a blocking call on a region thread, etc.)
-# is flagged before merge rather than only caught in the M8/M9 fork
-# regression runs.
+# Gate for the mod-safety scanner (multiforge-scanner/, docs/design/scanner-rules.md).
+#
+# The scanner audits *mod* jars, so it is checked against a corpus of mod
+# jars with known answers: the multiforge-testmods fixture mods and the
+# client debug mod. :multiforge-scanner:scanCorpus scans them with every
+# active rule and compares the findings with multiforge-scanner/corpus/
+# expected.txt; any added, dropped or moved finding fails the check until the
+# expectation is updated on purpose (-PupdateCorpus).
+#
+# This replaced an advisory scan of the fork jar, which could never gate:
+# the fork embeds all of patched Vanilla (8,000+ net/minecraft classes), so
+# nearly every finding was against Vanilla code, not MultiForge's.
 
 on:
   pull_request:
     branches: [main, develop]
+    paths:
+      - "multiforge-scanner/**"
+      - "multiforge-testmods/**"
+      - "multiforge-client/**"
+      - "gradle.properties"
+      - ".github/workflows/scanner.yml"
+  push:
+    branches: [main, develop]
+    paths:
+      - "multiforge-scanner/**"
+      - "multiforge-testmods/**"
+      - "multiforge-client/**"
+      - "gradle.properties"
+      - ".github/workflows/scanner.yml"
 
 concurrency:
   group: scanner-${{ github.workflow }}-${{ github.ref }}
@@ -20,198 +39,46 @@ permissions:
   contents: read
 
 jobs:
-  scan-upstream-patches:
-    name: mod-safety scanner (upstream/ changes)
+  corpus:
+    name: scanner corpus (fixture + client mod jars)
     runs-on: ubuntu-latest
-    # Mirrors ci.yml's fork-build timeout: :setup + patch-apply + compile
-    # + scanner build/run, all in one job.
-    timeout-minutes: 35
-    # v1.2.0 note: scanner exit=1 (ERROR findings against our own fork
-    # jar) but the uploaded SARIF is 0 bytes despite the scanner's own
-    # exit-1 path calling out.println(toSarif(...)). Marked advisory
-    # while the data-mystery is triaged separately — /67 round-6 already
-    # gave the fork jar a 4-lens correctness review and all HIGH findings
-    # were fixed, so the scanner is a nice-to-have not a release gate.
-    # Local verification remains authoritative:
-    #   java -jar multiforge-scanner/build/libs/multiforge-scanner-*.jar \
-    #     --sarif upstream/neoforge-1.21.1/build/libs/*.jar > out.sarif
-    continue-on-error: true
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      # No third-party paths-filter action — a plain `git diff` against the
-      # PR's merge-base keeps this workflow's trust surface to first-party
-      # actions only (this file always registers as a check either way;
-      # it just no-ops the expensive steps when upstream/ is untouched).
-      - name: Check for changes under upstream/
-        id: changed
-        env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        run: |
-          if git diff --name-only "$BASE_SHA" "$HEAD_SHA" -- upstream/ | grep -q .; then
-            echo "upstream_changed=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "upstream_changed=false" >> "$GITHUB_OUTPUT"
-            echo "No upstream/ changes in this PR — scanner run skipped."
-          fi
-
-      - name: Check multiforge-scanner module is present
-        if: steps.changed.outputs.upstream_changed == 'true'
-        id: module
-        run: |
-          if [ -d multiforge-scanner ]; then
-            echo "present=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "present=false" >> "$GITHUB_OUTPUT"
-            echo "::warning::multiforge-scanner/ not present yet (Track C2 lands the module) — skipping scan, not failing the check."
-          fi
 
       - name: Set up JDK 21
-        if: steps.changed.outputs.upstream_changed == 'true' && steps.module.outputs.present == 'true'
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: "21"
 
       - name: Set up Gradle
-        if: steps.changed.outputs.upstream_changed == 'true' && steps.module.outputs.present == 'true'
         uses: gradle/actions/setup-gradle@v3
         with:
           cache-read-only: ${{ github.event_name == 'pull_request' }}
 
-      # Same heap bump ci.yml's fork-build job needs for :setup's decompile step.
-      - name: Set fork-build heap
-        if: steps.changed.outputs.upstream_changed == 'true' && steps.module.outputs.present == 'true'
-        run: echo "GRADLE_OPTS=-Xmx6G" >> "$GITHUB_ENV"
+      # The corpus mods build against NeoForge (net.neoforged.moddev).
+      - name: Scan the corpus
+        env:
+          GRADLE_OPTS: -Xmx6G
+        run: ./gradlew :multiforge-scanner:scanCorpus --no-daemon --stacktrace
 
-      - name: Build multiforge-scanner
-        if: steps.changed.outputs.upstream_changed == 'true' && steps.module.outputs.present == 'true'
-        run: ./gradlew :multiforge-scanner:build --no-daemon --stacktrace
-
-      - name: Publish multiforge-runtime + api + license to mavenLocal
-        if: steps.changed.outputs.upstream_changed == 'true' && steps.module.outputs.present == 'true'
-        # The fork's projects/neoforge/build.gradle resolves these via
-        # mavenLocal — same dependency ci.yml's fork-build job has.
-        run: |
-          ./gradlew \
-            :multiforge-api:publishToMavenLocal \
-            :multiforge-runtime:publishToMavenLocal \
-            --no-daemon --stacktrace
-
-      - name: Build the patched fork jar
-        if: steps.changed.outputs.upstream_changed == 'true' && steps.module.outputs.present == 'true'
-        working-directory: upstream/neoforge-1.21.1
-        run: |
-          ./gradlew --no-configuration-cache --no-daemon --stacktrace --parallel --build-cache \
-            setup \
-            :neoforge:applyMultiforgePatches \
-            :neoforge:jar
-
-      - name: Run scanner (SARIF)
-        if: steps.changed.outputs.upstream_changed == 'true' && steps.module.outputs.present == 'true'
-        id: scan
+      - name: SARIF for the corpus
+        if: always()
         run: |
           set -uo pipefail
-          # Newest first: build/libs accumulates jars from earlier versions
-          # on a dirty tree, and picking an old one silently reintroduces
-          # the missing-Main-Class failure this check spent six releases on.
-          SCANNER_JAR="$(find multiforge-scanner/build/libs -maxdepth 1 -name 'multiforge-scanner-*.jar' \
-              ! -name '*-sources.jar' -printf '%T@ %p\n' 2>/dev/null | sort -rn | head -n1 | cut -d' ' -f2-)"
-          # The fork builds to projects/neoforge/build/libs, not
-          # upstream/neoforge-1.21.1/build/libs. The old glob pointed at a
-          # directory that has never existed, so it never expanded, the
-          # literal string was passed as a filename, and the scanner exited
-          # 2 with "Input does not exist" — a usage error the workflow then
-          # reported as ERROR-severity findings.
-          # Exclude every derived artifact: -installer, -userdev, -universal,
-          # -unsigned, -sources. Only the plain neoforge-<v>.jar is the fork
-          # build itself. (Picking the installer by accident makes the scan
-          # look clean — it has no net/minecraft classes to flag at all.)
-          TARGET="$(find upstream/neoforge-1.21.1/projects/neoforge/build/libs -maxdepth 1 \
-              -name 'neoforge-*.jar' \
-              ! -name '*-sources.jar' ! -name '*-universal*.jar' \
-              ! -name '*-installer*.jar' ! -name '*-userdev*.jar' ! -name '*-unsigned*.jar' \
-              -printf '%T@ %p\n' 2>/dev/null | sort -rn | head -n1 | cut -d' ' -f2-)"
-          if [ -z "$SCANNER_JAR" ] || [ -z "$TARGET" ]; then
-              echo "::warning::scanner jar or target jar not found — skipping scan."
-              echo "  scanner: ${SCANNER_JAR:-<none>}"
-              echo "  target:  ${TARGET:-<none>}"
-              echo "exit_code=skipped" >> "$GITHUB_OUTPUT"
-              exit 0
-          fi
-          echo "scanning $TARGET"
-          # `|| CODE=$?` rather than a bare call: GitHub runs `run:` blocks
-          # under `bash -e`, so a nonzero scanner exit aborts the step before
-          # exit_code is ever recorded — which left the gate reading an empty
-          # value and reporting a failure with no detail.
-          CODE=0
-          java -jar "$SCANNER_JAR" --sarif "$TARGET" > scanner-results.sarif || CODE=$?
-          echo "exit_code=$CODE" >> "$GITHUB_OUTPUT"
-          echo "scanner exited $CODE"
-          exit 0
+          SCANNER_JAR="$(ls -t multiforge-scanner/build/libs/multiforge-scanner-*.jar 2>/dev/null | grep -v -- -sources | head -n1 || true)"
+          [ -n "$SCANNER_JAR" ] || ./gradlew :multiforge-scanner:jar --no-daemon -q
+          SCANNER_JAR="$(ls -t multiforge-scanner/build/libs/multiforge-scanner-*.jar | grep -v -- -sources | head -n1)"
+          java -jar "$SCANNER_JAR" --sarif \
+            multiforge-testmods/writer/build/libs/*.jar \
+            multiforge-testmods/legacy/build/libs/*.jar \
+            > scanner-corpus.sarif || true
 
-      - name: Upload SARIF artifact
-        if: steps.changed.outputs.upstream_changed == 'true' && steps.module.outputs.present == 'true'
+      - name: Upload SARIF
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: scanner-sarif-${{ github.sha }}
-          path: scanner-results.sarif
+          name: scanner-corpus-sarif-${{ github.sha }}
+          path: scanner-corpus.sarif
           retention-days: 30
-
-      - name: Report findings
-        if: steps.changed.outputs.upstream_changed == 'true' && steps.module.outputs.present == 'true'
-        run: |
-          echo "Scanner exit code: ${{ steps.scan.outputs.exit_code }}"
-          python3 - <<'PYEOF' || true
-          import json, pathlib
-          from collections import Counter
-          p = pathlib.Path("scanner-results.sarif")
-          if not p.is_file() or p.stat().st_size == 0:
-              print("no SARIF produced")
-              raise SystemExit(0)
-          try:
-              results = json.loads(p.read_text())["runs"][0]["results"]
-          except Exception as exc:
-              print(f"SARIF unreadable: {exc}")
-              raise SystemExit(0)
-          print(f"{len(results)} finding(s)")
-          for level, n in Counter(r.get("level", "?") for r in results).most_common():
-              print(f"  level {level}: {n}")
-          for rule, n in Counter(r.get("ruleId", "?") for r in results).most_common(5):
-              print(f"  rule {rule}: {n}")
-          PYEOF
-          exit 0
-
-      - name: Findings are informational, not a gate
-        if: steps.changed.outputs.upstream_changed == 'true' && steps.module.outputs.present == 'true'
-        run: |
-          # Deliberately never fails. Three separate faults made this check
-          # report "ERROR-severity findings" for six releases without the
-          # scanner ever finding anything:
-          #
-          #   1. multiforge-scanner.jar had no Main-Class, so `java -jar`
-          #      exited 1. (fixed in multiforge-scanner/build.gradle.kts)
-          #   2. The target glob named a directory that has never existed,
-          #      so the scanner exited 2 on a usage error. (fixed above)
-          #   3. This step ran under `bash -e`, so a nonzero scanner exit
-          #      aborted before exit_code was recorded. (fixed above)
-          #
-          # With those fixed the scan runs — and produces ~194 findings, 169
-          # of them ERROR, essentially all against VANILLA Minecraft:
-          # DispenseItemBehavior$12.execute calling Level.setBlock, and so on.
-          # That is not a MultiForge defect. The scanner audits *mod* jars for
-          # unsafe region access (docs/design/scanner-rules.md §1.1), and every
-          # fork jar necessarily embeds patched vanilla — neoforge-<v>.jar
-          # carries 8,274 net/minecraft classes. There is no fork artifact to
-          # point it at that would be a fair target.
-          #
-          # So: report, upload the SARIF, do not gate. Re-gating requires
-          # either a corpus of real mod jars, or an ignore-file scoped to
-          # net/minecraft (see the scanner's --ignore-file flag). A red X that
-          # means nothing only teaches people to ignore CI.
-          CODE="${{ steps.scan.outputs.exit_code }}"
-          echo "Scanner exit code: ${CODE:-<unset>} (informational)"
-          exit 0

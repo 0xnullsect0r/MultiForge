@@ -1,5 +1,11 @@
 # MultiForge — ChunkTaskPriorityQueue{,Sorter} disposition
 
+> **Historical — superseded.** The M9 chunk-system fork this document describes was
+> retired: Vanilla's chunk system loads, ticks, lights and saves every chunk, and MultiForge
+> only tracks which region owns each loaded chunk. See `docs/design/barrier-tick-model.md`
+> (*Chunks*, *What this replaced*). Kept for the record; the classes and patches named here
+> no longer exist.
+
 **Status:** Phase 4 task 4.6 of the M9 landing plan
 (`plans/bubbly-jumping-comet.md`).
 **Verdict:** NO PATCH. Vanilla source remains verbatim.

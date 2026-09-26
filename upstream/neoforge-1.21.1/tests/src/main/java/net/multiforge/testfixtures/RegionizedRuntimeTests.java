@@ -49,36 +49,23 @@ public class RegionizedRuntimeTests {
 
     @GameTest(template = TestsMod.TEMPLATE_3x3)
     @TestHolder(description = {
-            "M9 sub-step 1: ChunkHolderManagerBridge shadows Vanilla ChunkMap into",
-            "MultiForge's ChunkHolderManager. After GameTest chunks load, the shadow",
-            "must have holder entries with non-INACCESSIBLE ChunkLoadLevel."
+            "Every loaded chunk is indexed in its world's ChunkHolderManager as owned",
+            "by the region the regionizer places it in."
     })
-    static void chunkBridgeShadowsRealChunks(final DynamicTest test) {
+    static void loadedChunksAreIndexedByTheirRegion(final DynamicTest test) {
         test.onGameTest(helper -> {
             MultiThreadedSchedulerHost host = MultiForgeRegionizedRuntime.current();
             helper.assertTrue(host != null, "runtime must be installed");
             net.multiforge.api.world.WorldRef world = net.multiforge.neoforge.RegionizedTickCoordinator.asWorldRef(helper.getLevel());
-            net.multiforge.runtime.chunk.ChunkHolderManager manager = host.chunkManagerFor(world);
-            // The GameTest structure sits at some chunk; the bridge should have shadowed at
-            // least that chunk into a holder by now.
-            helper.assertTrue(
-                    manager.holderCount() > 0,
-                    "expected ChunkHolderManager to have shadowed at least one chunk from "
-                            + "Vanilla ChunkMap; got holderCount=" + manager.holderCount()
-                            + " for world " + world.dimensionId());
-            // At least one holder should be at BORDER or higher (loaded state), not INACCESSIBLE.
-            boolean anyLoaded = false;
-            for (net.multiforge.runtime.chunk.NewChunkHolder h : manager.holders()) {
-                if (h.level().isAtLeast(net.multiforge.runtime.chunk.ChunkLoadLevel.BORDER)) {
-                    anyLoaded = true;
-                    break;
-                }
-            }
-            helper.assertTrue(
-                    anyLoaded,
-                    "expected at least one shadowed holder at BORDER or higher; "
-                            + "all holders are still INACCESSIBLE. Bridge is receiving events "
-                            + "but not translating levels correctly.");
+            net.minecraft.core.BlockPos origin = helper.absolutePos(net.minecraft.core.BlockPos.ZERO);
+            int cx = origin.getX() >> 4;
+            int cz = origin.getZ() >> 4;
+            net.multiforge.runtime.chunk.NewChunkHolder holder = host.chunkManagerFor(world).holderAt(new net.multiforge.api.world.ChunkPos(cx, cz));
+            net.multiforge.runtime.region.Region region = host.regionizerFor(world).regionAtChunk(cx, cz);
+            helper.assertTrue(holder != null, "the test's chunk [" + cx + ", " + cz + "] is not indexed");
+            helper.assertTrue(region != null, "the test's chunk [" + cx + ", " + cz + "] has no region");
+            helper.assertTrue(region.id().equals(holder.owningRegion()),
+                    "chunk indexed as owned by " + holder.owningRegion() + " but its region is " + region.id());
             helper.succeed();
         });
     }
@@ -103,6 +90,26 @@ public class RegionizedRuntimeTests {
                     region != null,
                     "expected a region for chunk (" + chunkX + "," + chunkZ + ") in world " + world.dimensionId()
                             + " — regionizer has " + regionizer.regions().size() + " region(s) live");
+            helper.succeed();
+        });
+    }
+
+    @GameTest(template = TestsMod.TEMPLATE_3x3)
+    @TestHolder(description = {
+            "/multiforge commands that take a world accept a namespaced dimension id:",
+            "a plain string argument stopped at the ':' of minecraft:overworld."
+    })
+    static void worldArgumentsAcceptNamespacedIds(final DynamicTest test) {
+        test.onGameTest(helper -> {
+            var server = helper.getLevel().getServer();
+            var source = server.createCommandSourceStack();
+            for (String command : java.util.List.of(
+                    "multiforge chunks minecraft:overworld",
+                    "multiforge region pin gametest minecraft:overworld 0 0 1 1")) {
+                var parse = server.getCommands().getDispatcher().parse(command, source);
+                helper.assertTrue(parse.getExceptions().isEmpty() && !parse.getReader().canRead(),
+                        "'" + command + "' does not parse: " + parse.getExceptions().values() + " at '" + parse.getReader().getRemaining() + "'");
+            }
             helper.succeed();
         });
     }

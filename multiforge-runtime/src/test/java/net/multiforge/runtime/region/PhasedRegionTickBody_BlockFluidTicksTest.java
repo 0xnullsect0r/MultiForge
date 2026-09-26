@@ -13,14 +13,13 @@
 package net.multiforge.runtime.region;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatCode;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import net.multiforge.api.world.WorldRef;
 import net.multiforge.runtime.config.MultiForgeConfig;
-import net.multiforge.runtime.diagnostics.ProbeRegistry;
 import net.multiforge.runtime.scheduler.MultiThreadedSchedulerHost;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -32,7 +31,7 @@ import org.junit.jupiter.api.io.TempDir;
  * m13-b3-region-tick.md §5.1): {@link
  * MultiThreadedSchedulerHost#setBlockFluidRunner} plumbs a {@link
  * ScheduledTickRunner} into the {@code BLOCK_FLUID_TICKS} phase slot that
- * {@link MultiThreadedSchedulerHost#installM9WiredTickBody} wires. Extends
+ * {@link MultiThreadedSchedulerHost#installRegionTickBody} wires. Extends
  * the {@code PhasedRegionTickBodyWiringTest} fixture pattern (worker pool
  * shut down up-front, tests drive {@code body.tickOnce(region)} by hand).
  */
@@ -82,7 +81,7 @@ class PhasedRegionTickBody_BlockFluidTicksTest {
 
         RecordingRunner runner = new RecordingRunner();
         host.setBlockFluidRunner(runner);
-        host.installM9WiredTickBody(PhasedRegionTickBody.builder(), null, journalDir);
+        host.installRegionTickBody(PhasedRegionTickBody.builder());
 
         RegionTickBody body = host.scheduler().body();
         body.tickOnce(region);
@@ -100,7 +99,7 @@ class PhasedRegionTickBody_BlockFluidTicksTest {
 
         RecordingRunner runner = new RecordingRunner();
         host.setBlockFluidRunner(runner);
-        host.installM9WiredTickBody(PhasedRegionTickBody.builder(), null, journalDir);
+        host.installRegionTickBody(PhasedRegionTickBody.builder());
 
         RegionTickBody body = host.scheduler().body();
         body.tickOnce(regionA);
@@ -111,9 +110,8 @@ class PhasedRegionTickBody_BlockFluidTicksTest {
     }
 
     @Test
-    void throwingRunnerIsCaughtAndTickContinues(@TempDir Path journalDir) {
+    void throwingRunnerStillLetsLaterPhasesRunThenPropagates(@TempDir Path journalDir) {
         Region region = host.touchChunk(WORLD, 0, 0);
-        long before = ProbeRegistry.get("region-tick.block-fluid.failure");
 
         List<PhasedRegionTickBody.Phase> observed = new ArrayList<>();
         PhasedRegionTickBody.Builder userBuilder = PhasedRegionTickBody.builder()
@@ -121,14 +119,15 @@ class PhasedRegionTickBody_BlockFluidTicksTest {
         host.setBlockFluidRunner(r -> {
             throw new RuntimeException("boom — simulated fork-bridge failure");
         });
-        host.installM9WiredTickBody(userBuilder, null, journalDir);
+        host.installRegionTickBody(userBuilder);
 
         RegionTickBody body = host.scheduler().body();
-        // The throwing runner must not propagate out of tickOnce, and later
-        // phases (here, the user-supplied REGION_EVENTS body) still run.
-        assertThatCode(() -> body.tickOnce(region)).doesNotThrowAnyException();
+        // Later phases (here, the user-supplied REGION_EVENTS body) still run,
+        // then the failure propagates so the server thread sees it.
+        assertThatThrownBy(() -> body.tickOnce(region))
+                .isInstanceOf(RuntimeException.class)
+                .hasMessageContaining("simulated fork-bridge failure");
 
         assertThat(observed).containsExactly(PhasedRegionTickBody.Phase.REGION_EVENTS);
-        assertThat(ProbeRegistry.get("region-tick.block-fluid.failure")).isEqualTo(before + 1);
     }
 }

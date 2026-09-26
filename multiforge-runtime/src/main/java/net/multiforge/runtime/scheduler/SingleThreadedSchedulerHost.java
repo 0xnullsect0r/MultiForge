@@ -49,11 +49,29 @@ public final class SingleThreadedSchedulerHost implements SchedulerHost {
     private static final long TICK_MS = 50L;
 
     private final ScheduledExecutorService tickExec;
+
+    /**
+     * Where region/entity/global task bodies run once due. {@code null}: on
+     * {@link #tickExec}'s own thread (standalone, tests). A server with {@code
+     * mode = "off"} passes its own executor, so they run on the server thread;
+     * a fallback host replaced by the real runtime hands them to its global
+     * domain ({@link #replacedBy}).
+     */
+    private volatile java.util.concurrent.Executor tickRunner;
+
+    private static final net.multiforge.api.mod.ModIdentifier HANDOVER_MOD =
+            net.multiforge.api.mod.ModIdentifier.of("multiforge");
     private final ScheduledExecutorService asyncExec;
     private final ConcurrentMap<ModIdentifier, ConcurrentMap<SchedulerTaskImpl, Boolean>> asyncByMod =
             new ConcurrentHashMap<>();
 
     public SingleThreadedSchedulerHost() {
+        this(null);
+    }
+
+    /** @param tickRunner runs due region/entity/global task bodies; {@code null} runs them on the timer thread */
+    public SingleThreadedSchedulerHost(java.util.concurrent.Executor tickRunner) {
+        this.tickRunner = tickRunner;
         AtomicInteger asyncSeq = new AtomicInteger();
         this.tickExec = Executors.newSingleThreadScheduledExecutor(r -> {
             Thread t = new Thread(r, "multiforge-tick-worker");
@@ -65,6 +83,17 @@ public final class SingleThreadedSchedulerHost implements SchedulerHost {
             t.setDaemon(true);
             return t;
         });
+    }
+
+    @Override
+    public void replacedBy(SchedulerHost next) {
+        tickRunner = body -> next.global().execute(HANDOVER_MOD, body);
+    }
+
+    private void dispatch(Runnable body) {
+        java.util.concurrent.Executor runner = tickRunner;
+        if (runner == null) body.run();
+        else runner.execute(body);
     }
 
     /** Install this host as the singleton {@link ServerDomains} binding. */
@@ -112,7 +141,8 @@ public final class SingleThreadedSchedulerHost implements SchedulerHost {
     private ScheduledTask scheduleTick(
             ModIdentifier mod, Consumer<ScheduledTask> body, long delayTicks, OwnerToken tok) {
         SchedulerTaskImpl task = new SchedulerTaskImpl(mod, false);
-        var future = tickExec.schedule(() -> runOnce(task, body, tok), delayTicks * TICK_MS, TimeUnit.MILLISECONDS);
+        var future = tickExec.schedule(
+                () -> dispatch(() -> runOnce(task, body, tok)), delayTicks * TICK_MS, TimeUnit.MILLISECONDS);
         task.bindFuture(future);
         return task;
     }
@@ -121,7 +151,7 @@ public final class SingleThreadedSchedulerHost implements SchedulerHost {
             ModIdentifier mod, Consumer<ScheduledTask> body, long initialTicks, long periodTicks, OwnerToken tok) {
         SchedulerTaskImpl task = new SchedulerTaskImpl(mod, true);
         var future = tickExec.scheduleAtFixedRate(
-                () -> runRepeating(task, body, tok),
+                () -> dispatch(() -> runRepeating(task, body, tok)),
                 Math.max(0, initialTicks) * TICK_MS,
                 Math.max(1, periodTicks) * TICK_MS,
                 TimeUnit.MILLISECONDS);
@@ -308,6 +338,10 @@ public final class SingleThreadedSchedulerHost implements SchedulerHost {
             if (!handle.enterExecuting()) return;
             try {
                 OwnerToken.runAs(OwnerToken.ASYNC, () -> body.accept(handle));
+            } catch (Throwable t) {
+                // A throw escaping here would be swallowed by the executor's future and,
+                // for a repeating task, silently end it. Log it; a repeating task keeps running.
+                org.slf4j.LoggerFactory.getLogger("multiforge.scheduler").error("async task {} threw", handle, t);
             } finally {
                 if (repeating) handle.prepareNextIteration();
                 else handle.markFinished();

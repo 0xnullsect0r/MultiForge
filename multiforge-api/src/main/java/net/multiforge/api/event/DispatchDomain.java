@@ -24,8 +24,8 @@ import java.lang.annotation.Target;
  * @EventBusSubscriber} class) as safe to dispatch on the given domain.
  * MultiForge reads this at listener-registration time.
  *
- * <p>Unannotated handlers default to {@link
- * DispatchDomainKind#LEGACY_SERIAL} — safe, but slower.
+ * <p>Unannotated handlers take their event type's default domain or {@link
+ * DispatchDomainKind#LEGACY_SERIAL} — safe, but serialised.
  *
  * <pre>{@code
  * @DispatchDomain(DispatchDomainKind.REGION)

@@ -142,8 +142,22 @@ public sealed interface DebugPayload {
         }
     }
 
-    /** Client-side flag bitset for what streams to receive. */
-    record Subscribe(int flags) implements DebugPayload {
+    /**
+     * Client-side flag bitset for what streams to receive, and the protocol
+     * version the client speaks ({@code 1} for clients that predate the
+     * field, which is optional on the wire).
+     */
+    record Subscribe(int flags, int clientProtocol) implements DebugPayload {
+        /** A subscription from a client speaking this build's protocol. */
+        public Subscribe(int flags) {
+            this(flags, DebugPacketCodec.PROTOCOL_VERSION);
+        }
+
+        /** The streams a client speaking {@code protocol} can decode. */
+        public static int streamsFor(int protocol) {
+            return protocol >= 2 ? F_ALL : F_REGIONS | F_HEATMAP | F_PINS | F_VIOLATIONS;
+        }
+
         public static final int F_REGIONS = 0x01;
         public static final int F_HEATMAP = 0x02;
         public static final int F_PINS = 0x04;

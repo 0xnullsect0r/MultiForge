@@ -13,22 +13,32 @@
 package net.multiforge.api.event;
 
 /**
- * Where a {@link DispatchDomain}-annotated event handler expects to
- * run. Unannotated handlers default to {@link #LEGACY_SERIAL}, which
- * MultiForge routes through a per-mod serialised executor with
- * automatic reroute-and-warn for cross-region access. Opt in to a
- * stronger dispatch mode for handlers you have audited.
+ * Where a {@link DispatchDomain}-annotated event handler runs when the
+ * event is posted from a region worker. Posted from any other thread (the
+ * server thread, world generation, network), every handler runs on the
+ * posting thread, as in NeoForge.
+ *
+ * <p>An unannotated handler takes the event type's default (block-,
+ * chunk- and entity-local events are {@link #REGION}) or else {@link
+ * #LEGACY_SERIAL}; a mod's {@code multiforge_safety} classification can
+ * widen or narrow that. See docs/events.md.
  */
 public enum DispatchDomainKind {
-    /** Runs on the region worker that currently owns the event's target. */
+    /** Runs on the posting region worker, in parallel with other regions. */
     REGION,
 
-    /** Runs on the dedicated global-region thread. */
+    /**
+     * Runs on the server thread, one handler at a time, while the posting
+     * worker waits; cancellation and results reach the poster.
+     */
     GLOBAL,
 
-    /** Runs on the shared async pool; must not touch game state. */
+    /** Runs on the shared async pool; the poster does not wait, so it cannot cancel. Must not touch game state. */
     ASYNC,
 
-    /** Default: runs on the per-mod serialised legacy executor. */
+    /**
+     * Like {@link #GLOBAL}: serialised on the server thread, so handler code
+     * that keeps unsynchronised state never runs concurrently with itself.
+     */
     LEGACY_SERIAL,
 }

@@ -18,8 +18,6 @@ import net.multiforge.api.world.WorldRef;
 import net.multiforge.runtime.chunk.ChunkHolderManager;
 import net.multiforge.runtime.chunk.HolderManagerRegionData;
 import net.multiforge.runtime.chunk.TickingBlockEntityRef;
-import net.multiforge.runtime.diagnostics.ProbeRegistry;
-import net.multiforge.runtime.diagnostics.ViolationLogger;
 
 /**
  * Runs one region's slice of block-entity tickers for a single tick —
@@ -59,9 +57,11 @@ public interface BlockEntityTickRunner {
     /**
      * Tick every live, ready block-entity ticker owned by {@code
      * region}. Called from the owning region's worker thread only
-     * (the {@code BLOCK_ENTITIES} phase). Implementations must not let
-     * a single misbehaving ticker abort the rest of the region's
-     * tickers — CLAUDE.md rule 5 ("auto-reroute + warn").
+     * (the {@code BLOCK_ENTITIES} phase). A throwable from a ticker
+     * propagates: Vanilla's own ticker wrapper already turns a failure
+     * into a crash report (or, with NeoForge's {@code
+     * removeErroringBlockEntities}, removes the block entity), and the
+     * barrier rethrows it on the server thread.
      */
     void tickBlockEntitiesForRegion(Region region);
 
@@ -72,12 +72,9 @@ public interface BlockEntityTickRunner {
      * reports {@link TickingBlockEntityRef#isRemoved()} (mirroring
      * Vanilla's own {@code iterator.remove()} in {@code
      * tickBlockEntities()}), and ticks every remaining entry that wants
-     * to run this tick ({@link TickingBlockEntityRef#shouldTick()}).
-     * Each ticker call is individually try/catch-guarded so one broken
-     * block entity — a mod bug in a custom tick implementation — can
-     * never stop the rest of the region's block entities from ticking
-     * this pass (docs/design/m13-b3-region-tick.md §5.3, mirroring
-     * Vanilla's own per-ticker isolation).
+     * to run this tick ({@link TickingBlockEntityRef#shouldTick()}),
+     * exactly as Vanilla's {@code Level.tickBlockEntities()} does for the
+     * whole level (docs/design/m13-b3-region-tick.md §5.3).
      *
      * @param worldForRegion resolves the {@link WorldRef} that owns a
      *     given region id; {@code null} when the region has died or no
@@ -96,20 +93,12 @@ public interface BlockEntityTickRunner {
             HolderManagerRegionData data = manager.regionData(region.id());
             List<TickingBlockEntityRef> tickers = data.snapshotBlockEntityTickers();
             for (TickingBlockEntityRef ticker : tickers) {
-                try {
-                    if (ticker.isRemoved()) {
-                        data.removeBlockEntityTicker(ticker);
-                        continue;
-                    }
-                    if (!ticker.shouldTick()) continue;
-                    ticker.tick();
-                } catch (Throwable t) {
-                    ProbeRegistry.bump("block-entities.ticker.failure");
-                    ViolationLogger.warn(
-                            "BlockEntityTickRunner.standard",
-                            "block entity ticker threw in region " + region.id() + " at " + ticker.pos() + ": "
-                                    + t.getClass().getSimpleName() + ": " + t.getMessage());
+                if (ticker.isRemoved()) {
+                    data.removeBlockEntityTicker(ticker);
+                    continue;
                 }
+                if (!ticker.shouldTick()) continue;
+                ticker.tick();
             }
         };
     }

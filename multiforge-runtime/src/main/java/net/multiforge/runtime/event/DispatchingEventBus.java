@@ -12,7 +12,9 @@
  */
 package net.multiforge.runtime.event;
 
-import java.lang.reflect.InvocationTargetException;
+import java.lang.invoke.MethodHandle;
+import java.lang.invoke.MethodHandles;
+import java.lang.invoke.MethodType;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
 import java.util.Arrays;
@@ -27,42 +29,20 @@ import net.neoforged.bus.api.IEventBus;
 import net.neoforged.bus.api.SubscribeEvent;
 
 /**
- * Transparent wrapper around a real {@link IEventBus} that routes each
- * registered listener's invocation through {@link DomainDispatcher}
- * according to its {@code @DispatchDomain}/{@code @Ordering} annotations.
- * See {@code docs/design/m12-event-routing.md} for the full design.
+ * Wrapper around a real {@link IEventBus} that routes each listener's
+ * invocation through {@link DomainDispatcher}, according to its {@code
+ * @DispatchDomain}/{@code @Ordering} annotations, the event type's default
+ * domain ({@link EventTypeDomainMap}) and the owning mod's {@link ModSafety}.
+ * See docs/events.md.
  *
- * <p>Every {@link IEventBus} method delegates straight to the wrapped
- * {@code inner} bus <b>except</b> {@link #register(Object)} and the {@code
- * addListener(...)} family — the entry points where a listener becomes
- * observable to the bus. {@code register}/{@code addListener} instead
- * introspect the listener (where a {@link Method} is available) and
- * install a {@link RoutingListenerWrapper}-backed consumer on {@code
- * inner} in place of the raw one.
- *
- * <p><b>Why {@code register} can't just delegate to {@code
- * inner.register(target)}:</b> the concrete {@code
- * net.neoforged.bus.EventBus}'s {@code registerListener(Object, Method,
- * Method)} — the method that would actually build the dispatch {@code
- * Consumer} for each {@code @SubscribeEvent} method — is {@code private}.
- * {@link IEventBus} exposes no seam to intercept what it builds. So {@code
- * register} here performs its own equivalent reflective scan and installs
- * wrapped consumers directly via {@code inner.addListener(...)} instead.
- *
- * <p><b>Why the {@code addListener(Consumer)} family can't be
- * annotation-routed:</b> a bare {@code Consumer<T>} lambda/method
- * reference carries no {@link Method} to read annotations off, and
- * NeoForge's {@code EventBus.addListener(Consumer)} identifies the
- * event type via ASM introspection of the consumer class's bytecode
- * (looking for the invokedynamic bootstrap that a lambda leaves
- * behind). Wrapping a lambda in our own {@link RoutingListenerWrapper}
- * makes that introspection fail — the wrapper is a plain class and
- * NeoForge throws {@code "Failed to resolve consumer event type"} at
- * boot. So the {@code addListener} overloads pass the raw consumer
- * straight through to the inner bus; those handlers run with pre-
- * MultiForge Vanilla semantics (inline on the poster's thread).
- * {@code @DispatchDomain} routing is only honored for listeners
- * registered via {@link #register(Object)} with {@code @SubscribeEvent}.
+ * <p>{@link #register(Object)} performs its own {@code @SubscribeEvent} scan
+ * (the concrete bus builds its listener consumers in a private method) and
+ * installs a {@link RoutingListenerWrapper} per method. The {@code
+ * addListener} overloads wrap the caller's consumer too; for the overloads
+ * without an explicit event type the type is resolved from the consumer's
+ * generic signature exactly as the bus itself does, and passed explicitly,
+ * because the bus cannot resolve it from the wrapper. A registration map
+ * lets {@link #unregister} remove the wrappers installed for an object.
  */
 public class DispatchingEventBus implements IEventBus {
 
@@ -137,79 +117,107 @@ public class DispatchingEventBus implements IEventBus {
         method.setAccessible(true);
 
         MetadataEntry metadata = AnnotationScanner.scan(method);
-        Consumer<T> raw = event -> invokeReflectively(method, receiver, event);
-        Consumer<T> wrapped = new RoutingListenerWrapper<>(raw, metadata, dispatcher);
+        Consumer<T> raw = invoker(method, receiver);
+        Consumer<T> wrapped = new RoutingListenerWrapper<>(raw, metadata, dispatcher, method.getDeclaringClass());
         inner.addListener(ann.priority(), ann.receiveCanceled(), eventClass, wrapped);
+        track(receiver != null ? receiver : method.getDeclaringClass(), wrapped);
     }
 
-    private static void invokeReflectively(Method method, Object receiver, Object event) {
+    /**
+     * A consumer calling {@code method} through a {@link MethodHandle} bound to
+     * {@code receiver} (for an instance method) and adapted to {@code (Object)void},
+     * resolved once here rather than looked up reflectively on every event.
+     */
+    private static <T> Consumer<T> invoker(Method method, Object receiver) {
+        MethodHandle handle;
         try {
-            method.invoke(receiver, event);
+            handle = MethodHandles.lookup().unreflect(method);
         } catch (IllegalAccessException e) {
-            throw new IllegalStateException("Cannot invoke @SubscribeEvent method " + method, e);
-        } catch (InvocationTargetException e) {
-            Throwable cause = e.getCause();
-            if (cause instanceof RuntimeException re) {
-                throw re;
-            }
-            if (cause instanceof Error er) {
-                throw er;
-            }
-            throw new RuntimeException(cause);
+            throw new IllegalStateException("Cannot access @SubscribeEvent method " + method, e);
         }
+        if (receiver != null) handle = handle.bindTo(receiver);
+        MethodHandle call = handle.asType(MethodType.methodType(void.class, Object.class));
+        return event -> {
+            try {
+                call.invokeExact((Object) event);
+            } catch (RuntimeException | Error e) {
+                throw e;
+            } catch (Throwable t) {
+                throw new RuntimeException(t);
+            }
+        };
     }
 
     // ---------------------------------------------------------------
-    // addListener(...) family — straight pass-through, no wrap.
-    //
-    // See the class Javadoc: wrapping the caller's Consumer in a
-    // RoutingListenerWrapper breaks NeoForge's ASM introspection
-    // ("Failed to resolve consumer event type"), and there is no
-    // Method to scan @DispatchDomain off anyway. These listeners
-    // run with pre-MultiForge Vanilla semantics — inline on the
-    // poster's thread. @DispatchDomain routing is only honored on
-    // register(Object) with @SubscribeEvent.
+    // addListener(...) family — wrapped like @SubscribeEvent listeners.
     // ---------------------------------------------------------------
 
     @Override
     public <T extends Event> void addListener(Consumer<T> consumer) {
-        inner.addListener(consumer);
+        addListener(EventPriority.NORMAL, false, eventTypeOf(consumer), consumer);
     }
 
     @Override
     public <T extends Event> void addListener(Class<T> eventType, Consumer<T> consumer) {
-        inner.addListener(eventType, consumer);
+        addListener(EventPriority.NORMAL, false, eventType, consumer);
     }
 
     @Override
     public <T extends Event> void addListener(EventPriority priority, Consumer<T> consumer) {
-        inner.addListener(priority, consumer);
+        addListener(priority, false, eventTypeOf(consumer), consumer);
     }
 
     @Override
     public <T extends Event> void addListener(EventPriority priority, Class<T> eventType, Consumer<T> consumer) {
-        inner.addListener(priority, eventType, consumer);
+        addListener(priority, false, eventType, consumer);
     }
 
     @Override
     public <T extends Event> void addListener(EventPriority priority, boolean receiveCanceled, Consumer<T> consumer) {
-        inner.addListener(priority, receiveCanceled, consumer);
+        addListener(priority, receiveCanceled, eventTypeOf(consumer), consumer);
+    }
+
+    @Override
+    public <T extends Event> void addListener(boolean receiveCanceled, Consumer<T> consumer) {
+        addListener(EventPriority.NORMAL, receiveCanceled, eventTypeOf(consumer), consumer);
+    }
+
+    @Override
+    public <T extends Event> void addListener(boolean receiveCanceled, Class<T> eventType, Consumer<T> consumer) {
+        addListener(EventPriority.NORMAL, receiveCanceled, eventType, consumer);
     }
 
     @Override
     public <T extends Event> void addListener(
             EventPriority priority, boolean receiveCanceled, Class<T> eventType, Consumer<T> consumer) {
-        inner.addListener(priority, receiveCanceled, eventType, consumer);
+        Objects.requireNonNull(consumer, "consumer");
+        Objects.requireNonNull(eventType, "eventType");
+        Consumer<T> wrapped = new RoutingListenerWrapper<>(
+                consumer, AnnotationScanner.forUnannotated(eventType), dispatcher, consumer.getClass());
+        inner.addListener(priority, receiveCanceled, eventType, wrapped);
+        track(consumer, wrapped);
     }
 
-    @Override
-    public <T extends Event> void addListener(boolean receiveCanceled, Consumer<T> consumer) {
-        inner.addListener(receiveCanceled, consumer);
+    /** The event type of {@code consumer}, resolved from its generic signature as the bus does. */
+    @SuppressWarnings("unchecked")
+    static <T extends Event> Class<T> eventTypeOf(Consumer<T> consumer) {
+        Class<?> type = net.jodah.typetools.TypeResolver.resolveRawArgument(Consumer.class, consumer.getClass());
+        if (type == net.jodah.typetools.TypeResolver.Unknown.class || !Event.class.isAssignableFrom(type)) {
+            throw new IllegalArgumentException("Failed to resolve consumer event type: " + consumer);
+        }
+        return (Class<T>) type;
     }
 
-    @Override
-    public <T extends Event> void addListener(boolean receiveCanceled, Class<T> eventType, Consumer<T> consumer) {
-        inner.addListener(receiveCanceled, eventType, consumer);
+    // Registered object (listener instance, class, or consumer) -> the
+    // wrappers installed on the inner bus for it.
+    private final java.util.Map<Object, java.util.List<Consumer<?>>> registrations = new java.util.IdentityHashMap<>();
+
+    private void track(Object owner, Consumer<?> wrapped) {
+        synchronized (registrations) {
+            registrations
+                    .computeIfAbsent(owner, k -> new java.util.ArrayList<>())
+                    .add(wrapped);
+        }
     }
 
     // ---------------------------------------------------------------
@@ -218,6 +226,13 @@ public class DispatchingEventBus implements IEventBus {
 
     @Override
     public void unregister(Object target) {
+        java.util.List<Consumer<?>> wrappers;
+        synchronized (registrations) {
+            wrappers = registrations.remove(target);
+        }
+        if (wrappers != null) {
+            for (Consumer<?> w : wrappers) inner.unregister(w);
+        }
         inner.unregister(target);
     }
 

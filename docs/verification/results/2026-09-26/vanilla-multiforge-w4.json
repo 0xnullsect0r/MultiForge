@@ -1,0 +1,20 @@
+{
+  "profile": "vanilla",
+  "workers": 4,
+  "ticks": 6000,
+  "wall_clock_ms": 21809,
+  "avg_mspt": 0.13,
+  "p50_mspt": 0.1,
+  "p95_mspt": 0.27,
+  "p99_mspt": 0.69,
+  "max_mspt": 21.07,
+  "tps_sustained_last_10min": null,
+  "rss_peak_mb": 838,
+  "boot_ok": true,
+  "clean_stop": true,
+  "timing_source": "tickstats",
+  "sprint_tps": 4966,
+  "ticks_measured": 6009,
+  "pacing": "sprint",
+  "server": "multiforge"
+}

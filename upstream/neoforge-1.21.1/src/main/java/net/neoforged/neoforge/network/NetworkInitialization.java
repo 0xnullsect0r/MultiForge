@@ -9,6 +9,7 @@ import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.fml.common.EventBusSubscriber;
 import net.neoforged.neoforge.internal.versions.neoforge.NeoForgeVersion;
 import net.neoforged.neoforge.network.configuration.CheckExtensibleEnums;
+import net.neoforged.neoforge.network.configuration.CheckFeatureFlags;
 import net.neoforged.neoforge.network.event.RegisterPayloadHandlersEvent;
 import net.neoforged.neoforge.network.handlers.ClientPayloadHandler;
 import net.neoforged.neoforge.network.handlers.ServerPayloadHandler;
@@ -21,19 +22,22 @@ import net.neoforged.neoforge.network.payload.ClientboundCustomSetTimePayload;
 import net.neoforged.neoforge.network.payload.ConfigFilePayload;
 import net.neoforged.neoforge.network.payload.ExtensibleEnumAcknowledgePayload;
 import net.neoforged.neoforge.network.payload.ExtensibleEnumDataPayload;
+import net.neoforged.neoforge.network.payload.FeatureFlagAcknowledgePayload;
+import net.neoforged.neoforge.network.payload.FeatureFlagDataPayload;
 import net.neoforged.neoforge.network.payload.FrozenRegistryPayload;
 import net.neoforged.neoforge.network.payload.FrozenRegistrySyncCompletedPayload;
 import net.neoforged.neoforge.network.payload.FrozenRegistrySyncStartPayload;
 import net.neoforged.neoforge.network.payload.KnownRegistryDataMapsPayload;
 import net.neoforged.neoforge.network.payload.KnownRegistryDataMapsReplyPayload;
 import net.neoforged.neoforge.network.payload.RegistryDataMapSyncPayload;
+import net.neoforged.neoforge.network.payload.SyncAttachmentsPayload;
 import net.neoforged.neoforge.network.registration.PayloadRegistrar;
 import net.neoforged.neoforge.registries.ClientRegistryManager;
 import net.neoforged.neoforge.registries.RegistryManager;
 import org.jetbrains.annotations.ApiStatus;
 
 @ApiStatus.Internal
-@EventBusSubscriber(modid = NeoForgeVersion.MOD_ID, bus = EventBusSubscriber.Bus.MOD)
+@EventBusSubscriber(modid = NeoForgeVersion.MOD_ID)
 public class NetworkInitialization {
     @SubscribeEvent
     private static void register(final RegisterPayloadHandlersEvent event) {
@@ -64,6 +68,10 @@ public class NetworkInitialization {
                         ExtensibleEnumDataPayload.TYPE,
                         ExtensibleEnumDataPayload.STREAM_CODEC,
                         CheckExtensibleEnums::handleClientboundPayload)
+                .configurationToClient(
+                        FeatureFlagDataPayload.TYPE,
+                        FeatureFlagDataPayload.STREAM_CODEC,
+                        CheckFeatureFlags::handleClientboundPayload)
                 .configurationToServer(
                         KnownRegistryDataMapsReplyPayload.TYPE,
                         KnownRegistryDataMapsReplyPayload.STREAM_CODEC,
@@ -72,6 +80,10 @@ public class NetworkInitialization {
                         ExtensibleEnumAcknowledgePayload.TYPE,
                         ExtensibleEnumAcknowledgePayload.STREAM_CODEC,
                         CheckExtensibleEnums::handleServerboundPayload)
+                .configurationToServer(
+                        FeatureFlagAcknowledgePayload.TYPE,
+                        FeatureFlagAcknowledgePayload.STREAM_CODEC,
+                        CheckFeatureFlags::handleServerboundPayload)
                 .playToClient(
                         AdvancedAddEntityPayload.TYPE,
                         AdvancedAddEntityPayload.STREAM_CODEC,
@@ -94,6 +106,10 @@ public class NetworkInitialization {
                 .playToClient(
                         ClientboundCustomSetTimePayload.TYPE,
                         ClientboundCustomSetTimePayload.STREAM_CODEC,
+                        ClientPayloadHandler::handle)
+                .playToClient(
+                        SyncAttachmentsPayload.TYPE,
+                        SyncAttachmentsPayload.STREAM_CODEC,
                         ClientPayloadHandler::handle);
     }
 }

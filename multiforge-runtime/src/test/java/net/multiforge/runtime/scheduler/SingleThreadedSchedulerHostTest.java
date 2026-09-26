@@ -155,4 +155,45 @@ class SingleThreadedSchedulerHostTest {
             return retired.get();
         }
     }
+
+    @Test
+    void aSuppliedExecutorRunsTheTaskBodies() throws Exception {
+        java.util.concurrent.atomic.AtomicInteger viaExecutor = new java.util.concurrent.atomic.AtomicInteger();
+        SingleThreadedSchedulerHost serverThreadHost = new SingleThreadedSchedulerHost(r -> {
+            viaExecutor.incrementAndGet();
+            r.run();
+        });
+        try {
+            ServerDomains.resetForTesting();
+            serverThreadHost.install();
+            CountDownLatch ran = new CountDownLatch(1);
+            ServerDomains.region(WORLD, POS).execute(MOD, ran::countDown);
+            assertThat(ran.await(2, TimeUnit.SECONDS)).isTrue();
+            assertThat(viaExecutor.get()).isEqualTo(1);
+        } finally {
+            serverThreadHost.shutdown();
+        }
+    }
+
+    @Test
+    void aServiceLoaderFallbackIsReplacedAndHandsOverPendingWork() throws Exception {
+        ServerDomains.resetForTesting();
+        // A mod uses ServerDomains before the server installs its runtime: the
+        // ServiceLoader binds a fallback SingleThreadedSchedulerHost.
+        CountDownLatch ran = new CountDownLatch(1);
+        ServerDomains.global().runDelayed(MOD, t -> ran.countDown(), 4);
+
+        java.util.concurrent.atomic.AtomicInteger viaReal = new java.util.concurrent.atomic.AtomicInteger();
+        SingleThreadedSchedulerHost real = new SingleThreadedSchedulerHost(r -> {
+            viaReal.incrementAndGet();
+            r.run();
+        });
+        try {
+            real.install(); // replaces the fallback instead of throwing
+            assertThat(ran.await(2, TimeUnit.SECONDS)).isTrue();
+            assertThat(viaReal.get()).isGreaterThanOrEqualTo(1); // ran through the real host
+        } finally {
+            real.shutdown();
+        }
+    }
 }

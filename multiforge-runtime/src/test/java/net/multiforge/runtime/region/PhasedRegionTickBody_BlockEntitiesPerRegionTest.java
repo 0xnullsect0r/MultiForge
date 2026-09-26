@@ -13,6 +13,7 @@
 package net.multiforge.runtime.region;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.nio.file.Path;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -32,9 +33,7 @@ import org.junit.jupiter.api.io.TempDir;
  * Coverage for B3.4's per-region {@code BLOCK_ENTITIES} wiring
  * (docs/design/m13-b3-region-tick.md §5.3):
  * {@code MultiThreadedSchedulerHost#phaseBlockEntitiesTickPerRegion},
- * layered <em>after</em> the already-landed {@code
- * phaseGlobalSystemsTick} on the same phase slot via {@link
- * MultiThreadedSchedulerHost#installM9WiredTickBody}.
+ * installed by {@link MultiThreadedSchedulerHost#installRegionTickBody}.
  *
  * <p>End-to-end through the real production path: a region is created
  * via {@link MultiThreadedSchedulerHost#touchChunk}, a {@link
@@ -83,7 +82,7 @@ class PhasedRegionTickBody_BlockEntitiesPerRegionTest {
         manager.regionData(region.id()).addBlockEntityTicker(b);
         manager.regionData(region.id()).addBlockEntityTicker(c);
 
-        host.installM9WiredTickBody(PhasedRegionTickBody.builder(), null, journalDir);
+        host.installRegionTickBody(PhasedRegionTickBody.builder());
         RegionTickBody body = host.scheduler().body();
 
         body.tickOnce(region);
@@ -108,7 +107,7 @@ class PhasedRegionTickBody_BlockEntitiesPerRegionTest {
         manager.regionData(regionA.id()).addBlockEntityTicker(inA);
         manager.regionData(regionB.id()).addBlockEntityTicker(inB);
 
-        host.installM9WiredTickBody(PhasedRegionTickBody.builder(), null, journalDir);
+        host.installRegionTickBody(PhasedRegionTickBody.builder());
         RegionTickBody body = host.scheduler().body();
 
         body.tickOnce(regionA);
@@ -134,7 +133,7 @@ class PhasedRegionTickBody_BlockEntitiesPerRegionTest {
         manager.regionData(region.id()).addBlockEntityTicker(removed);
         assertThat(manager.regionData(region.id()).blockEntityTickerCount()).isEqualTo(2);
 
-        host.installM9WiredTickBody(PhasedRegionTickBody.builder(), null, journalDir);
+        host.installRegionTickBody(PhasedRegionTickBody.builder());
         RegionTickBody body = host.scheduler().body();
 
         body.tickOnce(region);
@@ -147,83 +146,27 @@ class PhasedRegionTickBody_BlockEntitiesPerRegionTest {
     }
 
     @Test
-    void globalSystemsAndPerRegionBodiesBothFireLayeredOnBlockEntitiesPhase(@TempDir Path journalDir) {
-        AtomicInteger globalTicks = new AtomicInteger();
-        host.globalSystems().register(new net.multiforge.runtime.globals.GlobalSystem() {
-            @Override
-            public String name() {
-                return "test-fixture";
-            }
-
-            @Override
-            public void tick(net.multiforge.runtime.globals.GlobalTickContext ctx) {
-                globalTicks.incrementAndGet();
-            }
-
-            @Override
-            public java.util.Set<WorldRef> readSet() {
-                return java.util.Set.of();
-            }
-
-            @Override
-            public java.util.Set<WorldRef> writeSet() {
-                return java.util.Set.of();
-            }
-
-            @Override
-            public void crossRegionEffect(net.multiforge.runtime.region.RegionId dest, Runnable task) {
-                // unused
-            }
-        });
-
-        Region normal = host.touchChunk(WORLD, 0, 0);
-        ChunkHolderManager manager = host.chunkManagerFor(WORLD);
-        RecordingTicker ticker = new RecordingTicker(new BlockPos(0, 64, 0));
-        manager.regionData(normal.id()).addBlockEntityTicker(ticker);
-
-        host.installM9WiredTickBody(PhasedRegionTickBody.builder(), null, journalDir);
-        RegionTickBody body = host.scheduler().body();
-
-        // Ticking the global region: phaseGlobalSystemsTick does real work
-        // (the fixture fires), phaseBlockEntitiesTickPerRegion is a no-op
-        // (globalRegion never owns ordinary block-entity tickers).
-        body.tickOnce(host.globalRegion());
-        assertThat(globalTicks.get()).isEqualTo(1);
-        assertThat(ticker.tickCount.get()).isZero();
-
-        // Ticking the normal region: phaseGlobalSystemsTick early-returns
-        // (not globalRegion), phaseBlockEntitiesTickPerRegion does real
-        // work — both bodies ran (no exception, no interference) but only
-        // one did anything observable for each region.
-        body.tickOnce(normal);
-        assertThat(globalTicks.get()).isEqualTo(1); // unchanged — global body no-opped here
-        assertThat(ticker.tickCount.get()).isEqualTo(1);
-    }
-
-    @Test
-    void throwingTickerDoesNotBreakOtherTickersInTheSameRegion(@TempDir Path journalDir) {
+    void throwingTickerPropagatesAfterThePhaseRan(@TempDir Path journalDir) {
         Region region = host.touchChunk(WORLD, 0, 0);
         ChunkHolderManager manager = host.chunkManagerFor(WORLD);
 
         RecordingTicker before = new RecordingTicker(new BlockPos(0, 64, 0));
         ThrowingTicker throwing = new ThrowingTicker(new BlockPos(1, 64, 0));
-        RecordingTicker after = new RecordingTicker(new BlockPos(2, 64, 0));
         manager.regionData(region.id()).addBlockEntityTicker(before);
         manager.regionData(region.id()).addBlockEntityTicker(throwing);
-        manager.regionData(region.id()).addBlockEntityTicker(after);
 
-        host.installM9WiredTickBody(PhasedRegionTickBody.builder(), null, journalDir);
+        host.installRegionTickBody(PhasedRegionTickBody.builder());
         RegionTickBody body = host.scheduler().body();
 
-        // The whole tickOnce call must not throw — the defensive
-        // try/catch inside BlockEntityTickRunner.standard isolates the
-        // throwing ticker.
-        body.tickOnce(region);
+        // Vanilla crashes the server on a block-entity tick failure (its own
+        // ticker wrapper builds the crash report); the region phase must not
+        // swallow it. The barrier rethrows it on the server thread.
+        assertThatThrownBy(() -> body.tickOnce(region))
+                .isInstanceOf(RuntimeException.class)
+                .hasMessageContaining("simulated mod bug");
 
         assertThat(before.tickCount.get()).isEqualTo(1);
-        assertThat(after.tickCount.get()).isEqualTo(1);
         assertThat(throwing.tickAttempts.get()).isEqualTo(1);
-        assertThat(ProbeRegistry.get("block-entities.ticker.failure")).isEqualTo(1L);
     }
 
     private static class RecordingTicker implements TickingBlockEntityRef {

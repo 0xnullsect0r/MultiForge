@@ -1,14 +1,5 @@
 --- a/net/minecraft/client/resources/model/WeightedBakedModel.java
 +++ b/net/minecraft/client/resources/model/WeightedBakedModel.java
-@@ -17,7 +_,7 @@
- import net.neoforged.api.distmarker.OnlyIn;
- 
- @OnlyIn(Dist.CLIENT)
--public class WeightedBakedModel implements BakedModel {
-+public class WeightedBakedModel implements BakedModel, net.neoforged.neoforge.client.model.IDynamicBakedModel {
-     private final int totalWeight;
-     private final List<WeightedEntry.Wrapper<BakedModel>> list;
-     private final BakedModel wrapped;
 @@ -29,9 +_,10 @@
      }
  
@@ -34,7 +25,7 @@
      public boolean isGui3d() {
          return this.wrapped.isGui3d();
      }
-@@ -61,8 +_,25 @@
+@@ -61,8 +_,30 @@
      }
  
      @Override
@@ -53,10 +44,15 @@
 +    }
 +
 +    @Override // FORGE: Get render types based on the active weighted model
-+    public net.neoforged.neoforge.client.ChunkRenderTypeSet getRenderTypes(@org.jetbrains.annotations.NotNull BlockState state, @org.jetbrains.annotations.NotNull RandomSource rand, @org.jetbrains.annotations.NotNull net.neoforged.neoforge.client.model.data.ModelData data) {
++    public net.neoforged.neoforge.client.ChunkRenderTypeSet getRenderTypes(BlockState state, RandomSource rand, net.neoforged.neoforge.client.model.data.ModelData data) {
 +        return WeightedRandom.getWeightedItem(this.list, Math.abs((int)rand.nextLong()) % this.totalWeight)
 +                  .map((p_235065_) -> p_235065_.data().getRenderTypes(state, rand, data))
 +                  .orElse(net.neoforged.neoforge.client.ChunkRenderTypeSet.none());
++    }
++
++    @Override
++    public net.neoforged.neoforge.client.model.data.ModelData getModelData(net.minecraft.world.level.BlockAndTintGetter level, net.minecraft.core.BlockPos pos, BlockState state, net.neoforged.neoforge.client.model.data.ModelData modelData) {
++        return this.wrapped.getModelData(level, pos, state, modelData);
      }
  
      @Override

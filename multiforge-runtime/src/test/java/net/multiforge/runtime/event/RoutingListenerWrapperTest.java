@@ -15,12 +15,10 @@ package net.multiforge.runtime.event;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-import java.util.Optional;
 import java.util.concurrent.atomic.AtomicInteger;
 import net.multiforge.api.event.DispatchDomainKind;
 import net.multiforge.api.event.OrderingContract;
 import net.multiforge.runtime.event.AnnotationScanner.MetadataEntry;
-import net.multiforge.runtime.region.RegionId;
 import net.neoforged.bus.api.BusBuilder;
 import net.neoforged.bus.api.Event;
 import net.neoforged.bus.api.IEventBus;
@@ -98,7 +96,7 @@ class RoutingListenerWrapperTest {
 
     private static final class InlineDispatchExecutor implements DispatchExecutor {
         @Override
-        public void enqueueRegion(RegionId destination, Runnable task) {
+        public void runSerial(Runnable task) {
             task.run();
         }
 
@@ -110,11 +108,6 @@ class RoutingListenerWrapperTest {
         @Override
         public void enqueueAsync(Runnable task) {
             task.run();
-        }
-
-        @Override
-        public Optional<RegionId> resolveEventLocation(Object event) {
-            return Optional.empty();
         }
     }
 }

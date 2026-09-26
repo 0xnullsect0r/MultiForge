@@ -92,7 +92,7 @@ public class MegaModelTest {
             event.accept(TEST_BLOCK_ITEM);
     }
 
-    @EventBusSubscriber(value = Dist.CLIENT, modid = MOD_ID, bus = EventBusSubscriber.Bus.MOD)
+    @EventBusSubscriber(value = Dist.CLIENT, modid = MOD_ID)
     public static class ClientEvents {
         @SubscribeEvent
         public static void onModelBakingCompleted(ModelEvent.ModifyBakingResult event) {
@@ -133,11 +133,11 @@ public class MegaModelTest {
 
             @Override
             public ModelData getModelData() {
-                return ModelData.builder().with(TestData.PROPERTY, new TestData(new Transformation(
+                return ModelData.of(TestData.PROPERTY, new TestData(new Transformation(
                         new Vector3f(0, y * 0.2f, 0),
                         new Quaternionf(1f, 1f, 1f, 1f),
                         Transformation.identity().getScale(),
-                        new Quaternionf(1f, 1f, 1f, 1f)))).build();
+                        new Quaternionf(1f, 1f, 1f, 1f))));
             }
         }
     }

@@ -55,11 +55,42 @@ import net.multiforge.api.event.OrderingContract;
 public final class AnnotationScanner {
 
     /** The dispatch domain and ordering contract resolved for one listener method. */
-    public record MetadataEntry(DispatchDomainKind domain, OrderingContract ordering) {
+    /**
+     * @param explicit whether {@code domain} comes from a {@code @DispatchDomain}
+     *     annotation; if not, it is the event-type default (or {@code
+     *     LEGACY_SERIAL}) and the owning mod's {@link ModSafety} may override it
+     */
+    public record MetadataEntry(DispatchDomainKind domain, OrderingContract ordering, boolean explicit) {
         public MetadataEntry {
             Objects.requireNonNull(domain, "domain");
             Objects.requireNonNull(ordering, "ordering");
         }
+
+        public MetadataEntry(DispatchDomainKind domain, OrderingContract ordering) {
+            this(domain, ordering, true);
+        }
+
+        /** The domain to dispatch to for a listener of a mod with {@code safety}. */
+        public DispatchDomainKind effectiveDomain(ModSafety safety) {
+            if (explicit) return domain;
+            return switch (safety) {
+                case LEGACY -> DispatchDomainKind.LEGACY_SERIAL;
+                case STRICT_SAFE -> DispatchDomainKind.REGION;
+                case HYBRID_SAFE -> domain;
+            };
+        }
+    }
+
+    /**
+     * Metadata for a listener with no method to read annotations from (a
+     * lambda or method reference registered with {@code addListener}): the
+     * event-type default, else {@code LEGACY_SERIAL}.
+     */
+    public static MetadataEntry forUnannotated(Class<?> eventType) {
+        return new MetadataEntry(
+                EventTypeDomainMap.lookup(eventType).orElse(DispatchDomainKind.LEGACY_SERIAL),
+                OrderingContract.PER_REGION,
+                false);
     }
 
     private static final ConcurrentMap<Method, MetadataEntry> CACHE = new ConcurrentHashMap<>();
@@ -87,6 +118,7 @@ public final class AnnotationScanner {
             domainAnn = method.getDeclaringClass().getAnnotation(DispatchDomain.class);
         }
         DispatchDomainKind domain;
+        boolean explicit = domainAnn != null;
         if (domainAnn != null) {
             domain = domainAnn.value();
         } else {
@@ -101,7 +133,7 @@ public final class AnnotationScanner {
         }
         OrderingContract ordering = orderingAnn != null ? orderingAnn.value() : OrderingContract.PER_REGION;
 
-        return new MetadataEntry(domain, ordering);
+        return new MetadataEntry(domain, ordering, explicit);
     }
 
     /**

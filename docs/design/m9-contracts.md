@@ -1,5 +1,11 @@
 # M9 Interface Contracts
 
+> **Historical — superseded.** The M9 chunk-system fork this document describes was
+> retired: Vanilla's chunk system loads, ticks, lights and saves every chunk, and MultiForge
+> only tracks which region owns each loaded chunk. See `docs/design/barrier-tick-model.md`
+> (*Chunks*, *What this replaced*). Kept for the record; the classes and patches named here
+> no longer exist.
+
 **Status:** frozen (Phase 0 task 0.1). Phase 1+ subagents implement against these
 signatures; changes require a Phase 0 amendment.
 

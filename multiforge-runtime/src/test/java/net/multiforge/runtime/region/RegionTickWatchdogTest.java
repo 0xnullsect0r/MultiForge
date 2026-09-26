@@ -119,6 +119,35 @@ class RegionTickWatchdogTest {
     }
 
     @Test
+    void designedWaitsDoNotCountTowardAnOverrun() throws Exception {
+        Region region = new ThreadedRegionizer(WORLD, 0).addChunk(new ChunkPos(0, 0));
+        RegionTickWatchdog.setWarnMsForTesting(100);
+        RegionTickWatchdog.setModeForTesting(RegionTickWatchdog.Mode.STRICT);
+        RegionTickWatchdog.enterTick(region);
+        RegionTickWatchdog.beginWait();
+        RegionTickWatchdog.beginWait(); // nested: counted once
+        Thread.sleep(250);
+        RegionTickWatchdog.endWait("test");
+        RegionTickWatchdog.endWait("test");
+        RegionTickWatchdog.exitTick(region); // 250ms elapsed, all of it waiting: no overrun
+        assertThat(ProbeRegistry.get("region-tick.overrun")).isZero();
+        assertThat(ProbeRegistry.get("region-tick.wait-ms.test")).isGreaterThanOrEqualTo(250);
+
+        // The next tick starts with no wait credit, and busy time still counts.
+        RegionTickWatchdog.enterTick(region);
+        Thread.sleep(150);
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> RegionTickWatchdog.exitTick(region))
+                .isInstanceOf(RegionTickWatchdog.RegionTickOverrunException.class);
+    }
+
+    @Test
+    void waitsOutsideARegionTickAreIgnored() {
+        RegionTickWatchdog.beginWait();
+        RegionTickWatchdog.endWait("outside");
+        assertThat(ProbeRegistry.get("region-tick.wait-ms.outside")).isZero();
+    }
+
+    @Test
     void modeParserAcceptsCommonForms() {
         assertThat(RegionTickWatchdog.parseMode("on")).isEqualTo(RegionTickWatchdog.Mode.STRICT);
         assertThat(RegionTickWatchdog.parseMode("STRICT")).isEqualTo(RegionTickWatchdog.Mode.STRICT);

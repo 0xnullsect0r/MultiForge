@@ -28,7 +28,7 @@ import org.objectweb.asm.tree.MethodNode;
  *
  * <p>WARN: mod calls to {@code DistanceManager.addTicket} where the receiver resolves to {@code
  * net.minecraft.server.level.DistanceManager} directly, rather than through {@code
- * MultiForgeDistanceManager}.
+ * ServerChunkCache}'s ticket API on the server thread.
  */
 public final class R07RawDistanceManagerTicket extends AbstractTreeRule {
 
@@ -47,7 +47,7 @@ public final class R07RawDistanceManagerTicket extends AbstractTreeRule {
 
     @Override
     public String description() {
-        return "Direct DistanceManager.addTicket call bypassing MultiForgeDistanceManager.";
+        return "Direct DistanceManager.addTicket call, bypassing ServerChunkCache's ticket API.";
     }
 
     @Override
@@ -79,8 +79,8 @@ public final class R07RawDistanceManagerTicket extends AbstractTreeRule {
                         methodKey,
                         BytecodeUtil.lineOf(mn, call),
                         "DistanceManager.addTicket" + call.desc + " called directly from " + mn.name
-                                + " — writes to the Vanilla ticket/tracker state MultiForge keeps per-region;"
-                                + " use ServerChunkCache.addRegionTicket instead.",
+                                + " — use ServerChunkCache.addRegionTicket, from the server thread (or"
+                                + " ServerDomains.global() when this can run in a region tick).",
                         Fingerprint.compute(id(), classFqn, methodKey, mn, call)));
             }
         }
