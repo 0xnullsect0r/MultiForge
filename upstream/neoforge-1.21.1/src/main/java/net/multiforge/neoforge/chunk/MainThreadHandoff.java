@@ -28,8 +28,10 @@ import net.multiforge.runtime.diagnostics.ProbeRegistry;
  * server thread's executor and joins on it. In the barrier tick model the
  * server thread is itself waiting for the regions, so without help that is
  * a deadlock. The patched {@code getChunk} brackets the join with {@link
- * #enter()}/{@link #exit()}; the barrier's pump ({@link #pumpFor}) runs
- * main-thread chunk tasks only while at least one worker is waiting, so
+ * #enter()}/{@link #exit()}, and every task a region worker hands the
+ * executor is counted ({@link #track}); the barrier's pump ({@link #pumpFor})
+ * runs main-thread chunk tasks only while a worker is waiting or such a task
+ * is pending, so
  * in the common case (no region touching an unloaded chunk) the server
  * thread does nothing but wait and no chunk-system work overlaps region
  * work.
@@ -41,6 +43,7 @@ import net.multiforge.runtime.diagnostics.ProbeRegistry;
  */
 public final class MainThreadHandoff {
     private static final AtomicInteger WAITING = new AtomicInteger();
+    private static final AtomicInteger REGION_TASKS = new AtomicInteger();
 
     private MainThreadHandoff() {}
 
@@ -56,6 +59,43 @@ public final class MainThreadHandoff {
     public static void exit() {
         net.multiforge.runtime.region.RegionTickWatchdog.endWait("main-thread-chunk-load");
         WAITING.decrementAndGet();
+    }
+
+    /**
+     * Wrap a task handed to a level's main-thread chunk executor. A task from a
+     * region worker is counted until it has run, and the barrier's pump runs
+     * the executor's tasks while any is pending: the worker may be waiting for
+     * it through code that never calls {@link #enter()} (a mod that replaces
+     * {@code ServerChunkCache.getChunk}, as Lithium does, or joins a future of
+     * its own), and without the pump that wait would never end.
+     */
+    public static Runnable track(Runnable task) {
+        if (net.multiforge.runtime.ownership.OwnerToken.current().domain() != net.multiforge.runtime.ownership.Domain.REGION) {
+            return task;
+        }
+        REGION_TASKS.incrementAndGet();
+        return new RegionTask(task);
+    }
+
+    private static final class RegionTask implements Runnable {
+        private final Runnable task;
+        private boolean done;
+
+        RegionTask(Runnable task) {
+            this.task = task;
+        }
+
+        @Override
+        public void run() {
+            try {
+                task.run();
+            } finally {
+                if (!done) {
+                    done = true;
+                    REGION_TASKS.decrementAndGet();
+                }
+            }
+        }
     }
 
     /** @return how many region workers are currently blocked on the server thread. */
@@ -74,7 +114,7 @@ public final class MainThreadHandoff {
         return () -> {
             // Event listeners region workers handed to the serial lane.
             boolean ran = net.multiforge.runtime.event.SerialLane.drain();
-            if (WAITING.get() == 0) return ran;
+            if (WAITING.get() == 0 && REGION_TASKS.get() == 0) return ran;
             for (ServerLevel level : server.getAllLevels()) {
                 ran |= level.getChunkSource().pollTask();
             }

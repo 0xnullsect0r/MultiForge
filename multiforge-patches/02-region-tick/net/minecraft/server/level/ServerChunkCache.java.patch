@@ -163,7 +163,20 @@
      private void getFullChunk(long p_8371_, Consumer<LevelChunk> p_8372_) {
          ChunkHolder chunkholder = this.getVisibleChunkIfPresent(p_8371_);
          if (chunkholder != null) {
-@@ -569,4 +712,18 @@ public class ServerChunkCache extends ChunkSource implements net.neoforged.neofo
+@@ -535,7 +678,11 @@ public class ServerChunkCache extends ChunkSource implements net.neoforged.neofo
+ 
+         @Override
+         protected Runnable wrapRunnable(Runnable p_8506_) {
+-            return p_8506_;
++            // MultiForge (multiforge-patches/02-region-tick/): a task a region worker
++            // hands this executor is tracked, so the tick barrier runs it even when the
++            // worker waits for it through code other than getChunk (a mod replacing
++            // getChunk, as Lithium does, or calling join on its own).
++            return net.multiforge.neoforge.chunk.MainThreadHandoff.track(p_8506_);
+         }
+ 
+         @Override
+@@ -569,4 +716,18 @@ public class ServerChunkCache extends ChunkSource implements net.neoforged.neofo
              }
          }
      }
