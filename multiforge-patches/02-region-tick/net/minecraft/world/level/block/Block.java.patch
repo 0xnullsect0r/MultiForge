@@ -1,0 +1,51 @@
+--- a/net/minecraft/world/level/block/Block.java
++++ b/net/minecraft/world/level/block/Block.java
+@@ -338,8 +338,9 @@ public class Block extends BlockBehaviour implements ItemLike, net.neoforged.neo
+             ItemEntity itementity = p_152442_.get();
+             itementity.setDefaultPickUpDelay();
+             // Neo: Add drops to the captured list if capturing is enabled.
+-            if (capturedDrops != null) {
+-                capturedDrops.add(itementity);
++            List<ItemEntity> captured = capturedDrops.get();
++            if (captured != null) {
++                captured.add(itementity);
+             }
+             else {
+                 p_152441_.addFreshEntity(itementity);
+@@ -507,27 +508,25 @@ public class Block extends BlockBehaviour implements ItemLike, net.neoforged.neo
+      * Neo: Short-lived holder of dropped item entities. Used mainly for Neo hooks and event logic.
+      * <p>
+      * When not null, records all item entities from {@link #popResource(Level, Supplier, ItemStack)} instead of adding them to the world.
++     * <p>
++     * MultiForge: one per thread. Region workers break blocks (leaf decay, crops, player-free block
++     * updates) in parallel; a single static let one region's stop clear another's capture mid-drop.
+      */
+-    @Nullable
+-    private static List<ItemEntity> capturedDrops = null;
++    private static final ThreadLocal<List<ItemEntity>> capturedDrops = new ThreadLocal<>();
+ 
+     /**
+-     * Initializes {@link #capturedDrops}, starting the drop capture process.
+-     * <p>
+-     * Must only be called on the server thread.
++     * Initializes {@link #capturedDrops}, starting the drop capture process on the calling thread.
+      */
+     private static void beginCapturingDrops() {
+-        capturedDrops = new java.util.ArrayList<>();
++        capturedDrops.set(new java.util.ArrayList<>());
+     }
+ 
+     /**
+-     * Ends the drop capture process by setting {@link #capturedDrops} to null and returning the old list.
+-     * <p>
+-     * Must only be called on the server thread.
++     * Ends the calling thread's drop capture process and returns the captured list.
+      */
+     private static List<ItemEntity> stopCapturingDrops() {
+-        List<ItemEntity> drops = capturedDrops;
+-        capturedDrops = null;
++        List<ItemEntity> drops = capturedDrops.get();
++        capturedDrops.remove();
+         return drops;
+     }
+ 
