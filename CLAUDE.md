@@ -40,6 +40,11 @@ License v3.0. Full design in `docs/blueprint.md`.
 6. **NeoForge upstream drift is a maintenance cost.** Keep the patch set
    thin and grouped into `01-ownership/` .. `09-events/` so rebasing onto
    newer NeoForge tags is scoped per group.
+7. **Patches keep Vanilla's members for mixins.** No new lambdas in a
+   patched Vanilla class (use a nested `MfLambdas` class or a method
+   reference), no Vanilla body moved out of its method, no change to what a
+   Vanilla lambda captures. `:neoforge:checkMixinTargets` enforces it; see
+   `multiforge-patches/README.md`.
 
 ## Region-tick conventions
 

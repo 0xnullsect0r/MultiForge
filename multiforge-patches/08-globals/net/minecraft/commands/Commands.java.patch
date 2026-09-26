@@ -10,7 +10,7 @@
 +        final CommandSourceStack mf$source = p_230958_;
 +        final String mf$command = p_230959_;
 +        if (net.multiforge.neoforge.OwnershipGuard.deferToServerThread(
-+                "Commands.performPrefixedCommand", () -> this.performPrefixedCommand(mf$source, mf$command))) {
++                "Commands.performPrefixedCommand", Commands.MfLambdas.performPrefixedCommand(this, mf$source, mf$command))) {
 +            return;
 +        }
          p_230959_ = p_230959_.startsWith("/") ? p_230959_.substring(1) : p_230959_;
@@ -22,9 +22,32 @@
 +        final ParseResults<CommandSourceStack> mf$parse = p_242844_;
 +        final String mf$command = p_242841_;
 +        if (net.multiforge.neoforge.OwnershipGuard.deferToServerThread(
-+                "Commands.performCommand", () -> this.performCommand(mf$parse, mf$command))) {
++                "Commands.performCommand", Commands.MfLambdas.performCommand(this, mf$parse, mf$command))) {
 +            return;
 +        }
          CommandSourceStack commandsourcestack = p_242844_.getContext().getSource();
          net.neoforged.neoforge.event.CommandEvent event = new net.neoforged.neoforge.event.CommandEvent(p_242844_);
          if (net.neoforged.neoforge.common.NeoForge.EVENT_BUS.post(event).isCanceled()) {
+@@ -530,4 +546,22 @@ public class Commands {
+     public interface ParseFunction {
+         void parse(StringReader p_82161_) throws CommandSyntaxException;
+     }
++
++    /**
++     * MultiForge: the lambdas MultiForge's patches need, kept out of Commands itself.
++     * javac numbers a class's synthetic lambda methods in source order, so a lambda
++     * added to Commands would renumber Vanilla's, and mixins that target those by name
++     * would fail to apply.
++     */
++    static final class MfLambdas {
++        private MfLambdas() {}
++
++        static Runnable performPrefixedCommand(Commands commands, CommandSourceStack source, String command) {
++            return () -> commands.performPrefixedCommand(source, command);
++        }
++
++        static Runnable performCommand(Commands commands, ParseResults<CommandSourceStack> parse, String command) {
++            return () -> commands.performCommand(parse, command);
++        }
++    }
+ }

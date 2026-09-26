@@ -8,9 +8,28 @@
 +        // worker (e.g. an advancement reward) runs on the server thread after the tick
 +        // barrier, like a command (see Commands.performPrefixedCommand).
 +        if (net.multiforge.neoforge.OwnershipGuard.deferToServerThread(
-+                "ServerFunctionManager.execute", () -> this.execute(p_305881_, p_136114_))) {
++                "ServerFunctionManager.execute", ServerFunctionManager.MfLambdas.execute(this, p_305881_, p_136114_))) {
 +            return;
 +        }
          ProfilerFiller profilerfiller = this.server.getProfiler();
          profilerfiller.push(() -> "function " + p_305881_.id());
  
+@@ -104,4 +111,18 @@ public class ServerFunctionManager {
+     public Iterable<ResourceLocation> getTagNames() {
+         return this.library.getAvailableTags();
+     }
++
++    /**
++     * MultiForge: the lambdas MultiForge's patches need, kept out of
++     * ServerFunctionManager itself. javac numbers a class's synthetic lambda
++     * methods in source order, so a lambda added here would renumber Vanilla's,
++     * and mixins that target those by name would fail to apply.
++     */
++    static final class MfLambdas {
++        private MfLambdas() {}
++
++        static Runnable execute(ServerFunctionManager manager, CommandFunction<CommandSourceStack> function, CommandSourceStack source) {
++            return () -> manager.execute(function, source);
++        }
++    }
+ }

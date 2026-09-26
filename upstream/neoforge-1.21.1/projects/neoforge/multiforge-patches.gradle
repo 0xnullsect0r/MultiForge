@@ -220,3 +220,62 @@ tasks.named('applyMultiforgePatches').configure {
         dependsOn(applyMultiforgePatches)
     }
 }
+
+// Mixin-target parity. Mods' mixins name the Vanilla members they inject into,
+// including synthetic lambda methods (lambda$tick$2), which javac numbers in
+// source order. A MultiForge patch that adds a lambda to a Vanilla class, moves
+// a Vanilla body into another method, or changes what a Vanilla lambda captures
+// renumbers or renames those members, and every mixin aimed at them fails to
+// apply (Lithium and Ad Astra both did). This compiles the pristine copy of each
+// patched file against the fork and fails if any method it declares, lambdas
+// included, is missing from MultiForge's class or has a different descriptor.
+tasks.register('checkMixinTargets') {
+    group = 'verification'
+    description = 'Checks that MultiForge patches keep every method (and lambda) of the Vanilla classes they patch.'
+    dependsOn('compileJava')
+    def classesDir = sourceSets.main.java.destinationDirectory
+    def compileClasspath = sourceSets.main.compileClasspath
+    def outDir = project.layout.buildDirectory.dir('multiforge-pristine-classes').get().asFile
+    doLast {
+        def sources = []
+        pristineRoot.eachFileRecurse(groovy.io.FileType.FILES) { if (it.name.endsWith('.java')) sources << it }
+        if (sources.isEmpty()) throw new GradleException('MultiForge: no pristine sources — run :neoforge:applyMultiforgePatches first')
+        project.delete(outDir)
+        outDir.mkdirs()
+        def cp = ([classesDir.get().asFile] + compileClasspath.files).collect { it.absolutePath }.join(File.pathSeparator)
+        def javac = javax.tools.ToolProvider.getSystemJavaCompiler()
+        def args = ['-proc:none', '-nowarn', '-g:none', '--release', '21', '-encoding', 'UTF-8', '-cp', cp, '-d', outDir.absolutePath] +
+                sources.collect { it.absolutePath }
+        def err = new ByteArrayOutputStream()
+        if (javac.run(null, null, err, args as String[]) != 0) {
+            throw new GradleException("MultiForge: pristine sources did not compile:\n${err.toString().readLines().take(40).join('\n')}")
+        }
+        def members = { File f ->
+            def out = [] as Set
+            new org.objectweb.asm.ClassReader(f.bytes).accept(new org.objectweb.asm.ClassVisitor(org.objectweb.asm.Opcodes.ASM9) {
+                @Override
+                org.objectweb.asm.MethodVisitor visitMethod(int access, String name, String desc, String sig, String[] ex) {
+                    out << "${name}${desc}"
+                    return null
+                }
+            }, org.objectweb.asm.ClassReader.SKIP_CODE)
+            out
+        }
+        def problems = []
+        int checked = 0
+        outDir.eachFileRecurse(groovy.io.FileType.FILES) { pristineClass ->
+            if (!pristineClass.name.endsWith('.class')) return
+            def rel = outDir.toPath().relativize(pristineClass.toPath()).toString()
+            def ours = new File(classesDir.get().asFile, rel)
+            checked++
+            if (!ours.exists()) { problems << "${rel}: class missing"; return }
+            def lost = members(pristineClass) - members(ours)
+            lost.sort().each { problems << "${rel}: ${it}" }
+        }
+        if (!problems.isEmpty()) {
+            throw new GradleException("MultiForge: ${problems.size()} Vanilla member(s) missing or changed in patched classes " +
+                    "(mixins targeting them will fail to apply):\n  " + problems.join('\n  '))
+        }
+        logger.lifecycle("MultiForge: mixin targets intact in ${checked} patched class(es).")
+    }
+}

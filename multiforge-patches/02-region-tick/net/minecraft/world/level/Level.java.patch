@@ -19,10 +19,19 @@
 +        // MultiForge (multiforge-patches/02-region-tick/): one update chain per
 +        // thread — region workers update neighbours concurrently.
 +        this.neighborUpdater = new net.multiforge.neoforge.world.PerThreadNeighborUpdater(
-+                () -> new CollectingNeighborUpdater(this, p_270466_));
++                Level.MfLambdas.collectingNeighborUpdater(this, p_270466_));
          this.registryAccess = p_270200_;
          this.damageSources = new DamageSources(p_270200_);
      }
+@@ -229,7 +234,7 @@ public abstract class Level extends net.neoforged.neoforge.attachment.Attachment
+                     this,
+                     multiforge$pos,
+                     multiforge$state,
+-                    () -> this.setBlock(multiforge$pos, multiforge$state, multiforge$flags, multiforge$recursionLeft));
++                    Level.MfLambdas.setBlock(this, multiforge$pos, multiforge$state, multiforge$flags, multiforge$recursionLeft));
+         }
+ 
+         if (this.isOutsideBuildHeight(p_46605_)) {
 @@ -538,34 +543,85 @@ public abstract class Level extends net.neoforged.neoforge.attachment.Attachment
      }
  
@@ -161,3 +170,26 @@
          return this.profiler.get();
      }
  
+@@ -1283,4 +1349,22 @@ public abstract class Level extends net.neoforged.neoforge.attachment.Attachment
+         setDayTimeFraction(dayTimeStep - result);
+         return result;
+     }
++
++    /**
++     * MultiForge: the lambdas MultiForge's patches need, kept out of Level itself.
++     * javac numbers a class's synthetic lambda methods in source order, so a lambda
++     * added to Level would renumber Vanilla's (lambda$getEntities$1 and so on),
++     * and mixins that target those by name would fail to apply.
++     */
++    static final class MfLambdas {
++        private MfLambdas() {}
++
++        static java.util.function.Supplier<net.minecraft.world.level.redstone.NeighborUpdater> collectingNeighborUpdater(Level level, int maxChainedNeighborUpdates) {
++            return () -> new CollectingNeighborUpdater(level, maxChainedNeighborUpdates);
++        }
++
++        static java.util.function.BooleanSupplier setBlock(Level level, BlockPos pos, BlockState state, int flags, int recursionLeft) {
++            return () -> level.setBlock(pos, state, flags, recursionLeft);
++        }
++    }
+ }

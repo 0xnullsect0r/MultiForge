@@ -65,6 +65,28 @@ scripts/mf-patches.py add net/minecraft/...  # start tracking a file no patch to
 
 In the PR description, name the concurrency contract the patch defends.
 
+### Keep Vanilla's members where mixins expect them
+
+Mods' mixins inject into Vanilla methods by name, including the synthetic
+methods javac generates for lambdas (`lambda$tick$2`), which are numbered in
+source order across the whole class. So in a patched class:
+
+- **Add no lambdas.** A new lambda renumbers every Vanilla lambda after it.
+  Put the lambdas a patch needs in a nested `MfLambdas` class at the end of
+  the file (`ServerLevel.MfLambdas.addEntity(this, entity)`), or use a method
+  reference to a named method, which generates no synthetic method.
+- **Leave Vanilla bodies in their methods.** Wrap a body in place (a
+  `synchronized` block, an early return) rather than moving it to a new
+  method; a moved body takes its lambdas with it, under a new name.
+- **Don't change what a Vanilla lambda captures**; that changes its
+  descriptor.
+
+`./gradlew :neoforge:checkMixinTargets` (in `upstream/neoforge-1.21.1`, run by
+CI) compiles the pristine copy of every patched file and fails if any method it
+declares, lambdas included, is missing from MultiForge's class or has a
+different descriptor. Lithium and Ad Astra (ATM10) both failed to load before
+this rule existed.
+
 ## Upstream drift
 
 Moving to a newer NeoForge is described in `docs/compatibility.md` §5:

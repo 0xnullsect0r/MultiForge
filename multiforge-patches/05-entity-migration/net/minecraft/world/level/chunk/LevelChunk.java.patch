@@ -1,6 +1,6 @@
 --- a/net/minecraft/world/level/chunk/LevelChunk.java
 +++ b/net/minecraft/world/level/chunk/LevelChunk.java
-@@ -355,6 +355,14 @@
+@@ -355,6 +355,19 @@ public class LevelChunk extends ChunkAccess implements net.neoforged.neoforge.at
      }
  
      public void addAndRegisterBlockEntity(BlockEntity p_156391_) {
@@ -14,9 +14,28 @@
 +                    this.level,
 +                    this.chunkPos.x,
 +                    this.chunkPos.z,
-+                    () -> this.addAndRegisterBlockEntity(p_156391_));
++                    LevelChunk.MfLambdas.addAndRegisterBlockEntity(this, p_156391_));
 +            return;
 +        }
          this.setBlockEntity(p_156391_);
          if (this.isInLevel()) {
              if (this.level instanceof ServerLevel serverlevel) {
+@@ -808,4 +821,18 @@ public class LevelChunk extends ChunkAccess implements net.neoforged.neoforge.at
+             return this.ticker + " <wrapped>";
+         }
+     }
++
++    /**
++     * MultiForge: the lambdas MultiForge's patches need, kept out of LevelChunk itself.
++     * javac numbers a class's synthetic lambda methods in source order, so a lambda
++     * added to LevelChunk would renumber Vanilla's, and mixins that target those by name
++     * would fail to apply.
++     */
++    static final class MfLambdas {
++        private MfLambdas() {}
++
++        static Runnable addAndRegisterBlockEntity(LevelChunk chunk, BlockEntity blockEntity) {
++            return () -> chunk.addAndRegisterBlockEntity(blockEntity);
++        }
++    }
+ }

@@ -1,6 +1,6 @@
 --- a/net/minecraft/world/level/entity/PersistentEntitySectionManager.java
 +++ b/net/minecraft/world/level/entity/PersistentEntitySectionManager.java
-@@ -41,6 +41,15 @@ public class PersistentEntitySectionManager<T extends EntityAccess> implements A
+@@ -41,6 +41,17 @@ public class PersistentEntitySectionManager<T extends EntityAccess> implements A
      private final Long2ObjectMap<PersistentEntitySectionManager.ChunkLoadStatus> chunkLoadStatuses = new Long2ObjectOpenHashMap<>();
      private final LongSet chunksToUnload = new LongOpenHashSet();
      private final Queue<ChunkEntities<T>> loadingInbox = Queues.newConcurrentLinkedQueue();
@@ -13,10 +13,12 @@
 +    // after it is released, so no foreign code — which could wait on the server
 +    // thread — ever runs while it is held on a region worker.
 +    final Object mfLock = new Object();
++    // The transition list of the updateChunkStatus call in progress; guarded by mfLock.
++    private List<Runnable> mfTransitions;
  
      public PersistentEntitySectionManager(Class<T> p_157503_, LevelCallback<T> p_157504_, EntityPersistentStorage<T> p_157505_) {
          this.visibleEntityStorage = new EntityLookup<>();
-@@ -49,7 +58,8 @@ public class PersistentEntitySectionManager<T extends EntityAccess> implements A
+@@ -49,7 +60,8 @@ public class PersistentEntitySectionManager<T extends EntityAccess> implements A
          this.chunkLoadStatuses.defaultReturnValue(PersistentEntitySectionManager.ChunkLoadStatus.FRESH);
          this.callbacks = p_157504_;
          this.permanentStorage = p_157505_;
@@ -26,7 +28,7 @@
      }
  
      void removeSectionIfEmpty(long p_157510_, EntitySection<T> p_157511_) {
-@@ -59,7 +69,11 @@ public class PersistentEntitySectionManager<T extends EntityAccess> implements A
+@@ -59,7 +71,11 @@ public class PersistentEntitySectionManager<T extends EntityAccess> implements A
      }
  
      private boolean addEntityUuid(T p_157558_) {
@@ -39,7 +41,7 @@
              LOGGER.warn("UUID of added entity already exists: {}", p_157558_);
              return false;
          } else {
-@@ -85,14 +99,19 @@ public class PersistentEntitySectionManager<T extends EntityAccess> implements A
+@@ -85,14 +101,19 @@ public class PersistentEntitySectionManager<T extends EntityAccess> implements A
              return false;
          } else {
              long i = SectionPos.asLong(p_157539_.blockPosition());
@@ -62,7 +64,7 @@
              if (visibility.isAccessible()) {
                  this.startTracking(p_157539_);
              }
-@@ -132,13 +151,17 @@ public class PersistentEntitySectionManager<T extends EntityAccess> implements A
+@@ -132,13 +153,17 @@ public class PersistentEntitySectionManager<T extends EntityAccess> implements A
      }
  
      void startTracking(T p_157576_) {
@@ -82,7 +84,7 @@
      }
  
      public void updateChunkStatus(ChunkPos p_287590_, FullChunkStatus p_287623_) {
-@@ -148,35 +171,42 @@ public class PersistentEntitySectionManager<T extends EntityAccess> implements A
+@@ -148,35 +173,47 @@ public class PersistentEntitySectionManager<T extends EntityAccess> implements A
  
      public void updateChunkStatus(ChunkPos p_157528_, Visibility p_157529_) {
          long i = p_157528_.toLong();
@@ -108,6 +110,10 @@
 +        // out) run after the lock is released.
 +        List<Runnable> mf$transitions = new java.util.ArrayList<>();
 +        synchronized (this.mfLock) {
++            // Read by the lambda below through the field, so that lambda captures
++            // exactly what Vanilla's does and keeps its descriptor.
++            List<Runnable> mf$outer = this.mfTransitions;
++            this.mfTransitions = mf$transitions;
 +            if (p_157529_ == Visibility.HIDDEN) {
 +                this.chunkVisibility.remove(i);
 +                this.chunksToUnload.add(i);
@@ -129,7 +135,7 @@
 +                boolean flag2 = visibility.isTicking();
 +                boolean flag3 = p_157529_.isTicking();
 +                if (flag2 && !flag3) {
-+                    p_157545_.getEntities().filter(p_157603_ -> !p_157603_.isAlwaysTicking()).forEach(e -> mf$transitions.add(() -> this.stopTicking(e)));
++                    p_157545_.getEntities().filter(p_157603_ -> !p_157603_.isAlwaysTicking()).forEach(PersistentEntitySectionManager.MfLambdas.defer(this.mfTransitions, this::stopTicking));
 +                }
  
 -            if (!flag2 && flag3) {
@@ -137,21 +143,22 @@
 -            }
 -        });
 +                if (flag && !flag1) {
-+                    p_157545_.getEntities().filter(p_157601_ -> !p_157601_.isAlwaysTicking()).forEach(e -> mf$transitions.add(() -> this.stopTracking(e)));
++                    p_157545_.getEntities().filter(p_157601_ -> !p_157601_.isAlwaysTicking()).forEach(PersistentEntitySectionManager.MfLambdas.defer(this.mfTransitions, this::stopTracking));
 +                } else if (!flag && flag1) {
-+                    p_157545_.getEntities().filter(p_157599_ -> !p_157599_.isAlwaysTicking()).forEach(e -> mf$transitions.add(() -> this.startTracking(e)));
++                    p_157545_.getEntities().filter(p_157599_ -> !p_157599_.isAlwaysTicking()).forEach(PersistentEntitySectionManager.MfLambdas.defer(this.mfTransitions, this::startTracking));
 +                }
 +
 +                if (!flag2 && flag3) {
-+                    p_157545_.getEntities().filter(p_157597_ -> !p_157597_.isAlwaysTicking()).forEach(e -> mf$transitions.add(() -> this.startTicking(e)));
++                    p_157545_.getEntities().filter(p_157597_ -> !p_157597_.isAlwaysTicking()).forEach(PersistentEntitySectionManager.MfLambdas.defer(this.mfTransitions, this::startTicking));
 +                }
 +            });
++            this.mfTransitions = mf$outer;
 +        }
 +        mf$transitions.forEach(Runnable::run);
      }
  
      private void ensureChunkQueuedForLoad(long p_157556_) {
-@@ -252,8 +282,12 @@ public class PersistentEntitySectionManager<T extends EntityAccess> implements A
+@@ -252,8 +289,12 @@ public class PersistentEntitySectionManager<T extends EntityAccess> implements A
      }
  
      public void tick() {
@@ -166,33 +173,63 @@
      }
  
      private LongSet getAllChunksToSave() {
-@@ -269,6 +303,12 @@ public class PersistentEntitySectionManager<T extends EntityAccess> implements A
+@@ -269,31 +310,35 @@ public class PersistentEntitySectionManager<T extends EntityAccess> implements A
      }
  
      public void autoSave() {
+-        this.getAllChunksToSave().forEach(p_157579_ -> {
+-            boolean flag = this.chunkVisibility.get(p_157579_) == Visibility.HIDDEN;
+-            if (flag) {
+-                this.processChunkUnload(p_157579_);
+-            } else {
+-                this.storeChunkSections(p_157579_, p_157591_ -> {
+-                });
+-            }
+-        });
 +        synchronized (this.mfLock) {
-+            this.mfAutoSave();
++            this.getAllChunksToSave().forEach(p_157579_ -> {
++                boolean flag = this.chunkVisibility.get(p_157579_) == Visibility.HIDDEN;
++                if (flag) {
++                    this.processChunkUnload(p_157579_);
++                } else {
++                    this.storeChunkSections(p_157579_, p_157591_ -> {
++                    });
++                }
++            });
 +        }
-+    }
-+
-+    private void mfAutoSave() {
-         this.getAllChunksToSave().forEach(p_157579_ -> {
-             boolean flag = this.chunkVisibility.get(p_157579_) == Visibility.HIDDEN;
-             if (flag) {
-@@ -281,6 +321,12 @@ public class PersistentEntitySectionManager<T extends EntityAccess> implements A
      }
  
      public void saveAll() {
+-        LongSet longset = this.getAllChunksToSave();
+-
+-        while (!longset.isEmpty()) {
+-            this.permanentStorage.flush(false);
+-            this.processPendingLoads();
+-            longset.removeIf(p_157574_ -> {
+-                boolean flag = this.chunkVisibility.get(p_157574_) == Visibility.HIDDEN;
+-                return flag ? this.processChunkUnload(p_157574_) : this.storeChunkSections(p_157574_, p_157589_ -> {
 +        synchronized (this.mfLock) {
-+            this.mfSaveAll();
-+        }
-+    }
++            LongSet longset = this.getAllChunksToSave();
 +
-+    private void mfSaveAll() {
-         LongSet longset = this.getAllChunksToSave();
++            while (!longset.isEmpty()) {
++                this.permanentStorage.flush(false);
++                this.processPendingLoads();
++                longset.removeIf(p_157574_ -> {
++                    boolean flag = this.chunkVisibility.get(p_157574_) == Visibility.HIDDEN;
++                    return flag ? this.processChunkUnload(p_157574_) : this.storeChunkSections(p_157574_, p_157589_ -> {
++                    });
+                 });
+-            });
+-        }
++            }
  
-         while (!longset.isEmpty()) {
-@@ -303,7 +349,9 @@ public class PersistentEntitySectionManager<T extends EntityAccess> implements A
+-        this.permanentStorage.flush(true);
++            this.permanentStorage.flush(true);
++        }
+     }
+ 
+     @Override
+@@ -303,7 +348,9 @@ public class PersistentEntitySectionManager<T extends EntityAccess> implements A
      }
  
      public boolean isLoaded(UUID p_157551_) {
@@ -203,7 +240,7 @@
      }
  
      public LevelEntityGetter<T> getEntityGetter() {
-@@ -311,18 +359,30 @@ public class PersistentEntitySectionManager<T extends EntityAccess> implements A
+@@ -311,76 +358,88 @@ public class PersistentEntitySectionManager<T extends EntityAccess> implements A
      }
  
      public boolean canPositionTick(BlockPos p_202168_) {
@@ -228,29 +265,111 @@
      }
  
      public void dumpSections(Writer p_157549_) throws IOException {
+-        CsvOutput csvoutput = CsvOutput.builder()
+-            .addColumn("x")
+-            .addColumn("y")
+-            .addColumn("z")
+-            .addColumn("visibility")
+-            .addColumn("load_status")
+-            .addColumn("entity_count")
+-            .build(p_157549_);
+-        this.sectionStorage
+-            .getAllChunksWithExistingSections()
+-            .forEach(
+-                p_157517_ -> {
+-                    PersistentEntitySectionManager.ChunkLoadStatus persistententitysectionmanager$chunkloadstatus = this.chunkLoadStatuses.get(p_157517_);
+-                    this.sectionStorage
+-                        .getExistingSectionPositionsInChunk(p_157517_)
+-                        .forEach(
+-                            p_157521_ -> {
+-                                EntitySection<T> entitysection = this.sectionStorage.getSection(p_157521_);
+-                                if (entitysection != null) {
+-                                    try {
+-                                        csvoutput.writeRow(
+-                                            SectionPos.x(p_157521_),
+-                                            SectionPos.y(p_157521_),
+-                                            SectionPos.z(p_157521_),
+-                                            entitysection.getStatus(),
+-                                            persistententitysectionmanager$chunkloadstatus,
+-                                            entitysection.size()
+-                                        );
+-                                    } catch (IOException ioexception) {
+-                                        throw new UncheckedIOException(ioexception);
 +        synchronized (this.mfLock) {
-+            this.mfDumpSections(p_157549_);
++            CsvOutput csvoutput = CsvOutput.builder()
++                .addColumn("x")
++                .addColumn("y")
++                .addColumn("z")
++                .addColumn("visibility")
++                .addColumn("load_status")
++                .addColumn("entity_count")
++                .build(p_157549_);
++            this.sectionStorage
++                .getAllChunksWithExistingSections()
++                .forEach(
++                    p_157517_ -> {
++                        PersistentEntitySectionManager.ChunkLoadStatus persistententitysectionmanager$chunkloadstatus = this.chunkLoadStatuses.get(p_157517_);
++                        this.sectionStorage
++                            .getExistingSectionPositionsInChunk(p_157517_)
++                            .forEach(
++                                p_157521_ -> {
++                                    EntitySection<T> entitysection = this.sectionStorage.getSection(p_157521_);
++                                    if (entitysection != null) {
++                                        try {
++                                            csvoutput.writeRow(
++                                                SectionPos.x(p_157521_),
++                                                SectionPos.y(p_157521_),
++                                                SectionPos.z(p_157521_),
++                                                entitysection.getStatus(),
++                                                persistententitysectionmanager$chunkloadstatus,
++                                                entitysection.size()
++                                            );
++                                        } catch (IOException ioexception) {
++                                            throw new UncheckedIOException(ioexception);
++                                        }
+                                     }
+                                 }
+-                            }
+-                        );
+-                }
+-            );
++                            );
++                    }
++                );
 +        }
-+    }
-+
-+    private void mfDumpSections(Writer p_157549_) throws IOException {
-         CsvOutput csvoutput = CsvOutput.builder()
-             .addColumn("x")
-             .addColumn("y")
-@@ -363,6 +423,12 @@ public class PersistentEntitySectionManager<T extends EntityAccess> implements A
+     }
  
      @VisibleForDebug
      public String gatherStats() {
+-        return this.knownUuids.size()
+-            + ","
+-            + this.visibleEntityStorage.count()
+-            + ","
+-            + this.sectionStorage.count()
+-            + ","
+-            + this.chunkLoadStatuses.size()
+-            + ","
+-            + this.chunkVisibility.size()
+-            + ","
+-            + this.loadingInbox.size()
+-            + ","
+-            + this.chunksToUnload.size();
 +        synchronized (this.mfLock) {
-+            return this.mfGatherStats();
++            return this.knownUuids.size()
++                + ","
++                + this.visibleEntityStorage.count()
++                + ","
++                + this.sectionStorage.count()
++                + ","
++                + this.chunkLoadStatuses.size()
++                + ","
++                + this.chunkVisibility.size()
++                + ","
++                + this.loadingInbox.size()
++                + ","
++                + this.chunksToUnload.size();
 +        }
-+    }
-+
-+    private String mfGatherStats() {
-         return this.knownUuids.size()
-             + ","
-             + this.visibleEntityStorage.count()
-@@ -380,7 +446,9 @@ public class PersistentEntitySectionManager<T extends EntityAccess> implements A
+     }
  
      @VisibleForDebug
      public int count() {
@@ -261,7 +380,7 @@
      }
  
      class Callback implements EntityInLevelCallback {
-@@ -401,19 +469,27 @@ public class PersistentEntitySectionManager<T extends EntityAccess> implements A
+@@ -401,19 +460,27 @@ public class PersistentEntitySectionManager<T extends EntityAccess> implements A
              BlockPos blockpos = this.entity.blockPosition();
              long i = SectionPos.asLong(blockpos);
              if (i != this.currentSectionKey) {
@@ -295,7 +414,7 @@
                  if (this.realEntity != null) net.neoforged.neoforge.common.CommonHooks.onEntityEnterSection(this.realEntity, oldSectionKey, i);
              }
          }
-@@ -450,12 +526,18 @@ public class PersistentEntitySectionManager<T extends EntityAccess> implements A
+@@ -450,12 +517,18 @@ public class PersistentEntitySectionManager<T extends EntityAccess> implements A
  
          @Override
          public void onRemove(Entity.RemovalReason p_157619_) {
@@ -316,7 +435,7 @@
              if (visibility.isTicking()) {
                  PersistentEntitySectionManager.this.stopTicking(this.entity);
              }
-@@ -468,9 +550,13 @@ public class PersistentEntitySectionManager<T extends EntityAccess> implements A
+@@ -468,9 +541,13 @@ public class PersistentEntitySectionManager<T extends EntityAccess> implements A
                  PersistentEntitySectionManager.this.callbacks.onDestroyed(this.entity);
              }
  
@@ -332,3 +451,23 @@
          }
      }
  
+@@ -479,4 +556,19 @@ public class PersistentEntitySectionManager<T extends EntityAccess> implements A
+         PENDING,
+         LOADED;
+     }
++
++    /**
++     * MultiForge: the lambdas MultiForge's patches need, kept out of
++     * PersistentEntitySectionManager itself. javac numbers a class's synthetic
++     * lambda methods in source order, so a lambda added here would renumber
++     * Vanilla's, and mixins that target those by name would fail to apply.
++     */
++    static final class MfLambdas {
++        private MfLambdas() {}
++
++        /** A consumer that records {@code action} for each element, to run later. */
++        static <E> java.util.function.Consumer<E> defer(List<Runnable> into, java.util.function.Consumer<E> action) {
++            return e -> into.add(() -> action.accept(e));
++        }
++    }
+ }

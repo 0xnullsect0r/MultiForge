@@ -167,6 +167,10 @@ jobs:
         working-directory: upstream/neoforge-1.21.1
         run: ./gradlew --no-configuration-cache --stacktrace :neoforge:compileJava immaculateCheck licenseCheck
 
+      - name: Mixin-target parity (patched classes keep every Vanilla method and lambda)
+        working-directory: upstream/neoforge-1.21.1
+        run: ./gradlew --no-configuration-cache --stacktrace :neoforge:checkMixinTargets
+
       - name: GameTest server (NeoForge suite + MultiForge region-tick tests)
         # Boots the patched dedicated server with the regionized runtime and
         # runs every required GameTest; any failure fails the job.
