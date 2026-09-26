@@ -203,10 +203,10 @@ public final class SwarmBench {
     /**
      * Put each bot at a fixed spot on rings up to {@code spread} blocks from
      * spawn, standing on the surface: first a teleport high above the spot
-     * (a player teleport loads its chunks), one bot at a time once the last
-     * one's surroundings loaded, then a
-     * drop onto the {@code motion_blocking} heightmap — which an unloaded chunk
-     * cannot answer. A single {@code /spreadplayers} would generate every
+     * (a player teleport loads its chunks), then, once its surroundings have
+     * loaded, a drop onto the {@code motion_blocking} heightmap (which an
+     * unloaded chunk cannot answer). One bot at a time, so terrain generation
+     * never queues for every spot at once. A single {@code /spreadplayers} would generate every
      * candidate spot in one synchronous command and stall the server past
      * RCON's timeout at 20+ players.
      *
@@ -214,34 +214,30 @@ public final class SwarmBench {
      */
     private static int placeBots(HeadlessServerRunner runner, List<String> names, int spread, int renderDistance)
             throws IOException, InterruptedException {
-        int[][] spots = new int[names.size()][];
+        int placed = 0;
         for (int i = 0; i < names.size(); i++) {
             double angle = 2 * Math.PI * i / names.size();
             double r = spread * (0.35 + 0.65 * ((i * 7) % names.size()) / Math.max(1, names.size()));
-            spots[i] = new int[] {(int) Math.round(Math.cos(angle) * r), (int) Math.round(Math.sin(angle) * r)};
-            runner.rcon()
-                    .command(String.format(Locale.ROOT, "tp %s %d 250 %d", names.get(i), spots[i][0], spots[i][1]));
-            awaitSurroundingsLoaded(runner, spots[i], renderDistance);
-        }
-        int placed = 0;
-        long deadline = System.currentTimeMillis() + 120_000;
-        boolean[] done = new boolean[names.size()];
-        while (placed < names.size() && System.currentTimeMillis() < deadline) {
-            for (int i = 0; i < names.size(); i++) {
-                if (done[i]) continue;
+            int[] spot = {(int) Math.round(Math.cos(angle) * r), (int) Math.round(Math.sin(angle) * r)};
+            runner.rcon().command(String.format(Locale.ROOT, "tp %s %d 250 %d", names.get(i), spot[0], spot[1]));
+            awaitSurroundingsLoaded(runner, spot, renderDistance);
+            // Drop now, while the spot is loaded: the bots walk from the moment they
+            // join, so a later pass finds most spots unloaded again.
+            long deadline = System.currentTimeMillis() + 15_000;
+            while (System.currentTimeMillis() < deadline) {
                 String reply = runner.rcon()
                         .command(String.format(
                                 Locale.ROOT,
                                 "execute positioned %d 0 %d positioned over motion_blocking run tp %s ~ ~ ~",
-                                spots[i][0],
-                                spots[i][1],
+                                spot[0],
+                                spot[1],
                                 names.get(i)));
                 if (reply.startsWith("Teleported")) {
-                    done[i] = true;
                     placed++;
+                    break;
                 }
+                Thread.sleep(500);
             }
-            if (placed < names.size()) Thread.sleep(1000);
         }
         System.out.println("SwarmBench: placed " + placed + "/" + names.size() + " bots on rings up to " + spread
                 + " blocks from spawn");
