@@ -70,7 +70,12 @@ fun JavaExec.benchCommon(profile: String) {
     classpath = sourceSets["main"].runtimeClasspath
     workingDir = rootProject.projectDir
     systemProperty("bench.ticks", (project.findProperty("ticks") as String?) ?: "12000")
-    systemProperty("bench.serverRoot", layout.buildDirectory.dir("server").get().asFile.absolutePath)
+    // -PserverRoot=<dir> installs and runs the servers elsewhere, so a second run can go
+    // alongside a long one (a soak) without sharing its server directory.
+    systemProperty(
+            "bench.serverRoot",
+            (project.findProperty("serverRoot") as String?)
+                    ?: layout.buildDirectory.dir("server").get().asFile.absolutePath)
     systemProperty("bench.cacheDir", layout.buildDirectory.get().asFile.absolutePath)
     systemProperty(
             "bench.forkLibs",
