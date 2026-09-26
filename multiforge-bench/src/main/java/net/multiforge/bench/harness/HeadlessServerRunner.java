@@ -344,6 +344,7 @@ public final class HeadlessServerRunner implements AutoCloseable {
         }
         if (!serverProcess.waitFor(JVM_EXIT_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS)) {
             cleanStop = false;
+            dumpThreads("stop-timeout");
             serverProcess.destroy();
             if (!serverProcess.waitFor(10, TimeUnit.SECONDS)) serverProcess.destroyForcibly();
             serverProcess.waitFor(10, TimeUnit.SECONDS);
@@ -352,6 +353,26 @@ public final class HeadlessServerRunner implements AutoCloseable {
         }
         running.set(false);
         return cleanStop;
+    }
+
+    /**
+     * Write the server JVM's thread dump next to the boot log ({@code
+     * <bootLog>.<label>.threads.txt}), so a server that would not stop leaves
+     * evidence of where it was. Best effort.
+     */
+    private void dumpThreads(String label) {
+        try {
+            Path jstack = Path.of(System.getProperty("java.home"), "bin", "jstack");
+            Path out = bootLog.resolveSibling(bootLog.getFileName() + "." + label + ".threads.txt");
+            Process p = new ProcessBuilder(jstack.toString(), Long.toString(serverProcess.pid()))
+                    .redirectErrorStream(true)
+                    .redirectOutput(out.toFile())
+                    .start();
+            if (!p.waitFor(60, TimeUnit.SECONDS)) p.destroyForcibly();
+            System.err.println("bench: server did not exit; thread dump in " + out);
+        } catch (IOException | InterruptedException e) {
+            System.err.println("bench: could not take a thread dump: " + e);
+        }
     }
 
     @Override
