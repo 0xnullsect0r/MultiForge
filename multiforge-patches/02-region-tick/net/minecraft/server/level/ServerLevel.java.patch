@@ -12,7 +12,7 @@
      private final ServerChunkCache chunkSource;
      private final MinecraftServer server;
      private final ServerLevelData serverLevelData;
-@@ -190,16 +193,31 @@ public class ServerLevel extends Level implements WorldGenLevel {
+@@ -190,16 +193,37 @@ public class ServerLevel extends Level implements WorldGenLevel {
      private final LevelTicks<Block> blockTicks = new LevelTicks<>(this::isPositionTickingWithEntitiesLoaded, this.getProfilerSupplier());
      private final LevelTicks<Fluid> fluidTicks = new LevelTicks<>(this::isPositionTickingWithEntitiesLoaded, this.getProfilerSupplier());
      private final PathTypeCache pathTypesByPosCache = new PathTypeCache();
@@ -31,6 +31,12 @@
 +    public boolean mfRegionRunsBlockTicks;
 +    public boolean mfRegionRunsBlockEvents;
 +    public boolean mfRegionRunsEntities;
++    // MultiForge (multiforge-patches/02-region-tick/): this tick's entityTickList
++    // split by owning region (mfQueueRegionEntityTicks), and entities a region
++    // found had crossed into another region, left for the server thread.
++    private final java.util.concurrent.ConcurrentHashMap<Long, java.util.List<Entity>> mfRegionEntities =
++            new java.util.concurrent.ConcurrentHashMap<>();
++    private final java.util.concurrent.ConcurrentLinkedQueue<Entity> mfEntityStragglers = new java.util.concurrent.ConcurrentLinkedQueue<>();
 +    // MultiForge (multiforge-patches/02-region-tick/): block events queued by a
 +    // region worker, one ordered set per region, touched only by that region's
 +    // worker (and by the server thread while no region runs). See blockEvent.
@@ -47,7 +53,7 @@
      private final StructureManager structureManager;
      private final StructureCheck structureCheck;
      private final boolean tickTime;
-@@ -361,12 +379,23 @@ public class ServerLevel extends Level implements WorldGenLevel {
+@@ -361,12 +385,23 @@ public class ServerLevel extends Level implements WorldGenLevel {
          }
  
          profilerfiller.popPush("tickPending");
@@ -75,7 +81,7 @@
              profilerfiller.pop();
          }
  
-@@ -389,7 +418,9 @@ public class ServerLevel extends Level implements WorldGenLevel {
+@@ -389,7 +424,9 @@ public class ServerLevel extends Level implements WorldGenLevel {
              this.resetEmptyTime();
          }
  
@@ -85,7 +91,7 @@
              profilerfiller.push("entities");
              if (this.dragonFight != null && flag) {
                  profilerfiller.push("dragonFight");
-@@ -397,33 +428,18 @@ public class ServerLevel extends Level implements WorldGenLevel {
+@@ -397,33 +434,20 @@ public class ServerLevel extends Level implements WorldGenLevel {
                  profilerfiller.pop();
              }
  
@@ -127,11 +133,13 @@
 +            // runner-bound windows, exactly like every other B2/B3 guard.
 +            if (!net.multiforge.neoforge.RegionizedTickCoordinator.regionsHandleEntityTicks(this)) {
 +                this.mfTickEntitiesAll();
++            } else {
++                this.mfQueueRegionEntityTicks();
 +            }
              profilerfiller.pop();
              this.tickBlockEntities();
          }
-@@ -433,6 +449,98 @@ public class ServerLevel extends Level implements WorldGenLevel {
+@@ -433,6 +457,127 @@ public class ServerLevel extends Level implements WorldGenLevel {
          profilerfiller.pop();
      }
  
@@ -140,14 +148,14 @@
 +     * m13-b3-region-tick.md §5.2): the original, unmodified {@code
 +     * entityTickList.forEach(...)} despawn-check + guarded {@code
 +     * tickNonPassenger} pass, extracted verbatim so both this Vanilla-
-+     * inline fallback and {@link #mfTickEntitiesForChunk} (the per-
++     * inline fallback and {@link #mfTickEntitiesForRegion} (the per-
 +     * region path used once {@link
 +     * net.multiforge.neoforge.RegionizedTickCoordinator#regionsHandleEntityTicks}
 +     * reports the runtime is handling entity ticks for this world)
 +     * share the exact same per-entity computation via {@link
 +     * #mfTickOneEntity}. Only the call site (here, on the caller
 +     * thread, vs. a region worker) and the iteration source (the full
-+     * {@code entityTickList} vs. one chunk's AABB) differ.
++     * {@code entityTickList} vs. the region's share of it) differ.
 +     */
 +    public void mfTickEntitiesAll() {
 +        ProfilerFiller profilerfiller = this.getProfiler();
@@ -156,33 +164,62 @@
 +    }
 +
 +    /**
-+     * MultiForge (multiforge-patches/02-region-tick/, docs/design/
-+     * m13-b3-region-tick.md §5.2): per-region counterpart of {@link
-+     * #mfTickEntitiesAll()}, run on the owning region's worker by {@code
-+     * net.multiforge.neoforge.tick.EntityTickRunnerBridge}. Entities are
-+     * selected by the chunk they belong to ({@link Entity#chunkPosition()}), so an
-+     * entity straddling a chunk border is ticked once, and snapshotted before any
-+     * is ticked, so an entity moving into another of the region's chunks during
-+     * the pass is not ticked twice and the section storage is never modified
-+     * while being iterated. Each entity then goes through the same {@link
-+     * #mfTickOneEntity} Vanilla's inline pass uses.
++     * MultiForge (multiforge-patches/02-region-tick/): server thread, before the
++     * regions run: split this tick's {@code entityTickList} by the region owning
++     * each entity's chunk. Each region then ticks its share in Vanilla's list
++     * order ({@link #mfTickEntitiesForRegion}); anything no region took runs on
++     * the server thread afterwards ({@link #mfTickEntitiesAfterRegions}). Like
++     * Vanilla's own pass, an entity added during the tick waits for the next.
 +     */
-+    public void mfTickEntitiesForChunks(java.util.List<ChunkPos> chunks) {
++    private void mfQueueRegionEntityTicks() {
++        this.mfRegionEntities.clear();
++        this.mfEntityStragglers.clear();
++        this.entityTickList.forEach(p_308566_ -> {
++            ChunkPos pos = p_308566_.chunkPosition();
++            long region = net.multiforge.neoforge.RegionizedTickCoordinator.regionIdAt(this, pos.x, pos.z);
++            this.mfRegionEntities.computeIfAbsent(region, r -> new java.util.ArrayList<>()).add(p_308566_);
++        });
++    }
++
++    /**
++     * MultiForge (multiforge-patches/02-region-tick/): region worker: tick the
++     * entities {@link #mfQueueRegionEntityTicks} assigned to {@code regionId},
++     * through the same {@link #mfTickOneEntity} Vanilla's inline pass uses. An
++     * entity moved into another region since (by something else ticking) is
++     * left for the server thread instead of being ticked from here.
++     */
++    public void mfTickEntitiesForRegion(long regionId) {
 +        if (!this.mfRegionRunsEntities) return;
++        java.util.List<Entity> entities = this.mfRegionEntities.remove(regionId);
++        if (entities == null) return;
 +        ProfilerFiller profilerfiller = this.getProfiler();
 +        TickRateManager tickratemanager = this.tickRateManager();
-+        java.util.List<Entity> snapshot = new java.util.ArrayList<>();
-+        for (ChunkPos pos : chunks) {
-+            AABB bounds = new AABB(
-+                    pos.getMinBlockX(), this.getMinBuildHeight(), pos.getMinBlockZ(),
-+                    pos.getMaxBlockX() + 1, this.getMaxBuildHeight(), pos.getMaxBlockZ() + 1);
-+            this.getEntities().get(bounds, p_308566_ -> {
-+                if (p_308566_.chunkPosition().x == pos.x && p_308566_.chunkPosition().z == pos.z) {
-+                    snapshot.add(p_308566_);
-+                }
-+            });
++        for (Entity entity : entities) {
++            ChunkPos pos = entity.chunkPosition();
++            if (net.multiforge.neoforge.RegionizedTickCoordinator.regionIdAt(this, pos.x, pos.z) != regionId) {
++                this.mfEntityStragglers.add(entity);
++                continue;
++            }
++            this.mfTickOneEntity(entity, profilerfiller, tickratemanager);
 +        }
-+        for (Entity entity : snapshot) {
++    }
++
++    /**
++     * MultiForge (multiforge-patches/02-region-tick/): server thread, after the
++     * regions finished: tick the entities no region took this tick (in no
++     * region's chunk, their region merged or split away mid-tick, or moved
++     * across a region border).
++     */
++    public void mfTickEntitiesAfterRegions() {
++        if (this.mfRegionEntities.isEmpty() && this.mfEntityStragglers.isEmpty()) return;
++        ProfilerFiller profilerfiller = this.getProfiler();
++        TickRateManager tickratemanager = this.tickRateManager();
++        for (java.util.Iterator<java.util.List<Entity>> it = this.mfRegionEntities.values().iterator(); it.hasNext(); ) {
++            java.util.List<Entity> entities = it.next();
++            it.remove();
++            if (this.mfRegionRunsEntities) entities.forEach(e -> this.mfTickOneEntity(e, profilerfiller, tickratemanager));
++        }
++        for (Entity entity; (entity = this.mfEntityStragglers.poll()) != null; ) {
 +            this.mfTickOneEntity(entity, profilerfiller, tickratemanager);
 +        }
 +    }
@@ -230,7 +267,7 @@
      @Override
      public boolean shouldTickBlocksAt(long p_184059_) {
          return this.chunkSource.chunkMap.getDistanceManager().inBlockTickingRange(p_184059_);
-@@ -1069,7 +1177,7 @@ public class ServerLevel extends Level implements WorldGenLevel {
+@@ -1068,7 +1213,7 @@ public class ServerLevel extends Level implements WorldGenLevel {
  
      @Override
      public void sendBlockUpdated(BlockPos p_8755_, BlockState p_8756_, BlockState p_8757_, int p_8758_) {
@@ -239,7 +276,7 @@
              String s = "recursive call to sendBlockUpdated";
              Util.logAndPauseIfInIde("recursive call to sendBlockUpdated", new IllegalStateException("recursive call to sendBlockUpdated"));
          }
-@@ -1082,6 +1190,13 @@ public class ServerLevel extends Level implements WorldGenLevel {
+@@ -1081,6 +1226,13 @@ public class ServerLevel extends Level implements WorldGenLevel {
              List<PathNavigation> list = new ObjectArrayList<>();
  
              for (Mob mob : this.navigatingMobs) {
@@ -253,7 +290,7 @@
                  PathNavigation pathnavigation = mob.getNavigation();
                  if (pathnavigation.shouldRecomputePath(p_8755_)) {
                      list.add(pathnavigation);
-@@ -1089,13 +1204,13 @@ public class ServerLevel extends Level implements WorldGenLevel {
+@@ -1088,13 +1240,13 @@ public class ServerLevel extends Level implements WorldGenLevel {
              }
  
              try {
@@ -269,7 +306,7 @@
              }
          }
      }
-@@ -1186,11 +1301,63 @@ public class ServerLevel extends Level implements WorldGenLevel {
+@@ -1185,11 +1337,63 @@ public class ServerLevel extends Level implements WorldGenLevel {
  
      @Override
      public void blockEvent(BlockPos p_8746_, Block p_8747_, int p_8748_, int p_8749_) {
@@ -333,7 +370,7 @@
  
          while (!this.blockEvents.isEmpty()) {
              BlockEventData blockeventdata = this.blockEvents.removeFirst();
-@@ -1229,6 +1396,40 @@ public class ServerLevel extends Level implements WorldGenLevel {
+@@ -1228,6 +1432,40 @@ public class ServerLevel extends Level implements WorldGenLevel {
          return this.fluidTicks;
      }
  
@@ -374,7 +411,7 @@
      @Nonnull
      @Override
      public MinecraftServer getServer() {
-@@ -1570,6 +1771,7 @@ public class ServerLevel extends Level implements WorldGenLevel {
+@@ -1569,6 +1807,7 @@ public class ServerLevel extends Level implements WorldGenLevel {
      @VisibleForTesting
      public void clearBlockEvents(BoundingBox p_8723_) {
          this.blockEvents.removeIf(p_207568_ -> p_8723_.isInside(p_207568_.pos()));
@@ -382,7 +419,7 @@
      }
  
      @Override
-@@ -1753,7 +1955,7 @@ public class ServerLevel extends Level implements WorldGenLevel {
+@@ -1752,7 +1991,7 @@ public class ServerLevel extends Level implements WorldGenLevel {
              }
  
              if (p_143371_ instanceof Mob mob) {
@@ -391,7 +428,7 @@
                      String s = "onTrackingStart called during navigation iteration";
                      Util.logAndPauseIfInIde(
                          "onTrackingStart called during navigation iteration", new IllegalStateException("onTrackingStart called during navigation iteration")
-@@ -1780,7 +1982,7 @@ public class ServerLevel extends Level implements WorldGenLevel {
+@@ -1779,7 +2018,7 @@ public class ServerLevel extends Level implements WorldGenLevel {
              }
  
              if (p_143375_ instanceof Mob mob) {
@@ -400,7 +437,7 @@
                      String s = "onTrackingStart called during navigation iteration";
                      Util.logAndPauseIfInIde(
                                "onTrackingStart called during navigation iteration", new IllegalStateException("onTrackingStart called during navigation iteration")
-@@ -1809,7 +2011,10 @@ public class ServerLevel extends Level implements WorldGenLevel {
+@@ -1808,7 +2047,10 @@ public class ServerLevel extends Level implements WorldGenLevel {
  
      @Override
      public java.util.Collection<net.neoforged.neoforge.entity.PartEntity<?>> getPartEntities() {

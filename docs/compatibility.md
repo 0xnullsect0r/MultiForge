@@ -96,7 +96,7 @@ When regions are active, some per-chunk work that Vanilla runs inside one big le
 
 | Vanilla loop | Where it runs on MultiForge |
 |---|---|
-| `ServerLevel.tick`'s entity loop (`entityTickList.forEach(...)`) | `ServerLevel.mfTickEntitiesForChunks`, per region — it calls the same `tickNonPassenger` |
+| `ServerLevel.tick`'s entity loop (`entityTickList.forEach(...)`) | `ServerLevel.mfTickEntitiesForRegion`, per region: the region's share of `entityTickList`, in list order, through the same `tickNonPassenger` |
 | `Level.tickBlockEntities`' ticker loop | the region's block-entity phase — it calls the same `TickingBlockEntity.tick` |
 | `LevelTicks.tick` for block and fluid ticks | `LevelTicks.mfTickRegion`, per region — same collect-then-run order |
 | `ServerLevel.runBlockEvents` | per region, right after its scheduled ticks |

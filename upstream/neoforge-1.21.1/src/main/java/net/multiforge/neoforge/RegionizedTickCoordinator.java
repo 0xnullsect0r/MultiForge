@@ -133,6 +133,9 @@ public final class RegionizedTickCoordinator {
         // finished, so MinecraftServer.tickChildren's "Exception ticking world"
         // crash handling applies exactly as for Vanilla's inline level tick.
         checkOverrun(world, host.driveRegions(world, DISPATCH_DEADLINE_NANOS, pump));
+        // Entities no region ticked (outside every region, or moved across a
+        // region border mid-tick).
+        level.mfTickEntitiesAfterRegions();
         // Chunk work a region could not take this tick, then the block-change
         // broadcast Vanilla sends right after its chunk loop.
         level.getChunkSource().mfAfterRegions();

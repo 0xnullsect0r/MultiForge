@@ -17,8 +17,6 @@ import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
 import net.multiforge.api.world.WorldRef;
 import net.multiforge.neoforge.RegionizedTickCoordinator;
-import net.multiforge.runtime.chunk.ChunkHolderManager;
-import net.multiforge.runtime.chunk.NewChunkHolder;
 import net.multiforge.runtime.region.EntityTickRunner;
 import net.multiforge.runtime.region.Region;
 import net.multiforge.runtime.scheduler.MultiThreadedSchedulerHost;
@@ -40,31 +38,22 @@ import net.multiforge.runtime.scheduler.MultiThreadedSchedulerHost;
  * region}'s owning {@link WorldRef} (via {@link
  * MultiThreadedSchedulerHost#worldForRegion}), then that world's live
  * {@link ServerLevel} (a linear scan of {@link
- * MinecraftServer#getAllLevels()} — off the tick-hot path in the
- * sense that this runs once per region per tick, not once per entity,
- * matching {@code ChunkHolderManager.holdersOwnedBy}'s own "called a
- * few times per region per tick" cost model), then walks every {@link
- * NewChunkHolder} {@link ChunkHolderManager#holdersOwnedBy(net.multiforge.runtime.region.RegionId)}
- * reports for this region and calls the patched {@code ServerLevel
- * .mfTickEntitiesForChunk(holder)} for each — which ticks that
- * chunk's entities using the exact same {@code checkDespawn} +
- * {@code DistanceManager.inEntityTickingRange}-gated {@code
- * guardEntityTick(tickNonPassenger)} pass Vanilla's {@code
- * entityTickList.forEach} used to run inline (see the {@code
- * 02-region-tick/ServerLevel.java.patch} hunk's javadoc for the
- * extraction). Any entity mid-migration ({@code MigratingEntityRef
- * .migrationState() == MIGRATING}) is skipped by that same patched
- * method — this bridge does not need to re-check it.
+ * MinecraftServer#getAllLevels()}, once per region per tick), and calls
+ * the patched {@code ServerLevel.mfTickEntitiesForRegion}: the region's
+ * share of this tick's {@code entityTickList}, split by owning region on
+ * the server thread before the regions run, ticked in Vanilla's list
+ * order through the same {@code checkDespawn} + {@code
+ * DistanceManager.inEntityTickingRange}-gated {@code
+ * guardEntityTick(tickNonPassenger)} pass Vanilla ran inline (see the
+ * {@code 02-region-tick/ServerLevel.java.patch} hunk's javadoc).
  *
  * <p>Every step degrades to "do nothing for this region this tick"
  * rather than throwing (CLAUDE.md rule 5): a region that died between
  * the ENTITY_AI phase starting and this call ({@code worldForRegion}
- * returns {@code null}), a world with no live {@link ServerLevel} yet
- * (bootstrap window), or a {@link ChunkHolderManager} that has not
- * materialised for this world are all "nothing to tick yet," not
- * errors — matching the region→world/chunk-manager lookups every
- * other {@code MultiThreadedSchedulerHost} phase body already treats
- * this way (e.g. {@code phasePollFullLoadUpdate}).
+ * returns {@code null}) or a world with no live {@link ServerLevel} yet
+ * (bootstrap window) is "nothing to tick yet," not an error. Entities
+ * a region does not take are ticked by the server thread after the
+ * regions ({@code ServerLevel.mfTickEntitiesAfterRegions}).
  */
 public final class EntityTickRunnerBridge implements EntityTickRunner {
     private final MultiThreadedSchedulerHost host;
@@ -85,15 +74,7 @@ public final class EntityTickRunnerBridge implements EntityTickRunner {
         }
         ServerLevel level = resolveLevel(world);
         if (level == null) return;
-        ChunkHolderManager manager = host.chunkManagerForOrNull(world);
-        if (manager == null) return;
-
-        java.util.List<NewChunkHolder> holders = manager.holdersOwnedBy(region.id());
-        java.util.List<net.minecraft.world.level.ChunkPos> chunks = new java.util.ArrayList<>(holders.size());
-        for (NewChunkHolder holder : holders) {
-            chunks.add(new net.minecraft.world.level.ChunkPos(holder.position().x(), holder.position().z()));
-        }
-        level.mfTickEntitiesForChunks(chunks);
+        level.mfTickEntitiesForRegion(region.id().value());
     }
 
     private ServerLevel resolveLevel(WorldRef world) {
