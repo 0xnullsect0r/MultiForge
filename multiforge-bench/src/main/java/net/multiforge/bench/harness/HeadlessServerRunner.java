@@ -59,7 +59,8 @@ public final class HeadlessServerRunner implements AutoCloseable {
 
     private static final Duration RCON_BOOT_TIMEOUT = Duration.ofSeconds(300);
     private static final Duration RCON_IO_TIMEOUT = Duration.ofSeconds(30);
-    private static final Duration JVM_EXIT_TIMEOUT = Duration.ofSeconds(300);
+    private static final Duration JVM_EXIT_TIMEOUT =
+            Duration.ofMinutes(20); // saving a world 100 bots explored takes minutes
     private static final String RCON_PASSWORD = "multiforge";
     private static final Pattern LAST_NUMBER = Pattern.compile("(\\d+)");
 
