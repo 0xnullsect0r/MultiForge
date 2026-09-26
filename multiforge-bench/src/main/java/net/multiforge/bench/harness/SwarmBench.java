@@ -159,25 +159,7 @@ public final class SwarmBench {
             runner.rcon().command("gamemode creative @a");
             runner.rcon().command("give @a minecraft:dirt 64");
             if (spread > 0) {
-                // One surface teleport per bot to a fixed spot on rings around spawn. A
-                // single /spreadplayers generates every candidate spot synchronously and
-                // stalls the server (and RCON) for tens of seconds at 20+ players.
-                List<String> names = swarm.names();
-                for (int i = 0; i < names.size(); i++) {
-                    double angle = 2 * Math.PI * i / names.size();
-                    double r = spread * (0.35 + 0.65 * ((i * 7) % names.size()) / Math.max(1, names.size()));
-                    int x = (int) Math.round(Math.cos(angle) * r);
-                    int z = (int) Math.round(Math.sin(angle) * r);
-                    runner.rcon()
-                            .command(String.format(
-                                    Locale.ROOT,
-                                    "execute positioned %d 0 %d positioned over motion_blocking run tp %s ~ ~ ~",
-                                    x,
-                                    z,
-                                    names.get(i)));
-                }
-                System.out.println(
-                        "SwarmBench: placed " + names.size() + " bots on rings up to " + spread + " blocks from spawn");
+                extra.put("bots_placed", placeBots(runner, swarm.names(), spread, renderDistance));
             }
             // Let the spread's chunk generation and sends settle before measuring.
             Thread.sleep(15_000);
@@ -206,6 +188,75 @@ public final class SwarmBench {
                     + swarm.blocksPlaced() + " placements, " + swarm.blocksBroken() + " breaks, min connected "
                     + minConnected);
             return minConnected == players && runner.isAlive();
+        }
+    }
+
+    /**
+     * Put each bot at a fixed spot on rings up to {@code spread} blocks from
+     * spawn, standing on the surface: first a teleport high above the spot
+     * (a player teleport loads its chunks), one bot at a time once the last
+     * one's surroundings loaded, then a
+     * drop onto the {@code motion_blocking} heightmap — which an unloaded chunk
+     * cannot answer. A single {@code /spreadplayers} would generate every
+     * candidate spot in one synchronous command and stall the server past
+     * RCON's timeout at 20+ players.
+     *
+     * @return how many bots reached the surface of their spot
+     */
+    private static int placeBots(HeadlessServerRunner runner, List<String> names, int spread, int renderDistance)
+            throws IOException, InterruptedException {
+        int[][] spots = new int[names.size()][];
+        for (int i = 0; i < names.size(); i++) {
+            double angle = 2 * Math.PI * i / names.size();
+            double r = spread * (0.35 + 0.65 * ((i * 7) % names.size()) / Math.max(1, names.size()));
+            spots[i] = new int[] {(int) Math.round(Math.cos(angle) * r), (int) Math.round(Math.sin(angle) * r)};
+            runner.rcon()
+                    .command(String.format(Locale.ROOT, "tp %s %d 250 %d", names.get(i), spots[i][0], spots[i][1]));
+            awaitSurroundingsLoaded(runner, spots[i], renderDistance);
+        }
+        int placed = 0;
+        long deadline = System.currentTimeMillis() + 120_000;
+        boolean[] done = new boolean[names.size()];
+        while (placed < names.size() && System.currentTimeMillis() < deadline) {
+            for (int i = 0; i < names.size(); i++) {
+                if (done[i]) continue;
+                String reply = runner.rcon()
+                        .command(String.format(
+                                Locale.ROOT,
+                                "execute positioned %d 0 %d positioned over motion_blocking run tp %s ~ ~ ~",
+                                spots[i][0],
+                                spots[i][1],
+                                names.get(i)));
+                if (reply.startsWith("Teleported")) {
+                    done[i] = true;
+                    placed++;
+                }
+            }
+            if (placed < names.size()) Thread.sleep(1000);
+        }
+        System.out.println("SwarmBench: placed " + placed + "/" + names.size() + " bots on rings up to " + spread
+                + " blocks from spawn");
+        return placed;
+    }
+
+    /**
+     * Wait (up to a minute) until the chunks around a newly placed bot are
+     * loaded, before the next bot is placed. Placing every bot at once into
+     * fresh terrain queues thousands of chunks for generation together, and a
+     * mob that looks one block into a still-generating neighbour then stalls
+     * the tick behind that whole queue — on stock NeoForge as on MultiForge.
+     * Players arriving over time never do that.
+     */
+    private static void awaitSurroundingsLoaded(HeadlessServerRunner runner, int[] spot, int renderDistance)
+            throws IOException, InterruptedException {
+        int d = Math.max(1, renderDistance - 2) * 16;
+        int[][] probes = {{0, 0}, {d, 0}, {-d, 0}, {0, d}, {0, -d}};
+        long deadline = System.currentTimeMillis() + 60_000;
+        for (int[] o : probes) {
+            String cmd = String.format(Locale.ROOT, "execute if loaded %d 0 %d", spot[0] + o[0], spot[1] + o[1]);
+            while (!runner.rcon().command(cmd).contains("passed") && System.currentTimeMillis() < deadline) {
+                Thread.sleep(250);
+            }
         }
     }
 

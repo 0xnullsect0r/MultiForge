@@ -1,5 +1,53 @@
 # CHANGELOG
 
+## Unreleased — the regions actually tick
+
+Everything since v1.5.1, on branch `claude/epic-archimedes-ndcba6`. The short version: before this, a production MultiForge server installed an **empty region tick body** and the patched `ServerLevel` skipped Vanilla's own passes, so scheduled ticks, mob AI and block entities most likely never ran on an installed server; nothing in CI booted a server to notice. Now the server ticks every region in parallel under a barrier model, is rebased onto NeoForge 21.1.251, and is checked against stock NeoForge by live runs.
+
+### The tick
+
+- **Barrier tick model** (`docs/design/barrier-tick-model.md`). The server thread runs Vanilla's loop; each level's regions tick on the worker pool between two barriers — random ticks and natural spawning, scheduled block/fluid ticks, block events, entities, block entities — while the server thread services chunk loads and the serial event lane. Ownership is positional (an entity or block belongs to the region owning its chunk). Shared Vanilla state region workers touch is made safe with leaf locks or per-thread instances.
+- **Per-region random ticks and spawning (M14).** Each region runs its chunks' random ticks and natural spawning with its own `NaturalSpawner.SpawnState` and mob caps scaled to its spawnable chunks.
+- **Honest reroutes.** A cross-region `setBlock`/`addFreshEntity` is rerouted to the owner and returns what Vanilla would have (predicted from the owner's state; a mismatch bumps `reroute.<site>.mismatch`).
+- **Regions no longer flicker.** Unloading one chunk used to drop its whole 16×16 section, orphaning every other loaded chunk in it — constantly, around moving players. Sections now leave a region with their last chunk (jqwik property test).
+- **No merge deadlock.** A chunk loaded while regions tick (a worker handed the load to the server thread) used to be able to merge the ticking region and wait for it forever; such changes are applied after the barrier. Queued tasks follow their chunk through splits.
+- **Designed waits are not overruns.** Time a region spends waiting for the server thread to generate a chunk, or for a serial-lane listener, is excluded from the watchdog and the barrier deadline and totalled in `region-tick.wait-ms.*`. Strict mode used to crash a server as soon as players explored new terrain.
+- **Retired:** the M9 shadow chunk system (it observed Vanilla but never drove anything), M4 entity migration, the M5 re-run of global systems on a worker. Vanilla's own code runs those on the server thread, which also restores compatibility with mixins targeting them.
+
+### Events and mods
+
+- The serial lane (`LEGACY_SERIAL`): listeners of mods classified `legacy` run one at a time on the server thread, with cancellation and results kept. Per-mod classification in `config/multiforge-mods.toml` or the mod's `multiforge_safety` property.
+- Cancellable events with listeners in several domains dispatch inline in priority order; `addListener(Consumer)` registrations are routed like `@SubscribeEvent` ones; `@SubscribeEvent` methods are called through a `MethodHandle`.
+- The debug channel no longer sends to clients that never negotiated it (vanilla clients got a WARN per player per frame), and checks the client's protocol version.
+- A mod calling `ServerDomains` before the server installed its runtime no longer stops the server from starting; with `mode = "off"`, `ServerDomains` tasks run on the server thread. `ServerDomains.global()` tasks may write anywhere, as documented. Async task exceptions are logged.
+
+### Config and commands
+
+- `/multiforge config cores|threads|mode|policy|warnPerMin` and `/multiforge region size` apply live: the pool resizes and worlds re-partition. Config files are TOML parsed with night-config.
+- `/multiforge tickstats [reset]`: every tick's duration since reset, the true max MSPT, and a ten-minute TPS count.
+- `/multiforge chunks <world>` and `/multiforge region pin <id> <world> …` accept `minecraft:overworld` (a plain string argument stopped at the colon).
+- Region pins force a rectangle's loaded chunks into one region.
+
+### NeoForge 21.1.251
+
+Rebased from 21.1.1 to 21.1.251, the latest 1.21.1 release, so mods requiring any 21.1.x load. Patches regrouped and re-exported with `scripts/mf-patches.py`.
+
+### Verification and tooling
+
+- CI builds the fork and runs every GameTest (NeoForge's plus MultiForge's region-tick tests) as a gate; the release requires the installer build.
+- `:multiforge-bench:determinism` — the vanilla-parity gate: one frozen fixed-seed world ticked on stock NeoForge and on MultiForge, terrain compared chunk by chunk. (Stock NeoForge does not reproduce its own world generation, so the input world is shared.)
+- `:multiforge-bench:scenario` — Phase X checks on stock vs MultiForge: cross-region teleports, a raid, the dragon fight, fixture mods.
+- Real protocol bots (MCProtocolLib, MIT; bench-only) for the swarm bench; `x8StrictSwarm`; a nightly workflow.
+- `multiforge-testmods`: fixture mods for a cross-region writer and a legacy listener.
+- The scanner recognises NeoForge 21 tick handlers (nested `EntityTickEvent$Post` etc., `addListener` handlers) and is gated on a corpus of mod jars.
+- The bench boots installer-built servers directly (no nested `gradlew runServer`, no hardcoded JDK) and reports only measured numbers.
+
+### Dependencies added
+
+- runtime: night-config TOML 3.8.3 (LGPL-3.0; the parser NeoForge ships), typetools 0.6.3 (Apache-2.0).
+- bench only: lz4-java 1.8.0 (Apache-2.0), MCProtocolLib 1.21 (MIT) with its Apache-2.0/MIT/LGPL tree.
+- tests only: jqwik 1.9.1 (EPL-2.0).
+
 ## v1.5.1 — a MultiForge server refused to load any mod at all
 
 Reported from an ATM10 boot: the server started, then died with **192 mod-dependency failures**, every one of the form

@@ -63,8 +63,6 @@ Marked **Historical — superseded** in the document:
 - [`design/multiforge-lightengine.md`](design/multiforge-lightengine.md) — the M9 light-engine facade.
 - [`design/multiforge-priority-queue.md`](design/multiforge-priority-queue.md) — disposition of Vanilla's chunk task priority queue under M9.
 
-Describing retired machinery, without the banner:
-
 - [`design/entity-migration.md`](design/entity-migration.md) — the M4 entity-migration protocol (serialise and re-create across regions), retired; see `migration.md`.
 - [`design/global-region.md`](design/global-region.md) — the M5 global-region contract (Vanilla subsystems re-run on a global worker), retired; see `global-network.md`.
 
@@ -72,7 +70,7 @@ Describing retired machinery, without the banner:
 
 - [`verification/README.md`](verification/README.md) — verification results and runbook (start here).
 - [`verification/results/`](verification/results/) — raw result files from verification runs.
-- [`verification/m12/`](verification/m12/) — live-smoke evidence for M12 event-bus routing.
-- [`verification/m13/`](verification/m13/) — live-smoke evidence for the B3 per-region tick wiring (pre-barrier model).
-- [`verification/m456/`](verification/m456/) — M4/M5/M6 bench-verification scripts and records (cross-region teleport, raid stress, dragon fight, strict-mode swarm); M4/M5 have since been replaced.
+- [`verification/m12/`](verification/m12/) — where each M12 event-routing check now runs.
+- [`verification/m13/`](verification/m13/) — where each per-region tick check now runs.
+- [`verification/m456/`](verification/m456/) — where each Phase X check (teleport, raid, dragon, fixture mods, strict swarm) now runs.
 - [`verification/m9/`](verification/m9/) — M9 chunk-system-port Phase 7 results (retired system).
