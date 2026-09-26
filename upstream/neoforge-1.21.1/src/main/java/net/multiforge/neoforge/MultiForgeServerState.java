@@ -16,8 +16,8 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Objects;
-import java.util.WeakHashMap;
 import net.minecraft.server.MinecraftServer;
+import net.multiforge.runtime.chunk.InstanceRegistry;
 import net.multiforge.runtime.config.MultiForgeConfig;
 import net.multiforge.runtime.config.MultiForgeConfigStore;
 import net.multiforge.runtime.region.pin.RegionPinManager;
@@ -38,9 +38,8 @@ import org.slf4j.LoggerFactory;
  * chunks never showed up as boxes on the client. See v1.3.16
  * CHANGELOG for the full story.
  *
- * <p>Follows the {@code InstanceRegistry} pattern (CLAUDE.md M9
- * conventions §6): a {@link WeakHashMap} keyed by the
- * {@link MinecraftServer} so a reused GameTestServer JVM releases the
+ * <p>Uses {@link InstanceRegistry} (CLAUDE.md region-tick conventions),
+ * weakly keyed by the {@link MinecraftServer} so a reused GameTestServer JVM releases the
  * old server's pin manager when the server itself gets GC'd. The
  * {@code ServerStoppingEvent} handler in {@link
  * net.multiforge.neoforge.debug.DebugChannelServer} explicitly clears
@@ -49,8 +48,8 @@ import org.slf4j.LoggerFactory;
  */
 public final class MultiForgeServerState {
     private static final Logger LOGGER = LoggerFactory.getLogger("multiforge.serverstate");
-    private static final WeakHashMap<MinecraftServer, RegionPinManager> PINS = new WeakHashMap<>();
-    private static final WeakHashMap<MinecraftServer, MultiForgeConfigStore> CONFIGS = new WeakHashMap<>();
+    private static final InstanceRegistry<MinecraftServer, RegionPinManager> PINS = InstanceRegistry.weak();
+    private static final InstanceRegistry<MinecraftServer, MultiForgeConfigStore> CONFIGS = InstanceRegistry.weak();
 
     private MultiForgeServerState() {}
 
@@ -62,7 +61,7 @@ public final class MultiForgeServerState {
      */
     public static synchronized RegionPinManager pinManagerFor(MinecraftServer server) {
         Objects.requireNonNull(server, "server");
-        RegionPinManager cached = PINS.get(server);
+        RegionPinManager cached = PINS.of(server).orElse(null);
         if (cached != null) {
             return cached;
         }
@@ -79,7 +78,7 @@ public final class MultiForgeServerState {
             LOGGER.warn("failed to load {} — using empty pin manager: {}", pinsFile, e.getMessage());
             loaded = new RegionPinManager(pinsFile);
         }
-        PINS.put(server, loaded);
+        PINS.register(server, loaded);
         return loaded;
     }
 
@@ -92,7 +91,7 @@ public final class MultiForgeServerState {
      */
     public static synchronized MultiForgeConfigStore configStoreFor(MinecraftServer server) {
         Objects.requireNonNull(server, "server");
-        MultiForgeConfigStore cached = CONFIGS.get(server);
+        MultiForgeConfigStore cached = CONFIGS.of(server).orElse(null);
         if (cached != null) {
             return cached;
         }
@@ -108,7 +107,7 @@ public final class MultiForgeServerState {
             LOGGER.warn("failed to load {} — using defaults: {}", configFile, e.getMessage());
             loaded = new MultiForgeConfigStore(configFile, MultiForgeConfig.defaults());
         }
-        CONFIGS.put(server, loaded);
+        CONFIGS.register(server, loaded);
         return loaded;
     }
 
@@ -118,14 +117,25 @@ public final class MultiForgeServerState {
      * policy = "fail"}), the tick watchdog, and the violation-warning budget
      * ({@code policy = "reroute-only"} silences it). {@code mode = "off"} only
      * matters at server start, where it skips installing the runtime.
+     *
+     * <p>An explicitly set {@code -Dmultiforge.ownership.mode=off|reroute|strict}
+     * or {@code -Dmultiforge.regiontick.strict=on} wins over the file, so a
+     * regression run can force either without editing the config.
      */
     public static void applyConfig(MultiForgeConfig config) {
         boolean strict = config.effectiveMode() == MultiForgeConfig.Mode.STRICT;
-        net.multiforge.runtime.ownership.OwnershipEnforcer.setMode(
-                strict || config.violationPolicy() == MultiForgeConfig.ViolationPolicy.FAIL
-                        ? net.multiforge.runtime.ownership.OwnershipEnforcer.Mode.STRICT
-                        : net.multiforge.runtime.ownership.OwnershipEnforcer.Mode.REROUTE);
-        net.multiforge.runtime.region.RegionTickWatchdog.setMode(strict
+        net.multiforge.runtime.ownership.OwnershipEnforcer.Mode ownership = strict || config.violationPolicy() == MultiForgeConfig.ViolationPolicy.FAIL
+                ? net.multiforge.runtime.ownership.OwnershipEnforcer.Mode.STRICT
+                : net.multiforge.runtime.ownership.OwnershipEnforcer.Mode.REROUTE;
+        String ownershipProp = System.getProperty("multiforge.ownership.mode");
+        if (ownershipProp != null && !ownershipProp.isBlank()) {
+            ownership = net.multiforge.runtime.ownership.OwnershipEnforcer.parseMode(ownershipProp);
+        }
+        net.multiforge.runtime.ownership.OwnershipEnforcer.setMode(ownership);
+        String strictProp = System.getProperty("multiforge.regiontick.strict", "");
+        boolean watchdogStrict = strict || strictProp.equalsIgnoreCase("on") || strictProp.equalsIgnoreCase("true")
+                || strictProp.equalsIgnoreCase("strict");
+        net.multiforge.runtime.region.RegionTickWatchdog.setMode(watchdogStrict
                 ? net.multiforge.runtime.region.RegionTickWatchdog.Mode.STRICT
                 : net.multiforge.runtime.region.RegionTickWatchdog.Mode.WARN);
         net.multiforge.runtime.diagnostics.ViolationLogger.configure(
@@ -137,9 +147,9 @@ public final class MultiForgeServerState {
         return configStoreFor(server).get();
     }
 
-    /** Explicit clear-on-stop. WeakHashMap covers the case we forget. */
+    /** Explicit clear-on-stop. The weak keys cover the case we forget. */
     public static synchronized void clear(MinecraftServer server) {
-        PINS.remove(server);
-        CONFIGS.remove(server);
+        PINS.unregister(server);
+        CONFIGS.unregister(server);
     }
 }

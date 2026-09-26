@@ -36,4 +36,13 @@ public interface SchedulerHost {
     GlobalDomain global();
 
     AsyncDomain async();
+
+    /**
+     * This host was bound as the {@link java.util.ServiceLoader} fallback
+     * (a mod called {@code ServerDomains} before the server installed its
+     * runtime) and is now replaced by {@code next}: hand the world-domain work
+     * it still holds, and any it schedules later, over to {@code next}.
+     * Runtime-only; the default does nothing.
+     */
+    default void replacedBy(SchedulerHost next) {}
 }

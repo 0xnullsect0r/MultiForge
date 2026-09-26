@@ -22,7 +22,7 @@ import java.nio.file.Path;
 import java.util.List;
 import java.util.jar.JarEntry;
 import java.util.jar.JarOutputStream;
-import net.multiforge.scanner.rules.R05EntitySetPosOffCoord;
+import net.multiforge.scanner.rules.R02OffThreadLevelSetBlock;
 import net.multiforge.scanner.testsupport.Bytecode;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -39,13 +39,13 @@ class MainTest {
         ByteArrayOutputStream out = new ByteArrayOutputStream();
         ByteArrayOutputStream err = new ByteArrayOutputStream();
         int code = Main.run(
-                new String[0], new PrintStream(out), new PrintStream(err), List.of(new R05EntitySetPosOffCoord()));
+                new String[0], new PrintStream(out), new PrintStream(err), List.of(new R02OffThreadLevelSetBlock()));
         assertThat(code).isEqualTo(2);
     }
 
     @Test
     void exitsOneWhenErrorFindingPresentAndPrintsJson() throws IOException {
-        Path jar = writeJarWithBadR05Class();
+        Path jar = writeJarWithBadClass();
         ByteArrayOutputStream out = new ByteArrayOutputStream();
         ByteArrayOutputStream err = new ByteArrayOutputStream();
 
@@ -53,10 +53,10 @@ class MainTest {
                 new String[] {jar.toString()},
                 new PrintStream(out),
                 new PrintStream(err),
-                List.of(new R05EntitySetPosOffCoord()));
+                List.of(new R02OffThreadLevelSetBlock()));
 
         assertThat(code).isEqualTo(1);
-        assertThat(out.toString()).contains("\"R05\"");
+        assertThat(out.toString()).contains("\"R02\"");
     }
 
     @Test
@@ -69,14 +69,14 @@ class MainTest {
                 new String[] {jar.toString()},
                 new PrintStream(out),
                 new PrintStream(err),
-                List.of(new R05EntitySetPosOffCoord()));
+                List.of(new R02OffThreadLevelSetBlock()));
 
         assertThat(code).isEqualTo(0);
     }
 
     @Test
     void ignoreFileSuppressesAMatchingFindingAndDropsExitCodeToZero() throws IOException {
-        Path jar = writeJarWithBadR05Class();
+        Path jar = writeJarWithBadClass();
         Path ignoreFile = tempDir.resolve("my.multiforgeignore");
         // First run un-suppressed to discover the exact fingerprint the fixture produces —
         // mirrors the real workflow of "run once, paste the reported fingerprint to suppress it."
@@ -85,7 +85,7 @@ class MainTest {
                 new String[] {jar.toString()},
                 new PrintStream(discover),
                 new PrintStream(new ByteArrayOutputStream()),
-                List.of(new R05EntitySetPosOffCoord()));
+                List.of(new R02OffThreadLevelSetBlock()));
         String fingerprint = extractFingerprint(discover.toString());
         Files.writeString(ignoreFile, fingerprint + "\n");
 
@@ -95,18 +95,18 @@ class MainTest {
                 new String[] {"--ignore-file", ignoreFile.toString(), jar.toString()},
                 new PrintStream(out),
                 new PrintStream(err),
-                List.of(new R05EntitySetPosOffCoord()));
+                List.of(new R02OffThreadLevelSetBlock()));
 
         assertThat(code).isEqualTo(0);
-        assertThat(out.toString()).doesNotContain("\"ruleId\": \"R05\"");
+        assertThat(out.toString()).doesNotContain("\"ruleId\": \"R02\"");
         assertThat(out.toString()).contains("\"suppressed\": 1");
     }
 
     @Test
     void staleIgnoreEntryStillReportsTheFindingAndKeepsExitCodeNonZero() throws IOException {
-        Path jar = writeJarWithBadR05Class();
+        Path jar = writeJarWithBadClass();
         Path ignoreFile = tempDir.resolve("stale.multiforgeignore");
-        Files.writeString(ignoreFile, "R05:com.example.mod.BadR05#teleportToBase(Ljava/lang/Object;)V#000000000000\n");
+        Files.writeString(ignoreFile, "R02:com.example.mod.BadR05#teleportToBase(Ljava/lang/Object;)V#000000000000\n");
 
         ByteArrayOutputStream out = new ByteArrayOutputStream();
         ByteArrayOutputStream err = new ByteArrayOutputStream();
@@ -114,10 +114,10 @@ class MainTest {
                 new String[] {"--ignore-file", ignoreFile.toString(), jar.toString()},
                 new PrintStream(out),
                 new PrintStream(err),
-                List.of(new R05EntitySetPosOffCoord()));
+                List.of(new R02OffThreadLevelSetBlock()));
 
         assertThat(code).isEqualTo(1);
-        assertThat(out.toString()).contains("\"ruleId\": \"R05\"");
+        assertThat(out.toString()).contains("\"ruleId\": \"R02\"");
         assertThat(out.toString()).contains("\"staleSuppressions\": 1");
     }
 
@@ -130,7 +130,7 @@ class MainTest {
 
     @Test
     void emitsSarifWhenRequested() throws IOException {
-        Path jar = writeJarWithBadR05Class();
+        Path jar = writeJarWithBadClass();
         ByteArrayOutputStream out = new ByteArrayOutputStream();
         ByteArrayOutputStream err = new ByteArrayOutputStream();
 
@@ -138,16 +138,17 @@ class MainTest {
                 new String[] {"--sarif", jar.toString()},
                 new PrintStream(out),
                 new PrintStream(err),
-                List.of(new R05EntitySetPosOffCoord()));
+                List.of(new R02OffThreadLevelSetBlock()));
 
         assertThat(code).isEqualTo(1);
         assertThat(out.toString()).contains("\"version\": \"2.1.0\"");
     }
 
-    private Path writeJarWithBadR05Class() throws IOException {
+    private Path writeJarWithBadClass() throws IOException {
+        // An ERROR-severity finding: Level.setBlock from a method that is not tick-reachable (R02).
         ClassWriter cw = Bytecode.newClass("com/example/mod/BadR05", false);
         MethodVisitor mv = Bytecode.beginMethod(cw, "teleportToBase", false);
-        Bytecode.invokeVirtual(mv, "net/minecraft/world/entity/Entity", "setPos", "()V");
+        Bytecode.invokeVirtual(mv, "net/minecraft/world/level/Level", "setBlock", "()V");
         Bytecode.endVoid(mv);
         byte[] bytes = Bytecode.finish(cw);
 

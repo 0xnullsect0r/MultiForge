@@ -608,13 +608,20 @@ public final class MultiForgeCommandDispatcher {
         if (!Files.isReadable(scannerJar)) {
             return new ScanResult(2, "", "scanner jar not found or unreadable: " + scannerJar);
         }
-        ProcessBuilder pb = new ProcessBuilder(
-                "java", "-jar", scannerJar.toString(), "--json", "--severity=warn", modJar.toString());
-        Process proc = pb.start();
-        String stdout = new String(proc.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
-        String stderr = new String(proc.getErrorStream().readAllBytes(), StandardCharsets.UTF_8);
-        int exit = proc.waitFor();
-        return new ScanResult(exit, stdout, stderr);
+        // stderr goes to a file: reading stdout to EOF first while stderr filled
+        // its pipe would leave the scanner blocked on a write, forever.
+        Path stderrFile = Files.createTempFile("multiforge-scanner-", ".err");
+        try {
+            ProcessBuilder pb = new ProcessBuilder(
+                            "java", "-jar", scannerJar.toString(), "--json", "--severity=warn", modJar.toString())
+                    .redirectError(stderrFile.toFile());
+            Process proc = pb.start();
+            String stdout = new String(proc.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
+            int exit = proc.waitFor();
+            return new ScanResult(exit, stdout, Files.readString(stderrFile, StandardCharsets.UTF_8));
+        } finally {
+            Files.deleteIfExists(stderrFile);
+        }
     }
 
     private boolean handleCertify(String[] args, Consumer<String> output) {

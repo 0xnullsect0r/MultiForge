@@ -1,109 +1,163 @@
 # Certification Checklist
 
-"MultiForge-certified" is a signal, not a load gate — per CLAUDE.md
-rule 5, MultiForge never refuses to load a mod, certified or not. A
-certified mod is one that's been checked, automatically and manually,
-against the patterns that break under MultiForge's threading model, so
-a modpack author can tell at a glance which jars in their pack are
-known-safe versus known-risky versus simply unaudited.
+"MultiForge-certified" is a signal, not a load gate. Per CLAUDE.md rule 5,
+MultiForge never refuses to load a mod, certified or not. A certified mod
+has been checked, by the scanner and by hand, against the patterns that
+misbehave when regions tick in parallel, so a modpack author can tell
+which jars are known-good, which are known-risky, and which are
+unaudited.
+
+## The scanner
+
+`multiforge-scanner` is a standalone command-line tool that reads a mod
+jar's bytecode (ASM) and reports findings against 12 rules. It never runs
+mod code. Build it with `./gradlew :multiforge-scanner:jar`; the jar
+bundles its dependencies.
+
+```
+java -jar multiforge-scanner.jar [--json|--sarif] [--severity=warn|error] [--ignore-file <path>] <jar-or-dir>...
+```
+
+- Output is JSON by default, SARIF 2.1.0 with `--sarif`.
+- `--severity=error` reports only ERROR findings (a report filter; every
+  rule still runs).
+- Exit code: `0` no unsuppressed ERROR finding, `1` at least one, `2`
+  usage or I/O error.
+- Suppressions are read from `.multiforgeignore` in the working
+  directory, next to each input, and from `--ignore-file`; they add up.
+
+### Rules
+
+| Rule | Name | Severity | Flags |
+|---|---|---|---|
+| R01 | `direct-ChunkMap-invoke` | WARN | Calls into `ChunkMap` internals instead of `ChunkSource` |
+| R02 | `off-thread-Level.setBlock` | ERROR | `Level.setBlock` from a method that is not tick-reachable |
+| R03 | `blocking-future` | ERROR | `Future`/`CompletionStage`/`ForkJoinTask` blocking waits in tick-reachable code |
+| R04 | `unsync-static-mutation` | WARN | Non-final static field of a `@Mod` class written from tick-reachable code |
+| R05 | `entity-setpos-off-coord` | WARN | Any direct `Entity.setPos`/`setPosRaw` call (a long jump should use `teleportTo`) |
+| R06 | `direct-ServerChunkCache-mutation` | WARN | Mutating `ServerChunkCache` calls |
+| R07 | `raw-DistanceManager-ticket` | WARN | Direct `DistanceManager.addTicket` |
+| R08 | `off-thread-BlockEntity-setChanged` | WARN | `BlockEntity.setChanged` from a method that is not tick-reachable |
+| R09 | `sync-io-in-tick` | ERROR | Synchronous disk I/O in tick-reachable code |
+| R10 | `thread-start-in-mod-ctor` | WARN | Raw `Thread`/`Executors` construction in a `@Mod` constructor or setup handler |
+| R11 | `reflect-on-neoforged-internal` | WARN | Reflection (`getDeclaredField`, `setAccessible`, …) into NeoForge or Vanilla internals |
+| R12 | `capture-server-in-lambda` | ERROR | A lambda capturing `MinecraftServer`/`ServerLevel` stored in a static field |
+
+The full specification is [`design/scanner-rules.md`](design/scanner-rules.md).
+R01, R06 and R07 flag direct use of the chunk system (`ChunkMap`,
+`ServerChunkCache` mutations, `DistanceManager` tickets): it is the server
+thread's, so code that can run in a region tick should do it through
+`ServerDomains.global()`. R05 flags raw position writes, since a jump into
+another region from a region tick skips the deferral `teleportTo` gets (see
+[`mod-porting.md`](mod-porting.md)).
+
+### Tick reachability
+
+R02, R04, R08 and R09 only fire in (or, for R02/R08, only *outside*)
+methods the scanner considers reachable from a region tick. A method is a
+seed if:
+
+- it carries `@RegionThread` (on the method; a type-level annotation is
+  not read), or
+- its sole parameter is a tick event: a type whose simple name ends in
+  `TickEvent`, or a class nested in one (`EntityTickEvent$Post`,
+  `LevelTickEvent$Pre`). `@SubscribeEvent` is not required, so handlers
+  registered with `addListener(...)` count too.
+
+From the seeds, calls to methods of the same class are followed to a
+depth of 3. Virtual dispatch, reflection and calls into other classes are
+not followed; this is a lint heuristic, not a proof.
+
+### Suppressions
+
+A `.multiforgeignore` line is a finding's fingerprint:
+
+```
+<rule-id>:<class-fqn>#<method><descriptor>#<line-hash>
+```
+
+`<line-hash>` hashes the flagged instruction and its neighbours, so a
+suppression survives unrelated edits but goes stale when the flagged call
+changes. A stale suppression is reported separately
+(`staleSuppressions` in the JSON), neither silently applied nor silently
+dropped. Lines starting with `#` are comments; put the justification in a
+comment directly above the line it covers. The scanner does not enforce
+this.
+
+### The corpus gate
+
+CI (`.github/workflows/scanner.yml`) runs
+`./gradlew :multiforge-scanner:scanCorpus`, which scans the
+`multiforge-testmods` fixture mods (`writer`, `legacy`) and the client
+debug mod and compares one line per finding with
+`multiforge-scanner/corpus/expected.txt`. A rule change that adds, drops
+or moves a finding on those jars fails the build until the expectation is
+regenerated on purpose (`-PupdateCorpus`). Today the only expected
+findings are the legacy fixture's two unsynchronised static counters
+(R04).
 
 ## Criteria
 
 A mod is MultiForge-certified when all of the following hold:
 
 - [ ] **Zero unsuppressed ERROR findings.**
-      `java -jar multiforge-scanner.jar --severity=error <jar>` exits
-      `0`. ERROR-severity rules (R02 `off-thread-Level.setBlock`, R03
-      `blocking-future`, and any future ERROR-tier rule) detect
-      patterns that are *definitely broken* under MultiForge — not
-      "might be fine depending on modpack topology" — so none may be
-      present, suppressed or not, for certification.
-- [ ] **Every WARN finding is fixed or has a documented
-      `.multiforgeignore` suppression.** WARN-tier rules (R01, R04, and
-      the rest of the WARN-severity set — see
-      `docs/design/scanner-rules.md` §4) flag patterns that are
-      suspicious but not guaranteed broken. A suppression is
-      acceptable, but it must carry the justification convention from
-      the scanner spec §5.3 (why the flagged call site is actually
-      safe) — an undocumented blanket suppression doesn't count.
-- [ ] **Public API only.** The mod uses only `net.multiforge.api.*`.
-      No reflection into `net.multiforge.runtime.*`, which is
-      `@ApiStatus.Internal` and explicitly "subject to change without
-      notice" per CLAUDE.md — this is a manual review point, since the
-      scanner doesn't special-case reflective access beyond what R01
-      and R04 already catch structurally.
-- [ ] **No direct `ChunkMap`/`DistanceManager` internals access.**
-      Everything goes through the `MultiForgeChunkMap` /
-      `MultiForgeDistanceManager` facades. (R01.)
-- [ ] **No blocking `Future`/`CompletableFuture` calls on
-      `@RegionThread`-marked methods.** (R03.)
-- [ ] **No off-thread block mutation, and no cross-region entity touch
-      outside the migration protocol.** (R02, R05.)
-- [ ] **Static mutable state reachable from tick code is
-      synchronized, atomic, or per-region.** (R04.)
+      `java -jar multiforge-scanner.jar --severity=error <jar>` exits `0`.
+      ERROR rules (R02, R03, R09, R12) flag patterns that are wrong
+      under parallel region ticks in the general case. An ERROR
+      suppression needs a justification the reviewer accepts.
+- [ ] **Every WARN finding is fixed or suppressed with a justification.**
+      A suppression without a comment explaining why the flagged site is
+      safe does not count.
+- [ ] **Public API only.** The mod uses only `net.multiforge.api.*` from
+      MultiForge; `net.multiforge.runtime.*` is internal and changes
+      without notice. Manual check: the scanner does not look for this.
+- [ ] **No blocking calls in tick code.** No `Future.get()`/`join()`,
+      `Thread.sleep` or synchronous disk I/O on a region worker (R03, R09;
+      both see tick-reachable code only, within one class, so check other
+      tick paths by hand).
+- [ ] **No world access from foreign threads.** Network handlers use
+      `IPayloadContext.enqueueWork`; background threads and
+      `ServerDomains.async()` tasks hand world work to
+      `ServerDomains.region(...)` (R02, R08).
+- [ ] **Static mutable state reachable from tick code is synchronised or
+      atomic, or the mod is classified `legacy`.** (R04.)
 
-See [`mod-porting.md`](mod-porting.md) for the before/after recipe
-matching each of these.
+See [`mod-porting.md`](mod-porting.md) for the before/after recipe for
+each.
 
-## Certification process
+## Process
 
-1. **Automated gate.** Run the scanner against the mod's release jar:
+1. **Automated gate.** Run the scanner on the release jar:
    ```
    java -jar multiforge-scanner.jar --severity=error mods/examplemod-1.2.3.jar
    ```
-   Exit code `0` means no ERROR findings. Re-run without
-   `--severity=error` (or with `--severity=warn`, the default) to see
-   the full WARN + ERROR picture for the suppression review step.
-2. **Suppression review.** For every WARN finding, either fix the
-   underlying pattern (`mod-porting.md`) or add a justified
-   `.multiforgeignore` entry using the fingerprint from the finding's
-   `fingerprint` field (`docs/design/scanner-rules.md` §5).
-3. **Manual review.** Confirm public-API-only usage — the scanner
-   flags structural violations but doesn't do a full API-surface audit
-   by itself.
-4. **Sign off.** Once all criteria above are met, the mod is
-   certified. There's no separate signing step or registry in v1 —
-   certification is evidenced by a clean scanner report the mod author
-   or modpack curator keeps alongside the jar.
+   Then run it without `--severity=error` to see WARN findings too.
+2. **Suppression review.** For each finding, fix the pattern or add a
+   justified `.multiforgeignore` line using the finding's `fingerprint`.
+3. **Manual review.** Public-API-only use, blocking calls outside
+   `@RegionThread` methods, threads the mod starts.
+4. **Sign-off.** There is no signing step and no registry; certification
+   is evidenced by a clean scanner report kept with the jar.
 
-The in-server `/multiforge certify` command (below) is a convenience
-wrapper for step 1 — an operator with a `./mods` directory full of
-jars can check certification status without leaving the game or
-hand-building the scanner invocation.
+## In-game commands
 
-## Commands
-
-Two new subcommand groups, alongside the existing `/multiforge` tree
-(`config`, `region`, `probes`, `chunks` — see
-`docs/global-network.md`). Both are `op`-gated like every other
-`/multiforge` command.
-
-### `/multiforge warn`
-
-```
-/multiforge warn list     # show recent violations from ViolationLogger
-/multiforge warn clear    # reset the violation history ring buffer
-```
-
-`warn list` prints the last (at most 200) violations
-`ViolationLogger` has emitted, oldest first — mod id, site, and
-detail, timestamped. See `docs/debugging-violations.md` for how to
-read and act on the output. `warn clear` empties that history; it does
-not reset the underlying rate-limit buckets, so a mod mid-burst keeps
-its existing throttle window.
+Both are part of the `/multiforge` tree (see
+[`multiforge-command.md`](multiforge-command.md)) and require operator
+permission.
 
 ### `/multiforge certify`
 
 ```
-/multiforge certify <modId>   # certification status for one mod's jar under ./mods
-/multiforge certify all       # same, for every jar under ./mods
+/multiforge certify <modId>   # jars under ./mods whose file name starts with <modId> (case-insensitive)
+/multiforge certify all       # every *.jar directly under ./mods
 ```
 
-For each resolved jar, the command shells out to
-`java -jar multiforge-scanner.jar --json --severity=warn <jar>`
-(scanner jar path overridable via `-Dmultiforge.scanner.jar=<path>`,
-default `./multiforge-scanner.jar`), and prints one pass/fail line per
-rule plus an overall verdict:
+For each jar the command runs
+`java -jar <scanner> --json --severity=warn <jar>` as a child process and
+prints one PASS/FAIL line per rule and a verdict. The scanner jar is
+`./multiforge-scanner.jar` in the server's working directory, or the path
+in `-Dmultiforge.scanner.jar=<path>`. Suppression files in the server
+directory and in `mods/` apply as they do on the command line.
 
 ```
 > /multiforge certify examplemod
@@ -111,7 +165,7 @@ rule plus an overall verdict:
   R01: PASS
   R02: PASS
   R03: FAIL (ERROR)
-  R04: PASS
+  R04: FAIL (WARN)
   R05: PASS
   R06: PASS
   R07: PASS
@@ -123,10 +177,19 @@ rule plus an overall verdict:
 NOT CERTIFIED: examplemod-1.2.3.jar
 ```
 
-`certify all` runs the same per-jar report for every `*.jar` under
-`./mods` and reports a certified/not-certified verdict per jar. If the
-scanner jar isn't present at the configured path, the command reports
-that clearly and fails the command (never throws) — consistent with
-CLAUDE.md rule 5's "auto-reroute and warn, never refuse" spirit
-extended to tooling: a missing scanner jar is a tooling gap for the
-operator to fix, not a crash.
+The verdict is `CERTIFIED` when no rule has an unsuppressed ERROR
+finding; WARN findings are shown but do not change it (the suppression
+review above is still up to a person). If the scanner jar is missing or
+the scanner fails, the jar is reported `NOT CERTIFIED` with the reason;
+the command never throws. The scanner runs synchronously, so the server
+stalls while it scans.
+
+### `/multiforge warn`
+
+```
+/multiforge warn list     # the last (at most 200) logged violation warnings, oldest first
+/multiforge warn clear    # empty that list; rate-limit budgets are not reset
+```
+
+See [`debugging-violations.md`](debugging-violations.md) for reading the
+output.

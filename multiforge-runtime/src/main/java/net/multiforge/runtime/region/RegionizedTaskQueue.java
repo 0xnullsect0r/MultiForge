@@ -24,19 +24,18 @@ import net.multiforge.api.world.WorldRef;
 /**
  * Per-region mailboxes used to route cross-region work. The primary
  * entry point is {@link #queueChunkTask(WorldRef, int, int, Runnable)}:
- * the task is delivered to the region owning that chunk <em>at drain
- * time</em>, not schedule time. This is how MultiForge (like Folia)
- * handles entities crossing borders, network packets landing on the
- * network thread, and event-bus dispatch fan-out.
+ * the task is queued on the region that owns that chunk when it is
+ * queued, and it follows the chunk if ownership changes before it runs:
+ * a merge moves the dying region's inbox to the survivor, a split moves
+ * each task whose chunk went to the new region, and a task for an unloaded
+ * chunk waits in the orphan queue until the chunk loads.
  *
  * <p>Inboxes are unbounded per region — the tick pipeline drains them
- * in bounded batches inside its MSPT budget instead. Backpressure is
- * therefore observed as MSPT growth, which the adaptive sizer picks up
- * as a split signal.
+ * in bounded batches instead. Backpressure shows up as region MSPT.
  *
  * <p>The queue does not know about {@link ThreadedRegionizer} state
  * transitions on its own; callers hand it a resolver so it can look
- * up ownership at drain time. This lets us wire the same queue to
+ * up ownership when a task is queued or re-routed. This lets us wire the same queue to
  * either the {@link ThreadedRegionizer} (production) or a stub map
  * (unit tests).
  */
@@ -74,7 +73,7 @@ public final class RegionizedTaskQueue implements RegionListener {
 
     private final OwnerLookup ownerLookup;
     private final ReadLockLookup readLockLookup;
-    private final ConcurrentMap<RegionId, Queue<Runnable>> inboxes = new ConcurrentHashMap<>();
+    private final ConcurrentMap<RegionId, Queue<PendingTask>> inboxes = new ConcurrentHashMap<>();
     private final ConcurrentMap<OrphanBucket, Queue<PendingTask>> orphanedBySection = new ConcurrentHashMap<>();
 
     /**
@@ -137,7 +136,7 @@ public final class RegionizedTaskQueue implements RegionListener {
                 orphanBucketFor(world, chunkX, chunkZ).add(new PendingTask(world, chunkX, chunkZ, task));
                 return;
             }
-            inboxFor(owner).add(task);
+            inboxFor(owner).add(new PendingTask(world, chunkX, chunkZ, task));
         } finally {
             if (readLock != null) readLock.unlock();
         }
@@ -154,17 +153,16 @@ public final class RegionizedTaskQueue implements RegionListener {
      * @return the number of tasks executed.
      */
     public int drain(Region region, int max) {
-        Queue<Runnable> inbox = inboxes.get(region.id());
+        Queue<PendingTask> inbox = inboxes.get(region.id());
         if (inbox == null) return 0;
         int run = 0;
         while (run < max) {
-            Runnable r = inbox.poll();
-            if (r == null) break;
+            PendingTask p = inbox.poll();
+            if (p == null) break;
             try {
-                r.run();
+                p.task().run();
             } catch (Throwable t) {
                 // Never let a mod-thrown exception drop the tick pipeline.
-                // Log via the diagnostics layer once its logger sink is wired in M2.5.
                 Thread.currentThread().getUncaughtExceptionHandler().uncaughtException(Thread.currentThread(), t);
             }
             run++;
@@ -206,14 +204,14 @@ public final class RegionizedTaskQueue implements RegionListener {
             if (owner == null) {
                 bucket.add(pending);
             } else {
-                inboxFor(owner).add(pending.task);
+                inboxFor(owner).add(pending);
             }
             drained++;
         }
     }
 
     public int inboxSize(Region region) {
-        Queue<Runnable> q = inboxes.get(region.id());
+        Queue<PendingTask> q = inboxes.get(region.id());
         return q == null ? 0 : q.size();
     }
 
@@ -225,11 +223,11 @@ public final class RegionizedTaskQueue implements RegionListener {
 
     /** Merge {@code source}'s pending inbox into {@code target}'s. */
     public void moveInbox(Region source, Region target) {
-        Queue<Runnable> src = inboxes.remove(source.id());
+        Queue<PendingTask> src = inboxes.remove(source.id());
         if (src == null) return;
-        Queue<Runnable> tgt = inboxFor(target);
-        Runnable r;
-        while ((r = src.poll()) != null) tgt.add(r);
+        Queue<PendingTask> tgt = inboxFor(target);
+        PendingTask p;
+        while ((p = src.poll()) != null) tgt.add(p);
     }
 
     /** Drop every task for {@code region} — used when a region dies. */
@@ -257,7 +255,30 @@ public final class RegionizedTaskQueue implements RegionListener {
         clear(region);
     }
 
-    private Queue<Runnable> inboxFor(Region region) {
+    /**
+     * {@link RegionListener} hook: after a split, tasks queued on the source
+     * for chunks that now belong to {@code child} move to the child's inbox, so
+     * they run on the worker that owns their chunk. Each task carries the chunk
+     * it was queued for; ownership is re-resolved here, after the split.
+     */
+    @Override
+    public void onRegionSplit(Region source, Region child) {
+        Queue<PendingTask> src = inboxes.get(source.id());
+        if (src == null) return;
+        int size = src.size();
+        for (int i = 0; i < size; i++) {
+            PendingTask p = src.poll();
+            if (p == null) break;
+            Region owner = ownerLookup.regionAtChunk(p.world, p.chunkX, p.chunkZ);
+            if (owner == null) {
+                orphanBucketFor(p.world, p.chunkX, p.chunkZ).add(p);
+            } else {
+                inboxFor(owner).add(p);
+            }
+        }
+    }
+
+    private Queue<PendingTask> inboxFor(Region region) {
         return inboxes.computeIfAbsent(region.id(), id -> new ConcurrentLinkedQueue<>());
     }
 

@@ -108,6 +108,6 @@ public final class RegionPinManager {
     public synchronized void save() throws IOException {
         Path parent = file.getParent();
         if (parent != null) Files.createDirectories(parent);
-        Files.writeString(file, PinCodec.render(byId.values()), StandardCharsets.UTF_8);
+        net.multiforge.runtime.config.AtomicFiles.writeString(file, PinCodec.render(byId.values()));
     }
 }

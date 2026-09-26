@@ -16,8 +16,6 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.level.LevelAccessor;
 import net.multiforge.api.world.WorldRef;
-import net.multiforge.runtime.chunk.ChunkHolderManager;
-import net.multiforge.runtime.region.Region;
 import net.multiforge.runtime.scheduler.MultiForgeRegionizedRuntime;
 import net.multiforge.runtime.scheduler.MultiThreadedSchedulerHost;
 import net.neoforged.neoforge.common.NeoForge;
@@ -50,10 +48,7 @@ public final class RegionizedChunkLifecycle {
         WorldRef world = worldRefFor(event.getLevel());
         if (world == null) return;
         ChunkPos pos = event.getChunk().getPos();
-        Region region = host.registerChunk(world, pos.x, pos.z);
-        host.chunkManagerFor(world).createHolder(new net.multiforge.api.world.ChunkPos(pos.x, pos.z), region.id());
-        // Work queued for this chunk before it had an owner goes to its region now.
-        host.taskQueue().rerouteAtChunk(world, pos.x, pos.z);
+        host.chunkLoaded(world, pos.x, pos.z);
     }
 
     private static void onChunkUnloaded(final ChunkEvent.Unload event) {
@@ -62,9 +57,7 @@ public final class RegionizedChunkLifecycle {
         WorldRef world = worldRefFor(event.getLevel());
         if (world == null) return;
         ChunkPos pos = event.getChunk().getPos();
-        host.unregisterChunk(world, pos.x, pos.z);
-        ChunkHolderManager manager = host.chunkManagerForOrNull(world);
-        if (manager != null) manager.dropHolder(new net.multiforge.api.world.ChunkPos(pos.x, pos.z));
+        host.chunkUnloaded(world, pos.x, pos.z);
     }
 
     private static WorldRef worldRefFor(LevelAccessor level) {

@@ -421,30 +421,23 @@ public class ExampleMod {
 
 ### R05 — `entity-setpos-off-coord`
 
-**Severity:** ERROR. **Detects:** a direct call to
-`Entity.setPos(double,double,double)` or `setPosRaw` from mod code, not
-made from within
-`net.multiforge.runtime.entity.EntityMigrationCoordinator` itself.
+**Severity:** WARN (was ERROR while M4 entity migration existed). **Detects:**
+a direct call to `Entity.setPos(double,double,double)` or `setPosRaw` from
+mod code.
 
 **Bytecode pattern:**
 ```
 visitMethodInsn(INVOKEVIRTUAL, "net/minecraft/world/entity/Entity", "setPos"|"setPosRaw", "(DDD)V", false)
-  guarded by: ClassContext.className does NOT start with "net/multiforge/runtime/entity/"
 ```
 
-**Rationale:** Cross-region entity movement is not just "set the
-coordinate fields" — `EntityMigrationCoordinator.beginMigration`/
-`completeAt`
-(`multiforge-runtime/src/main/java/net/multiforge/runtime/entity/EntityMigrationCoordinator.java:56,89`)
-exists because a boundary-crossing position write must also transfer
-ownership, drain in-flight per-region state, and (per
-`beginMigrationWithTree`, line 115) carry passengers atomically. A raw
-`setPos` silently desyncs region ownership bookkeeping from the entity's
-actual coordinates.
+**Rationale:** Ownership follows position, so ordinary movement needs
+nothing special. But a jump into another region's chunks from a region
+tick skips the deferral MultiForge gives `teleportTo`/`changeDimension`
+(they run on the server thread), and the entity keeps being ticked by the
+old region until the next tick. Flagged so long moves can be reviewed.
 
-**Escape hatch:** `.multiforgeignore` fingerprint — legitimate for small,
-same-region cosmetic nudges that never cross a boundary in practice; the
-scanner cannot prove that, so it flags all direct calls.
+**Escape hatch:** `.multiforgeignore` fingerprint — for short moves that
+never leave the region.
 
 **Buggy:**
 ```java

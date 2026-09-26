@@ -13,6 +13,7 @@
 package net.multiforge.runtime.config;
 
 import java.io.IOException;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Objects;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -40,8 +41,14 @@ public final class MultiForgeConfigStore {
         this.current = new AtomicReference<>(Objects.requireNonNull(initial, "initial"));
     }
 
+    /**
+     * Load {@code file}; when it does not exist yet, write the defaults to it so
+     * an operator finds every setting (with its comment) on first start.
+     */
     public static MultiForgeConfigStore load(Path file) throws IOException {
-        return new MultiForgeConfigStore(file, ConfigCodec.load(file));
+        MultiForgeConfig config = ConfigCodec.load(file);
+        if (!Files.exists(file)) ConfigCodec.save(file, config);
+        return new MultiForgeConfigStore(file, config);
     }
 
     public MultiForgeConfig get() {

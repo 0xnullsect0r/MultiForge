@@ -62,9 +62,9 @@ import net.multiforge.runtime.region.pin.RegionPinManager;
 
 /**
  * Parallel {@link SchedulerHost} that runs region/entity work on the
- * {@link TickRegionScheduler} worker pool. Global work runs on a
- * dedicated single-thread executor (the "global region" in Folia
- * terms). Async work runs on a shared pool.
+ * {@link TickRegionScheduler} worker pool. Global work runs in the
+ * synthetic global region, ticked once per server tick before any
+ * level's regions. Async work runs on a shared pool.
  *
  * <p>Region/entity task <em>dispatch</em> is deferred: calling
  * {@code region.execute(mod, r)} enqueues {@code r} in the owner
@@ -246,6 +246,11 @@ public final class MultiThreadedSchedulerHost implements SchedulerHost, AutoClos
         }
 
         @Override
+        public long globalRegionId() {
+            return globalRegion.id().value();
+        }
+
+        @Override
         public boolean queueOnOwner(WorldRef world, int chunkX, int chunkZ, Runnable mutation) {
             if (ownerOf(world, chunkX, chunkZ) == UNOWNED) return false;
             taskQueue.queueChunkTask(world, chunkX, chunkZ, mutation);
@@ -341,7 +346,52 @@ public final class MultiThreadedSchedulerHost implements SchedulerHost, AutoClos
     public TickRegionScheduler.TickAllResult driveRegions(WorldRef world, long deadlineNanos, BooleanSupplier pump) {
         ThreadedRegionizer regionizer = regionizerForOrNull(world);
         if (regionizer == null) return scheduler.driveTick(List.of(), deadlineNanos, pump);
-        return scheduler.driveTick(regionizer.regions(), deadlineNanos, pump);
+        regionsTicking = true;
+        try {
+            return scheduler.driveTick(regionizer.regions(), deadlineNanos, pump);
+        } finally {
+            regionsTicking = false;
+            applyDeferredChunkChanges();
+        }
+    }
+
+    /**
+     * A chunk was loaded ({@code ChunkEvent.Load}): register it with its world's
+     * regionizer, index it in the world's {@link ChunkHolderManager} under its
+     * region, and hand it any work queued for it before it had an owner.
+     *
+     * <p>While a level's regions are ticking, the change is queued and applied on
+     * the server thread when the barrier completes. A chunk loads mid-tick when a
+     * region worker hands a load to the server thread ({@code MainThreadHandoff});
+     * registering it then could merge the ticking region, and a merge waits for
+     * its target to stop ticking — while that region's worker waits for the load.
+     * Until the barrier ends the chunk is unowned, and work on it goes to the
+     * server thread, as for any unowned chunk.
+     */
+    public void chunkLoaded(WorldRef world, int chunkX, int chunkZ) {
+        if (regionsTicking) {
+            deferredChunkChanges.add(() -> chunkLoaded(world, chunkX, chunkZ));
+            return;
+        }
+        Region region = registerChunk(world, chunkX, chunkZ);
+        chunkManagerFor(world).createHolder(new net.multiforge.api.world.ChunkPos(chunkX, chunkZ), region.id());
+        taskQueue.rerouteAtChunk(world, chunkX, chunkZ);
+    }
+
+    /** A chunk was unloaded ({@code ChunkEvent.Unload}); deferred like {@link #chunkLoaded}. */
+    public void chunkUnloaded(WorldRef world, int chunkX, int chunkZ) {
+        if (regionsTicking) {
+            deferredChunkChanges.add(() -> chunkUnloaded(world, chunkX, chunkZ));
+            return;
+        }
+        unregisterChunk(world, chunkX, chunkZ);
+        ChunkHolderManager manager = chunkManagerForOrNull(world);
+        if (manager != null) manager.dropHolder(new net.multiforge.api.world.ChunkPos(chunkX, chunkZ));
+    }
+
+    private void applyDeferredChunkChanges() {
+        Runnable change;
+        while ((change = deferredChunkChanges.poll()) != null) change.run();
     }
 
     /**
@@ -369,6 +419,13 @@ public final class MultiThreadedSchedulerHost implements SchedulerHost, AutoClos
     public MultiForgeConfig config() {
         return config;
     }
+
+    /** True while a level's regions tick (server thread inside {@link #driveRegions}). */
+    private volatile boolean regionsTicking;
+
+    /** Chunk loads/unloads that arrived while regions were ticking, in order. */
+    private final java.util.concurrent.ConcurrentLinkedQueue<Runnable> deferredChunkChanges =
+            new java.util.concurrent.ConcurrentLinkedQueue<>();
 
     /**
      * Apply a changed configuration live: resize the worker pool and, if the
@@ -454,13 +511,9 @@ public final class MultiThreadedSchedulerHost implements SchedulerHost, AutoClos
             // inboxes — no manual bookkeeping in the M8 patches.
             r.addListener(scheduler);
             r.addListener(taskQueue);
-            // /67 round-4 fix: also wire the per-world ChunkHolderManager
-            // and the shared ChunkTaskScheduler so ticket state, holder
-            // ownership, and chunk-priority deques auto-migrate on merge
-            // and are cleaned up on death. Previously these two listeners
-            // were silently dropped (signature mismatch); every merge
-            // leaked per-region state and left holders pointing at dead
-            // RegionIds.
+            // Also the per-world ChunkHolderManager, so each indexed chunk's
+            // owning region and the per-region block-entity tickers follow
+            // merges and splits and are cleaned up on death.
             r.addListener(chunkManagerFor(world));
             // Phase 5.1/5.3 wiring: region → world map so the M9-wired
             // tick body can route Region → ChunkHolderManager without
@@ -629,9 +682,7 @@ public final class MultiThreadedSchedulerHost implements SchedulerHost, AutoClos
      * same tick — {@link PhasedRegionTickBody#tickOnce} already
      * isolates each phase this way, but the per-entity iteration this
      * phase delegates to is exactly the kind of large, mod-influenced
-     * body CLAUDE.md rule 5 asks call sites to defend individually too
-     * (matching {@link #phaseAutoSave}'s own IOException catch just
-     * below).
+     * body CLAUDE.md rule 5 asks call sites to defend individually too.
      */
     private void phaseEntityAiTick(Region region) {
         OwnerToken tok = OwnerToken.current();
@@ -737,7 +788,16 @@ public final class MultiThreadedSchedulerHost implements SchedulerHost, AutoClos
                 for (Region region : regionizer.regions()) ran += taskQueue.drain(region, Integer.MAX_VALUE);
             }
             total += ran;
-            if (ran == 0) break;
+            if (ran == 0) return total;
+        }
+        // Tasks that keep queueing more tasks: stop rather than spin, but say so.
+        int left = 0;
+        for (ThreadedRegionizer regionizer : regionizers.values()) {
+            for (Region region : regionizer.regions()) left += taskQueue.inboxSize(region);
+        }
+        if (left > 0) {
+            org.slf4j.LoggerFactory.getLogger("multiforge.scheduler")
+                    .warn("{} rerouted task(s) still queued after 16 drain passes at stop; they are dropped", left);
         }
         return total;
     }
@@ -1082,6 +1142,10 @@ public final class MultiThreadedSchedulerHost implements SchedulerHost, AutoClos
             if (!handle.enterExecuting()) return;
             try {
                 OwnerToken.runAs(OwnerToken.ASYNC, () -> body.accept(handle));
+            } catch (Throwable t) {
+                // A throw escaping here would be swallowed by the executor's future and,
+                // for a repeating task, silently end it. Log it; a repeating task keeps running.
+                org.slf4j.LoggerFactory.getLogger("multiforge.scheduler").error("async task {} threw", handle, t);
             } finally {
                 if (repeating) handle.prepareNextIteration();
                 else handle.markFinished();

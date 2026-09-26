@@ -84,6 +84,15 @@ public final class OwnershipEnforcer {
          *     to the server-thread target)
          */
         boolean queueOnOwner(WorldRef world, int chunkX, int chunkZ, Runnable mutation);
+
+        /**
+         * The id value of the synthetic global region, or {@link #UNOWNED}. The
+         * global region ticks on its own before any level's regions, so like the
+         * server thread it may write anywhere.
+         */
+        default long globalRegionId() {
+            return UNOWNED;
+        }
     }
 
     private static final String MODE_PROP = "multiforge.ownership.mode";
@@ -113,7 +122,7 @@ public final class OwnershipEnforcer {
         mode = Objects.requireNonNull(m, "m");
     }
 
-    static Mode parseMode(String raw) {
+    public static Mode parseMode(String raw) {
         try {
             return Mode.valueOf(raw.trim().toUpperCase(Locale.ROOT));
         } catch (IllegalArgumentException e) {
@@ -241,6 +250,7 @@ public final class OwnershipEnforcer {
         if (tok.domain() != Domain.REGION) return canMutate(site);
         PositionRouter router = positionRouter;
         if (router == null || world == null) return true;
+        if (tok.regionId() == router.globalRegionId()) return true; // global region: allowed
         long owner = router.ownerOf(world, chunkX, chunkZ);
         if (owner == tok.regionId()) return true;
         ProbeRegistry.bump(site + ":cross-region");

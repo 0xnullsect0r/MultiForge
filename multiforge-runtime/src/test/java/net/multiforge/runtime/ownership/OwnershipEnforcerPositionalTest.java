@@ -46,6 +46,11 @@ class OwnershipEnforcerPositionalTest {
             queued.add("region-" + owner);
             return true;
         }
+
+        @Override
+        public long globalRegionId() {
+            return 99L;
+        }
     };
 
     @BeforeEach
@@ -92,6 +97,14 @@ class OwnershipEnforcerPositionalTest {
         assertThat(global.get()).isTrue();
         OwnershipEnforcer.bindTickThread(Thread.currentThread());
         assertThat(OwnershipEnforcer.canMutateAt("site", WORLD, 5, 0)).isTrue();
+    }
+
+    @Test
+    void theGlobalRegionsOwnTokenMayWriteAnywhere() {
+        // On a server the global region ticks under a REGION token for its own id.
+        assertThat(asRegion(99, 5)).isTrue();
+        assertThat(asRegion(99, -5)).isTrue();
+        assertThat(asRegion(99, 150)).isTrue();
     }
 
     @Test

@@ -29,7 +29,7 @@ import net.multiforge.runtime.diagnostics.ViolationLogger;
  *       deadlock/jitter risk;</li>
  *   <li>a mod handler stuck in an infinite loop;</li>
  *   <li>legitimate work that's just too heavy for a single tick — a
- *       signal the region should split.</li>
+ *       sign that one region carries too much (see docs/perf-tuning.md).</li>
  * </ul>
  *
  * <p>Default {@link Mode#WARN} rate-limits a violation warning per
@@ -196,7 +196,7 @@ public final class RegionTickWatchdog {
                 "region-tick.overrun",
                 "region " + region.id() + " tick body took " + elapsedMs + "ms (threshold " + warnMs + "ms, "
                         + waitedNs / 1_000_000L + "ms of designed waits not counted) — "
-                        + "likely a blocking wait or a region that needs to split");
+                        + "likely a blocking wait, or more work than one region should carry");
 
         if (mode == Mode.STRICT) {
             throw new RegionTickOverrunException(region, elapsedMs, warnMs);

@@ -34,7 +34,7 @@ import org.objectweb.asm.tree.MethodNode;
  * <p>A method is tick-reachable if:
  *
  * <ul>
- *   <li>it carries {@code @RegionThread}, or
+ *   <li>it carries {@code @RegionThread}, or its class does, or
  *   <li>its sole parameter is a tick event — a type whose name ends in {@code TickEvent}, or a
  *       class nested in one ({@code EntityTickEvent$Post}, {@code LevelTickEvent$Pre}: NeoForge
  *       21's tick events are all nested {@code Pre}/{@code Post} classes). The method need not
@@ -69,8 +69,9 @@ public final class TickReachability {
         Deque<String> frontier = new ArrayDeque<>();
         Map<String, Integer> depthOf = new HashMap<>();
 
+        boolean regionThreadClass = hasClassAnnotation(cn, REGION_THREAD_DESC);
         for (MethodNode m : methods) {
-            if (isSeed(m)) {
+            if (regionThreadClass || isSeed(m)) {
                 String k = key(m);
                 if (reachable.add(k)) {
                     depthOf.put(k, 0);
@@ -128,6 +129,14 @@ public final class TickReachability {
 
     private static boolean hasAnnotation(MethodNode m, String descriptor) {
         return annotationDescriptors(m).stream().anyMatch(d -> d.equals(descriptor));
+    }
+
+    private static boolean hasClassAnnotation(ClassNode cn, String descriptor) {
+        for (List<AnnotationNode> nodes : java.util.Arrays.asList(cn.visibleAnnotations, cn.invisibleAnnotations)) {
+            if (nodes == null) continue;
+            for (AnnotationNode n : nodes) if (n.desc.equals(descriptor)) return true;
+        }
+        return false;
     }
 
     private static List<String> annotationDescriptors(MethodNode m) {

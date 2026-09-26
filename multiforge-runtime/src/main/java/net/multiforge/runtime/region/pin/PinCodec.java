@@ -22,7 +22,7 @@ import net.multiforge.api.world.WorldRef;
 
 /**
  * TOML codec for {@link RegionPin} — round-trips through
- * {@code multiforge-regions.toml}.
+ * {@code config/multiforge-region-pins.toml}.
  *
  * <pre>
  *   [[pins]]

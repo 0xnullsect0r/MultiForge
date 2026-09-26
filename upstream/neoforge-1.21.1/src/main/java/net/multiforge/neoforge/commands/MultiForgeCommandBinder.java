@@ -185,13 +185,32 @@ public final class MultiForgeCommandBinder {
 
     private static LiteralArgumentBuilder<CommandSourceStack> certifySubtree(MultiForgeCommandDispatcher dispatcher) {
         return Commands.literal("certify")
-                .then(Commands.literal("all").executes(ctx -> run(dispatcher, ctx, "certify", "all")))
+                .then(Commands.literal("all").executes(ctx -> runOffThread(dispatcher, ctx, "certify", "all")))
                 .then(Commands.argument("modId", StringArgumentType.word())
-                        .executes(ctx -> run(dispatcher, ctx, "certify", strArg(ctx, "modId"))));
+                        .executes(ctx -> runOffThread(dispatcher, ctx, "certify", strArg(ctx, "modId"))));
     }
 
     private static int run(MultiForgeCommandDispatcher dispatcher, CommandContext<CommandSourceStack> ctx, String... args) {
         dispatcher.dispatch(args, msg -> ctx.getSource().sendSuccess(() -> Component.literal(msg), false));
+        return 1;
+    }
+
+    /**
+     * For slow subcommands ({@code certify} runs the scanner as a child
+     * process, seconds per jar): dispatch on a background thread so the
+     * server keeps ticking, and deliver each output line on the server thread.
+     */
+    private static int runOffThread(
+            MultiForgeCommandDispatcher dispatcher, CommandContext<CommandSourceStack> ctx, String... args) {
+        CommandSourceStack source = ctx.getSource();
+        MinecraftServer server = source.getServer();
+        source.sendSuccess(() -> Component.literal("Running in the background..."), false);
+        Thread worker = new Thread(
+                () -> dispatcher.dispatch(
+                        args, msg -> server.execute(() -> source.sendSuccess(() -> Component.literal(msg), false))),
+                "multiforge-" + args[0]);
+        worker.setDaemon(true);
+        worker.start();
         return 1;
     }
 

@@ -64,6 +64,8 @@ public final class ConfigCodec {
         sb.append("threadsPerCore = ").append(c.threadsPerCore()).append("\n");
         sb.append("mode = \"").append(c.mode().name().toLowerCase(Locale.ROOT)).append("\"\n\n");
         sb.append("[region]\n");
+        sb.append("# Sections are 2^size chunks on a side (4 = 16). `/multiforge region size <chunks>`\n");
+        sb.append("# takes the edge in chunks instead.\n");
         sb.append("size = ").append(c.regionSize()).append("\n\n");
         sb.append("[violations]\n");
         sb.append("policy = \"")
@@ -74,9 +76,7 @@ public final class ConfigCodec {
     }
 
     public static void save(Path file, MultiForgeConfig c) throws IOException {
-        Path parent = file.getParent();
-        if (parent != null) Files.createDirectories(parent);
-        Files.writeString(file, render(c), StandardCharsets.UTF_8);
+        AtomicFiles.writeString(file, render(c));
     }
 
     /**

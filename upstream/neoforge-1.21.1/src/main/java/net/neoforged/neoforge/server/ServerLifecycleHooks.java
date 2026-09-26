@@ -97,10 +97,10 @@ public class ServerLifecycleHooks {
         // legitimate single-threaded tick executor for
         // net.multiforge.runtime.ownership.OwnershipEnforcer's ownership
         // guard (multiforge-patches/01-ownership/) — without touching
-        // MinecraftServer.runServer itself. The reroute target is bound
-        // to the server's own executor as an interim measure until M2
-        // wires a real per-region RegionizedTaskQueue (see
-        // docs/blueprint.md M7/M8).
+        // MinecraftServer.runServer itself. The reroute target is the
+        // server's own executor: it takes mutations of chunks no region owns;
+        // mutations of owned chunks go to the owner's mailbox through the
+        // host's position router.
         net.multiforge.runtime.ownership.OwnershipEnforcer.bindTickThread(Thread.currentThread());
         // The serial event lane runs on the server thread, pumped at the tick barrier.
         net.multiforge.runtime.event.SerialLane.bind(Thread.currentThread());
@@ -147,6 +147,10 @@ public class ServerLifecycleHooks {
             // unchanged — the kill switch, and the control for regression runs.
             org.slf4j.LoggerFactory.getLogger("multiforge.lifecycle")
                     .info("MultiForge mode=off: running Vanilla's single-threaded tick");
+            // ServerDomains still works for mods: world tasks run on the server
+            // thread through its own executor, as on a Vanilla server.
+            mfOffHost = new net.multiforge.runtime.scheduler.SingleThreadedSchedulerHost(server);
+            mfOffHost.install();
             freshInstall = false;
         } else try {
             net.multiforge.runtime.scheduler.MultiForgeRegionizedRuntime.install(
@@ -259,6 +263,9 @@ public class ServerLifecycleHooks {
         exitLatch = new CountDownLatch(1);
     }
 
+    /** The {@code ServerDomains} host of a server running with MultiForge {@code mode = "off"}. */
+    private static net.multiforge.runtime.scheduler.SingleThreadedSchedulerHost mfOffHost;
+
     public static void handleServerStopped(final MinecraftServer server) {
         // MultiForge M8 sub-step 4: tear down the regionized runtime.
         // Called from every server-stop path, including the dedi
@@ -267,6 +274,11 @@ public class ServerLifecycleHooks {
         try {
             net.multiforge.runtime.event.SerialLane.unbind();
             net.multiforge.runtime.scheduler.MultiForgeRegionizedRuntime.shutdown();
+            if (mfOffHost != null) {
+                net.multiforge.api.scheduler.ServerDomains.uninstall();
+                mfOffHost.shutdown();
+                mfOffHost = null;
+            }
             // B3.4 teardown: drop the per-world "installed" bridge state
             // (docs/design/m13-b3-region-tick.md §5.3), for the
             // reused-JVM-across-server-instances case.

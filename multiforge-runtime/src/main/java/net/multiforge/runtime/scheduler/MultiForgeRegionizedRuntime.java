@@ -111,7 +111,7 @@ public final class MultiForgeRegionizedRuntime {
             throw e;
         }
         // Opt-in only: a no-op unless -Dmultiforge.otel.endpoint is set (see
-        // docs/operator-handbook.md and OtelExporter's class doc).
+        // OtelExporter's class doc).
         OtelExporter.startFromSystemProperty();
         return host;
     }

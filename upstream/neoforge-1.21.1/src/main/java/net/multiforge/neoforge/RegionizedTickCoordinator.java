@@ -39,15 +39,16 @@ import net.multiforge.runtime.scheduler.MultiThreadedSchedulerHost;
  *
  * <ol>
  * <li>{@link #dispatchLevelTick} for the first level ticked (the
- * overworld) first drives the synthetic global region once — weather,
- * time, world border, scoreboard, boss bars, raids, dragon fight and
- * command dispatch (docs/design/global-region.md).</li>
+ * overworld) first drives the synthetic global region once: the tasks
+ * queued with {@code ServerDomains.global()} and GLOBAL-domain event
+ * listeners.</li>
  * <li>Vanilla's {@code ServerLevel.tick} then runs on the server thread.
- * The patched body skips exactly the work that regions own: scheduled
- * block/fluid ticks, entity ticking and block-entity ticking (see
- * {@link #regionsHandleBlockFluidTicks}, {@link #regionsHandleEntityTicks},
- * {@link #regionsHandleBlockEntities}); everything else (chunk system,
- * random ticks, spawning, block events, raids) runs as in Vanilla.</li>
+ * The patched body skips exactly the work that regions own: random ticks
+ * and spawning, scheduled block/fluid ticks, block events, entity ticking
+ * and block-entity ticking (see {@link #regionsHandleChunkTicks}, {@link
+ * #regionsHandleBlockFluidTicks}, {@link #regionsHandleEntityTicks}, {@link
+ * #regionsHandleBlockEntities}); everything else — the chunk system,
+ * weather, time, raids, the dragon fight — runs as in Vanilla.</li>
  * <li>Every region of the level then ticks once, in parallel on the worker
  * pool, and this method returns only after all of them finished
  * ({@link MultiThreadedSchedulerHost#driveRegions}). While waiting, the

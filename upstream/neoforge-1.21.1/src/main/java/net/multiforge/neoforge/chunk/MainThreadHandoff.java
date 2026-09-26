@@ -36,7 +36,8 @@ import net.multiforge.runtime.diagnostics.ProbeRegistry;
  *
  * <p>Every hand-off bumps the probe {@code region.main-thread-chunk-load};
  * a region that keeps loading chunks synchronously is a performance
- * problem worth seeing in {@code /multiforge probe}.
+ * problem worth seeing in {@code /multiforge probes}. The wait is a
+ * designed wait: the region tick watchdog does not count it.
  */
 public final class MainThreadHandoff {
     private static final AtomicInteger WAITING = new AtomicInteger();

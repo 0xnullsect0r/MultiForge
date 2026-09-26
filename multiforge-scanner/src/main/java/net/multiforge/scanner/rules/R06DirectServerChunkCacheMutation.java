@@ -31,7 +31,8 @@ import org.objectweb.asm.tree.MethodNode;
  *
  * <p>WARN: mod calls to {@code ServerChunkCache}'s mutating surface ({@code addRegionTicket},
  * {@code removeRegionTicket}, {@code updateChunkForced}, and any void-returning method not named
- * {@code get*}/{@code is*}/{@code has*}) bypassing {@code ServerChunkCacheDelegate}.
+ * {@code get*}/{@code is*}/{@code has*}). The chunk cache is the server thread's; from code that
+ * can run in a region tick these belong in {@code ServerDomains.global()}.
  */
 public final class R06DirectServerChunkCacheMutation extends AbstractTreeRule {
 
@@ -51,7 +52,7 @@ public final class R06DirectServerChunkCacheMutation extends AbstractTreeRule {
 
     @Override
     public String description() {
-        return "ServerChunkCache mutating call bypassing ServerChunkCacheDelegate's per-region bookkeeping.";
+        return "ServerChunkCache mutating call; the chunk cache is server-thread state.";
     }
 
     @Override
@@ -84,7 +85,8 @@ public final class R06DirectServerChunkCacheMutation extends AbstractTreeRule {
                         methodKey,
                         BytecodeUtil.lineOf(mn, call),
                         "ServerChunkCache." + call.name + call.desc + " called directly from " + mn.name
-                                + " — bypasses ServerChunkCacheDelegate's per-region ticket bookkeeping.",
+                                + " — the chunk cache is the server thread's; from code that can run in a region"
+                                + " tick, run it with ServerDomains.global().",
                         Fingerprint.compute(id(), classFqn, methodKey, mn, call)));
             }
         }

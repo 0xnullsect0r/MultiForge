@@ -28,8 +28,8 @@ import org.objectweb.asm.tree.MethodNode;
  * R01 — {@code direct-ChunkMap-invoke}. See {@code docs/design/scanner-rules.md} &sect;4 (R01).
  *
  * <p>WARN: mod bytecode that reaches past {@code ChunkSource}/{@code ServerChunkCache}'s public
- * surface directly into {@code net.minecraft.server.level.ChunkMap} internals, instead of the
- * {@code MultiForgeChunkMap} facade.
+ * surface directly into {@code net.minecraft.server.level.ChunkMap} internals. The chunk system
+ * is the server thread's; region workers must not drive it directly.
  */
 public final class R01DirectChunkMapInvoke extends AbstractTreeRule {
 
@@ -48,7 +48,7 @@ public final class R01DirectChunkMapInvoke extends AbstractTreeRule {
 
     @Override
     public String description() {
-        return "Direct call into ChunkMap internals bypassing the MultiForgeChunkMap facade.";
+        return "Direct call into ChunkMap internals, which are server-thread state.";
     }
 
     @Override
@@ -80,7 +80,8 @@ public final class R01DirectChunkMapInvoke extends AbstractTreeRule {
                         methodKey,
                         BytecodeUtil.lineOf(mn, call),
                         "Direct call to ChunkMap." + call.name + call.desc
-                                + " bypasses the MultiForgeChunkMap facade — use ChunkSource's stable API instead.",
+                                + " — ChunkMap internals are the server thread's; use ChunkSource's stable API, or run it with"
+                                + " ServerDomains.global() when this can run in a region tick.",
                         Fingerprint.compute(id(), classFqn, methodKey, mn, call)));
             }
         }

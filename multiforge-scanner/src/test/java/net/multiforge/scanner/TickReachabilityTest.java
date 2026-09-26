@@ -66,4 +66,20 @@ class TickReachabilityTest {
         assertThat(TickReachability.isTickEvent("net/neoforged/neoforge/event/level/BlockEvent$BreakEvent"))
                 .isFalse();
     }
+
+    @Test
+    void everyMethodOfARegionThreadClassIsReachable() {
+        ClassWriter cw = new ClassWriter(ClassWriter.COMPUTE_MAXS);
+        cw.visit(Opcodes.V21, Opcodes.ACC_PUBLIC, "com/example/Worker", null, "java/lang/Object", null);
+        cw.visitAnnotation(TickReachability.REGION_THREAD_DESC, true).visitEnd();
+        MethodVisitor mv = cw.visitMethod(Opcodes.ACC_PUBLIC | Opcodes.ACC_STATIC, "work", "()V", null, null);
+        mv.visitCode();
+        mv.visitInsn(Opcodes.RETURN);
+        mv.visitMaxs(0, 0);
+        mv.visitEnd();
+        cw.visitEnd();
+        ClassNode cn = new ClassNode();
+        new org.objectweb.asm.ClassReader(cw.toByteArray()).accept(cn, 0);
+        assertThat(TickReachability.compute(cn)).contains("work()V");
+    }
 }
