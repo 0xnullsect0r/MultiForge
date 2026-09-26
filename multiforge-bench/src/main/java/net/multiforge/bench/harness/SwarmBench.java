@@ -142,6 +142,26 @@ public final class SwarmBench {
                 ok = true;
             }
 
+            if (!runner.isAlive()) {
+                // Died at the end of the run; there is nothing left to query.
+                System.err.println("SwarmBench: the server died during the run — see " + bootLog);
+                extra.put("server_crashed", true);
+                extra.put("crash_phase", "measurement");
+                BenchResult.from(
+                                "swarm",
+                                workers,
+                                ticks,
+                                elapsedMs(start),
+                                metrics,
+                                runner.rssPeakMb(),
+                                true,
+                                false,
+                                extra)
+                        .writeTo(outputFile);
+                System.out.println("SwarmBench: wrote " + outputFile.toAbsolutePath());
+                System.exit(1);
+                return;
+            }
             if (runner.hasTickStats()) {
                 ProbeSummary probes = ProbeSummary.parse(runner.rcon().command("multiforge probes"));
                 long violations = probes.violations();

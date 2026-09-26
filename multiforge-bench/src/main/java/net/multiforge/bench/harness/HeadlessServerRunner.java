@@ -59,7 +59,7 @@ public final class HeadlessServerRunner implements AutoCloseable {
 
     private static final Duration RCON_BOOT_TIMEOUT = Duration.ofSeconds(300);
     private static final Duration RCON_IO_TIMEOUT = Duration.ofSeconds(30);
-    private static final Duration JVM_EXIT_TIMEOUT = Duration.ofSeconds(120);
+    private static final Duration JVM_EXIT_TIMEOUT = Duration.ofSeconds(300);
     private static final String RCON_PASSWORD = "multiforge";
     private static final Pattern LAST_NUMBER = Pattern.compile("(\\d+)");
 
@@ -332,14 +332,15 @@ public final class HeadlessServerRunner implements AutoCloseable {
      */
     public boolean shutdown(Duration settleBeforeStop) throws InterruptedException {
         boolean cleanStop = true;
+        if (settleBeforeStop != null) {
+            Thread.sleep(settleBeforeStop.toMillis());
+        }
         try {
-            if (settleBeforeStop != null) {
-                Thread.sleep(settleBeforeStop.toMillis());
-            }
-            rcon.command("save-all flush");
+            // `stop` saves every level itself. A separate `save-all flush` of a big
+            // world can outlast the RCON read timeout, and then `stop` was never sent.
             rcon.command("stop");
         } catch (IOException e) {
-            cleanStop = false;
+            // The server may close RCON before it answers; the exit code decides.
         }
         if (!serverProcess.waitFor(JVM_EXIT_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS)) {
             cleanStop = false;
