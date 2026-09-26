@@ -1,8 +1,8 @@
 # CHANGELOG
 
-## Unreleased — the regions actually tick
+## v1.6.0 — the regions actually tick
 
-Everything since v1.5.1, on branch `claude/epic-archimedes-ndcba6`. The short version: before this, a production MultiForge server installed an **empty region tick body** and the patched `ServerLevel` skipped Vanilla's own passes, so scheduled ticks, mob AI and block entities most likely never ran on an installed server; nothing in CI booted a server to notice. Now the server ticks every region in parallel under a barrier model, is rebased onto NeoForge 21.1.251, and is checked against stock NeoForge by live runs.
+Everything since v1.5.1. The short version: before this, a production MultiForge server installed an **empty region tick body** and the patched `ServerLevel` skipped Vanilla's own passes, so scheduled ticks, mob AI and block entities most likely never ran on an installed server; nothing in CI booted a server to notice. Now the server ticks every region in parallel under a barrier model, is rebased onto NeoForge 21.1.251, and is checked against stock NeoForge by live runs.
 
 ### The tick
 
