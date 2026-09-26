@@ -45,7 +45,7 @@
  
          SectionPos sectionpos = p_140185_.getLastSectionPos();
          SectionPos sectionpos1 = SectionPos.of(p_140185_);
-@@ -1083,11 +1107,24 @@ public class ChunkMap extends ChunkStorage implements ChunkHolder.PlayerProvider
+@@ -1083,11 +1107,26 @@ public class ChunkMap extends ChunkStorage implements ChunkHolder.PlayerProvider
              int i = entitytype.clientTrackingRange() * 16;
              if (i != 0) {
                  int j = entitytype.updateInterval();
@@ -70,10 +70,12 @@
                  } else {
 -                    ChunkMap.TrackedEntity chunkmap$trackedentity = new ChunkMap.TrackedEntity(p_140200_, i, j, entitytype.trackDeltas());
 -                    this.entityMap.put(p_140200_.getId(), chunkmap$trackedentity);
++                    if (MF_INDEXED_TRACKING) this.mfUpdateViewers(chunkmap$trackedentity, this.level.players());
++                    else
                      chunkmap$trackedentity.updatePlayers(this.level.players());
                      if (p_140200_ instanceof ServerPlayer serverplayer) {
                          this.updatePlayerStatus(serverplayer, true);
-@@ -1110,11 +1147,19 @@ public class ChunkMap extends ChunkStorage implements ChunkHolder.PlayerProvider
+@@ -1110,11 +1149,19 @@ public class ChunkMap extends ChunkStorage implements ChunkHolder.PlayerProvider
              for (ChunkMap.TrackedEntity chunkmap$trackedentity : this.entityMap.values()) {
                  chunkmap$trackedentity.removePlayer(serverplayer);
              }
@@ -94,7 +96,16 @@
          }
      }
  
-@@ -1146,21 +1191,160 @@ public class ChunkMap extends ChunkStorage implements ChunkHolder.PlayerProvider
+@@ -1131,6 +1178,8 @@ public class ChunkMap extends ChunkStorage implements ChunkHolder.PlayerProvider
+             SectionPos sectionpos1 = SectionPos.of(chunkmap$trackedentity.entity);
+             boolean flag = !Objects.equals(sectionpos, sectionpos1);
+             if (flag) {
++                if (MF_INDEXED_TRACKING) this.mfUpdateViewers(chunkmap$trackedentity, list1);
++                else
+                 chunkmap$trackedentity.updatePlayers(list1);
+                 Entity entity = chunkmap$trackedentity.entity;
+                 if (entity instanceof ServerPlayer) {
+@@ -1146,21 +1195,194 @@ public class ChunkMap extends ChunkStorage implements ChunkHolder.PlayerProvider
          }
  
          if (!list.isEmpty()) {
@@ -180,9 +191,32 @@
 +                    self = this.entityMap.get(player.getId());
 +                }
 +            }
-+            if (self != null && self.entity == player) self.updatePlayers(this.level.players());
++            if (self != null && self.entity == player) this.mfUpdateViewers(self, this.level.players());
 +        }
 +        if (MF_VERIFY_EVERY > 0 && ++this.mfVerifyCounter % MF_VERIFY_EVERY == 0) this.mfCheckTracking(player);
++    }
++
++    /**
++     * MultiForge: {@code tracker.updatePlayers(players)}, on the players it can
++     * change: those it shows its entity to now, and those whose chunk-tracking
++     * view reaches the entity's chunk (updatePlayer requires isChunkTracked, and
++     * ChunkTrackingView.contains reaches viewDistance + 2 chunks from the view's
++     * centre). For every other player updatePlayer would change nothing.
++     */
++    private void mfUpdateViewers(ChunkMap.TrackedEntity tracker, List<ServerPlayer> players) {
++        ChunkPos chunk = tracker.entity.chunkPosition();
++        for (ServerPlayer player : players) {
++            if (tracker.seenBy.contains(player.connection) || mfViewMayContain(player, chunk.x, chunk.z)) {
++                tracker.updatePlayer(player);
++            }
++        }
++    }
++
++    /** MultiForge: whether {@code player}'s chunk-tracking view could contain chunk ({@code x}, {@code z}). */
++    private static boolean mfViewMayContain(ServerPlayer player, int x, int z) {
++        if (!(player.getChunkTrackingView() instanceof ChunkTrackingView.Positioned view)) return false;
++        int reach = view.viewDistance() + 2;
++        return Math.abs(x - view.center().x) <= reach && Math.abs(z - view.center().z) <= reach;
 +    }
 +
 +    /**
@@ -225,7 +259,18 @@
 +        }
 +        Set<ChunkMap.TrackedEntity> seen = this.mfSeenBy.get(player);
 +        for (ChunkMap.TrackedEntity tracker : all) {
-+            if (tracker.entity == player) continue;
++            if (tracker.entity == player) {
++                // The player's own tracker: every other player's view of it.
++                for (ServerPlayer other : this.level.players()) {
++                    if (other == player || tracker.seenBy.contains(other.connection) == tracker.mfWouldSee(other)) continue;
++                    net.multiforge.runtime.diagnostics.ProbeRegistry.bump("tracking.mismatch");
++                    net.multiforge.runtime.diagnostics.ViolationLogger.warn(
++                            "ChunkMap.tracking",
++                            "indexed tracking disagrees with a full check: " + player.getScoreboardName() + " for "
++                                    + other.getScoreboardName());
++                }
++                continue;
++            }
 +            boolean shown = tracker.seenBy.contains(player.connection);
 +            boolean indexed = seen != null && seen.contains(tracker);
 +            if (shown == tracker.mfWouldSee(player) && shown == indexed) continue;
@@ -257,7 +302,7 @@
          if (chunkmap$trackedentity != null) {
              chunkmap$trackedentity.broadcastAndSend(p_140335_);
          }
-@@ -1210,7 +1394,10 @@ public class ChunkMap extends ChunkStorage implements ChunkHolder.PlayerProvider
+@@ -1210,7 +1432,10 @@ public class ChunkMap extends ChunkStorage implements ChunkHolder.PlayerProvider
  
      // Neo: Getter for players watching an entity.
      public List<ServerPlayer> getPlayersWatching(Entity entity) {
@@ -269,7 +314,7 @@
          if (trackedEntity != null) {
              var ret = new java.util.ArrayList<ServerPlayer>(trackedEntity.seenBy.size());
              for (var connection : trackedEntity.seenBy) {
-@@ -1290,6 +1477,7 @@ public class ChunkMap extends ChunkStorage implements ChunkHolder.PlayerProvider
+@@ -1290,6 +1515,7 @@ public class ChunkMap extends ChunkStorage implements ChunkHolder.PlayerProvider
  
          public void removePlayer(ServerPlayer p_140486_) {
              if (this.seenBy.remove(p_140486_.connection)) {
@@ -277,7 +322,7 @@
                  this.serverEntity.removePairing(p_140486_);
              }
          }
-@@ -1306,14 +1494,30 @@ public class ChunkMap extends ChunkStorage implements ChunkHolder.PlayerProvider
+@@ -1306,14 +1532,30 @@ public class ChunkMap extends ChunkStorage implements ChunkHolder.PlayerProvider
                      && ChunkMap.this.isChunkTracked(p_140498_, this.entity.chunkPosition().x, this.entity.chunkPosition().z);
                  if (flag) {
                      if (this.seenBy.add(p_140498_.connection)) {
@@ -308,7 +353,7 @@
          private int scaledRange(int p_140484_) {
              return ChunkMap.this.level.getServer().getScaledTrackingDistance(p_140484_);
          }
-@@ -1352,4 +1556,17 @@ public class ChunkMap extends ChunkStorage implements ChunkHolder.PlayerProvider
+@@ -1352,4 +1594,17 @@ public class ChunkMap extends ChunkStorage implements ChunkHolder.PlayerProvider
      public void scheduleOnMainThreadMailbox(ChunkTaskPriorityQueueSorter.Message<Runnable> msg) {
          mainThreadMailbox.tell(msg);
      }
