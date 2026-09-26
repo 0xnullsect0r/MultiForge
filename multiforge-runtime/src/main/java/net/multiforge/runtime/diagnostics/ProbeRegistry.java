@@ -33,6 +33,11 @@ public final class ProbeRegistry {
         COUNTERS.computeIfAbsent(name, k -> new LongAdder()).increment();
     }
 
+    /** Add {@code amount} to counter {@code name} (a total, e.g. milliseconds waited). */
+    public static void add(String name, long amount) {
+        COUNTERS.computeIfAbsent(name, k -> new LongAdder()).add(amount);
+    }
+
     public static long get(String name) {
         LongAdder a = COUNTERS.get(name);
         return a == null ? 0L : a.sum();

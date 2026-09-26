@@ -133,6 +133,41 @@ class TickRegionSchedulerBarrierModeTest {
     }
 
     @Test
+    void designedWaitsDoNotCountAgainstTheDeadline() {
+        // The region waits 300ms for main-thread work (a chunk generation), bracketed
+        // as a designed wait the way MainThreadHandoff does; it does nothing slow itself.
+        ThreadedRegionizer regionizer = new ThreadedRegionizer(WORLD, 0);
+        RegionizedTaskQueue queue = RegionizedTaskQueue.of(regionizer);
+        CountDownLatch mainThreadWork = new CountDownLatch(1);
+        RegionTickBody body = r -> {
+            RegionTickWatchdog.beginWait();
+            try {
+                assertThat(mainThreadWork.await(5, TimeUnit.SECONDS)).isTrue();
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            } finally {
+                RegionTickWatchdog.endWait("test");
+            }
+        };
+        try (TickRegionScheduler scheduler =
+                new TickRegionScheduler(1, body, queue, 32, TickRegionScheduler.Mode.BARRIER)) {
+            regionizer.addListener(scheduler);
+            Region a = regionizer.addChunk(new ChunkPos(0, 0));
+            TickRegionScheduler.TickAllResult result = scheduler.driveTick(List.of(a), 100_000_000L, () -> {
+                if (mainThreadWork.getCount() == 0) return false;
+                try {
+                    Thread.sleep(300);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+                mainThreadWork.countDown();
+                return true;
+            });
+            assertThat(result.allCompleted()).isTrue();
+        }
+    }
+
+    @Test
     void overrunIsReportedButTheTickIsNeverCutShort() {
         ThreadedRegionizer regionizer = new ThreadedRegionizer(WORLD, 0);
         RegionizedTaskQueue queue = RegionizedTaskQueue.of(regionizer);

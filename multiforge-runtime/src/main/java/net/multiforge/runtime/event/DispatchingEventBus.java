@@ -12,7 +12,9 @@
  */
 package net.multiforge.runtime.event;
 
-import java.lang.reflect.InvocationTargetException;
+import java.lang.invoke.MethodHandle;
+import java.lang.invoke.MethodHandles;
+import java.lang.invoke.MethodType;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
 import java.util.Arrays;
@@ -115,27 +117,35 @@ public class DispatchingEventBus implements IEventBus {
         method.setAccessible(true);
 
         MetadataEntry metadata = AnnotationScanner.scan(method);
-        Consumer<T> raw = event -> invokeReflectively(method, receiver, event);
+        Consumer<T> raw = invoker(method, receiver);
         Consumer<T> wrapped = new RoutingListenerWrapper<>(raw, metadata, dispatcher, method.getDeclaringClass());
         inner.addListener(ann.priority(), ann.receiveCanceled(), eventClass, wrapped);
         track(receiver != null ? receiver : method.getDeclaringClass(), wrapped);
     }
 
-    private static void invokeReflectively(Method method, Object receiver, Object event) {
+    /**
+     * A consumer calling {@code method} through a {@link MethodHandle} bound to
+     * {@code receiver} (for an instance method) and adapted to {@code (Object)void},
+     * resolved once here rather than looked up reflectively on every event.
+     */
+    private static <T> Consumer<T> invoker(Method method, Object receiver) {
+        MethodHandle handle;
         try {
-            method.invoke(receiver, event);
+            handle = MethodHandles.lookup().unreflect(method);
         } catch (IllegalAccessException e) {
-            throw new IllegalStateException("Cannot invoke @SubscribeEvent method " + method, e);
-        } catch (InvocationTargetException e) {
-            Throwable cause = e.getCause();
-            if (cause instanceof RuntimeException re) {
-                throw re;
-            }
-            if (cause instanceof Error er) {
-                throw er;
-            }
-            throw new RuntimeException(cause);
+            throw new IllegalStateException("Cannot access @SubscribeEvent method " + method, e);
         }
+        if (receiver != null) handle = handle.bindTo(receiver);
+        MethodHandle call = handle.asType(MethodType.methodType(void.class, Object.class));
+        return event -> {
+            try {
+                call.invokeExact((Object) event);
+            } catch (RuntimeException | Error e) {
+                throw e;
+            } catch (Throwable t) {
+                throw new RuntimeException(t);
+            }
+        };
     }
 
     // ---------------------------------------------------------------

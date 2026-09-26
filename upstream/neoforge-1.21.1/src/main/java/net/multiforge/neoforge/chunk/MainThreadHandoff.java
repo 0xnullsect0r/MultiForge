@@ -47,10 +47,13 @@ public final class MainThreadHandoff {
     public static void enter() {
         WAITING.incrementAndGet();
         ProbeRegistry.bump("region.main-thread-chunk-load");
+        // A designed wait: the region tick watchdog does not count it as the region's time.
+        net.multiforge.runtime.region.RegionTickWatchdog.beginWait();
     }
 
     /** The worker's main-thread chunk task completed. */
     public static void exit() {
+        net.multiforge.runtime.region.RegionTickWatchdog.endWait("main-thread-chunk-load");
         WAITING.decrementAndGet();
     }
 

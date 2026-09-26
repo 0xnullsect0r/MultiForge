@@ -39,6 +39,16 @@ import net.multiforge.runtime.diagnostics.ViolationLogger;
  * RegionTickOverrunException} from {@link #exitTick} — used only by
  * the regression-run flag {@code -Dmultiforge.regiontick.strict=on}.
  *
+ * <p><b>Designed waits do not count.</b> Two waits are part of the
+ * design, bounded, and not the region's own work: a hand-off to the server
+ * thread for a chunk that is not loaded yet (its generation can take
+ * hundreds of milliseconds), and a listener run on the serial event lane.
+ * Their callers bracket them with {@link #beginWait()}/{@link #endWait()};
+ * the overrun check measures the tick minus that time, and the waits are
+ * totalled in the probes {@code region-tick.wait-ms.<kind>}. Anything else
+ * that stalls a region tick — a {@code Future.get}, a contended lock, a
+ * loop — still counts.
+ *
  * <p>Deliberately checks only at {@link #exitTick} time, not via a
  * background sweeper thread. This misses a worker that's stuck
  * forever (endTick never called), but that case is already visible
@@ -85,6 +95,9 @@ public final class RegionTickWatchdog {
 
     private static final ThreadLocal<Long> TICK_START_NANOS = new ThreadLocal<>();
 
+    /** Per worker: {nanos waited this tick, start of the wait in progress or 0, nesting depth}. */
+    private static final ThreadLocal<long[]> WAIT = ThreadLocal.withInitial(() -> new long[3]);
+
     private RegionTickWatchdog() {}
 
     public static Mode mode() {
@@ -125,7 +138,41 @@ public final class RegionTickWatchdog {
 
     /** Called by {@link TickRegionScheduler} before it invokes the region tick body. */
     public static void enterTick(Region region) {
+        long[] wait = WAIT.get();
+        wait[0] = 0;
+        wait[1] = 0;
+        wait[2] = 0;
         TICK_START_NANOS.set(System.nanoTime());
+    }
+
+    /** Nanoseconds of designed waits in the calling worker's most recent region tick. */
+    public static long lastTickWaitNanos() {
+        return WAIT.get()[0];
+    }
+
+    /**
+     * The calling thread starts a designed wait (see the class doc). No-op
+     * outside a region tick; nests.
+     */
+    public static void beginWait() {
+        if (TICK_START_NANOS.get() == null) return;
+        long[] wait = WAIT.get();
+        if (wait[2]++ == 0) wait[1] = System.nanoTime();
+    }
+
+    /**
+     * The designed wait begun by {@link #beginWait()} is over; {@code kind}
+     * names it in the {@code region-tick.wait-ms.<kind>} probe.
+     */
+    public static void endWait(String kind) {
+        if (TICK_START_NANOS.get() == null) return;
+        long[] wait = WAIT.get();
+        if (wait[2] == 0) return;
+        if (--wait[2] == 0) {
+            long waited = System.nanoTime() - wait[1];
+            wait[0] += waited;
+            ProbeRegistry.add("region-tick.wait-ms." + kind, waited / 1_000_000L);
+        }
     }
 
     /**
@@ -139,15 +186,17 @@ public final class RegionTickWatchdog {
         Long start = TICK_START_NANOS.get();
         TICK_START_NANOS.remove();
         if (start == null) return; // enterTick wasn't called — defensive, should never happen
-        long elapsedNs = System.nanoTime() - start;
+        long waitedNs = WAIT.get()[0];
+        long elapsedNs = System.nanoTime() - start - waitedNs;
         long elapsedMs = elapsedNs / 1_000_000L;
         if (elapsedMs < warnMs) return;
 
         ProbeRegistry.bump("region-tick.overrun");
         ViolationLogger.warn(
                 "region-tick.overrun",
-                "region " + region.id() + " tick body took " + elapsedMs + "ms (threshold " + warnMs + "ms) — "
-                        + "likely blocking wait or a region that needs to split");
+                "region " + region.id() + " tick body took " + elapsedMs + "ms (threshold " + warnMs + "ms, "
+                        + waitedNs / 1_000_000L + "ms of designed waits not counted) — "
+                        + "likely a blocking wait or a region that needs to split");
 
         if (mode == Mode.STRICT) {
             throw new RegionTickOverrunException(region, elapsedMs, warnMs);
@@ -168,10 +217,11 @@ public final class RegionTickWatchdog {
     }
 
     /**
-     * Thrown by {@link #exitTick} only in {@link Mode#STRICT}. Never
-     * thrown in production mode. Caught by
-     * {@link TickRegionScheduler#runWorker}'s outer catch, which routes
-     * it to the thread's uncaught handler and continues.
+     * Thrown by {@link #exitTick} only in {@link Mode#STRICT}. Never thrown in
+     * the default mode. Like any region-tick exception it is rethrown on the
+     * server thread once the tick barrier completes, where Vanilla's "Exception
+     * ticking world" handling stops the server: strict mode is for regression
+     * runs that must fail loudly, not for production.
      */
     public static final class RegionTickOverrunException extends RuntimeException {
         private final RegionId regionId;

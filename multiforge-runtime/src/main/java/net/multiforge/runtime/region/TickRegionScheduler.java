@@ -314,6 +314,10 @@ public final class TickRegionScheduler implements AutoCloseable, RegionListener 
         List<Region> batch = List.copyOf(regions);
         AtomicInteger remaining = new AtomicInteger(batch.size());
         long[] finishedAt = new long[batch.size()];
+        // Designed waits (a main-thread chunk load, a serial-lane listener) are not
+        // the region's own time: RegionTickWatchdog leaves them out per region, and
+        // so does the deadline.
+        long[] waited = new long[batch.size()];
         Throwable[] failures = new Throwable[batch.size()];
         Thread waiter = Thread.currentThread();
         for (int i = 0; i < batch.size(); i++) {
@@ -324,6 +328,7 @@ public final class TickRegionScheduler implements AutoCloseable, RegionListener 
                 try {
                     if (region.tryMarkTicking()) {
                         failures[idx] = tickClaimed(s, region, false);
+                        waited[idx] = RegionTickWatchdog.lastTickWaitNanos();
                     }
                 } finally {
                     finishedAt[idx] = System.nanoTime();
@@ -345,7 +350,7 @@ public final class TickRegionScheduler implements AutoCloseable, RegionListener 
         List<RegionId> overrun = new ArrayList<>();
         Throwable first = null;
         for (int i = 0; i < batch.size(); i++) {
-            if (finishedAt[i] > deadline) overrun.add(batch.get(i).id());
+            if (finishedAt[i] - waited[i] > deadline) overrun.add(batch.get(i).id());
             if (failures[i] != null) {
                 if (first == null) first = failures[i];
                 else if (first != failures[i]) first.addSuppressed(failures[i]);

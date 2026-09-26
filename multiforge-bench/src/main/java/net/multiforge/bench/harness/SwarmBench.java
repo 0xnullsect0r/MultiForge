@@ -18,6 +18,7 @@ import java.nio.file.Path;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Random;
@@ -114,6 +115,11 @@ public final class SwarmBench {
                 extra.put("region_overruns", overruns);
                 extra.put("reroutes", probes.reroutes());
                 extra.put("reroute_mismatches", probes.rerouteMismatches());
+                extra.put(
+                        "main_thread_chunk_loads", probes.counters().getOrDefault("region.main-thread-chunk-load", 0L));
+                extra.put(
+                        "wait_ms_main_thread",
+                        probes.counters().getOrDefault("region-tick.wait-ms.main-thread-chunk-load", 0L));
                 if (violations > 0)
                     extra.put("violation_counters", probes.violationCounters().toString());
                 if (Boolean.getBoolean("bench.failOnViolations") && (violations > 0 || overruns > 0)) ok = false;
@@ -153,13 +159,25 @@ public final class SwarmBench {
             runner.rcon().command("gamemode creative @a");
             runner.rcon().command("give @a minecraft:dirt 64");
             if (spread > 0) {
-                System.out.println("SwarmBench: "
-                        + runner.rcon()
-                                .command(String.format(
-                                        Locale.ROOT,
-                                        "spreadplayers 0 0 %d %d false @a",
-                                        Math.max(8, spread / 8),
-                                        spread)));
+                // One surface teleport per bot to a fixed spot on rings around spawn. A
+                // single /spreadplayers generates every candidate spot synchronously and
+                // stalls the server (and RCON) for tens of seconds at 20+ players.
+                List<String> names = swarm.names();
+                for (int i = 0; i < names.size(); i++) {
+                    double angle = 2 * Math.PI * i / names.size();
+                    double r = spread * (0.35 + 0.65 * ((i * 7) % names.size()) / Math.max(1, names.size()));
+                    int x = (int) Math.round(Math.cos(angle) * r);
+                    int z = (int) Math.round(Math.sin(angle) * r);
+                    runner.rcon()
+                            .command(String.format(
+                                    Locale.ROOT,
+                                    "execute positioned %d 0 %d positioned over motion_blocking run tp %s ~ ~ ~",
+                                    x,
+                                    z,
+                                    names.get(i)));
+                }
+                System.out.println(
+                        "SwarmBench: placed " + names.size() + " bots on rings up to " + spread + " blocks from spawn");
             }
             // Let the spread's chunk generation and sends settle before measuring.
             Thread.sleep(15_000);

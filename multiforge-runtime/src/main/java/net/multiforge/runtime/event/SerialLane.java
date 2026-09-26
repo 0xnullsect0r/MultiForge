@@ -92,9 +92,14 @@ public final class SerialLane {
         QUEUE.add(job);
         ProbeRegistry.bump("serial-lane.handoff");
         LockSupport.unpark(lane);
-        while (!job.done) {
-            LockSupport.park(job);
-            if (laneThread == null && !job.done) drain(); // lane went away while we waited
+        net.multiforge.runtime.region.RegionTickWatchdog.beginWait();
+        try {
+            while (!job.done) {
+                LockSupport.park(job);
+                if (laneThread == null && !job.done) drain(); // lane went away while we waited
+            }
+        } finally {
+            net.multiforge.runtime.region.RegionTickWatchdog.endWait("serial-lane");
         }
         Throwable failure = job.failure;
         if (failure instanceof RuntimeException re) throw re;
