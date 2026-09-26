@@ -92,6 +92,9 @@ runs {
     }
     gameTestServer {
             type = "gameTestServer"
+            // MultiForge fork addition: check every indexed entity-tracking update
+            // against Vanilla's full pass (EntityTrackingTests asserts on it).
+            systemProperty("multiforge.tracking.verify", "true")
     }
     data {
             data()
