@@ -11,7 +11,7 @@ dependencies {
     // Slf4j API only. Minecraft ships slf4j-api (pinned strictly to 2.0.9) and
     // the logger binding; depend on the same version so the fork's classpath
     // resolves.
-    implementation("org.slf4j:slf4j-api:2.0.9")
+    implementation("org.slf4j:slf4j-api:2.0.20")
 
     // TOML parser for multiforge-server.toml and the region pin file:
     // night-config (LGPL-3.0), the library NeoForge itself ships and loads its
@@ -36,7 +36,7 @@ dependencies {
 
     testImplementation("org.junit.jupiter:junit-jupiter:5.10.3")
     testImplementation("org.assertj:assertj-core:3.26.3")
-    testImplementation("org.slf4j:slf4j-simple:2.0.9")
+    testImplementation("org.slf4j:slf4j-simple:2.0.20")
     testImplementation("org.awaitility:awaitility:4.2.1")
     // Property tests (EPL-2.0, test scope only: never shipped).
     testImplementation("net.jqwik:jqwik:1.9.1")
