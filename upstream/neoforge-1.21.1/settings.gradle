@@ -22,9 +22,13 @@ dependencyResolutionManagement {
     repositories {
         mavenCentral()
         // MultiForge fork addition: multiforge-api / multiforge-runtime,
-        // published from the outer repo with publishToMavenLocal.
-        mavenLocal {
-            content { includeGroup 'net.multiforge' }
+        // published from the outer repo with publishToMavenLocal. Exclusive, so
+        // no remote repository is ever asked for net.multiforge: a failed lookup
+        // there (a 502 from maven.neoforged.net) disables that repository for
+        // the rest of the build.
+        exclusiveContent {
+            forRepository { mavenLocal() }
+            filter { includeGroup 'net.multiforge' }
         }
     }
 }
