@@ -14,6 +14,7 @@ package net.multiforge.runtime.event;
 
 import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import net.multiforge.api.event.DispatchDomainKind;
@@ -49,6 +50,35 @@ public final class EventTypeDomainMap {
 
     private static final ConcurrentMap<String, DispatchDomainKind> MAP = new ConcurrentHashMap<>();
 
+    /**
+     * Defaults that hold only for listeners someone read: event class name to
+     * the domain and the listener classes it was checked for. A listener of
+     * such an event that is not on the list keeps the ordinary default (the
+     * serial lane) and is logged once. An entry in {@link #MAP} (a default or
+     * an operator's {@code [events]} entry) wins over this.
+     */
+    private static final ConcurrentMap<String, Audited> AUDITED = new ConcurrentHashMap<>();
+
+    /**
+     * Fire-and-forget events a region worker posts without waiting: the post
+     * runs on the server thread after the level's regions finished ticking
+     * (see {@link SerialLane#defer}).
+     */
+    private static final Set<String> DEFERRED = ConcurrentHashMap.newKeySet();
+
+    /** Listener classes of audited events already logged as unaudited. */
+    private static final Set<String> UNAUDITED_LOGGED = ConcurrentHashMap.newKeySet();
+
+    private record Audited(DispatchDomainKind kind, Set<String> listeners) {}
+
+    /**
+     * What {@link #lookup(Class, Class)} decided for one listener.
+     *
+     * @param kind the default domain, or empty for the serial lane
+     * @param audited whether it came from an audited entry that lists the listener
+     */
+    public record Resolution(Optional<DispatchDomainKind> kind, boolean audited) {}
+
     /** Guards one-time population of {@link #MAP}'s default entries. */
     private static volatile boolean initialized;
 
@@ -80,10 +110,103 @@ public final class EventTypeDomainMap {
         return Optional.empty();
     }
 
+    /**
+     * Like {@link #lookup(Class)}, for one listener: an audited entry applies
+     * only when {@code listenerClass} (a lambda's host class for a lambda) is
+     * one of the listeners it was checked for.
+     */
+    public static Resolution lookup(Class<?> eventType, Class<?> listenerClass) {
+        Objects.requireNonNull(eventType, "eventType");
+        ensureInitialized();
+        for (Class<?> cls = eventType; cls != null && cls != Object.class; cls = cls.getSuperclass()) {
+            String name = cls.getName();
+            DispatchDomainKind kind = MAP.get(name);
+            if (kind != null) return new Resolution(Optional.of(kind), false);
+            Audited audited = AUDITED.get(name);
+            if (audited != null) {
+                String listener = listenerClass == null ? null : hostName(listenerClass);
+                if (listener != null && audited.listeners().contains(listener)) {
+                    return new Resolution(Optional.of(audited.kind()), true);
+                }
+                if (listener != null && UNAUDITED_LOGGED.add(name + "#" + listener)) {
+                    net.multiforge.runtime.diagnostics.ViolationLogger.warn(
+                            "EventTypeDomainMap",
+                            "listener " + listener + " of " + name
+                                    + " was not audited; it runs on the serial lane (docs/events.md)");
+                }
+                return new Resolution(Optional.empty(), false);
+            }
+        }
+        return new Resolution(Optional.empty(), false);
+    }
+
+    /** The class a listener belongs to: a lambda's or method reference's host class, else the class itself. */
+    static String hostName(Class<?> listenerClass) {
+        String name = listenerClass.getName();
+        int lambda = name.indexOf("$$Lambda");
+        return lambda < 0 ? name : name.substring(0, lambda);
+    }
+
+    /**
+     * Whether a region worker posts {@code eventType} without waiting, the
+     * listeners running on the server thread after the level's regions (see
+     * {@link #registerDeferred}).
+     */
+    public static boolean isDeferred(Class<?> eventType) {
+        ensureInitialized();
+        if (DEFERRED.isEmpty()) return false;
+        for (Class<?> cls = eventType; cls != null && cls != Object.class; cls = cls.getSuperclass()) {
+            if (DEFERRED.contains(cls.getName())) return true;
+        }
+        return false;
+    }
+
+    /**
+     * Posts of {@code eventClassName} from a region worker are deferred: the
+     * worker does not wait, and the listeners run on the server thread when the
+     * level's regions finished ticking. Only for events whose poster ignores the
+     * result and that cannot be cancelled; a cancellable one is posted as usual
+     * (see {@code DispatchingEventBus#post}). An operator's {@code [events]}
+     * value, or a later {@link #register}, replaces it.
+     */
+    public static void registerDeferred(String eventClassName) {
+        Objects.requireNonNull(eventClassName, "eventClassName");
+        ensureInitialized();
+        MAP.remove(eventClassName);
+        DEFERRED.add(eventClassName);
+        RoutingEpoch.bump();
+    }
+
+    /**
+     * Registers an audited default: {@code eventClassName}'s listeners of the
+     * classes {@code listenerClassNames} (a lambda's host class for a lambda)
+     * default to {@code kind}; any other listener keeps the serial lane.
+     */
+    public static void registerAudited(String eventClassName, DispatchDomainKind kind, String... listenerClassNames) {
+        Objects.requireNonNull(eventClassName, "eventClassName");
+        Objects.requireNonNull(kind, "kind");
+        ensureInitialized();
+        AUDITED.put(eventClassName, new Audited(kind, Set.of(listenerClassNames)));
+        RoutingEpoch.bump();
+    }
+
     /** The entry for exactly {@code eventClassName}, no hierarchy walk (tests: the NeoForge classes are not on their classpath). */
     static Optional<DispatchDomainKind> entryFor(String eventClassName) {
         ensureInitialized();
         return Optional.ofNullable(MAP.get(eventClassName));
+    }
+
+    /** The listener classes an audited entry for exactly {@code eventClassName} lists (tests). */
+    static Optional<Set<String>> auditedListeners(String eventClassName) {
+        ensureInitialized();
+        Audited audited = AUDITED.get(eventClassName);
+        return audited == null ? Optional.empty() : Optional.of(audited.listeners());
+    }
+
+    /** Whether exactly {@code eventClassName} is deferred (tests). */
+    static boolean deferredEntry(String eventClassName) {
+        ensureInitialized();
+        return DEFERRED.contains(eventClassName);
     }
 
     /**
@@ -95,7 +218,9 @@ public final class EventTypeDomainMap {
     public static void register(String eventClassName, DispatchDomainKind kind) {
         Objects.requireNonNull(eventClassName, "eventClassName");
         Objects.requireNonNull(kind, "kind");
+        ensureInitialized();
         MAP.put(eventClassName, kind);
+        DEFERRED.remove(eventClassName);
         RoutingEpoch.bump();
     }
 
@@ -103,6 +228,9 @@ public final class EventTypeDomainMap {
     static void resetForTesting() {
         synchronized (INIT_LOCK) {
             MAP.clear();
+            AUDITED.clear();
+            DEFERRED.clear();
+            UNAUDITED_LOGGED.clear();
             initialized = false;
             RoutingEpoch.bump();
         }
@@ -197,6 +325,54 @@ public final class EventTypeDomainMap {
         // MinecraftServer.isSameThread(), which is false on a region worker, so on the
         // region their effects would silently stop.
 
+        // Events mods define and post from an entity's own movement, per entity per
+        // tick, audited listener by listener (bytecode of relics 0.12.8,
+        // reliquified_artifacts 1.0.8, artifacts 13.2.3 with expandability 12.0.0,
+        // lionfishapi 3.1, cataclysm 3.33). Every listener reads the posting entity
+        // (its flags, Curios items, item data components, attachments) and the block
+        // states under its own bounding box, and writes only the event; none writes a
+        // static field or calls isSameThread. The one shared structure they reach,
+        // relics' CacheHandler.TEMPLATE_CACHE, is a Collections.synchronizedMap. On an
+        // ATM10 bench these were ~4,000 serial-lane posts per tick. A listener not
+        // listed here (another mod, or a new class after an update) keeps the serial
+        // lane and is logged once.
+        // Relics BlockStateMixin.getFluidCollisionShape / PlayerMixin: the living
+        // entity of an EntityCollisionContext, asking whether it stands on a fluid.
+        audited(
+                "it.hurts.sskirillss.relics.api.events.utility.FluidCollisionEvent",
+                "it.hurts.sskirillss.relics.items.relics.feet.CutGlassBootItem$CommonEvents",
+                "it.hurts.shatterbyte.reliquified_artifacts.items.feet.AquaDashersItem$CommonEvents",
+                "it.hurts.shatterbyte.reliquified_artifacts.items.feet.StriderShoesItem$CommonEvents");
+        // Relics LivingEntityMixin.setBlockFriction: the entity's friction on the block below.
+        audited(
+                "it.hurts.sskirillss.relics.api.events.utility.LivingSlippingEvent",
+                "it.hurts.sskirillss.relics.items.relics.feet.RollerSkateItem$Events",
+                "it.hurts.shatterbyte.reliquified_artifacts.items.feet.SteadfastSpikesItem$SteadfastSpikesEvent");
+        // Relics EntityMixin.getBlockSpeedFactor: the entity's speed on the block below.
+        audited(
+                "it.hurts.sskirillss.relics.api.events.utility.EntityBlockSpeedFactorEvent",
+                "it.hurts.sskirillss.relics.items.relics.feet.RollerSkateItem$Events");
+        // Relics RelicData, while one of the listeners above reads a relic's data: the
+        // bearer's rank for that stack.
+        audited(
+                "it.hurts.sskirillss.relics.api.events.relic.GatherRelicTemplateCacheKeyEvent",
+                "it.hurts.sskirillss.relics.handlers.RankHandler");
+        // Expandability EventDispatcherImpl (fluid collision of a living entity).
+        audited(
+                "be.florens.expandability.api.forge.LivingFluidCollisionEvent",
+                "artifacts.neoforge.event.ArtifactHooksNeoForge");
+        // Lionfishapi EntityMixin.fluidCollision: the entity standing on a fluid.
+        audited(
+                "com.github.L_Ender.lionfishapi.server.event.StandOnFluidEvent",
+                "com.github.L_Ender.cataclysm.event.ServerEventHandler");
+        // Xycraft ItemEntityTickMixin -> ItemEntityTickEvent.onTick: every item entity,
+        // every tick. The poster discards the result (post; pop; return) and the event
+        // cannot be cancelled. Its listener, CollectorBlockEntity.absorbItem, reads a
+        // per-level volume map and inserts into a collector that may be in another
+        // region, so it cannot run on the region: the post runs on the server thread
+        // after the level's regions, when no worker is running.
+        DEFERRED.add("tv.soaryn.xycraft.core.event.ItemEntityTickEvent");
+
         // Player events.
         put("net.neoforged.neoforge.event.entity.player.PlayerEvent$PlayerLoggedInEvent", DispatchDomainKind.GLOBAL);
         put("net.neoforged.neoforge.event.entity.player.PlayerEvent$PlayerLoggedOutEvent", DispatchDomainKind.GLOBAL);
@@ -236,5 +412,9 @@ public final class EventTypeDomainMap {
 
     private static void put(String eventClassName, DispatchDomainKind kind) {
         MAP.putIfAbsent(eventClassName, kind);
+    }
+
+    private static void audited(String eventClassName, String... listenerClassNames) {
+        AUDITED.putIfAbsent(eventClassName, new Audited(DispatchDomainKind.REGION, Set.of(listenerClassNames)));
     }
 }

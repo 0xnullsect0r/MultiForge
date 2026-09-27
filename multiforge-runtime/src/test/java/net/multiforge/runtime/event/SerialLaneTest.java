@@ -63,6 +63,36 @@ class SerialLaneTest {
     }
 
     @Test
+    void deferredJobsWaitForDrainDeferredAndRunInOrderUnderTheWorkersToken() {
+        java.util.List<String> ran = new CopyOnWriteArrayList<>();
+        AtomicBoolean left = new AtomicBoolean();
+        OwnerToken.runAs(OwnerToken.forRegion(7L), () -> {
+            left.set(SerialLane.defer(() -> ran.add("a@" + OwnerToken.current().regionId())));
+            SerialLane.defer(() -> ran.add("b@" + OwnerToken.current().regionId()));
+        });
+        assertThat(left.get()).isTrue();
+        assertThat(ran).isEmpty(); // the worker did not wait, nor did the lane's pump run them
+
+        assertThat(SerialLane.drainDeferred()).isEqualTo(2);
+        assertThat(ran).containsExactly("a@7", "b@7");
+        assertThat(SerialLane.drainDeferred()).isZero();
+    }
+
+    @Test
+    void onlyARegionDefersAndAThrowingDeferredJobDoesNotStopTheRest() {
+        assertThat(SerialLane.defer(() -> {})).isFalse(); // no region token
+        java.util.List<String> ran = new CopyOnWriteArrayList<>();
+        OwnerToken.runAs(OwnerToken.forRegion(1L), () -> {
+            SerialLane.defer(() -> {
+                throw new IllegalStateException("boom");
+            });
+            SerialLane.defer(() -> ran.add("after"));
+        });
+        SerialLane.drainDeferred();
+        assertThat(ran).containsExactly("after");
+    }
+
+    @Test
     void jobsFromManyWorkersRunOneAtATime() throws InterruptedException {
         java.util.concurrent.atomic.AtomicInteger inside = new java.util.concurrent.atomic.AtomicInteger();
         java.util.List<Integer> maxSeen = new CopyOnWriteArrayList<>();

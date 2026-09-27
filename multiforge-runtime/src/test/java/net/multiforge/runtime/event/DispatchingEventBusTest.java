@@ -240,6 +240,132 @@ class DispatchingEventBusTest {
         assertThat(ProbeRegistry.get("event.dispatch.serial-post")).isZero();
     }
 
+    @Test
+    void anAuditedListenerRunsOnTheWorkerAndAnUnauditedOneKeepsTheLane() {
+        RecordingDispatchExecutor executor = new RecordingDispatchExecutor();
+        DispatchingEventBus bus = new DispatchingEventBus(BusBuilder.builder().build(), executor);
+        try {
+            EventTypeDomainMap.registerAudited(
+                    TestEvent.class.getName(), DispatchDomainKind.REGION, InstanceListener.class.getName());
+            InstanceListener audited = new InstanceListener();
+            bus.register(audited);
+
+            OwnerToken.runAs(OwnerToken.forRegion(1L), () -> bus.post(new TestEvent()));
+            assertThat(audited.calls.get()).isEqualTo(1);
+            assertThat(executor.serial.get()).isZero();
+
+            bus.register(StaticListener.class); // not audited: the whole post goes to the lane
+            OwnerToken.runAs(OwnerToken.forRegion(1L), () -> bus.post(new TestEvent()));
+            assertThat(executor.serial.get()).isEqualTo(1);
+            assertThat(StaticListener.CALLS.get()).isEqualTo(1);
+        } finally {
+            EventTypeDomainMap.resetForTesting();
+        }
+    }
+
+    @Test
+    void aListenerThatAsksForTheThreadOrAnAuditedOneThatWritesStaticsStaysOnTheLane() {
+        RecordingDispatchExecutor executor = new RecordingDispatchExecutor();
+        DispatchingEventBus bus = new DispatchingEventBus(BusBuilder.builder().build(), executor);
+        try {
+            EventTypeDomainMap.registerAudited(
+                    TestEvent.class.getName(), DispatchDomainKind.REGION, InstanceListener.class.getName());
+            ListenerAffinity.bind((host, type, method) -> host == InstanceListener.class
+                    ? new ListenerAffinity.Scan(true, false, true)
+                    : ListenerAffinity.Scan.CLEAN);
+            bus.register(new InstanceListener());
+            OwnerToken.runAs(OwnerToken.forRegion(1L), () -> bus.post(new TestEvent()));
+            assertThat(executor.serial.get()).isEqualTo(1);
+
+            // An unaudited event default of REGION ignores static writes, but not thread checks.
+            EventTypeDomainMap.register(OtherEvent.class.getName(), DispatchDomainKind.REGION);
+            OtherListener other = new OtherListener();
+            bus.register(other);
+            OwnerToken.runAs(OwnerToken.forRegion(1L), () -> bus.post(new OtherEvent()));
+            assertThat(executor.serial.get()).isEqualTo(1);
+            ListenerAffinity.bind((host, type, method) -> host == OtherListener.class
+                    ? new ListenerAffinity.Scan(true, true, false)
+                    : ListenerAffinity.Scan.CLEAN);
+            OwnerToken.runAs(OwnerToken.forRegion(1L), () -> bus.post(new OtherEvent()));
+            assertThat(executor.serial.get()).isEqualTo(2);
+            assertThat(other.calls.get()).isEqualTo(2);
+            assertThat(ProbeRegistry.get("event.affinity.pinned")).isPositive();
+        } finally {
+            ListenerAffinity.resetForTesting();
+            EventTypeDomainMap.resetForTesting();
+        }
+    }
+
+    @Test
+    void aDeferredEventIsLeftForTheServerThreadWithoutWaiting() {
+        RecordingDispatchExecutor executor = new RecordingDispatchExecutor();
+        DispatchingEventBus bus = new DispatchingEventBus(BusBuilder.builder().build(), executor);
+        SerialLane.bind(new Thread(() -> {}, "test-lane"));
+        try {
+            EventTypeDomainMap.registerDeferred(TestEvent.class.getName());
+            InstanceListener listener = new InstanceListener(); // serial by default
+            bus.register(listener);
+
+            OwnerToken.runAs(OwnerToken.forRegion(3L), () -> bus.post(new TestEvent()));
+            assertThat(listener.calls.get()).isZero();
+            assertThat(executor.serial.get()).isZero();
+            assertThat(ProbeRegistry.get("event.dispatch.deferred")).isEqualTo(1);
+
+            SerialLane.drainDeferred();
+            assertThat(listener.calls.get()).isEqualTo(1);
+
+            // Off a region worker it is posted where it is.
+            bus.post(new TestEvent());
+            assertThat(listener.calls.get()).isEqualTo(2);
+
+            // The guard drops an event with nothing left to act on.
+            DispatchingEventBus.bindDeferredGuard(e -> false);
+            OwnerToken.runAs(OwnerToken.forRegion(3L), () -> bus.post(new TestEvent()));
+            SerialLane.drainDeferred();
+            assertThat(listener.calls.get()).isEqualTo(2);
+            assertThat(ProbeRegistry.get("event.dispatch.deferred.dropped")).isEqualTo(1);
+        } finally {
+            DispatchingEventBus.bindDeferredGuard(e -> true);
+            SerialLane.unbind();
+            EventTypeDomainMap.resetForTesting();
+        }
+    }
+
+    @Test
+    void aCancellableEventIsNeverDeferred() {
+        RecordingDispatchExecutor executor = new RecordingDispatchExecutor();
+        DispatchingEventBus bus = new DispatchingEventBus(BusBuilder.builder().build(), executor);
+        SerialLane.bind(new Thread(() -> {}, "test-lane"));
+        try {
+            EventTypeDomainMap.registerDeferred(CancellableEvent.class.getName());
+            java.util.concurrent.atomic.AtomicInteger calls = new java.util.concurrent.atomic.AtomicInteger();
+            bus.addListener(CancellableEvent.class, e -> {
+                calls.incrementAndGet();
+                e.setCanceled(true);
+            });
+
+            CancellableEvent event = new CancellableEvent();
+            OwnerToken.runAs(OwnerToken.forRegion(3L), () -> bus.post(event));
+            assertThat(calls.get()).isEqualTo(1);
+            assertThat(event.isCanceled()).isTrue();
+            assertThat(ProbeRegistry.get("event.dispatch.deferred")).isZero();
+        } finally {
+            SerialLane.unbind();
+            EventTypeDomainMap.resetForTesting();
+        }
+    }
+
+    private static final class CancellableEvent extends Event implements net.neoforged.bus.api.ICancellableEvent {}
+
+    private static final class OtherListener {
+        final java.util.concurrent.atomic.AtomicInteger calls = new java.util.concurrent.atomic.AtomicInteger();
+
+        @net.neoforged.bus.api.SubscribeEvent
+        void onEvent(OtherEvent event) {
+            calls.incrementAndGet();
+        }
+    }
+
     private static final class TestEvent extends Event {}
 
     private static final class InstanceListener {

@@ -60,6 +60,11 @@ public final class ModSafetyClassifier {
         Path file = server.getServerDirectory().resolve("config").resolve(FILE);
         Map<String, ModSafety> configured = readConfig(file);
         readEventOverrides(file).forEach(EventTypeDomainMap::register);
+        readDeferredOverrides(file).forEach(EventTypeDomainMap::registerDeferred);
+        net.multiforge.runtime.event.ListenerAffinity.bind(new ThreadAffinityScanner());
+        // A deferred event about an entity removed before its turn has nothing left to act on.
+        net.multiforge.runtime.event.DispatchingEventBus.bindDeferredGuard(
+                ModSafetyClassifier::deferredStillRelevant);
         Map<String, ModSafety> byModule = new HashMap<>();
         for (IModFileInfo fileInfo : ModList.get().getModFiles()) {
             ModSafety safety = null;
@@ -74,6 +79,11 @@ public final class ModSafetyClassifier {
         Map<Class<?>, ModSafety> cache = new ConcurrentHashMap<>();
         ModClassifier.bind(cls -> cache.computeIfAbsent(
                 cls, c -> byModule.getOrDefault(c.getModule().getName(), ModSafety.HYBRID_SAFE)));
+    }
+
+    private static boolean deferredStillRelevant(Object event) {
+        return !(event instanceof net.neoforged.neoforge.event.entity.EntityEvent entityEvent)
+                || !entityEvent.getEntity().isRemoved();
     }
 
     private static ModSafety declared(IModInfo mod) {
@@ -106,8 +116,11 @@ public final class ModSafetyClassifier {
                         # examplemod = "legacy"
 
                         # Per-event default for listeners of hybrid-safe mods, by event class:
-                        #   region  runs on the region worker that posted it
-                        #   serial  runs on the serial lane
+                        #   region    runs on the region worker that posted it
+                        #   serial    runs on the serial lane
+                        #   deferred  a region worker does not wait; the listeners run on the
+                        #             server thread after the level's regions (only for events
+                        #             that cannot be cancelled and whose result nobody reads)
                         [events]
                         # "net.neoforged.neoforge.event.entity.living.LivingDrownEvent" = "serial"
                         """, StandardCharsets.UTF_8);
@@ -151,15 +164,35 @@ public final class ModSafetyClassifier {
                     case "async" -> DispatchDomainKind.ASYNC;
                     default -> null;
                 };
+                if (kind == null && "deferred".equals(value)) continue; // readDeferredOverrides
                 if (kind == null) {
                     ViolationLogger.warn(
-                            "ModSafetyClassifier", FILE + ": [events] " + entry.getKey() + " = \"" + entry.getValue() + "\" is not region or serial");
+                            "ModSafetyClassifier", FILE + ": [events] " + entry.getKey() + " = \"" + entry.getValue() + "\" is not region, serial or deferred");
                     continue;
                 }
                 out.put(entry.getKey(), kind);
             }
         } catch (IOException | RuntimeException e) {
             ViolationLogger.warn("ModSafetyClassifier", "could not read [events] of " + file + ": " + e.getMessage());
+        }
+        return out;
+    }
+
+    /** The {@code [events]} entries set to {@code "deferred"} (see {@link EventTypeDomainMap#registerDeferred}). */
+    static java.util.Set<String> readDeferredOverrides(Path file) {
+        java.util.Set<String> out = new java.util.LinkedHashSet<>();
+        if (!Files.isRegularFile(file)) return out;
+        try {
+            UnmodifiableConfig root = new TomlParser().parse(Files.readString(file, StandardCharsets.UTF_8));
+            if (!(root.get("events") instanceof UnmodifiableConfig events)) return out;
+            for (UnmodifiableConfig.Entry entry : events.entrySet()) {
+                if (entry.getValue() instanceof String s
+                        && "deferred".equals(s.trim().toLowerCase(java.util.Locale.ROOT))) {
+                    out.add(entry.getKey());
+                }
+            }
+        } catch (IOException | RuntimeException e) {
+            // readEventOverrides already reported an unreadable file.
         }
         return out;
     }

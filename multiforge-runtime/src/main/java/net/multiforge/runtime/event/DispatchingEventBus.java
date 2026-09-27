@@ -125,8 +125,8 @@ public class DispatchingEventBus implements IEventBus {
 
         MetadataEntry metadata = AnnotationScanner.scan(method);
         Consumer<T> raw = invoker(method, receiver);
-        RoutingListenerWrapper<T> wrapped =
-                new RoutingListenerWrapper<>(raw, metadata, dispatcher, method.getDeclaringClass(), eventClass);
+        RoutingListenerWrapper<T> wrapped = new RoutingListenerWrapper<>(
+                raw, metadata, dispatcher, method.getDeclaringClass(), eventClass, method.getName());
         inner.addListener(ann.priority(), ann.receiveCanceled(), eventClass, wrapped);
         track(receiver != null ? receiver : method.getDeclaringClass(), wrapped);
     }
@@ -289,6 +289,7 @@ public class DispatchingEventBus implements IEventBus {
      */
     @Override
     public <T extends Event> T post(T event) {
+        if (deferPost(event, () -> inner.post(event))) return event;
         if (postOnLane(event)) {
             dispatcher.runPostOnSerialLane(() -> inner.post(event));
             return event;
@@ -298,11 +299,69 @@ public class DispatchingEventBus implements IEventBus {
 
     @Override
     public <T extends Event> T post(EventPriority priority, T event) {
+        if (deferPost(event, () -> inner.post(priority, event))) return event;
         if (postOnLane(event)) {
             dispatcher.runPostOnSerialLane(() -> inner.post(priority, event));
             return event;
         }
         return inner.post(priority, event);
+    }
+
+    /**
+     * Whether a deferred event ({@link EventTypeDomainMap#isDeferred}) was left
+     * for the server thread: posted on a region worker, a fire-and-forget event
+     * runs, whole, after the level's regions finished ticking, and the worker
+     * does not wait (see {@link SerialLane#defer}). A cancellable event is never
+     * deferred — its poster reads the result — and is logged once.
+     */
+    private boolean deferPost(Event event, Runnable post) {
+        if (event == null
+                || OwnerToken.current().domain() != Domain.REGION
+                || !EventTypeDomainMap.isDeferred(event.getClass())) {
+            return false;
+        }
+        if (event instanceof net.neoforged.bus.api.ICancellableEvent) {
+            if (CANCELLABLE_LOGGED.add(event.getClass())) {
+                net.multiforge.runtime.diagnostics.ViolationLogger.warn(
+                        "DispatchingEventBus",
+                        event.getClass().getName() + " is cancellable; it is posted as usual, not deferred");
+            }
+            return false;
+        }
+        java.util.function.Predicate<Object> guard = deferredGuard;
+        boolean deferred = SerialLane.defer(() -> {
+            if (guard.test(event)) {
+                post.run();
+            } else {
+                net.multiforge.runtime.diagnostics.ProbeRegistry.bump("event.dispatch.deferred.dropped");
+            }
+        });
+        if (deferred) {
+            net.multiforge.runtime.diagnostics.ProbeRegistry.bump("event.dispatch.deferred");
+            net.multiforge.runtime.diagnostics.ProbeRegistry.bump(DEFERRED_KEYS.get(event.getClass()));
+        }
+        return deferred;
+    }
+
+    private static final Set<Class<?>> CANCELLABLE_LOGGED = java.util.concurrent.ConcurrentHashMap.newKeySet();
+
+    private static final ClassValue<String> DEFERRED_KEYS = new ClassValue<>() {
+        @Override
+        protected String computeValue(Class<?> type) {
+            return "event.dispatch.deferred.event." + type.getName();
+        }
+    };
+
+    /** Whether a deferred event still has something to act on when its turn comes (the server binds it). */
+    private static volatile java.util.function.Predicate<Object> deferredGuard = e -> true;
+
+    /**
+     * Bind the check run before a deferred event is posted: an event about an
+     * entity removed since it was left is dropped (probe {@code
+     * event.dispatch.deferred.dropped}).
+     */
+    public static void bindDeferredGuard(java.util.function.Predicate<Object> guard) {
+        deferredGuard = Objects.requireNonNull(guard, "guard");
     }
 
     private boolean postOnLane(Event event) {

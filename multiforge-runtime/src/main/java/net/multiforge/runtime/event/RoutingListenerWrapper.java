@@ -43,6 +43,8 @@ final class RoutingListenerWrapper<T> implements Consumer<T> {
     private final Class<?> listenerClass;
     /** The event type the listener was registered for, or null to keep {@code metadata}'s domain. */
     private final Class<?> eventType;
+    /** The {@code @SubscribeEvent} method's name, or null for a consumer (see {@link ListenerAffinity}). */
+    private final String methodName;
 
     /** The resolved domain and the {@link RoutingEpoch} it was resolved in. */
     private volatile Resolved resolved;
@@ -72,6 +74,17 @@ final class RoutingListenerWrapper<T> implements Consumer<T> {
             DomainDispatcher dispatcher,
             Class<?> listenerClass,
             Class<?> eventType) {
+        this(delegate, metadata, dispatcher, listenerClass, eventType, null);
+    }
+
+    RoutingListenerWrapper(
+            Consumer<T> delegate,
+            MetadataEntry metadata,
+            DomainDispatcher dispatcher,
+            Class<?> listenerClass,
+            Class<?> eventType,
+            String methodName) {
+        this.methodName = methodName;
         this.delegate = Objects.requireNonNull(delegate, "delegate");
         this.metadata = Objects.requireNonNull(metadata, "metadata");
         this.dispatcher = Objects.requireNonNull(dispatcher, "dispatcher");
@@ -106,12 +119,19 @@ final class RoutingListenerWrapper<T> implements Consumer<T> {
 
     private DispatchDomainKind resolve() {
         if (metadata.explicit()) return metadata.domain();
-        MetadataEntry base = eventType == null
-                ? metadata
-                : new MetadataEntry(
-                        EventTypeDomainMap.lookup(eventType).orElse(DispatchDomainKind.LEGACY_SERIAL),
-                        metadata.ordering(),
-                        false);
-        return base.effectiveDomain(ModClassifier.safetyOf(listenerClass));
+        if (eventType == null) return metadata.effectiveDomain(ModClassifier.safetyOf(listenerClass));
+        EventTypeDomainMap.Resolution resolution = EventTypeDomainMap.lookup(eventType, listenerClass);
+        MetadataEntry base = new MetadataEntry(
+                resolution.kind().orElse(DispatchDomainKind.LEGACY_SERIAL), metadata.ordering(), false);
+        ModSafety safety = ModClassifier.safetyOf(listenerClass);
+        DispatchDomainKind domain = base.effectiveDomain(safety);
+        // A listener that would leave the lane but depends on the server thread stays
+        // on it, unless its mod declared itself strict-safe.
+        if (safety != ModSafety.STRICT_SAFE
+                && !DomainDispatcher.isSerial(domain, metadata.ordering())
+                && ListenerAffinity.pinned(listenerClass, eventType, methodName, resolution.audited())) {
+            return DispatchDomainKind.LEGACY_SERIAL;
+        }
+        return domain;
     }
 }

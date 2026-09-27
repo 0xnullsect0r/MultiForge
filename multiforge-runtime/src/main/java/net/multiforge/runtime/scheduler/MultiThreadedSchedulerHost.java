@@ -431,6 +431,9 @@ public final class MultiThreadedSchedulerHost implements SchedulerHost, AutoClos
             ChunkCost.endLevelTick();
             regionsTicking = false;
             applyDeferredChunkChanges();
+            // Fire-and-forget event posts the regions left (SerialLane.defer), now that
+            // no region worker runs.
+            net.multiforge.runtime.event.SerialLane.drainDeferred();
         }
     }
 
@@ -486,7 +489,11 @@ public final class MultiThreadedSchedulerHost implements SchedulerHost, AutoClos
      * itself, which never overlaps region work.
      */
     public TickRegionScheduler.TickAllResult driveGlobalTick(long deadlineNanos, BooleanSupplier pump) {
-        return scheduler.driveTick(List.of(globalRegion), deadlineNanos, pump);
+        try {
+            return scheduler.driveTick(List.of(globalRegion), deadlineNanos, pump);
+        } finally {
+            net.multiforge.runtime.event.SerialLane.drainDeferred();
+        }
     }
 
     /**
