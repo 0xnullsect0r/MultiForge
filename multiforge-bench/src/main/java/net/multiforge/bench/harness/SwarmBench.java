@@ -134,11 +134,19 @@ public final class SwarmBench {
                     return;
                 }
             } else {
+                setRegionSize(runner, extra);
                 spawnArmorStands(runner, players);
                 spawnMobs(runner, players, Integer.getInteger("bench.mobs", 0));
+                int[] far = forceloadFarArea(runner, extra);
+                if (far != null) {
+                    // Let the far area load and its region settle before measuring.
+                    Thread.sleep(10_000L);
+                    command(runner, "multiforge chunkcost on");
+                }
                 runner.beginMeasurement();
                 extra.put("churn_rounds", churnArmorStands(runner, churnDuration));
                 runner.endMeasurement();
+                if (far != null) reportFarArea(runner, far, extra);
                 despawnArmorStands(runner);
                 ok = true;
             }
@@ -178,7 +186,11 @@ public final class SwarmBench {
                         "event.dispatch.serial",
                         "event.dispatch.serial-post",
                         "region-tick.inline.single",
-                        "region-tick.inline.hot")) {
+                        "region-tick.inline.hot",
+                        "region-tick.hot",
+                        "region-tick.hot-released",
+                        "region-tick.wait-ns.serial-lane",
+                        "region-tick.waits.serial-lane")) {
                     extra.put(
                             key.replace('.', '_').replace('-', '_'),
                             probes.counters().getOrDefault(key, 0L));
@@ -334,6 +346,54 @@ public final class SwarmBench {
             while (!runner.rcon().command(cmd).contains("passed") && System.currentTimeMillis() < deadline) {
                 Thread.sleep(250);
             }
+        }
+    }
+
+    /** {@code bench.regionSize} (chunks): {@code /multiforge region size} right after boot, before any forceload. */
+    private static void setRegionSize(HeadlessServerRunner runner, Map<String, Object> extra) {
+        String size = System.getProperty("bench.regionSize");
+        if (size == null || !runner.hasTickStats()) return;
+        extra.put("region_size_chunks", Integer.parseInt(size));
+        extra.put(
+                "region_size_reply",
+                command(runner, "multiforge region size " + size).strip());
+    }
+
+    /**
+     * {@code bench.farArea=x,z} (block coordinates): forceload a 5x5-chunk area
+     * there with nothing in it — the wilderness around a lone player far from
+     * the busy forceloaded area at spawn (the user report: a player ~2.4k blocks
+     * from a base, sections merged diagonally). Returns its centre chunk.
+     */
+    private static int[] forceloadFarArea(HeadlessServerRunner runner, Map<String, Object> extra) {
+        String spec = System.getProperty("bench.farArea");
+        if (spec == null) return null;
+        String[] xz = spec.split(",");
+        int x = Integer.parseInt(xz[0].strip());
+        int z = Integer.parseInt(xz[1].strip());
+        command(runner, "forceload add " + (x - 32) + " " + (z - 32) + " " + (x + 32) + " " + (z + 32));
+        extra.put("far_area", x + "," + z);
+        return new int[] {Math.floorDiv(x, 16), Math.floorDiv(z, 16)};
+    }
+
+    /** Per-chunk cost of the far area vs the busiest chunks, and the region layout, after the run. */
+    private static void reportFarArea(HeadlessServerRunner runner, int[] far, Map<String, Object> extra) {
+        extra.put(
+                "chunkcost",
+                command(runner, "multiforge chunkcost report minecraft:overworld " + far[0] + " " + far[1] + " 2")
+                        .strip());
+        extra.put("region_list", command(runner, "multiforge region list").strip());
+        command(runner, "multiforge chunkcost off");
+    }
+
+    private static String command(HeadlessServerRunner runner, String cmd) {
+        try {
+            String reply = runner.rcon().command(cmd);
+            System.out.println("SwarmBench: " + cmd + " -> " + reply.strip().replace('\n', ' '));
+            return reply;
+        } catch (IOException e) {
+            System.err.println("SwarmBench: RCON error on '" + cmd + "': " + e.getMessage());
+            return "";
         }
     }
 
