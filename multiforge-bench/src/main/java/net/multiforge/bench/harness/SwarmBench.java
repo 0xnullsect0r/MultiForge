@@ -135,6 +135,7 @@ public final class SwarmBench {
                 }
             } else {
                 spawnArmorStands(runner, players);
+                spawnMobs(runner, players, Integer.getInteger("bench.mobs", 0));
                 runner.beginMeasurement();
                 extra.put("churn_rounds", churnArmorStands(runner, churnDuration));
                 runner.endMeasurement();
@@ -163,7 +164,24 @@ public final class SwarmBench {
                 return;
             }
             if (runner.hasTickStats()) {
-                ProbeSummary probes = ProbeSummary.parse(runner.rcon().command("multiforge probes"));
+                String probeDump = runner.rcon().command("multiforge probes");
+                ProbeSummary probes = ProbeSummary.parse(probeDump);
+                // The whole dump next to the result, for the serial-lane breakdown
+                // (event.dispatch.serial.event.* / .mod.* / .world.*).
+                Path probeFile = outputFile.resolveSibling(outputFile.getFileName() + ".probes.txt");
+                Files.createDirectories(probeFile.toAbsolutePath().getParent());
+                Files.writeString(probeFile, probeDump);
+                for (String key : List.of(
+                        "serial-lane.handoff",
+                        "serial-lane.inline",
+                        "event.dispatch.serial",
+                        "event.dispatch.serial-post",
+                        "region-tick.inline.single",
+                        "region-tick.inline.hot")) {
+                    extra.put(
+                            key.replace('.', '_').replace('-', '_'),
+                            probes.counters().getOrDefault(key, 0L));
+                }
                 long violations = probes.violations();
                 long overruns = probes.overruns();
                 extra.put("ownership_violations", violations);
@@ -347,6 +365,32 @@ public final class SwarmBench {
         }
         System.out.println("SwarmBench: spawned " + players + " armor stands across a " + (2 * spreadRadius) + "x"
                 + (2 * spreadRadius) + " block area, forceloaded at that footprint");
+    }
+
+    /**
+     * {@code bench.mobs} persistent mobs on the surface of the armor-stand
+     * footprint, so the forceloaded area carries the per-entity AI and events
+     * a player's surroundings would (natural spawning needs a real player).
+     */
+    private static void spawnMobs(HeadlessServerRunner runner, int players, int mobs) throws IOException {
+        if (mobs <= 0) return;
+        String[] kinds = {"cow", "sheep", "pig", "chicken", "villager", "wolf", "spider", "iron_golem"};
+        int side = (int) Math.ceil(Math.sqrt(Math.max(1, players)));
+        int spreadRadius = Math.max(16, side * 8);
+        Random rnd = new Random(11);
+        for (int i = 0; i < mobs; i++) {
+            int x = rnd.nextInt(2 * spreadRadius + 1) - spreadRadius;
+            int z = rnd.nextInt(2 * spreadRadius + 1) - spreadRadius;
+            runner.rcon()
+                    .command(String.format(
+                            Locale.ROOT,
+                            "execute positioned %d 0 %d positioned over world_surface run summon minecraft:%s ~ ~ ~"
+                                    + " {PersistenceRequired:1b}",
+                            x,
+                            z,
+                            kinds[i % kinds.length]));
+        }
+        System.out.println("SwarmBench: spawned " + mobs + " mobs in the armor-stand footprint");
     }
 
     private static int churnArmorStands(HeadlessServerRunner runner, Duration duration) throws InterruptedException {
