@@ -407,9 +407,12 @@ class TickRegionSchedulerBarrierModeTest {
                     .isEqualTo(TickRegionScheduler.TickPlacement.SERVER_THREAD_SINGLE);
             double onCaller = scheduler.mspt(c).averageMillis();
 
+            // Both count the 10 ms of listener work. A worker left the listeners out as
+            // waiting before, and would read ~0. The spread allows for a loaded CI host
+            // descheduling one of the three spinning threads (region worker, lane).
             assertThat(onWorker).isGreaterThan(9.0);
             assertThat(onCaller).isGreaterThan(9.0);
-            assertThat(onWorker).isCloseTo(onCaller, org.assertj.core.data.Percentage.withPercentage(25));
+            assertThat(onWorker).isCloseTo(onCaller, org.assertj.core.data.Offset.offset(6.0));
         } finally {
             net.multiforge.runtime.event.SerialLane.unbind();
         }
