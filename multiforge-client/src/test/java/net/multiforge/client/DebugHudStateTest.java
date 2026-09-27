@@ -134,4 +134,25 @@ class DebugHudStateTest {
         assertThat(state.hasOwnershipFor("minecraft:overworld")).isFalse();
         assertThat(state.regionIdAtChunk(0, 0)).isNull();
     }
+
+    @Test
+    void clearForgetsTheRuntimeStatus() {
+        DebugHudState state = new DebugHudState();
+        state.apply(new DebugPayload.RuntimeStatus(1, 1, List.of(), List.of()));
+        assertThat(state.worldStatus("minecraft:overworld")).isNotNull();
+        state.clear();
+        assertThat(state.runtimeStatus()).isNull();
+        assertThat(state.worldStatus("minecraft:overworld")).isNull();
+    }
+
+    @Test
+    void threadTagShortensWorkerNamesAndNamesTheServerThread() {
+        assertThat(DebugHudState.threadTag(null)).isEmpty();
+        assertThat(DebugHudState.threadTag(
+                        new DebugPayload.RegionThread(1, "w", "multiforge-tick-12", DebugPayload.Placement.WORKER, 0)))
+                .isEqualTo("tick-12");
+        assertThat(DebugHudState.threadTag(new DebugPayload.RegionThread(
+                        1, "w", "Server thread", DebugPayload.Placement.SERVER_THREAD_SINGLE, 0)))
+                .isEqualTo("server");
+    }
 }

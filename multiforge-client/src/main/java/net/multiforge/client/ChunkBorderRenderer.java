@@ -20,7 +20,6 @@ import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.client.renderer.MultiBufferSource;
 import net.minecraft.client.renderer.RenderType;
-import net.minecraft.util.Mth;
 import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.phys.Vec3;
 import net.neoforged.bus.api.SubscribeEvent;
@@ -30,9 +29,10 @@ import net.neoforged.neoforge.client.event.RenderLevelStageEvent;
  * Draws vertical strips along the seams where two adjacent chunks
  * belong to different regions. Walks a grid around the player and, for
  * each chunk, draws a line strip on its north and west edge when the
- * neighbour across that edge has a different owning region. Y is
- * clamped to a band around the player so the strips stay crisp and
- * dodge depth-buffer precision loss at high altitude.
+ * neighbour across that edge has a different owning region. Each strip
+ * runs from the bottom of the world to the build limit, since a region
+ * owns whole chunks (before v1.8.0 it was a 48-block band that followed
+ * the player's height).
  *
  * <p>As of v1.4.0 the ownership behind those seams is <b>real</b>. From
  * v1.3.5 through v1.3.18 this class hash-picked a region id from the
@@ -91,11 +91,10 @@ public final class ChunkBorderRenderer {
         VertexConsumer consumer = bufferSource.getBuffer(RenderType.lines());
         ChunkPos center = player.chunkPosition();
 
-        double playerY = player.getY();
-        double yLow = Mth.clamp(
-                playerY - MultiForgeDebugConfig.Y_BELOW.get(), level.getMinBuildHeight(), level.getMaxBuildHeight());
-        double yHigh = Mth.clamp(
-                playerY + MultiForgeDebugConfig.Y_ABOVE.get(), level.getMinBuildHeight(), level.getMaxBuildHeight());
+        // A region owns whole chunks, so a seam runs from the bottom of the
+        // world to the build limit, like the pin box.
+        double yLow = level.getMinBuildHeight();
+        double yHigh = level.getMaxBuildHeight();
 
         for (int dx = -radius; dx <= radius; dx++) {
             for (int dz = -radius; dz <= radius; dz++) {

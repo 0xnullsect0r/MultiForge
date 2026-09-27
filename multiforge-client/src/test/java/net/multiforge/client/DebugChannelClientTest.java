@@ -47,6 +47,39 @@ class DebugChannelClientTest {
     }
 
     @Test
+    void runtimeStatusTagsRegionRowsWithTheirThread() throws IOException {
+        DebugHudState state = new DebugHudState();
+        DebugChannelClient client = new DebugChannelClient(state);
+        client.onFrame(DebugPacketCodec.encodeRegionSnapshot(new DebugPayload.RegionSnapshot(
+                5,
+                List.of(
+                        new DebugPayload.RegionStat(1, 1, 10.0, 15.0, 42),
+                        new DebugPayload.RegionStat(2, 3, 22.0, 27.5, 250),
+                        new DebugPayload.RegionStat(3, 1, 1.0, 2.0, 0)))));
+        // Before any RUNTIME_STATUS (a protocol-2 server) rows keep the old format.
+        assertThat(state.f3Lines().get(1L)).startsWith("region-1 mspt=");
+
+        client.onFrame(DebugPacketCodec.encodeRuntimeStatus(new DebugPayload.RuntimeStatus(
+                0,
+                0,
+                List.of(new DebugPayload.WorldStatus("minecraft:overworld", DebugPayload.WorldMode.WORKERS, 3)),
+                List.of(
+                        new DebugPayload.RegionThread(
+                                1, "minecraft:overworld", "multiforge-tick-6", DebugPayload.Placement.WORKER, 0),
+                        new DebugPayload.RegionThread(
+                                2,
+                                "minecraft:overworld",
+                                "Server thread",
+                                DebugPayload.Placement.SERVER_THREAD_HOT,
+                                4000),
+                        new DebugPayload.RegionThread(
+                                3, "minecraft:overworld", "", DebugPayload.Placement.UNKNOWN, 0)))));
+        assertThat(state.f3Lines().get(1L)).startsWith("region-1 [tick-6] mspt=10.0/15.0");
+        assertThat(state.f3Lines().get(2L)).startsWith("region-2 [server, busy lane] mspt=");
+        assertThat(state.f3Lines().get(3L)).startsWith("region-3 mspt=");
+    }
+
+    @Test
     void violationsAccumulateBoundedInReverseOrder() throws IOException {
         DebugHudState state = new DebugHudState();
         DebugChannelClient client = new DebugChannelClient(state);

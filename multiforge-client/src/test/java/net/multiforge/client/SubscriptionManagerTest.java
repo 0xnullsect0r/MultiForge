@@ -86,7 +86,7 @@ class SubscriptionManagerTest {
     void masterToggleOffZeroesTheMask() throws IOException {
         DebugHudState state = new DebugHudState();
         SubscriptionManager m = new SubscriptionManager(state, () -> DebugPayload.Subscribe.F_ALL);
-        m.onHello(2);
+        m.onHello(DebugPacketCodec.PROTOCOL_VERSION);
         Wire wire = new Wire();
         m.syncIfChanged(wire::accept);
 
@@ -124,6 +124,29 @@ class SubscriptionManagerTest {
 
         m.syncIfChanged(wire::accept);
         assertThat(wire.lastMask() & DebugPayload.Subscribe.F_OWNERSHIP).isNotZero();
+    }
+
+    @Test
+    void runtimeBitIsStrippedOnAProtocolTwoServer() throws IOException {
+        DebugHudState state = new DebugHudState();
+        SubscriptionManager m = new SubscriptionManager(state, () -> DebugPayload.Subscribe.F_ALL);
+        m.onHello(2); // v1.4.0 .. v1.7.x
+        Wire wire = new Wire();
+
+        m.syncIfChanged(wire::accept);
+        assertThat(wire.lastMask() & DebugPayload.Subscribe.F_RUNTIME).isZero();
+        assertThat(wire.lastMask() & DebugPayload.Subscribe.F_OWNERSHIP).isNotZero();
+    }
+
+    @Test
+    void runtimeBitSurvivesOnAProtocolThreeServer() throws IOException {
+        DebugHudState state = new DebugHudState();
+        SubscriptionManager m = new SubscriptionManager(state, () -> DebugPayload.Subscribe.F_ALL);
+        m.onHello(3);
+        Wire wire = new Wire();
+
+        m.syncIfChanged(wire::accept);
+        assertThat(wire.lastMask() & DebugPayload.Subscribe.F_RUNTIME).isNotZero();
     }
 
     @Test

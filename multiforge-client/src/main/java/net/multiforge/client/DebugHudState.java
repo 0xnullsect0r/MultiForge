@@ -44,6 +44,12 @@ public final class DebugHudState {
     private final Deque<DebugPayload.ViolationEvent> violations = new ArrayDeque<>();
 
     /**
+     * v1.8.0: which thread ticks each region and how each world ticks, from
+     * {@code RUNTIME_STATUS}. Null from a server older than protocol 3.
+     */
+    private DebugPayload.RuntimeStatus runtimeStatus;
+
+    /**
      * v1.4.0: real section→region ownership from {@code
      * CHUNK_OWNERSHIP}, keyed by packed section-<em>origin</em> chunk.
      * Empty until the server sends a frame; {@link ChunkBorderRenderer}
@@ -95,6 +101,10 @@ public final class DebugHudState {
         while (violations.size() > VIOLATION_HISTORY) violations.removeLast();
     }
 
+    public void apply(DebugPayload.RuntimeStatus status) {
+        this.runtimeStatus = status;
+    }
+
     public void apply(DebugPayload.OwnershipUpdate update) {
         ownershipWorldId = update.worldId();
         ownershipShift = update.sectionChunkShift();
@@ -122,6 +132,7 @@ public final class DebugHudState {
         hello = null;
         latestSnapshot = null;
         latestHeatmap = null;
+        runtimeStatus = null;
         pins = new DebugPayload.PinList(List.of());
         violations.clear();
         ownership.clear();
@@ -137,6 +148,25 @@ public final class DebugHudState {
 
     public DebugPayload.RegionSnapshot latestSnapshot() {
         return latestSnapshot;
+    }
+
+    /** The latest {@code RUNTIME_STATUS}, or null (server older than protocol 3, or none yet). */
+    public DebugPayload.RuntimeStatus runtimeStatus() {
+        return runtimeStatus;
+    }
+
+    /**
+     * How {@code worldId} ticks, or null before any {@code RUNTIME_STATUS}.
+     * A world the server did not list has no regions, so it ticks on the
+     * server thread as in NeoForge.
+     */
+    public DebugPayload.WorldStatus worldStatus(String worldId) {
+        DebugPayload.RuntimeStatus st = runtimeStatus;
+        if (st == null) return null;
+        for (DebugPayload.WorldStatus w : st.worlds()) {
+            if (w.worldId().equals(worldId)) return w;
+        }
+        return new DebugPayload.WorldStatus(worldId, DebugPayload.WorldMode.SERVER_THREAD_NO_REGIONS, 0);
     }
 
     public DebugPayload.HeatmapUpdate latestHeatmap() {
@@ -203,20 +233,49 @@ public final class DebugHudState {
 
     /**
      * Build the compact map that the region-list panel renders one line
-     * per region: {@code "region-<id> mspt=X.X/Y.Y owned=N sections=M"}.
+     * per region: {@code "region-<id> [<thread>] mspt=X.X/Y.Y owned=N sections=M"}.
+     * The thread tag appears once a {@code RUNTIME_STATUS} names the
+     * thread that last ticked the region (protocol 3 servers).
      */
     public Map<Long, String> f3Lines() {
         DebugPayload.RegionSnapshot s = latestSnapshot;
         if (s == null) return Collections.emptyMap();
+        Map<Long, DebugPayload.RegionThread> threads = new HashMap<>();
+        if (runtimeStatus != null) {
+            for (DebugPayload.RegionThread t : runtimeStatus.regions()) threads.put(t.regionId(), t);
+        }
         Map<Long, String> out = new LinkedHashMap<>();
         for (DebugPayload.RegionStat r : s.regions()) {
+            String tag = threadTag(threads.get(r.regionId()));
             out.put(
                     r.regionId(),
                     String.format(
-                            "region-%d mspt=%.1f/%.1f owned=%d sections=%d",
-                            r.regionId(), r.msptP50(), r.msptP95(), r.ownedEntities(), r.sectionCount()));
+                            "region-%d%s mspt=%.1f/%.1f owned=%d sections=%d",
+                            r.regionId(),
+                            tag.isEmpty() ? "" : " [" + tag + "]",
+                            r.msptP50(),
+                            r.msptP95(),
+                            r.ownedEntities(),
+                            r.sectionCount()));
         }
         return out;
+    }
+
+    /**
+     * Short label for where a region last ticked: {@code tick-6} for worker
+     * {@code multiforge-tick-6}, {@code server} for the server thread,
+     * {@code server, busy lane} when it was moved there for posting too many
+     * events to the serial lane, and empty when not known yet.
+     */
+    static String threadTag(DebugPayload.RegionThread t) {
+        if (t == null || t.thread().isEmpty()) return "";
+        return switch (t.placement()) {
+            case SERVER_THREAD_SINGLE -> "server";
+            case SERVER_THREAD_HOT -> "server, busy lane";
+            case WORKER, UNKNOWN -> t.thread().startsWith("multiforge-")
+                    ? t.thread().substring("multiforge-".length())
+                    : t.thread();
+        };
     }
 
     private static long pack(int chunkX, int chunkZ) {

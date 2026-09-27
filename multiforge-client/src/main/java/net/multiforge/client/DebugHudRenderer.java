@@ -17,6 +17,7 @@ import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.Font;
 import net.minecraft.client.gui.GuiGraphics;
@@ -85,7 +86,9 @@ public final class DebugHudRenderer {
         int y = MARGIN;
         // v1.3.16: top-left, not bottom-left.
         if (MultiForgeDebugConfig.HUD.get()) {
-            for (String line : buildSummaryLines(state)) {
+            String worldId =
+                    mc.level == null ? null : mc.level.dimension().location().toString();
+            for (String line : buildSummaryLines(state, worldId)) {
                 graphics.drawString(font, line, MARGIN, y, TEXT_COLOR);
                 y += LINE_HEIGHT;
             }
@@ -115,6 +118,15 @@ public final class DebugHudRenderer {
      * server.
      */
     static List<String> buildSummaryLines(DebugHudState state) {
+        return buildSummaryLines(state, null);
+    }
+
+    /**
+     * As {@link #buildSummaryLines(DebugHudState)}, plus, from a protocol-3
+     * server, how the player's dimension {@code worldId} ticks and the serial
+     * lane's rate.
+     */
+    static List<String> buildSummaryLines(DebugHudState state, String worldId) {
         if (state.protocolUnsupported()) {
             // Protocol §8: we refused to subscribe, so no other panel
             // will ever populate. Say why rather than looking broken.
@@ -150,7 +162,36 @@ public final class DebugHudRenderer {
                     "MultiForge worstP95=%.1fms warns=%d(last 200)",
                     worstP95, state.recentViolations().size()));
         }
+        DebugPayload.RuntimeStatus status = state.runtimeStatus();
+        if (status != null) {
+            if (worldId != null) {
+                lines.add("This dimension: " + worldId + " — " + describe(state.worldStatus(worldId)));
+            }
+            lines.add(String.format(
+                    "Serial lane: %s/s handed to server thread, %s/s run in place",
+                    rate(status.laneHandoffsPerSecond()), rate(status.laneInlinePerSecond())));
+        }
         return lines;
+    }
+
+    /** Where a world's regions tick, in words. */
+    static String describe(DebugPayload.WorldStatus w) {
+        int n = w.regionCount();
+        String regions = n == 1 ? "1 region" : n + " regions";
+        return switch (w.mode()) {
+            case SERVER_THREAD_NO_REGIONS -> "server thread (no regions)";
+            case SERVER_THREAD_SINGLE_REGION -> "server thread (" + regions + ", nothing to run beside it)";
+            case WORKERS -> "worker threads (" + regions + ")";
+            case WORKERS_AND_SERVER_THREAD -> "worker threads + server thread (" + regions
+                    + ", busy-lane ones on the server)";
+        };
+    }
+
+    /** 950 → "950", 12345 → "12.3k". */
+    static String rate(double perSecond) {
+        if (perSecond < 1000) return String.format(Locale.ROOT, "%.0f", perSecond);
+        if (perSecond < 1_000_000) return String.format(Locale.ROOT, "%.1fk", perSecond / 1000);
+        return String.format(Locale.ROOT, "%.1fM", perSecond / 1_000_000);
     }
 
     /**

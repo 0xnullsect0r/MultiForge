@@ -31,17 +31,25 @@ The mod stays quiet until you're connected to a MultiForge server. Once the serv
 
 ### 2.1 F3-style HUD (top-left)
 
-A three-line status block, drawn in the top-left corner in the same style as vanilla F3 but **always visible** — you don't need to press F3. It appears as soon as a HELLO frame arrives from a MultiForge server (usually within one second of connecting):
+A status block, drawn in the top-left corner in the same style as vanilla F3 but **always visible** — you don't need to press F3. It appears as soon as a HELLO frame arrives from a MultiForge server (usually within one second of connecting):
 
 ```
-MultiForge build=1.3.13 proto=1 tickHz=20
+MultiForge build=1.8.0 proto=3 tickHz=20
 MultiForge regions=8 workers~=8 tps~=20.0
 MultiForge worstP95=8.3ms warns=3(last 200)
+This dimension: minecraft:overworld — worker threads (3 regions)
+Serial lane: 1.2k/s handed to server thread, 0/s run in place
 ```
 
 - **Line 1** — server build label, wire-protocol version, and the server's target tick rate (20 Hz for a normal 1.21.1 world).
 - **Line 2** — live region count, an approximate worker-thread count (currently reported as `≈ region count`, since regions each own one worker at a time), and an estimated TPS (`min(tickHz, 1000 / worstP95)`).
 - **Line 3** — worst region's MSPT at the p95 percentile, and the number of ownership/reroute warnings in a rolling 200-event ring buffer.
+- **Line 4** (v1.8.0 servers) — how the dimension you are in ticks:
+  - `server thread (no regions)` — nothing loaded there has a region; it ticks on the server thread like stock NeoForge.
+  - `server thread (1 region, nothing to run beside it)` — one region, which MultiForge ticks on the server thread because a worker would gain nothing and only add hand-off cost.
+  - `worker threads (N regions)` — each region ticks on a worker, in parallel.
+  - `worker threads + server thread (…)` — as above, except regions that post too many events to the serial lane, which tick on the server thread after the others.
+- **Line 5** (v1.8.0 servers) — the serial lane: events whose listeners are not safe on a worker. "Handed to server thread" is each such event a worker had to pass to the server thread and wait for; a high number there is what made v1.7.x lag. "Run in place" is the same kind of event from a region already on the server thread, which costs nothing extra.
 
 ### 2.2 Chunk-border renderer
 
@@ -49,7 +57,8 @@ Coloured vertical strips along the **seams** where two adjacent chunks belong to
 
 - Each region gets its own hue, stable for as long as that region exists.
 - Only the seams are drawn — not a box around every chunk. Between two chunks the same region owns, nothing is drawn at all.
-- Strips span a configurable band around the player (16 blocks below, 32 above by default) rather than the full world height, which keeps them crisp and avoids the z-fighting the old full-height boxes produced at altitude.
+- Strips run from the bottom of the world to the build limit, since a region owns whole chunks. (Before v1.8.0 they were a 48-block band that followed your height.)
+- A single region surrounded by unloaded chunks has no seam: seams mark where two regions meet, not the edge of the loaded area. To see which thread ticks your area, read the region list (§2.7) and line 4 of the HUD.
 
 **As of v1.4.0 these seams are real.** From v1.3.5 through v1.3.18 the client had no source of truth for chunk ownership — the server never sent one — so it hash-picked a region id from each chunk's coordinates modulo the live region count. The seams that produced were an artifact of *how many* regions existed, they re-shuffled whenever a region merged or split, and they had no relationship to what actually owned anything. v1.4.0 adds the `CHUNK_OWNERSHIP` packet, and the overlay now draws the server's true mapping.
 
@@ -106,11 +115,11 @@ The client keeps the last 200 events and draws the newest 8 by default (`hud.vio
 One row per live region, under the three summary lines:
 
 ```
-region-1 mspt=8.1/12.4 owned=132 sections=6
-region-2 mspt=2.0/3.1 owned=18 sections=2
+region-1 [tick-6] mspt=8.1/12.4 owned=132 sections=6
+region-2 [server] mspt=2.0/3.1 owned=18 sections=2
 ```
 
-That's the region id, its p50/p95 tick cost in milliseconds, how many entities it owns, and how many sections it spans. Capped at 8 rows by default (`hud.regionListMaxRows`), with a `… N more region(s)` line when there are more.
+That's the region id, where its last tick ran (v1.8.0 servers: `tick-N` is worker thread `multiforge-tick-N`, `server` is the server thread, `server, busy lane` means it was moved there for posting too many serial-lane events), its p50/p95 tick cost in milliseconds, how many entities it owns, and how many sections it spans. Capped at 8 rows by default (`hud.regionListMaxRows`), with a `… N more region(s)` line when there are more.
 
 **New in v1.4.0**, in the same sense as the violation panel: the data and its exact format have existed since M6 and were documented, but nothing drew them.
 
@@ -126,7 +135,7 @@ The same settings live in `config/multiforge_debug-client.toml`, created on firs
 
 | Setting | Default | What it controls |
 |---|---|---|
-| `overlays.hud` | on | The three-line summary block (§2.1) |
+| `overlays.hud` | on | The summary block (§2.1) |
 | `overlays.regionList` | on | Per-region rows (§2.7) |
 | `overlays.violations` | on | Violation panel (§2.6) |
 | `overlays.chunkBorders` | on | Region seams (§2.2) |
@@ -135,7 +144,6 @@ The same settings live in `config/multiforge_debug-client.toml`, created on firs
 | `hud.regionListMaxRows` | 8 | Region rows before truncating |
 | `hud.violationMaxRows` | 8 | Violation rows drawn |
 | `render.borderRadiusChunks` | 4 | How far out to look for seams |
-| `render.yBelow` / `render.yAbove` | 16 / 32 | Vertical extent of seams and pin boxes |
 
 The F6 keybind (§2.5) is a master switch on top of all of this — it hides everything at once regardless of the individual settings, and while it's off the mod unsubscribes entirely, so the server stops sending anything but the handshake.
 

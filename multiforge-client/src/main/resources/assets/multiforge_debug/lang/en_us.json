@@ -38,9 +38,5 @@
   "multiforge_debug.configuration.hud.violationMaxRows.tooltip": "Maximum violation rows to draw. The client retains 200 regardless.",
 
   "multiforge_debug.configuration.render.borderRadiusChunks": "Border radius (chunks)",
-  "multiforge_debug.configuration.render.borderRadiusChunks.tooltip": "Chunks in each direction from the player to test for region seams.",
-  "multiforge_debug.configuration.render.yBelow": "Extent below player",
-  "multiforge_debug.configuration.render.yBelow.tooltip": "Blocks below the player that seams and pin boxes extend.",
-  "multiforge_debug.configuration.render.yAbove": "Extent above player",
-  "multiforge_debug.configuration.render.yAbove.tooltip": "Blocks above the player that seams and pin boxes extend."
+  "multiforge_debug.configuration.render.borderRadiusChunks.tooltip": "Chunks in each direction from the player to test for region seams."
 }
