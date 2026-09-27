@@ -41,6 +41,57 @@ public final class RegionMspt {
         samplesNanos.set(idx, nanos);
     }
 
+    /**
+     * Seed a new region's history from the region it split off, so its heat does not
+     * start from nothing (an empty window read as a cheap region for its first ticks,
+     * which showed up as the heatmap briefly dropping to green or yellow). Each of
+     * {@code source}'s samples is copied oldest first and scaled by {@code share},
+     * the child's share of the work. Nothing measures that share at split time, so
+     * the caller passes an estimate (the child's share of the sections); the child's
+     * own samples replace the estimate within one window.
+     */
+    public void seedFrom(RegionMspt source, double share) {
+        if (share <= 0) return;
+        long[] samples = source.samplesOldestFirst();
+        for (long v : samples) recordNanos(Math.max(1L, Math.round(v * Math.min(1.0, share))));
+    }
+
+    /**
+     * Fold a region that is merging into this one: the merged region does both
+     * regions' work, so its expected tick time is the sum. Samples are added pairwise
+     * by recency (newest with newest), and a slot only {@code other} had is taken
+     * as is.
+     */
+    public void absorb(RegionMspt other) {
+        long[] mine = samplesOldestFirst();
+        long[] theirs = other.samplesOldestFirst();
+        int n = Math.max(mine.length, theirs.length);
+        long[] merged = new long[Math.min(n, capacity)];
+        for (int k = 0; k < merged.length; k++) {
+            // k counts back from the newest sample of each window.
+            long a = k < mine.length ? mine[mine.length - 1 - k] : 0L;
+            long b = k < theirs.length ? theirs[theirs.length - 1 - k] : 0L;
+            merged[merged.length - 1 - k] = a + b;
+        }
+        for (int i = 0; i < capacity; i++) samplesNanos.set(i, 0L);
+        cursor.set(0);
+        for (long v : merged) recordNanos(v);
+    }
+
+    /** The recorded samples, oldest first; empty slots are left out. */
+    long[] samplesOldestFirst() {
+        int written = cursor.get();
+        // A cursor past Integer.MAX_VALUE wraps negative; the window is full by then.
+        int filled = written < 0 ? capacity : Math.min(written, capacity);
+        long[] out = new long[filled];
+        int n = 0;
+        for (int i = written - filled; i < written; i++) {
+            long v = samplesNanos.get(Math.floorMod(i, capacity));
+            if (v > 0) out[n++] = v;
+        }
+        return n == filled ? out : java.util.Arrays.copyOf(out, n);
+    }
+
     /** Rolling average, in milliseconds; 0 if no samples yet. */
     public double averageMillis() {
         long total = 0L;

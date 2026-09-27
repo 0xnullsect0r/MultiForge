@@ -172,8 +172,13 @@ public final class TickRegionScheduler implements AutoCloseable, RegionListener 
      * put-first-then-add closes that race.
      */
     public void register(Region region) {
+        register(region, null, 0.0);
+    }
+
+    private void register(Region region, RegionMspt seed, double share) {
         Objects.requireNonNull(region, "region");
         RegionState_ fresh = new RegionState_(region);
+        if (seed != null) fresh.mspt.seedFrom(seed, share);
         RegionState_ existing = perRegion.putIfAbsent(region.id(), fresh);
         if (existing == null && mode == Mode.FREE_RUNNING) {
             queue.add(new ScheduleEntry(System.nanoTime(), region.id(), fresh));
@@ -208,6 +213,33 @@ public final class TickRegionScheduler implements AutoCloseable, RegionListener 
     @Override
     public void onRegionCreated(Region region) {
         register(region);
+    }
+
+    /**
+     * {@link RegionListener} hook: a split child starts with the source's recent
+     * tick times scaled by its share of the sections (see {@link
+     * RegionMspt#seedFrom}), so its heat and {@code region list} figures do not
+     * start from an empty window. Fired before {@link #onRegionCreated}, whose
+     * {@link #register} is then a no-op.
+     */
+    @Override
+    public void onRegionSplit(Region source, Region child) {
+        RegionState_ src = perRegion.get(source.id());
+        if (src == null) return;
+        int total = source.sectionCount() + child.sectionCount();
+        register(child, src.mspt, total == 0 ? 0.0 : child.sectionCount() / (double) total);
+    }
+
+    /**
+     * {@link RegionListener} hook: the surviving region of a merge takes on the
+     * dying region's work, so its recent tick times become the sum of both (see
+     * {@link RegionMspt#absorb}).
+     */
+    @Override
+    public void onRegionsMerging(Region surviving, Region dying) {
+        RegionState_ keep = perRegion.get(surviving.id());
+        RegionState_ gone = perRegion.get(dying.id());
+        if (keep != null && gone != null) keep.mspt.absorb(gone.mspt);
     }
 
     public RegionMspt mspt(Region region) {
