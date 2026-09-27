@@ -365,9 +365,9 @@ public final class TickRegionScheduler implements AutoCloseable, RegionListener 
         }
         AtomicInteger remaining = new AtomicInteger(parallel);
         long[] finishedAt = new long[n];
-        // Designed waits (a main-thread chunk load, a serial-lane listener) are not
+        // Designed waits (a main-thread chunk load, a serial-lane hand-off) are not
         // the region's own time: RegionTickWatchdog leaves them out per region, and
-        // so does the deadline.
+        // so does the deadline. The listeners the lane runs for a region do count.
         long[] waited = new long[n];
         Throwable[] failures = new Throwable[n];
         Thread waiter = Thread.currentThread();
@@ -426,7 +426,7 @@ public final class TickRegionScheduler implements AutoCloseable, RegionListener 
                     ? finishedAt[i] - waited[i] > deadline
                     : finishedAt[i] - startedAt[i] - waited[i] > Math.max(0L, deadlineNanos);
             if (late) overrun.add(batch.get(i).id());
-            updateHot(states[i]);
+            updateHot(states[i], placement[i]);
             if (failures[i] != null) {
                 if (first == null) first = failures[i];
                 else if (first != failures[i]) first.addSuppressed(failures[i]);
@@ -440,9 +440,8 @@ public final class TickRegionScheduler implements AutoCloseable, RegionListener 
 
     /**
      * Where a region's tick ran last: on a worker, or on the server thread
-     * because it was the only region of its batch or because it posts so many
-     * events to the serial lane that a worker would spend its tick handing
-     * them off.
+     * because it was the only region of its batch or because a worker would
+     * spend too much of its tick handing serial-lane events off.
      */
     public enum TickPlacement {
         WORKER,
@@ -450,44 +449,90 @@ public final class TickRegionScheduler implements AutoCloseable, RegionListener 
         SERVER_THREAD_HOT
     }
 
+    /** Consecutive ticks over the threshold before a region goes to the server thread. */
+    static final int HOT_ENTER_TICKS = 20;
+
     /** Quiet ticks (under a quarter of the threshold) before a hot region goes back to a worker. */
     static final int HOT_RELEASE_TICKS = 200;
 
+    /** Assumed cost of one serial-lane hand-off until a worker has measured it. */
+    static final long DEFAULT_HANDOFF_NANOS = 20_000L;
+
     private volatile boolean inlineSingleRegion = true;
-    private volatile long serialLaneInlineThreshold = 2000;
+    private volatile long serialLaneHotWaitNanos = 5_000_000L;
+
+    /**
+     * Measured cost of one serial-lane hand-off (the wait minus the job's run
+     * time), a moving average over worker ticks. Server thread only.
+     */
+    private long handoffNanos = DEFAULT_HANDOFF_NANOS;
 
     /**
      * @param single tick a batch of one region on the calling thread
-     * @param serialThreshold serial-lane posts in one tick above which a region
-     *     ticks on the calling thread after the parallel ones; 0 or less: never
+     * @param hotWaitMs serial-lane hand-off time per tick, in milliseconds, above
+     *     which a region ticks on the calling thread after the parallel ones;
+     *     0 or less: never
      */
-    public void setInlinePolicy(boolean single, long serialThreshold) {
+    public void setInlinePolicy(boolean single, long hotWaitMs) {
         this.inlineSingleRegion = single;
-        this.serialLaneInlineThreshold = serialThreshold;
-        if (serialThreshold <= 0) {
+        this.serialLaneHotWaitNanos = Math.max(0L, hotWaitMs) * 1_000_000L;
+        if (hotWaitMs <= 0) {
             for (RegionState_ s : perRegion.values()) s.hot = false;
         }
     }
 
-    /** Server thread, after the barrier: mark a region hot, or release it after a quiet spell. */
-    private void updateHot(RegionState_ s) {
-        long threshold = serialLaneInlineThreshold;
+    /**
+     * Server thread, after the barrier: move a region to the server thread when
+     * handing its serial-lane events off costs it more than the threshold for
+     * {@link #HOT_ENTER_TICKS} ticks, and back to a worker after {@link
+     * #HOT_RELEASE_TICKS} ticks under a quarter of it. The decision is on time
+     * lost, not on the number of events: what one hand-off costs depends on the
+     * machine and its load (17 µs on average in one modpack server's probes). On a worker the cost is measured; on the server
+     * thread, where nothing is handed off, it is estimated from the region's
+     * posts and the measured cost of one hand-off.
+     */
+    private void updateHot(RegionState_ s, TickPlacement where) {
+        long threshold = serialLaneHotWaitNanos;
         if (threshold <= 0) return;
         long posts = s.lastSerialPosts;
+        long overhead;
+        if (where == TickPlacement.WORKER) {
+            overhead = s.lastSerialOverheadNanos;
+            if (posts > 0) handoffNanos += (overhead / posts - handoffNanos) / 16;
+        } else {
+            overhead = posts * handoffNanos;
+        }
         if (!s.hot) {
-            if (posts > threshold) {
-                s.hot = true;
-                s.quietTicks = 0;
-                ProbeRegistry.bump("region-tick.hot");
+            if (overhead > threshold) {
+                if (++s.overTicks >= HOT_ENTER_TICKS) {
+                    s.hot = true;
+                    s.overTicks = 0;
+                    s.quietTicks = 0;
+                    ProbeRegistry.bump("region-tick.hot");
+                }
+            } else {
+                s.overTicks = 0;
             }
-        } else if (posts < threshold / 4) {
+        } else if (overhead < threshold / 4) {
             if (++s.quietTicks >= HOT_RELEASE_TICKS) {
                 s.hot = false;
+                s.quietTicks = 0;
                 ProbeRegistry.bump("region-tick.hot-released");
             }
         } else {
             s.quietTicks = 0;
         }
+    }
+
+    /** Measured cost of one serial-lane hand-off, in nanoseconds (for diagnostics and tests). */
+    public long serialHandoffNanos() {
+        return handoffNanos;
+    }
+
+    /** Serial-lane hand-off time of {@code region}'s last tick, in nanoseconds (0 on the server thread). */
+    public long lastTickSerialOverheadNanos(Region region) {
+        RegionState_ s = perRegion.get(region.id());
+        return s == null ? 0L : s.lastSerialOverheadNanos;
     }
 
     /** Name of the thread that last ticked {@code region}, or null if it has not ticked. */
@@ -614,10 +659,13 @@ public final class TickRegionScheduler implements AutoCloseable, RegionListener 
             Thread.currentThread().getUncaughtExceptionHandler().uncaughtException(Thread.currentThread(), t);
         } finally {
             // The region's own time: designed waits (a chunk load it handed to the
-            // server thread, a serial-lane listener) are left out, as the watchdog
-            // leaves them out. Otherwise exploring players make a region look hot.
+            // server thread, a serial-lane hand-off) are left out, as the watchdog
+            // leaves them out. The listeners the lane ran for it count, wherever
+            // the region ticked, so moving it between a worker and the server
+            // thread does not change its time.
             s.mspt.recordNanos(Math.max(1L, System.nanoTime() - start - RegionTickWatchdog.lastTickWaitNanos()));
             s.lastSerialPosts = RegionTickWatchdog.lastTickSerialPosts();
+            s.lastSerialOverheadNanos = RegionTickWatchdog.lastTickSerialOverheadNanos();
             region.markNotTicking();
         }
         return null;
@@ -645,9 +693,11 @@ public final class TickRegionScheduler implements AutoCloseable, RegionListener 
         final RegionMspt mspt = new RegionMspt(100); // ~5s at 20 TPS
         volatile String lastThread;
         volatile long lastSerialPosts;
+        volatile long lastSerialOverheadNanos;
         volatile TickPlacement placement;
         // Server thread only (driveTick): serial-lane heat.
         boolean hot;
+        int overTicks;
         int quietTicks;
 
         RegionState_(Region region) {

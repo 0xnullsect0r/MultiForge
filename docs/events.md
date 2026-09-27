@@ -117,9 +117,13 @@ to one block, chunk or entity; `GLOBAL` ones are server-wide. The per-entity
 entries from `EnteringSection` to `VanillaGameEvent` were added in v1.8: they
 fire from each entity's own tick, and on an ATM10 bench they were the most
 frequent serial-lane events (`LivingBreatheEvent` and `MobDespawnEvent` fire
-for every living entity or mob, every tick). A mod whose listener for one of
-them is not thread-safe should be classified `legacy`, or the event set back to
-`serial` under `[events]`.
+for every living entity or mob, every tick). `EntityInvulnerabilityCheckEvent`,
+`LevelEvent.PotentialSpawns` and `GetEnchantmentLevelEvent` followed in v1.9,
+the most frequent ones left on an ATM10 server, after reading every listener
+for them in that pack. `LivingHealEvent` stays serial: two Relics listeners do
+nothing unless `MinecraftServer.isSameThread()`, which is false on a region
+worker. A mod whose listener for one of them is not thread-safe should be
+classified `legacy`, or the event set back to `serial` under `[events]`.
 
 | Event (`net.neoforged.neoforge.event.…`) | Default |
 |---|---|
@@ -151,6 +155,9 @@ them is not thread-safe should be classified `legacy`, or the event set back to
 | `entity.living.LivingFallEvent` | `REGION` |
 | `entity.living.LivingEvent.LivingJumpEvent` | `REGION` |
 | `VanillaGameEvent` | `REGION` |
+| `entity.EntityInvulnerabilityCheckEvent` | `REGION` |
+| `level.LevelEvent.PotentialSpawns` | `REGION` |
+| `enchanting.GetEnchantmentLevelEvent` | `REGION` |
 | `entity.player.PlayerEvent.PlayerLoggedInEvent` | `GLOBAL` |
 | `entity.player.PlayerEvent.PlayerLoggedOutEvent` | `GLOBAL` |
 | `entity.player.PlayerInteractEvent.LeftClickBlock` | `REGION` |
