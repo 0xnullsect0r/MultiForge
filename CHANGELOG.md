@@ -1,5 +1,9 @@
 # CHANGELOG
 
+## v1.8.1 — the heatmap is green in empty wilderness again
+
+- A region ticked on the server thread (a lone region, new in v1.8.0) counted chunk loading and terrain generation as its own tick time, so exploring painted the whole heatmap orange. That wait is now left out, as it is on a worker thread (probe `region.main-thread-chunk-load.inline`).
+
 ## v1.8.0 — no more serial-lane stall, one-line updates
 
 - **The serial-lane stall is fixed.** On a large modpack, once a player's area ran on a worker thread, every event with a listener not marked region-safe was handed to the server thread one listener at a time, about 27,000 round trips per tick, and the server fell to about 9 TPS. Now:
