@@ -20,6 +20,7 @@ import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.client.renderer.RenderType;
 import net.minecraft.world.level.levelgen.Heightmap;
 import net.minecraft.world.phys.Vec3;
+import net.multiforge.runtime.diagnostics.wire.DebugPacketCodec;
 import net.multiforge.runtime.diagnostics.wire.DebugPayload;
 import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.neoforge.client.event.RenderLevelStageEvent;
@@ -27,9 +28,13 @@ import org.joml.Matrix4f;
 
 /**
  * Blends a translucent per-chunk tint over the ground near the player,
- * coloured by {@code HEATMAP_UPDATE}'s per-chunk MSPT delta (protocol
- * §7.3): green below 5ms, yellow below 20ms, red at/above 50ms,
- * interpolated between those anchors.
+ * coloured by {@code HEATMAP_UPDATE} (protocol §7.3).
+ *
+ * <p>From a protocol-4 server (v1.9.0) the value is the chunk's own tick
+ * time: green below 0.1 ms, yellow at 1 ms, red at 5 ms and above. From an
+ * older server it is the owning region's average, on the old scale: green
+ * below 5 ms, yellow at 20 ms, red at 50 ms. Colours interpolate between the
+ * anchors.
  *
  * <p>Each chunk is drawn as 4×4-block cells laid on the terrain surface
  * (the client's motion-blocking heightmap), for chunks the client has
@@ -40,9 +45,11 @@ import org.joml.Matrix4f;
  */
 public final class HeatmapRenderer {
 
-    private static final float GREEN_MAX_MSPT = 5.0F;
-    private static final float YELLOW_MAX_MSPT = 20.0F;
-    private static final float RED_MSPT = 50.0F;
+    /** Per-chunk scale (protocol 4+): ms per tick one chunk costs. */
+    static final float[] CHUNK_SCALE = {0.1F, 1.0F, 5.0F};
+    /** Region-average scale (older servers): ms per tick of the whole region. */
+    static final float[] REGION_SCALE = {5.0F, 20.0F, 50.0F};
+
     private static final int ALPHA = 110;
     /** Lifts each cell just above the surface so it does not z-fight the ground. */
     private static final double SURFACE_OFFSET = 0.05;
@@ -91,6 +98,7 @@ public final class HeatmapRenderer {
         poseStack.translate(-camPos.x, -camPos.y, -camPos.z);
         Matrix4f pose = poseStack.last().pose();
 
+        float[] scale = scaleFor(state.serverProtocol());
         VertexConsumer consumer = mc.renderBuffers().bufferSource().getBuffer(RenderType.debugQuads());
         for (DebugPayload.ChunkHeat heat : heatmap.heats()) {
             if (Math.abs(heat.chunkX() - playerChunkX) > radius || Math.abs(heat.chunkZ() - playerChunkZ) > radius) {
@@ -99,7 +107,7 @@ public final class HeatmapRenderer {
             if (!level.hasChunk(heat.chunkX(), heat.chunkZ())) {
                 continue;
             }
-            int[] rgba = colorFor(heat.heatMspt());
+            int[] rgba = colorFor(heat.heatMspt(), scale);
             int bx = heat.chunkX() * 16;
             int bz = heat.chunkZ() * 16;
             for (int cx = 0; cx < 16; cx += CELL) {
@@ -122,18 +130,27 @@ public final class HeatmapRenderer {
         poseStack.popPose();
     }
 
-    private static int[] colorFor(float mspt) {
+    /** The colour scale for what a server speaking {@code protocol} puts in the heat slot. */
+    static float[] scaleFor(int protocol) {
+        return protocol >= DebugPacketCodec.PER_CHUNK_HEAT_PROTOCOL ? CHUNK_SCALE : REGION_SCALE;
+    }
+
+    /** RGBA for {@code mspt} on {@code scale} = {green up to, yellow at, red at}. */
+    static int[] colorFor(float mspt, float[] scale) {
+        float green = scale[0];
+        float yellow = scale[1];
+        float red = scale[2];
         float r;
         float g;
-        if (mspt <= GREEN_MAX_MSPT) {
+        if (mspt <= green) {
             r = 0F;
             g = 1F;
-        } else if (mspt <= YELLOW_MAX_MSPT) {
-            float t = (mspt - GREEN_MAX_MSPT) / (YELLOW_MAX_MSPT - GREEN_MAX_MSPT);
+        } else if (mspt <= yellow) {
+            float t = (mspt - green) / (yellow - green);
             r = t;
             g = 1F;
         } else {
-            float t = Math.min(1F, (mspt - YELLOW_MAX_MSPT) / (RED_MSPT - YELLOW_MAX_MSPT));
+            float t = Math.min(1F, (mspt - yellow) / (red - yellow));
             r = 1F;
             g = 1F - t;
         }
