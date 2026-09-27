@@ -33,7 +33,10 @@ worker hands the listener over and parks; the server thread runs it under the
 worker's owner token, so world writes it makes are checked and rerouted
 exactly as the worker's own would be (`docs/concurrency-contract.md`). Two
 listeners on the lane never overlap, which is what code with unsynchronised
-static state needs.
+static state needs. The lane does not stop the other regions, though: it runs
+while their workers tick, so state that region code also touches is not
+protected by it (see *Deferred events* below for work that must not overlap
+any region).
 
 A worker hands over **whole events**, not single listeners: when an event it
 posts reaches at least one serial-lane listener, the entire `post` runs on the
@@ -98,7 +101,7 @@ below) for listeners of `hybrid-safe` mods, by the event's class name:
 
 ```toml
 [events]
-"it.hurts.sskirillss.relics.api.events.utility.LivingSlippingEvent" = "region"   # region | serial
+"com.example.SomeEntityEvent" = "region"   # region | serial | deferred
 ```
 
 It is read at server start and applies to listeners registered before it.
@@ -182,6 +185,63 @@ classified `legacy`, or the event set back to `serial` under `[events]`.
 | `server.ServerAboutToStartEvent` | `GLOBAL` |
 | `server.ServerStartedEvent` | `GLOBAL` |
 | `server.ServerStoppingEvent` | `GLOBAL` |
+
+### Audited mod events
+
+Some mods define their own per-entity events and post them from an entity's
+movement, for every entity, every tick. v1.10 runs these on the region, but
+only for the listeners that were read (bytecode of the named versions); a
+listener of another class — another mod, or a class a mod update added — keeps
+the serial lane and is logged once (`EventTypeDomainMap: listener … was not
+audited`). Every listed listener reads the posting entity (flags, Curios items,
+item components, attachments) and the blocks under its own box, and writes only
+the event.
+
+| Event | Listeners that run on the region |
+|---|---|
+| relics `api.events.utility.FluidCollisionEvent` | relics `CutGlassBootItem$CommonEvents`; reliquified_artifacts `AquaDashersItem$CommonEvents`, `StriderShoesItem$CommonEvents` |
+| relics `api.events.utility.LivingSlippingEvent` | relics `RollerSkateItem$Events`; reliquified_artifacts `SteadfastSpikesItem$SteadfastSpikesEvent` |
+| relics `api.events.utility.EntityBlockSpeedFactorEvent` | relics `RollerSkateItem$Events` |
+| relics `api.events.relic.GatherRelicTemplateCacheKeyEvent` | relics `RankHandler` |
+| expandability `api.forge.LivingFluidCollisionEvent` | artifacts `ArtifactHooksNeoForge` |
+| lionfishapi `server.event.StandOnFluidEvent` | cataclysm `ServerEventHandler` |
+
+Audited against relics 0.12.8, reliquified_artifacts 1.0.8, artifacts 13.2.3
+(expandability 12.0.0), lionfishapi 3.1 and cataclysm 3.33. `[events] "<class>"
+= "serial"` puts one back on the lane for every listener; `[mods] relics =
+"legacy"` does it for all of a mod's listeners.
+
+### Listeners pinned to the lane
+
+At server start MultiForge reads listener bytecode (the listener method and
+the methods of its own class it calls, up to three calls deep). A listener
+without an explicit `@DispatchDomain`, of a mod not declared `strict-safe`,
+stays on the serial lane even where its event's default is `REGION` when:
+
+- it calls `isSameThread` or `getRunningThread` — on a region worker its
+  answer changes, so its effect would silently stop (Relics' Jellyfish Necklace
+  and Midnight Mantle heal listeners do this); or
+- it is on the region only because an audited entry lists it, and it writes a
+  static field — the audited version did not, so the mod has changed.
+
+Each pinned listener is logged once and counted in `event.affinity.pinned`;
+class files that cannot be read pin nothing (`event.affinity.unscanned`).
+
+### Deferred events
+
+A **deferred** event posted on a region worker does not wait for anything: the
+whole post runs on the server thread after that level's regions finished
+ticking, when no region worker runs. Only for events nobody reads back — the
+poster discards the result and the event cannot be cancelled (a cancellable
+event is posted as usual and logged once). An event about an entity that was
+removed before its turn is dropped (`event.dispatch.deferred.dropped`).
+
+| Event | Why |
+|---|---|
+| xycraft `core.event.ItemEntityTickEvent` | Posted for every item entity every tick; the poster discards the result. Its listener, `CollectorBlockEntity.absorbItem`, reads a per-level volume map and inserts into a collector that may sit in another region, so it must not overlap any region. |
+
+`[events] "<class>" = "deferred"` defers another event (probes
+`event.dispatch.deferred`, `event.dispatch.deferred.event.<class>`).
 
 ## What `ASYNC` is for
 

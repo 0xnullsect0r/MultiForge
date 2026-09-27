@@ -60,6 +60,14 @@ public final class SerialLane {
 
     private static final ConcurrentLinkedQueue<Job> QUEUE = new ConcurrentLinkedQueue<>();
 
+    /** A job a region worker left for the server thread without waiting ({@link #defer}). */
+    private record Deferred(Runnable task, OwnerToken token) {}
+
+    private static final ConcurrentLinkedQueue<Deferred> DEFERRED = new ConcurrentLinkedQueue<>();
+
+    /** True while the lane thread runs {@link #drainDeferred} (touched by the lane thread only). */
+    private static boolean drainingDeferred;
+
     private SerialLane() {}
 
     /** Bind the lane to {@code thread} (the server thread). */
@@ -71,6 +79,54 @@ public final class SerialLane {
     public static void unbind() {
         laneThread = null;
         drain();
+        drainDeferred();
+    }
+
+    /**
+     * Leave {@code task} for the server thread without waiting: it runs, under
+     * the caller's owner token, in the next {@link #drainDeferred}, which the
+     * scheduler calls on the server thread once a level's regions finished
+     * ticking, when no region worker runs. For work whose caller needs no
+     * result (a fire-and-forget event). Returns false, and does nothing, when
+     * the caller is not a region or no lane is bound, or while deferred jobs
+     * are being run (a job's own deferred work then runs where it is).
+     */
+    public static boolean defer(Runnable task) {
+        Objects.requireNonNull(task, "task");
+        if (laneThread == null || OwnerToken.current().domain() != Domain.REGION) return false;
+        if (drainingDeferred && Thread.currentThread() == laneThread) return false;
+        DEFERRED.add(new Deferred(task, OwnerToken.current()));
+        ProbeRegistry.bump("serial-lane.deferred");
+        return true;
+    }
+
+    /**
+     * Run every deferred job, in the order they were left, on the calling
+     * thread (the server thread, between barriers). A job that throws is
+     * logged and the rest still run.
+     *
+     * @return how many ran
+     */
+    public static int drainDeferred() {
+        if (DEFERRED.isEmpty()) return 0;
+        int ran = 0;
+        boolean outer = !drainingDeferred;
+        drainingDeferred = true;
+        try {
+            Deferred job;
+            while ((job = DEFERRED.poll()) != null) {
+                ran++;
+                try {
+                    OwnerToken.runAs(job.token(), job.task());
+                } catch (Throwable t) {
+                    net.multiforge.runtime.diagnostics.ViolationLogger.warn(
+                            "SerialLane", "a deferred job threw " + t + " (the rest still run)");
+                }
+            }
+        } finally {
+            if (outer) drainingDeferred = false;
+        }
+        return ran;
     }
 
     /** Whether the calling thread would hand {@link #run} jobs to the lane. */
