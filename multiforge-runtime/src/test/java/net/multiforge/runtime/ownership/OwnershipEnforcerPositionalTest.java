@@ -51,6 +51,11 @@ class OwnershipEnforcerPositionalTest {
         public long globalRegionId() {
             return 99L;
         }
+
+        @Override
+        public boolean isPendingRegistration(WorldRef world, int chunkX, int chunkZ) {
+            return chunkX == 200; // loaded during this tick, owner assigned at the barrier
+        }
     };
 
     @BeforeEach
@@ -88,6 +93,17 @@ class OwnershipEnforcerPositionalTest {
     @Test
     void unownedChunkIsRefusedForARegionWorker() {
         assertThat(asRegion(1, 150)).isFalse();
+    }
+
+    @Test
+    void aChunkLoadedThisTickIsRefusedQuietlyEvenInStrictMode() {
+        net.multiforge.runtime.diagnostics.ProbeRegistry.resetForTesting();
+        OwnershipEnforcer.setModeForTesting(OwnershipEnforcer.Mode.STRICT);
+        assertThat(asRegion(1, 200)).isFalse(); // no throw
+        assertThat(net.multiforge.runtime.diagnostics.ProbeRegistry.get("ownership.pending-registration"))
+                .isEqualTo(1);
+        assertThat(net.multiforge.runtime.diagnostics.ProbeRegistry.get("site:cross-region"))
+                .isZero();
     }
 
     @Test

@@ -1,5 +1,21 @@
 # CHANGELOG
 
+## v1.8.0 — no more serial-lane stall, one-line updates
+
+- **The serial-lane stall is fixed.** On a large modpack, once a player's area ran on a worker thread, every event with a listener not marked region-safe was handed to the server thread one listener at a time, about 27,000 round trips per tick, and the server fell to about 9 TPS. Now:
+  - an event goes to the serial lane once, not once per listener (`-Dmultiforge.event-dispatch.batch=off` restores the old behaviour);
+  - a level with a single region ticks it on the server thread, where nothing needs handing off, and a region posting more than 2000 lane events in a tick moves there too until it has been quiet for 200 ticks (`[tick]` in `multiforge-server.toml`; an existing file keeps its values and gets the defaults for the new keys);
+  - nine NeoForge events fired from one entity's own tick (breathing, despawn, griefing, target change, visibility, fall, jump, entering a section, Vanilla game events) run on the owning region;
+  - an `[events]` table in `config/multiforge-mods.toml` overrides how any event is dispatched.
+  - On the ATM10 bench, lane hand-offs went from 99.7k to 0 in two minutes and p95 tick time from 11.6 to 6.6 ms. The parity gate is byte-identical to stock NeoForge, including with a region ticked on the server thread.
+- **The stall is visible now.** Region wait time is summed in nanoseconds (it truncated each sub-millisecond wait to 0 ms, so lane waits looked free), serial dispatch is counted per event, mod and dimension (`event.dispatch.serial.*`), `/multiforge probes top <prefix>` lists the largest counters, and `/multiforge region list` shows which thread ticked each region.
+- A write to a chunk loaded during the tick counts under `ownership.pending-registration` instead of logging an `owner=none` violation.
+- **Debug client (protocol 3).** Region rows show the thread that ticked them (`[tick-6]`, `[server]`), the HUD says whether your dimension runs on worker threads or the server thread, and shows the serial-lane rate. Chunk seams and pin boxes run from the bottom of the world to the build limit. Clients from v1.4.0 on keep working.
+- **One-line install and update.** `curl -fsSL https://github.com/0xnullsect0r/MultiForge/releases/latest/download/multiforge-update.sh | sh` in the server directory installs or updates MultiForge. It replaces `server.jar` on every run, so `java -Xms4G -Xmx20G -jar server.jar nogui` always starts the installed version; leaves one version under `libraries/`, with the previous one kept for `--rollback`; and never touches `config/` (including `multiforge-server.toml`), `mods/`, worlds, `server.properties` or `eula.txt`. See `docs/install.md#updating`.
+- **`/multiforge certify` works on an installed server.** Releases now ship `multiforge-scanner.jar` and the updater installs it. A missing scanner is reported once instead of failing every mod, and the scanner runs on the server's own Java.
+- Releases attach `SHA256SUMS`, `server.jar` (NeoForged's server starter, LGPL-2.1, pinned) and the updater.
+- The Pelican egg and the bench harness launch the version `run.sh` names instead of whichever version folder they find first.
+
 ## v1.7.1 — the debug client shows the truth
 
 - **Heatmap.** It was scattered red tiles that floated with the player: the server sent one chunk per region section, the client drew each at the player's feet height, and a region's tick time included time spent waiting for the server thread to generate terrain. The server now sends every loaded chunk, and region tick time is the region's own work. The client lays the tint on the terrain surface.

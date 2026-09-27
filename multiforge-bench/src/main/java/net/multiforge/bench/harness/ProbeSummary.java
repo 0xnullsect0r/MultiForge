@@ -36,6 +36,46 @@ public record ProbeSummary(Map<String, Long> counters) {
     private static final List<String> VIOLATION_MARKERS =
             List.of(":off-thread", "wrong-owner", ":wrong-region", ":not-global", ":not-tick-thread", ".off-thread");
 
+    /**
+     * Every counter, read through {@code query} ({@code /multiforge probes
+     * <prefix>} over RCON). A reply longer than RCON's 4096-byte packet is cut
+     * off, so a prefix whose reply comes back near that size is read again one
+     * character longer, until each reply fits.
+     */
+    public static ProbeSummary collect(Query query) throws java.io.IOException {
+        java.util.Deque<String> prefixes = new java.util.ArrayDeque<>();
+        prefixes.add("");
+        StringBuilder all = new StringBuilder();
+        while (!prefixes.isEmpty()) {
+            String prefix = prefixes.poll();
+            String reply = query.probes(prefix);
+            if (reply.length() < 3800 || prefix.length() > 200) {
+                all.append(reply).append('\n');
+                continue;
+            }
+            // A counter named exactly the prefix has no longer prefix to be found under.
+            Long exact = parse(reply).counters().get(prefix);
+            if (exact != null) all.append(prefix).append(" = ").append(exact).append('\n');
+            for (char c : PREFIX_CHARS.toCharArray()) prefixes.add(prefix + c);
+        }
+        return parse(all.toString());
+    }
+
+    private static final String PREFIX_CHARS = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.:-_$/";
+
+    /** {@code /multiforge probes <prefix>} on a live server. */
+    @FunctionalInterface
+    public interface Query {
+        String probes(String prefix) throws java.io.IOException;
+    }
+
+    /** Render the counters one per line, as {@code /multiforge probes} does. */
+    public String render() {
+        StringBuilder sb = new StringBuilder();
+        counters.forEach((k, v) -> sb.append(k).append(" = ").append(v).append('\n'));
+        return sb.toString();
+    }
+
     public static ProbeSummary parse(String reply) {
         Map<String, Long> counters = new TreeMap<>();
         for (String line : reply.split("\n")) {

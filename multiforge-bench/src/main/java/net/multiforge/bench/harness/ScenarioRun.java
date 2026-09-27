@@ -206,7 +206,8 @@ public final class ScenarioRun {
         } finally {
             if (ctx.runner != null && ctx.runner.isAlive()) {
                 if (ctx.runner.hasTickStats()) {
-                    ProbeSummary probes = ProbeSummary.parse(ctx.cmd("multiforge probes"));
+                    ProbeSummary probes =
+                            ProbeSummary.collect(prefix -> ctx.cmd(("multiforge probes " + prefix).strip()));
                     ctx.observations.put("info.reroutes", String.valueOf(probes.reroutes()));
                     ctx.observations.put("info.reroute_mismatches", String.valueOf(probes.rerouteMismatches()));
                     ctx.observations.put("info.violations", String.valueOf(probes.violations()));

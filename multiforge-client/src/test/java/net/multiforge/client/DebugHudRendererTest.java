@@ -150,4 +150,40 @@ class DebugHudRendererTest {
         assertThat(row).endsWith("…");
         assertThat(row.length()).isLessThan(100);
     }
+
+    @Test
+    void summaryNamesHowThePlayersDimensionTicksAndTheLaneRate() {
+        DebugHudState state = connected();
+        state.apply(new DebugPayload.RegionSnapshot(1L, List.of(new DebugPayload.RegionStat(1, 1, 1.0, 8.0, 10))));
+        state.apply(new DebugPayload.RuntimeStatus(
+                12_345,
+                950,
+                List.of(
+                        new DebugPayload.WorldStatus(
+                                "minecraft:overworld", DebugPayload.WorldMode.SERVER_THREAD_SINGLE_REGION, 1),
+                        new DebugPayload.WorldStatus("allthemodium:mining", DebugPayload.WorldMode.WORKERS, 2)),
+                List.of()));
+
+        List<String> overworld = DebugHudRenderer.buildSummaryLines(state, "minecraft:overworld");
+        assertThat(overworld).hasSize(5);
+        assertThat(overworld.get(3))
+                .isEqualTo("This dimension: minecraft:overworld — server thread (1 region, nothing to run beside it)");
+        assertThat(overworld.get(4)).isEqualTo("Serial lane: 12.3k/s handed to server thread, 950/s run in place");
+
+        assertThat(DebugHudRenderer.buildSummaryLines(state, "allthemodium:mining")
+                        .get(3))
+                .endsWith("worker threads (2 regions)");
+        // A world the server did not list has no regions.
+        assertThat(DebugHudRenderer.buildSummaryLines(state, "minecraft:the_nether")
+                        .get(3))
+                .endsWith("server thread (no regions)");
+    }
+
+    @Test
+    void summaryHasNoRuntimeLinesFromAProtocolTwoServer() {
+        DebugHudState state = connected();
+        state.apply(new DebugPayload.RegionSnapshot(1L, List.of(new DebugPayload.RegionStat(1, 1, 1.0, 8.0, 10))));
+        assertThat(DebugHudRenderer.buildSummaryLines(state, "minecraft:overworld"))
+                .hasSize(3);
+    }
 }

@@ -93,6 +93,15 @@ public final class OwnershipEnforcer {
         default long globalRegionId() {
             return UNOWNED;
         }
+
+        /**
+         * Whether the chunk loaded during the current region tick and gets its
+         * owner when the tick barrier ends. Until then no region owns it, and a
+         * write to it goes to the server thread — expected, not a violation.
+         */
+        default boolean isPendingRegistration(WorldRef world, int chunkX, int chunkZ) {
+            return false;
+        }
     }
 
     private static final String MODE_PROP = "multiforge.ownership.mode";
@@ -235,8 +244,11 @@ public final class OwnershipEnforcer {
      * <li>Mode {@link Mode#OFF}, the global region, and the server tick
      *     thread: allowed. In the barrier tick model these never run
      *     concurrently with region workers.</li>
-     * <li>A region worker: allowed iff its region owns the chunk. Otherwise
-     *     the probe {@code <site>:cross-region} is bumped, a rate-limited
+     * <li>A region worker: allowed iff its region owns the chunk. A chunk
+     *     that loaded during this tick and has no owner yet ({@link
+     *     PositionRouter#isPendingRegistration}) is refused quietly: the probe
+     *     {@code <site>:pending-registration} is bumped and the caller
+     *     reroutes. Otherwise the probe {@code <site>:cross-region} is bumped, a rate-limited
      *     warning logged ({@link Mode#STRICT} throws instead), and
      *     {@code false} returned so the call site reroutes via
      *     {@link #rerouteAt}.</li>
@@ -253,6 +265,13 @@ public final class OwnershipEnforcer {
         if (tok.regionId() == router.globalRegionId()) return true; // global region: allowed
         long owner = router.ownerOf(world, chunkX, chunkZ);
         if (owner == tok.regionId()) return true;
+        if (owner == PositionRouter.UNOWNED && router.isPendingRegistration(world, chunkX, chunkZ)) {
+            // Loaded mid-tick (a chunk load handed to the server thread): it has no
+            // owner until the barrier ends, so the write goes to the server thread.
+            ProbeRegistry.bump(site + ":pending-registration");
+            ProbeRegistry.bump("ownership.pending-registration");
+            return false;
+        }
         ProbeRegistry.bump(site + ":cross-region");
         String msg = "cross-region mutation of chunk [" + chunkX + ", " + chunkZ + "] in " + world.dimensionId()
                 + " from region " + tok.regionId() + " (owner="

@@ -50,16 +50,24 @@ Set cores = 8 (worker pool 8 threads)
 
 ### `region list`
 
-Every world's live regions (largest first) with their size, then the pins.
+Every world's live regions (largest first) with their size, where they tick,
+which thread last ticked each one and how many serial-lane events it posted,
+then the pins.
 
 ```
 /multiforge region list
-minecraft:overworld: 3 region(s)
-  region region#7 — 41 section(s), up to 10496 chunks, READY
-  region region#9 — 2 section(s), up to 512 chunks, READY
+minecraft:overworld: 3 region(s), ticking on worker threads
+  region region#7 — 41 section(s), up to 10496 chunks, READY, last ticked on multiforge-tick-3, 12 serial-lane post(s) last tick
+  region region#9 — 2 section(s), up to 512 chunks, READY, last ticked on multiforge-tick-5, 0 serial-lane post(s) last tick
   ...
+minecraft:the_nether: 1 region(s), ticking on the server thread (one region)
+  region region#12 — 1 section(s), up to 256 chunks, READY, last ticked on Server thread, 40 serial-lane post(s) last tick
 No pinned regions.
 ```
+
+A world with a single region ticks it on the server thread, and a region that
+posts many serial-lane events ticks there after the others; see
+[`perf-tuning.md`](perf-tuning.md#tick-placement).
 
 ### `region size <chunks>`
 
@@ -127,7 +135,17 @@ Filter to counters whose key starts with the prefix. Tab-complete suggests commo
 
 ```
 /multiforge probes region-tick
-/multiforge probes event-dispatch
+/multiforge probes event.dispatch
+```
+
+### `probes top [prefix] [n]`
+
+The `n` (default 15) largest counters under the prefix, largest first. To see
+which events, mods and dimensions send the most work to the serial lane:
+
+```
+/multiforge probes top event.dispatch.serial.event
+/multiforge probes top event.dispatch.serial.mod 10
 ```
 
 Use `probes region-tick.overrun` to answer "have we ever hit a region-tick overrun since boot" and `probes ownership.reroute` to check how many mod calls have been silently rerouted to the owner thread.
@@ -187,7 +205,7 @@ Typical workflow: `warn clear` before deliberate testing, run the scenario, then
 
 Run the ASM-based `multiforge-scanner` (see `docs/design/scanner-rules.md`) against a mod jar sitting in `./mods/`. The scanner checks 12 rules for known-unsafe patterns (direct `ChunkMap` access, blocking on a worker thread, etc.) and reports WARN/ERROR findings.
 
-- **Requires**: `multiforge-scanner.jar` on the system property `multiforge.scanner.jar` (default: `multiforge-scanner.jar` in the server root). Ship the scanner jar alongside your server if you want to use this subcommand — it's not bundled with the runtime by default.
+- **Requires**: `multiforge-scanner.jar` on the system property `multiforge.scanner.jar` (default: `multiforge-scanner.jar` in the server root). Every release attaches `multiforge-scanner.jar`, and the updater (`docs/install.md#updating`) installs it into the server root; without it the command prints one `Cannot certify:` line.
 
 ### `certify <modId>`
 
@@ -263,4 +281,4 @@ Fix or drop mods with R09 (blocking on worker thread) ERROR findings; WARN-only 
 ## Limits
 
 - `config mode off` (and switching back from it) needs a restart: it decides whether the regionized runtime is installed at all.
-- `certify` needs `multiforge-scanner.jar` on the server (`-Dmultiforge.scanner.jar=…`, default `./multiforge-scanner.jar`).
+- `certify` needs `multiforge-scanner.jar` on the server (`-Dmultiforge.scanner.jar=…`, default `./multiforge-scanner.jar`, which the updater installs).

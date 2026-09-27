@@ -54,8 +54,6 @@ public final class MultiForgeDebugConfig {
     // ---- world rendering ------------------------------------------------
 
     public static final ModConfigSpec.IntValue BORDER_RADIUS_CHUNKS;
-    public static final ModConfigSpec.IntValue Y_BELOW;
-    public static final ModConfigSpec.IntValue Y_ABOVE;
 
     /** Root of every translation key this spec declares. */
     private static final String LANG = "multiforge_debug.configuration.";
@@ -107,12 +105,6 @@ public final class MultiForgeDebugConfig {
         BORDER_RADIUS_CHUNKS = b.comment("Chunks in each direction from the player to test for region seams.")
                 .translation(LANG + "render.borderRadiusChunks")
                 .defineInRange("borderRadiusChunks", 4, 1, 16);
-        Y_BELOW = b.comment("Blocks below the player that seams and pin boxes extend.")
-                .translation(LANG + "render.yBelow")
-                .defineInRange("yBelow", 16, 0, 256);
-        Y_ABOVE = b.comment("Blocks above the player that seams and pin boxes extend.")
-                .translation(LANG + "render.yAbove")
-                .defineInRange("yAbove", 32, 0, 256);
         b.pop();
 
         SPEC = b.build();
@@ -124,14 +116,18 @@ public final class MultiForgeDebugConfig {
      * The subscription mask these settings imply (protocol §5).
      *
      * <p>The summary and region-list panels both render {@code
-     * REGION_SNAPSHOT}, so either one enables {@code F_REGIONS}.
-     * {@code F_OWNERSHIP} exists only from protocol version 2, so
-     * {@link SubscriptionManager} strips it when talking to an older
+     * REGION_SNAPSHOT} and {@code RUNTIME_STATUS} (which thread ticks each
+     * region), so either one enables {@code F_REGIONS} and {@code F_RUNTIME}.
+     * {@code F_OWNERSHIP} exists only from protocol version 2 and
+     * {@code F_RUNTIME} from 3, so {@link SubscriptionManager} strips
+     * them when talking to an older
      * server rather than this method guessing at the peer's version.
      */
     public static int desiredMask() {
         int mask = 0;
-        if (HUD.get() || REGION_LIST.get()) mask |= DebugPayload.Subscribe.F_REGIONS;
+        if (HUD.get() || REGION_LIST.get()) {
+            mask |= DebugPayload.Subscribe.F_REGIONS | DebugPayload.Subscribe.F_RUNTIME;
+        }
         if (HEATMAP.get()) mask |= DebugPayload.Subscribe.F_HEATMAP;
         if (PINS.get()) mask |= DebugPayload.Subscribe.F_PINS;
         if (VIOLATIONS.get()) mask |= DebugPayload.Subscribe.F_VIOLATIONS;

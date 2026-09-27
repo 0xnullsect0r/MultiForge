@@ -33,11 +33,16 @@ size = 4                # sections are 2^size chunks per side (4 → 16)
 [violations]
 policy = "warn"         # warn | reroute-only | fail
 warnPerMin = 5
+
+[tick]
+inlineSingleRegion = true         # see "Tick placement"
+serialLaneInlineThreshold = 2000
 ```
 
 There are no other performance keys: no tick budget, no split/merge
 thresholds, no autosave settings. Saving is Vanilla's
-([`persistence.md`](persistence.md)).
+([`persistence.md`](persistence.md)). A file written by an older version has
+no `[tick]` section; the defaults apply and the file is not rewritten.
 
 `/multiforge config cores|threads <n>` and `/multiforge region size <chunks>`
 apply live. `-Dmultiforge.workers=N` on the JVM command line replaces
@@ -88,6 +93,26 @@ never split them. Remove pins you no longer need.
 - `off` runs Vanilla's single-threaded tick. It is the baseline to compare
   against and a kill switch; it takes effect at the next start.
 
+### Tick placement
+
+A region ticks on a worker thread only when that can help:
+
+- **A level with one region** ticks it on the server thread
+  (`inlineSingleRegion = true`). With nothing to run beside it, a worker adds
+  only cost: every serial-lane event and every chunk load it needs would be a
+  round trip to the server thread. One player alone, or players close
+  together, is this case.
+- **A region that posts more than `serialLaneInlineThreshold` serial-lane
+  events in one tick** (default 2000) moves to the server thread, where those
+  events run directly, and ticks there after the parallel regions finish. It
+  goes back to a worker after 200 ticks under a quarter of the threshold.
+  `0` disables this.
+
+`/multiforge region list` says, per world, where its regions ticked, and per
+region which thread last ticked it and how many serial-lane events it posted.
+`-Dmultiforge.inlineSingleRegion=false` and
+`-Dmultiforge.serialLaneInlineThreshold=0` override the file for one run.
+
 ### Heap and garbage collector
 
 Every region stops when the JVM pauses for garbage collection, so a long pause
@@ -129,15 +154,19 @@ compare between configurations.
 
 ### Probes
 
-`/multiforge probes [prefix]` dumps diagnostic counters. The useful ones:
+`/multiforge probes [prefix]` dumps diagnostic counters; `/multiforge probes
+top [prefix] [n]` lists the largest. The useful ones:
 
 | Probe | Meaning |
 |---|---|
 | `region-tick.overrun` | A region's tick, minus designed waits, took longer than the watchdog threshold (default 500 ms, `-Dmultiforge.watchdog.warn-ms`). Usually a blocking call, a stuck mod handler, or one very busy region. A warning names the region. |
 | `region-tick.dispatch.overrun` | A level's regions did not all finish within the barrier deadline (default 500 ms, `-Dmultiforge.regiontick.dispatch-ms`). |
-| `region-tick.wait-ms.<kind>` | Total milliseconds region workers spent in designed waits: `main-thread-chunk-load` and `serial-lane`. These are excluded from the overrun check. |
+| `region-tick.wait-ms.<kind>` | Total milliseconds region workers spent in designed waits: `main-thread-chunk-load` and `serial-lane`. These are excluded from the overrun check. `region-tick.wait-ns.<kind>` is the same in nanoseconds and `region-tick.waits.<kind>` counts the waits. (Before v1.8 each wait was rounded down to whole milliseconds on its own, so thousands of sub-millisecond serial-lane waits showed as 0.) |
 | `region.main-thread-chunk-load` | Count of region workers that touched a chunk that was not loaded and had to wait for the server thread to load it. A steadily growing value means some region code (often a mod, or entities at the edge of loaded terrain) reaches into unloaded chunks every tick. |
-| `serial-lane.handoff` | Event listeners a region worker handed to the server thread to run one at a time (see [`events.md`](events.md)). |
+| `serial-lane.handoff` | Events a region worker handed to the server thread to run on the serial lane (see [`events.md`](events.md)). `serial-lane.inline` counts the ones a region ticking on the server thread ran directly. |
+| `event.dispatch.serial.{event,mod,world}.*` | Serial-lane listener runs by event class, by the listener's mod and by the posting region's dimension. `/multiforge probes top event.dispatch.serial` shows the heaviest. |
+| `region-tick.inline.{single,hot}` | Region ticks run on the server thread (see *Tick placement*). |
+| `ownership.pending-registration` | Writes to a chunk that loaded during the current region tick; it gets its owner when the tick ends, so the write went to the server thread. Expected, not a violation. |
 | `<site>:cross-region` | Mutations rerouted to another region's mailbox, per mutation site (e.g. `Level.setBlock:cross-region`). Some are normal; a high rate means work keeps crossing region borders. |
 | `reroute.<site>.mismatch` | A rerouted call returned Vanilla's predicted result to its caller, but the owner saw a different result when it applied it. |
 | `event.dispatch.*` | How event listeners were dispatched: `inline`, `serial`, `global`, `async`. |

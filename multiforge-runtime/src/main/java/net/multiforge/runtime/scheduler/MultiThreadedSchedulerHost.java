@@ -183,6 +183,7 @@ public final class MultiThreadedSchedulerHost implements SchedulerHost, AutoClos
                     return r == null ? null : r.readLock();
                 });
         this.scheduler = new TickRegionScheduler(config.tickWorkerCount(), body, taskQueue, 128, mode);
+        applyInlinePolicy(config);
 
         // Global region is exposed under a synthetic world so it uses the
         // same inbox+tick plumbing as any other region. Publish it into
@@ -230,6 +231,66 @@ public final class MultiThreadedSchedulerHost implements SchedulerHost, AutoClos
     public void install() {
         ServerDomains.install(this);
         OwnershipEnforcer.bindPositionRouter(positionRouter);
+        net.multiforge.runtime.event.SerialDispatchProbes.bindWorldLookup(id -> {
+            WorldRef world = regionToWorld.get(new RegionId(id));
+            return world == null ? null : world.dimensionId();
+        });
+    }
+
+    /**
+     * Hand the config's tick placement knobs to the scheduler. {@code
+     * -Dmultiforge.inlineSingleRegion} and {@code
+     * -Dmultiforge.serialLaneInlineThreshold} override the file (benchmarks
+     * compare with and without).
+     */
+    private void applyInlinePolicy(MultiForgeConfig c) {
+        boolean single = c.inlineSingleRegion();
+        String singleProp = System.getProperty("multiforge.inlineSingleRegion");
+        if (singleProp != null && !singleProp.isBlank()) single = Boolean.parseBoolean(singleProp.trim());
+        long threshold = c.serialLaneInlineThreshold();
+        String thresholdProp = System.getProperty("multiforge.serialLaneInlineThreshold");
+        if (thresholdProp != null && !thresholdProp.isBlank()) {
+            try {
+                threshold = Long.parseLong(thresholdProp.trim());
+            } catch (NumberFormatException ignored) {
+                // keep the configured value
+            }
+        }
+        scheduler.setInlinePolicy(single, threshold);
+    }
+
+    /** How a world's regions ticked last: see {@link #tickMode(WorldRef)}. */
+    public enum WorldTickMode {
+        /** No region: the level ticks on the server thread as in NeoForge. */
+        SERVER_THREAD_NO_REGIONS,
+        /** One region, ticked on the server thread. */
+        SERVER_THREAD_SINGLE_REGION,
+        /** Every region on a worker. */
+        WORKERS,
+        /** Some regions on workers, the hot ones on the server thread. */
+        WORKERS_AND_SERVER_THREAD
+    }
+
+    /** How {@code world}'s regions ticked last (for the debug client and {@code /multiforge region list}). */
+    public WorldTickMode tickMode(WorldRef world) {
+        ThreadedRegionizer regionizer = regionizerForOrNull(world);
+        if (regionizer == null) return WorldTickMode.SERVER_THREAD_NO_REGIONS;
+        java.util.Collection<Region> regions = regionizer.regions();
+        if (regions.isEmpty()) return WorldTickMode.SERVER_THREAD_NO_REGIONS;
+        boolean worker = false;
+        boolean server = false;
+        for (Region region : regions) {
+            TickRegionScheduler.TickPlacement p = scheduler.lastTickPlacement(region);
+            if (p == null) continue;
+            if (p == TickRegionScheduler.TickPlacement.SERVER_THREAD_SINGLE) {
+                return WorldTickMode.SERVER_THREAD_SINGLE_REGION;
+            }
+            if (p == TickRegionScheduler.TickPlacement.WORKER) worker = true;
+            else server = true;
+        }
+        if (worker && server) return WorldTickMode.WORKERS_AND_SERVER_THREAD;
+        if (server) return WorldTickMode.SERVER_THREAD_SINGLE_REGION;
+        return WorldTickMode.WORKERS;
     }
 
     /**
@@ -256,7 +317,19 @@ public final class MultiThreadedSchedulerHost implements SchedulerHost, AutoClos
             taskQueue.queueChunkTask(world, chunkX, chunkZ, mutation);
             return true;
         }
+
+        @Override
+        public boolean isPendingRegistration(WorldRef world, int chunkX, int chunkZ) {
+            return !pendingLoads.isEmpty() && pendingLoads.contains(pendingKey(world, chunkX, chunkZ));
+        }
     };
+
+    /** Chunks loaded while regions ticked, awaiting registration (see {@link #chunkLoaded}). */
+    private final java.util.Set<String> pendingLoads = ConcurrentHashMap.newKeySet();
+
+    private static String pendingKey(WorldRef world, int chunkX, int chunkZ) {
+        return world.dimensionId() + '|' + chunkX + ',' + chunkZ;
+    }
 
     /**
      * Replace the {@link ScheduledTickRunner} the {@code
@@ -370,9 +443,11 @@ public final class MultiThreadedSchedulerHost implements SchedulerHost, AutoClos
      */
     public void chunkLoaded(WorldRef world, int chunkX, int chunkZ) {
         if (regionsTicking) {
+            pendingLoads.add(pendingKey(world, chunkX, chunkZ));
             deferredChunkChanges.add(() -> chunkLoaded(world, chunkX, chunkZ));
             return;
         }
+        pendingLoads.remove(pendingKey(world, chunkX, chunkZ));
         Region region = registerChunk(world, chunkX, chunkZ);
         chunkManagerFor(world).createHolder(new net.multiforge.api.world.ChunkPos(chunkX, chunkZ), region.id());
         taskQueue.rerouteAtChunk(world, chunkX, chunkZ);
@@ -384,6 +459,7 @@ public final class MultiThreadedSchedulerHost implements SchedulerHost, AutoClos
             deferredChunkChanges.add(() -> chunkUnloaded(world, chunkX, chunkZ));
             return;
         }
+        pendingLoads.remove(pendingKey(world, chunkX, chunkZ));
         unregisterChunk(world, chunkX, chunkZ);
         ChunkHolderManager manager = chunkManagerForOrNull(world);
         if (manager != null) manager.dropHolder(new net.multiforge.api.world.ChunkPos(chunkX, chunkZ));
@@ -436,6 +512,7 @@ public final class MultiThreadedSchedulerHost implements SchedulerHost, AutoClos
         Objects.requireNonNull(next, "next");
         MultiForgeConfig prev = this.config;
         this.config = next;
+        applyInlinePolicy(next);
         if (next.tickWorkerCount() != scheduler.workerCount()) scheduler.resize(next.tickWorkerCount());
         if (next.regionSize() != prev.regionSize()) repartition();
     }
@@ -805,6 +882,7 @@ public final class MultiThreadedSchedulerHost implements SchedulerHost, AutoClos
     @Override
     public void close() {
         OwnershipEnforcer.unbindPositionRouter();
+        net.multiforge.runtime.event.SerialDispatchProbes.unbindWorldLookup();
         AutoCloseable pinSub = this.pinSubscription;
         if (pinSub != null) {
             try {

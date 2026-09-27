@@ -161,6 +161,85 @@ class DispatchingEventBusTest {
         }
     }
 
+    @Test
+    void anEventWithSeveralSerialListenersIsHandedToTheLaneOnce() {
+        RecordingDispatchExecutor executor = new RecordingDispatchExecutor();
+        DispatchingEventBus bus = new DispatchingEventBus(BusBuilder.builder().build(), executor);
+        InstanceListener first = new InstanceListener();
+        InstanceListener second = new InstanceListener();
+        GlobalRoutedListener third = new GlobalRoutedListener();
+        RegionRoutedListener region = new RegionRoutedListener();
+        bus.register(first);
+        bus.register(second);
+        bus.register(third);
+        bus.register(region);
+
+        OwnerToken.runAs(OwnerToken.forRegion(1L), () -> bus.post(new TestEvent()));
+
+        assertThat(first.calls.get() + second.calls.get() + third.calls.get() + region.calls.get())
+                .isEqualTo(4);
+        assertThat(executor.serial.get()).isEqualTo(1); // one hand-off for the whole post
+        assertThat(ProbeRegistry.get("event.dispatch.serial-post")).isEqualTo(1);
+        assertThat(ProbeRegistry.get("event.dispatch.serial")).isEqualTo(3);
+        assertThat(ProbeRegistry.get("event.dispatch.serial.event." + TestEvent.class.getName()))
+                .isEqualTo(3);
+    }
+
+    @Test
+    void anEventWithOnlyRegionListenersStaysOnTheWorker() {
+        RecordingDispatchExecutor executor = new RecordingDispatchExecutor();
+        DispatchingEventBus bus = new DispatchingEventBus(BusBuilder.builder().build(), executor);
+        RegionRoutedListener region = new RegionRoutedListener();
+        InstanceListener other = new InstanceListener(); // serial, but for TestEvent only
+        bus.register(region);
+
+        OwnerToken.runAs(OwnerToken.forRegion(1L), () -> bus.post(new TestEvent()));
+        assertThat(executor.serial.get()).isZero();
+
+        // A serial listener registered later is picked up: the cache is dropped.
+        bus.register(other);
+        OwnerToken.runAs(OwnerToken.forRegion(1L), () -> bus.post(new TestEvent()));
+        assertThat(executor.serial.get()).isEqualTo(1);
+
+        bus.unregister(other);
+        OwnerToken.runAs(OwnerToken.forRegion(1L), () -> bus.post(new TestEvent()));
+        assertThat(executor.serial.get()).isEqualTo(1);
+        assertThat(region.calls.get()).isEqualTo(3);
+    }
+
+    @Test
+    void anEventTypeDefaultRegisteredAfterTheListenerApplies() {
+        RecordingDispatchExecutor executor = new RecordingDispatchExecutor();
+        DispatchingEventBus bus = new DispatchingEventBus(BusBuilder.builder().build(), executor);
+        InstanceListener listener = new InstanceListener();
+        bus.register(listener); // unmapped event: serial
+        try {
+            EventTypeDomainMap.register(OtherEvent.class.getName(), DispatchDomainKind.REGION);
+            EventTypeDomainMap.register(TestEvent.class.getName(), DispatchDomainKind.REGION);
+
+            OwnerToken.runAs(OwnerToken.forRegion(1L), () -> bus.post(new TestEvent()));
+
+            assertThat(listener.calls.get()).isEqualTo(1);
+            assertThat(executor.serial.get()).isZero();
+        } finally {
+            EventTypeDomainMap.resetForTesting();
+        }
+    }
+
+    @Test
+    void postsOffARegionWorkerAreNotBatched() {
+        RecordingDispatchExecutor executor = new RecordingDispatchExecutor();
+        DispatchingEventBus bus = new DispatchingEventBus(BusBuilder.builder().build(), executor);
+        InstanceListener listener = new InstanceListener();
+        bus.register(listener);
+
+        bus.post(new TestEvent());
+
+        assertThat(listener.calls.get()).isEqualTo(1);
+        assertThat(executor.serial.get()).isZero();
+        assertThat(ProbeRegistry.get("event.dispatch.serial-post")).isZero();
+    }
+
     private static final class TestEvent extends Event {}
 
     private static final class InstanceListener {
@@ -204,12 +283,20 @@ class DispatchingEventBusTest {
     }
 
     private static final class RecordingDispatchExecutor implements DispatchExecutor {
+        /** Hand-offs to the lane: like SerialLane, a job run from inside a job runs directly. */
         final AtomicInteger serial = new AtomicInteger();
+
+        private int depth;
 
         @Override
         public void runSerial(Runnable task) {
-            serial.incrementAndGet();
-            task.run();
+            if (depth == 0) serial.incrementAndGet();
+            depth++;
+            try {
+                task.run();
+            } finally {
+                depth--;
+            }
         }
 
         @Override

@@ -120,6 +120,7 @@ class TickRegionSchedulerBarrierModeTest {
         AtomicBoolean pumpedOnCaller = new AtomicBoolean();
         try (TickRegionScheduler scheduler =
                 new TickRegionScheduler(1, body, queue, 32, TickRegionScheduler.Mode.BARRIER)) {
+            scheduler.setInlinePolicy(false, 0); // a worker, so the caller pumps
             regionizer.addListener(scheduler);
             Region a = regionizer.addChunk(new ChunkPos(0, 0));
             TickRegionScheduler.TickAllResult result = scheduler.driveTick(List.of(a), 5_000_000_000L, () -> {
@@ -151,6 +152,7 @@ class TickRegionSchedulerBarrierModeTest {
         };
         try (TickRegionScheduler scheduler =
                 new TickRegionScheduler(1, body, queue, 32, TickRegionScheduler.Mode.BARRIER)) {
+            scheduler.setInlinePolicy(false, 0); // a worker, so the caller pumps
             regionizer.addListener(scheduler);
             Region a = regionizer.addChunk(new ChunkPos(0, 0));
             TickRegionScheduler.TickAllResult result = scheduler.driveTick(List.of(a), 100_000_000L, () -> {
@@ -214,6 +216,76 @@ class TickRegionSchedulerBarrierModeTest {
         try (TickRegionScheduler scheduler = new TickRegionScheduler(1, r -> {}, queue, 32)) {
             assertThatThrownBy(() -> scheduler.driveTick(List.of(), 0L, () -> false))
                     .isInstanceOf(IllegalStateException.class);
+        }
+    }
+
+    @Test
+    void aRegionAloneInItsBatchTicksOnTheCaller() {
+        ThreadedRegionizer regionizer = new ThreadedRegionizer(WORLD, 0);
+        RegionizedTaskQueue queue = RegionizedTaskQueue.of(regionizer);
+        Map<RegionId, Thread> tickedOn = new ConcurrentHashMap<>();
+        RegionTickBody body = r -> tickedOn.put(r.id(), Thread.currentThread());
+        try (TickRegionScheduler scheduler =
+                new TickRegionScheduler(2, body, queue, 32, TickRegionScheduler.Mode.BARRIER)) {
+            regionizer.addListener(scheduler);
+            Region a = regionizer.addChunk(new ChunkPos(0, 0));
+            Region b = regionizer.addChunk(new ChunkPos(500, 500));
+
+            scheduler.driveTick(List.of(a), 5_000_000_000L, () -> false);
+            assertThat(tickedOn.get(a.id())).isSameAs(Thread.currentThread());
+            assertThat(scheduler.lastTickPlacement(a))
+                    .isEqualTo(TickRegionScheduler.TickPlacement.SERVER_THREAD_SINGLE);
+            assertThat(scheduler.lastTickThread(a))
+                    .isEqualTo(Thread.currentThread().getName());
+
+            scheduler.driveTick(List.of(a, b), 5_000_000_000L, () -> false);
+            assertThat(tickedOn.get(a.id())).isNotSameAs(Thread.currentThread());
+            assertThat(tickedOn.get(b.id())).isNotSameAs(Thread.currentThread());
+            assertThat(scheduler.lastTickPlacement(a)).isEqualTo(TickRegionScheduler.TickPlacement.WORKER);
+            assertThat(scheduler.lastTickThread(b)).startsWith("multiforge-tick-");
+
+            scheduler.setInlinePolicy(false, 0);
+            scheduler.driveTick(List.of(a), 5_000_000_000L, () -> false);
+            assertThat(tickedOn.get(a.id())).isNotSameAs(Thread.currentThread());
+        }
+    }
+
+    @Test
+    void aRegionPostingManySerialJobsTicksOnTheCallerUntilItQuietsDown() {
+        ThreadedRegionizer regionizer = new ThreadedRegionizer(WORLD, 0);
+        RegionizedTaskQueue queue = RegionizedTaskQueue.of(regionizer);
+        AtomicInteger posts = new AtomicInteger(50);
+        Map<RegionId, Thread> tickedOn = new ConcurrentHashMap<>();
+        Region[] hot = new Region[1];
+        RegionTickBody body = r -> {
+            tickedOn.put(r.id(), Thread.currentThread());
+            if (r == hot[0]) {
+                for (int i = posts.get(); i > 0; i--) RegionTickWatchdog.countSerialPost();
+            }
+        };
+        try (TickRegionScheduler scheduler =
+                new TickRegionScheduler(2, body, queue, 32, TickRegionScheduler.Mode.BARRIER)) {
+            scheduler.setInlinePolicy(true, 20);
+            regionizer.addListener(scheduler);
+            Region a = regionizer.addChunk(new ChunkPos(0, 0));
+            Region b = regionizer.addChunk(new ChunkPos(500, 500));
+            hot[0] = a;
+
+            scheduler.driveTick(List.of(a, b), 5_000_000_000L, () -> false);
+            assertThat(scheduler.lastTickSerialPosts(a)).isEqualTo(50);
+            assertThat(tickedOn.get(a.id())).isNotSameAs(Thread.currentThread()); // measured on a worker
+
+            scheduler.driveTick(List.of(a, b), 5_000_000_000L, () -> false);
+            assertThat(tickedOn.get(a.id())).isSameAs(Thread.currentThread());
+            assertThat(scheduler.lastTickPlacement(a)).isEqualTo(TickRegionScheduler.TickPlacement.SERVER_THREAD_HOT);
+            assertThat(tickedOn.get(b.id())).isNotSameAs(Thread.currentThread());
+
+            posts.set(0);
+            for (int i = 0; i < TickRegionScheduler.HOT_RELEASE_TICKS; i++) {
+                scheduler.driveTick(List.of(a, b), 5_000_000_000L, () -> false);
+            }
+            scheduler.driveTick(List.of(a, b), 5_000_000_000L, () -> false);
+            assertThat(scheduler.lastTickPlacement(a)).isEqualTo(TickRegionScheduler.TickPlacement.WORKER);
         }
     }
 }

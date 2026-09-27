@@ -33,8 +33,27 @@ worker hands the listener over and parks; the server thread runs it under the
 worker's owner token, so world writes it makes are checked and rerouted
 exactly as the worker's own would be (`docs/concurrency-contract.md`). Two
 listeners on the lane never overlap, which is what code with unsynchronised
-static state needs. Probe counters: `event.dispatch.{inline,serial,async,global}`,
-`serial-lane.handoff`.
+static state needs.
+
+A worker hands over **whole events**, not single listeners: when an event it
+posts reaches at least one serial-lane listener, the entire `post` runs on the
+lane — one hand-off per event, however many listeners it has — and each
+listener is still routed as above from there (a `REGION` listener runs on the
+lane too, an `ASYNC` one still goes to the pool). Before v1.8 each serial
+listener was its own hand-off, which on a large modpack meant tens of
+thousands of thread round trips per tick. `-Dmultiforge.event-dispatch.batch=off`
+restores the old behaviour.
+
+A region that ticks on the server thread itself (see
+[`perf-tuning.md`](perf-tuning.md#tick-placement)) runs its serial listeners
+directly, with no hand-off at all.
+
+Probe counters: `event.dispatch.{inline,serial,async,global,serial-post}`,
+`serial-lane.handoff` (a worker waited for the lane), `serial-lane.inline`
+(an event ran on the lane from a region ticking on the server thread), and the
+breakdown `event.dispatch.serial.event.<class>`, `.mod.<module>` and
+`.world.<dimension>` — `/multiforge probes top event.dispatch.serial` lists
+the heaviest.
 
 ## A listener's effective domain
 
@@ -74,6 +93,16 @@ A server operator overrides that in `config/multiforge-mods.toml`
 examplemod = "legacy"
 ```
 
+The same file sets an event type's default domain (see *Event-type defaults*
+below) for listeners of `hybrid-safe` mods, by the event's class name:
+
+```toml
+[events]
+"it.hurts.sskirillss.relics.api.events.utility.LivingSlippingEvent" = "region"   # region | serial
+```
+
+It is read at server start and applies to listeners registered before it.
+
 Use `legacy` for a mod whose listeners share unsynchronised state (a static
 `HashMap` updated from entity events) and misbehave under `hybrid-safe`.
 Declare `strict-safe` only for code that is thread-safe; its listeners then
@@ -84,7 +113,13 @@ run in parallel on every region worker.
 Unannotated listeners of a `hybrid-safe` mod for these events take the listed
 domain (`EventTypeDomainMap`); a subclass inherits its superclass's entry.
 All other events default to `LEGACY_SERIAL`. `REGION` entries are events local
-to one block, chunk or entity; `GLOBAL` ones are server-wide.
+to one block, chunk or entity; `GLOBAL` ones are server-wide. The per-entity
+entries from `EnteringSection` to `VanillaGameEvent` were added in v1.8: they
+fire from each entity's own tick, and on an ATM10 bench they were the most
+frequent serial-lane events (`LivingBreatheEvent` and `MobDespawnEvent` fire
+for every living entity or mob, every tick). A mod whose listener for one of
+them is not thread-safe should be classified `legacy`, or the event set back to
+`serial` under `[events]`.
 
 | Event (`net.neoforged.neoforge.event.…`) | Default |
 |---|---|
@@ -107,6 +142,15 @@ to one block, chunk or entity; `GLOBAL` ones are server-wide.
 | `entity.living.MobSpawnEvent.SpawnPlacementCheck` | `REGION` |
 | `entity.living.FinalizeSpawnEvent` | `REGION` |
 | `entity.EntityEvent.Size` | `REGION` |
+| `entity.EntityEvent.EnteringSection` | `REGION` |
+| `entity.EntityMobGriefingEvent` | `REGION` |
+| `entity.living.LivingBreatheEvent` | `REGION` |
+| `entity.living.MobDespawnEvent` | `REGION` |
+| `entity.living.LivingChangeTargetEvent` | `REGION` |
+| `entity.living.LivingEvent.LivingVisibilityEvent` | `REGION` |
+| `entity.living.LivingFallEvent` | `REGION` |
+| `entity.living.LivingEvent.LivingJumpEvent` | `REGION` |
+| `VanillaGameEvent` | `REGION` |
 | `entity.player.PlayerEvent.PlayerLoggedInEvent` | `GLOBAL` |
 | `entity.player.PlayerEvent.PlayerLoggedOutEvent` | `GLOBAL` |
 | `entity.player.PlayerInteractEvent.LeftClickBlock` | `REGION` |

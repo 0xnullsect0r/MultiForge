@@ -183,6 +183,22 @@ class MultiForgeCommandDispatcherTest {
         assertThat(out).anyMatch(l -> l.contains("no probes matching prefix 'nomatch'"));
     }
 
+    @Test
+    void probesTopListsTheLargestCountersFirst(@TempDir Path tmp) throws IOException {
+        net.multiforge.runtime.diagnostics.ProbeRegistry.resetForTesting();
+        net.multiforge.runtime.diagnostics.ProbeRegistry.add("event.dispatch.serial.event.A", 5);
+        net.multiforge.runtime.diagnostics.ProbeRegistry.add("event.dispatch.serial.event.B", 50);
+        net.multiforge.runtime.diagnostics.ProbeRegistry.add("event.dispatch.serial.event.C", 20);
+        net.multiforge.runtime.diagnostics.ProbeRegistry.add("region-tick.overrun", 999);
+
+        MultiForgeCommandDispatcher d = make(tmp);
+        List<String> out = new ArrayList<>();
+        // As the command binder passes it: the rest of the line in one argument.
+        assertThat(d.dispatch(new String[] {"probes", "top event.dispatch.serial 2"}, out::add))
+                .isTrue();
+        assertThat(out).containsExactly("event.dispatch.serial.event.B = 50", "event.dispatch.serial.event.C = 20");
+    }
+
     // /multiforge chunks — loaded chunks per region, from the world's ChunkHolderManager.
     @Test
     void chunksNotInstalledReportsFailure(@TempDir Path tmp) throws IOException {
@@ -346,6 +362,21 @@ class MultiForgeCommandDispatcherTest {
         assertThat(d.dispatch(new String[] {"certify", "brokenmod"}, out::add)).isFalse();
         assertThat(out).anyMatch(l -> l.contains("scanner internal failure"));
         assertThat(out).anyMatch(l -> l.contains("NOT CERTIFIED"));
+    }
+
+    @Test
+    void certifyAllReportsAMissingScannerOnceInsteadOfFailingEveryJar(@TempDir Path tmp) throws IOException {
+        Path modsDir = tmp.resolve("mods");
+        Files.createDirectories(modsDir);
+        Files.createFile(modsDir.resolve("a-1.0.jar"));
+        Files.createFile(modsDir.resolve("b-1.0.jar"));
+
+        MultiForgeCommandDispatcher d = makeWithScanner(tmp, modsDir, jar -> {
+            throw new MultiForgeCommandDispatcher.ScannerUnavailableException("scanner jar not found");
+        });
+        List<String> out = new ArrayList<>();
+        assertThat(d.dispatch(new String[] {"certify", "all"}, out::add)).isFalse();
+        assertThat(out).containsExactly("Cannot certify: scanner jar not found");
     }
 
     private MultiForgeCommandDispatcher makeWithChunks(

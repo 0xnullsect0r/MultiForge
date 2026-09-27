@@ -90,6 +90,7 @@ public final class EventTypeDomainMap {
         Objects.requireNonNull(eventClassName, "eventClassName");
         Objects.requireNonNull(kind, "kind");
         MAP.put(eventClassName, kind);
+        RoutingEpoch.bump();
     }
 
     /** Test-only: drops every entry, including the lazily-built defaults, so the next {@link #lookup} repopulates them. */
@@ -97,6 +98,7 @@ public final class EventTypeDomainMap {
         synchronized (INIT_LOCK) {
             MAP.clear();
             initialized = false;
+            RoutingEpoch.bump();
         }
     }
 
@@ -143,6 +145,28 @@ public final class EventTypeDomainMap {
         put("net.neoforged.neoforge.event.entity.living.MobSpawnEvent$SpawnPlacementCheck", DispatchDomainKind.REGION);
         put("net.neoforged.neoforge.event.entity.living.FinalizeSpawnEvent", DispatchDomainKind.REGION);
         put("net.neoforged.neoforge.event.entity.EntityEvent$Size", DispatchDomainKind.REGION);
+
+        // Per-entity events posted from the entity's own tick on its owning region,
+        // about that entity alone. These were the most frequent serial-lane events
+        // on an ATM10 bench (event.dispatch.serial.event.*): run on the lane, each
+        // cost a round trip to the server thread for every living entity, every tick.
+        // LivingEntity.baseTick -> CommonHooks.onLivingBreathe: every living entity, every tick.
+        put("net.neoforged.neoforge.event.entity.living.LivingBreatheEvent", DispatchDomainKind.REGION);
+        // Mob.checkDespawn -> EventHooks.checkMobDespawn: every mob, every tick.
+        put("net.neoforged.neoforge.event.entity.living.MobDespawnEvent", DispatchDomainKind.REGION);
+        // Mob AI asking whether it may change blocks (EventHooks.canEntityGrief).
+        put("net.neoforged.neoforge.event.entity.EntityMobGriefingEvent", DispatchDomainKind.REGION);
+        // Target selection in mob AI (CommonHooks.onLivingChangeTarget).
+        put("net.neoforged.neoforge.event.entity.living.LivingChangeTargetEvent", DispatchDomainKind.REGION);
+        // Visibility scaling when a mob looks for a target (CommonHooks.getEntityVisibilityMultiplier).
+        put("net.neoforged.neoforge.event.entity.living.LivingEvent$LivingVisibilityEvent", DispatchDomainKind.REGION);
+        // Movement of the entity itself (CommonHooks.onLivingFall / onLivingJump).
+        put("net.neoforged.neoforge.event.entity.living.LivingFallEvent", DispatchDomainKind.REGION);
+        put("net.neoforged.neoforge.event.entity.living.LivingEvent$LivingJumpEvent", DispatchDomainKind.REGION);
+        // The entity crossing a section border (CommonHooks.onEntityEnterSection).
+        put("net.neoforged.neoforge.event.entity.EntityEvent$EnteringSection", DispatchDomainKind.REGION);
+        // A game event at one position, posted by whatever caused it there (CommonHooks.onVanillaGameEvent).
+        put("net.neoforged.neoforge.event.VanillaGameEvent", DispatchDomainKind.REGION);
 
         // Player events.
         put("net.neoforged.neoforge.event.entity.player.PlayerEvent$PlayerLoggedInEvent", DispatchDomainKind.GLOBAL);

@@ -71,4 +71,48 @@ class ConfigCodecTest {
         MultiForgeConfig back = ConfigCodec.load(file);
         assertThat(back).isEqualTo(c);
     }
+
+    @Test
+    void aFileFromBeforeTheTickSectionLoadsWithDefaultsAndIsLeftAlone(@TempDir Path tmp) throws IOException {
+        // A v1.7 multiforge-server.toml: no [tick] section.
+        String old =
+                """
+                [mtserver]
+                cores = 6
+                threadsPerCore = 1
+                mode = "hybrid"
+
+                [region]
+                size = 3
+
+                [violations]
+                policy = "warn"
+                warnPerMin = 9
+                """;
+        Path file = tmp.resolve("multiforge-server.toml");
+        Files.writeString(file, old);
+
+        MultiForgeConfigStore store = MultiForgeConfigStore.load(file);
+
+        MultiForgeConfig c = store.get();
+        assertThat(c.cores()).isEqualTo(6);
+        assertThat(c.regionSize()).isEqualTo(3);
+        assertThat(c.warnPerMin()).isEqualTo(9);
+        assertThat(c.inlineSingleRegion()).isEqualTo(MultiForgeConfig.DEFAULT_INLINE_SINGLE_REGION);
+        assertThat(c.serialLaneInlineThreshold()).isEqualTo(MultiForgeConfig.DEFAULT_SERIAL_LANE_INLINE_THRESHOLD);
+        assertThat(Files.readString(file)).isEqualTo(old); // loading never rewrites an existing file
+    }
+
+    @Test
+    void tickKeysParseAndRoundTrip() {
+        MultiForgeConfig c = ConfigCodec.parse(
+                """
+                [tick]
+                inlineSingleRegion = false
+                serialLaneInlineThreshold = 0
+                """);
+        assertThat(c.inlineSingleRegion()).isFalse();
+        assertThat(c.serialLaneInlineThreshold()).isZero();
+        assertThat(ConfigCodec.parse(ConfigCodec.render(c))).isEqualTo(c);
+    }
 }

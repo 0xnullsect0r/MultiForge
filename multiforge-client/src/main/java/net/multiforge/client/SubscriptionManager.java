@@ -79,6 +79,7 @@ public final class SubscriptionManager {
         if (!state.overlaysEnabled()) return 0;
         int mask = configMask.getAsInt();
         if (serverProtocol < 2) mask &= ~DebugPayload.Subscribe.F_OWNERSHIP;
+        if (serverProtocol < 3) mask &= ~DebugPayload.Subscribe.F_RUNTIME;
         return mask;
     }
 

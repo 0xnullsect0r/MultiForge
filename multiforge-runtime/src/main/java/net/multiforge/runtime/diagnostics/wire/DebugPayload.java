@@ -17,7 +17,7 @@ import java.util.Objects;
 
 /**
  * Payload records carried on the {@code multiforge:debug/v1} channel.
- * Each of the seven permitted records corresponds to one {@link
+ * Each of the eight permitted records corresponds to one {@link
  * DebugPacketKind}. Purely data — the server produces them in {@code
  * net.multiforge.runtime.diagnostics} (see the {@code
  * net.multiforge.runtime.diagnostics.emitters} producers), the client
@@ -142,6 +142,103 @@ public sealed interface DebugPayload {
         }
     }
 
+    /** How a world's regions ticked last. Codes are wire values; never renumber them. */
+    enum WorldMode {
+        /** No region: the level ticks on the server thread as in NeoForge. */
+        SERVER_THREAD_NO_REGIONS(0),
+        /** One region, ticked on the server thread (a worker would gain nothing). */
+        SERVER_THREAD_SINGLE_REGION(1),
+        /** Every region on a worker. */
+        WORKERS(2),
+        /** Some regions on workers, the lane-bound ones on the server thread. */
+        WORKERS_AND_SERVER_THREAD(3);
+
+        private final int wire;
+
+        WorldMode(int wire) {
+            this.wire = wire;
+        }
+
+        public int wire() {
+            return wire;
+        }
+
+        /** Unknown codes (from a newer server) read as {@link #WORKERS}, the neutral answer. */
+        public static WorldMode fromWire(int code) {
+            for (WorldMode m : values()) if (m.wire == code) return m;
+            return WORKERS;
+        }
+    }
+
+    /** Where one region's last tick ran. Codes are wire values; never renumber them. */
+    enum Placement {
+        UNKNOWN(0),
+        WORKER(1),
+        SERVER_THREAD_SINGLE(2),
+        SERVER_THREAD_HOT(3);
+
+        private final int wire;
+
+        Placement(int wire) {
+            this.wire = wire;
+        }
+
+        public int wire() {
+            return wire;
+        }
+
+        public static Placement fromWire(int code) {
+            for (Placement p : values()) if (p.wire == code) return p;
+            return UNKNOWN;
+        }
+    }
+
+    /** One world's tick mode and live region count. */
+    record WorldStatus(String worldId, WorldMode mode, int regionCount) {
+        public WorldStatus {
+            Objects.requireNonNull(worldId, "worldId");
+            Objects.requireNonNull(mode, "mode");
+        }
+    }
+
+    /**
+     * Where one region last ticked.
+     *
+     * @param thread name of the thread that ran the tick ({@code ""} before the first tick)
+     * @param serialPosts events the region's last tick posted to the serial lane
+     */
+    record RegionThread(long regionId, String worldId, String thread, Placement placement, long serialPosts) {
+        public RegionThread {
+            Objects.requireNonNull(worldId, "worldId");
+            Objects.requireNonNull(thread, "thread");
+            Objects.requireNonNull(placement, "placement");
+        }
+    }
+
+    /**
+     * Which thread ticks what: per-world tick mode, per-region thread, and the
+     * serial lane's rate. Added in v1.8.0 (wire {@code RUNTIME_STATUS},
+     * protocol version 3). Worlds without regions are absent: a client reads
+     * a missing world as {@link WorldMode#SERVER_THREAD_NO_REGIONS}.
+     *
+     * @param laneHandoffsPerSecond events a worker handed to the server thread, per second
+     * @param laneInlinePerSecond serial-lane events run directly because their region ticked on the
+     *     server thread, per second
+     */
+    record RuntimeStatus(
+            double laneHandoffsPerSecond,
+            double laneInlinePerSecond,
+            List<WorldStatus> worlds,
+            List<RegionThread> regions)
+            implements DebugPayload {
+        public RuntimeStatus {
+            Objects.requireNonNull(worlds, "worlds");
+            Objects.requireNonNull(regions, "regions");
+            worlds = List.copyOf(worlds);
+            regions = List.copyOf(regions);
+        }
+    }
+
     /**
      * Client-side flag bitset for what streams to receive, and the protocol
      * version the client speaks ({@code 1} for clients that predate the
@@ -155,7 +252,9 @@ public sealed interface DebugPayload {
 
         /** The streams a client speaking {@code protocol} can decode. */
         public static int streamsFor(int protocol) {
-            return protocol >= 2 ? F_ALL : F_REGIONS | F_HEATMAP | F_PINS | F_VIOLATIONS;
+            if (protocol >= 3) return F_ALL;
+            if (protocol == 2) return F_ALL & ~F_RUNTIME;
+            return F_REGIONS | F_HEATMAP | F_PINS | F_VIOLATIONS;
         }
 
         public static final int F_REGIONS = 0x01;
@@ -166,8 +265,11 @@ public sealed interface DebugPayload {
         /** v1.4.0 / protocol 2 — {@link OwnershipUpdate} stream. */
         public static final int F_OWNERSHIP = 0x10;
 
+        /** v1.8.0 / protocol 3 — {@link RuntimeStatus} stream. */
+        public static final int F_RUNTIME = 0x20;
+
         /** Every stream this protocol version defines. */
-        public static final int F_ALL = F_REGIONS | F_HEATMAP | F_PINS | F_VIOLATIONS | F_OWNERSHIP;
+        public static final int F_ALL = F_REGIONS | F_HEATMAP | F_PINS | F_VIOLATIONS | F_OWNERSHIP | F_RUNTIME;
 
         public boolean wants(int flag) {
             return (flags & flag) == flag;

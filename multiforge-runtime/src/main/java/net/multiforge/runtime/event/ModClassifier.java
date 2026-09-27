@@ -30,10 +30,12 @@ public final class ModClassifier {
 
     public static void bind(Function<Class<?>, ModSafety> classifier) {
         lookup = Objects.requireNonNull(classifier, "classifier");
+        RoutingEpoch.bump();
     }
 
     public static void reset() {
         lookup = c -> ModSafety.HYBRID_SAFE;
+        RoutingEpoch.bump();
     }
 
     public static ModSafety safetyOf(Class<?> listenerClass) {

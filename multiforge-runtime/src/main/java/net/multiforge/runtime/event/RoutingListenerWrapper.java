@@ -41,6 +41,13 @@ final class RoutingListenerWrapper<T> implements Consumer<T> {
     private final MetadataEntry metadata;
     private final DomainDispatcher dispatcher;
     private final Class<?> listenerClass;
+    /** The event type the listener was registered for, or null to keep {@code metadata}'s domain. */
+    private final Class<?> eventType;
+
+    /** The resolved domain and the {@link RoutingEpoch} it was resolved in. */
+    private volatile Resolved resolved;
+
+    private record Resolved(int epoch, DispatchDomainKind domain) {}
 
     RoutingListenerWrapper(Consumer<T> delegate, MetadataEntry metadata, DomainDispatcher dispatcher) {
         this(delegate, metadata, dispatcher, delegate.getClass());
@@ -49,17 +56,62 @@ final class RoutingListenerWrapper<T> implements Consumer<T> {
     /** @param listenerClass the class whose mod decides the {@link ModSafety} of an unannotated listener */
     RoutingListenerWrapper(
             Consumer<T> delegate, MetadataEntry metadata, DomainDispatcher dispatcher, Class<?> listenerClass) {
+        this(delegate, metadata, dispatcher, listenerClass, null);
+    }
+
+    /**
+     * @param eventType the event type the listener is registered for: an
+     *     unannotated listener takes its default domain from {@link
+     *     EventTypeDomainMap} again whenever the map changes (an operator
+     *     override read at server start applies to listeners registered at
+     *     mod construction)
+     */
+    RoutingListenerWrapper(
+            Consumer<T> delegate,
+            MetadataEntry metadata,
+            DomainDispatcher dispatcher,
+            Class<?> listenerClass,
+            Class<?> eventType) {
         this.delegate = Objects.requireNonNull(delegate, "delegate");
         this.metadata = Objects.requireNonNull(metadata, "metadata");
         this.dispatcher = Objects.requireNonNull(dispatcher, "dispatcher");
         this.listenerClass = Objects.requireNonNull(listenerClass, "listenerClass");
+        this.eventType = eventType;
     }
 
     @Override
     public void accept(T event) {
-        DispatchDomainKind domain = metadata.explicit()
-                ? metadata.domain()
-                : metadata.effectiveDomain(ModClassifier.safetyOf(listenerClass));
-        dispatcher.dispatch(event, domain, metadata.ordering(), () -> delegate.accept(event));
+        dispatcher.dispatch(event, domain(), metadata.ordering(), () -> delegate.accept(event), listenerClass);
+    }
+
+    /** The domain this listener dispatches to now. */
+    DispatchDomainKind domain() {
+        int epoch = RoutingEpoch.current();
+        Resolved r = resolved;
+        if (r == null || r.epoch() != epoch) {
+            r = new Resolved(epoch, resolve());
+            resolved = r;
+        }
+        return r.domain();
+    }
+
+    /** Whether a region worker posting this listener's event must wait for the serial lane. */
+    boolean routesSerial() {
+        return DomainDispatcher.isSerial(domain(), metadata.ordering());
+    }
+
+    Class<?> eventType() {
+        return eventType;
+    }
+
+    private DispatchDomainKind resolve() {
+        if (metadata.explicit()) return metadata.domain();
+        MetadataEntry base = eventType == null
+                ? metadata
+                : new MetadataEntry(
+                        EventTypeDomainMap.lookup(eventType).orElse(DispatchDomainKind.LEGACY_SERIAL),
+                        metadata.ordering(),
+                        false);
+        return base.effectiveDomain(ModClassifier.safetyOf(listenerClass));
     }
 }

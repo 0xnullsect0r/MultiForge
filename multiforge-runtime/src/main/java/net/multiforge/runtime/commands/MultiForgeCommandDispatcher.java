@@ -63,6 +63,7 @@ import net.multiforge.runtime.scheduler.MultiThreadedSchedulerHost;
  *   /multiforge region list
  *   /multiforge probes           — dump all ProbeRegistry counters (diagnostics)
  *   /multiforge probes &lt;prefix&gt;  — dump counters whose key starts with prefix
+ *   /multiforge probes top [prefix] [n] — the n largest counters under prefix
  *   /multiforge chunks &lt;world&gt;   — loaded chunks of a world, per owning region
  *   /multiforge warn list         — show recent violations from ViolationLogger
  *   /multiforge warn clear        — reset the violation history ring buffer
@@ -205,6 +206,8 @@ public final class MultiForgeCommandDispatcher {
         output.accept("  /multiforge probes                 — dump every ProbeRegistry counter");
         output.accept("  /multiforge probes <prefix>        — filter, e.g. `probes region-tick`");
         output.accept(
+                "  /multiforge probes top [prefix] [n] — the largest counters, e.g. `probes top event.dispatch.serial`");
+        output.accept(
                 "  /multiforge tickstats              — tick times since reset: mean, p50/p95/p99, max, 10-min TPS");
         output.accept("  /multiforge tickstats reset        — start a new measurement window");
         output.accept("  /multiforge chunks <world>         — loaded chunks per region for one world");
@@ -267,7 +270,12 @@ public final class MultiForgeCommandDispatcher {
      * counters). Snapshot is sorted for stable operator-readable output.
      */
     private boolean handleProbes(String[] args, Consumer<String> output) {
-        String prefix = args.length > 1 ? args[1] : "";
+        // The command binder hands the rest of the line over as one argument.
+        String[] words = String.join(" ", java.util.Arrays.copyOfRange(args, 1, args.length))
+                .trim()
+                .split("\\s+");
+        if (words[0].equals("top")) return handleProbesTop(words, output);
+        String prefix = words[0];
         Map<String, Long> snap = ProbeRegistry.snapshot();
         int matched = 0;
         for (Map.Entry<String, Long> e : snap.entrySet()) {
@@ -278,6 +286,30 @@ public final class MultiForgeCommandDispatcher {
         if (matched == 0) {
             output.accept(prefix.isEmpty() ? "(no probes recorded)" : "(no probes matching prefix '" + prefix + "')");
         }
+        return true;
+    }
+
+    /** {@code /multiforge probes top [prefix] [n]}: the {@code n} (default 15) largest counters under {@code prefix}. */
+    private boolean handleProbesTop(String[] words, Consumer<String> output) {
+        String prefix = "";
+        int limit = 15;
+        for (int i = 1; i < words.length; i++) {
+            try {
+                limit = Math.max(1, Integer.parseInt(words[i]));
+            } catch (NumberFormatException e) {
+                prefix = words[i];
+            }
+        }
+        String p = prefix;
+        List<Map.Entry<String, Long>> matched = ProbeRegistry.snapshot().entrySet().stream()
+                .filter(e -> e.getKey().startsWith(p))
+                .sorted(Map.Entry.<String, Long>comparingByValue().reversed())
+                .limit(limit)
+                .toList();
+        if (matched.isEmpty()) {
+            output.accept(prefix.isEmpty() ? "(no probes recorded)" : "(no probes matching prefix '" + prefix + "')");
+        }
+        for (Map.Entry<String, Long> e : matched) output.accept(e.getKey() + " = " + e.getValue());
         return true;
     }
 
@@ -504,10 +536,14 @@ public final class MultiForgeCommandDispatcher {
                 regions.sort(
                         java.util.Comparator.comparingInt(Region::sectionCount).reversed());
                 int sectionChunks = 1 << (2 * e.getValue().sectionChunkShift());
-                output.accept(e.getKey() + ": " + regions.size() + " region(s)");
+                output.accept(e.getKey() + ": " + regions.size() + " region(s), ticking "
+                        + describe(host.tickMode(e.getValue().world())));
                 for (Region r : regions) {
+                    String thread = host.scheduler().lastTickThread(r);
                     output.accept("  region " + r.id() + " — " + r.sectionCount() + " section(s), up to "
-                            + (long) r.sectionCount() * sectionChunks + " chunks, " + r.state());
+                            + (long) r.sectionCount() * sectionChunks + " chunks, " + r.state()
+                            + (thread == null ? "" : ", last ticked on " + thread)
+                            + ", " + host.scheduler().lastTickSerialPosts(r) + " serial-lane post(s) last tick");
                 }
             }
         }
@@ -523,6 +559,15 @@ public final class MultiForgeCommandDispatcher {
                     + p.toChunkX() + "," + p.toChunkZ() + "] (" + p.chunkCount() + " chunks)");
         }
         return true;
+    }
+
+    private static String describe(MultiThreadedSchedulerHost.WorldTickMode mode) {
+        return switch (mode) {
+            case SERVER_THREAD_NO_REGIONS -> "on the server thread (no regions)";
+            case SERVER_THREAD_SINGLE_REGION -> "on the server thread (one region)";
+            case WORKERS -> "on worker threads";
+            case WORKERS_AND_SERVER_THREAD -> "on worker threads, busy regions on the server thread";
+        };
     }
 
     // ------------------------------------------------------------------
@@ -599,21 +644,44 @@ public final class MultiForgeCommandDispatcher {
      */
     public record ScanResult(int exitCode, String stdout, String stderr) {}
 
+    /**
+     * The scanner itself cannot run (its jar is missing), so no mod can be
+     * judged. {@code certify} reports this once instead of failing every jar.
+     */
+    public static final class ScannerUnavailableException extends IOException {
+        public ScannerUnavailableException(String message) {
+            super(message);
+        }
+    }
+
     private static ScannerRunner defaultScannerRunner() {
         Path scannerJar = Path.of(System.getProperty("multiforge.scanner.jar", "multiforge-scanner.jar"));
         return modJar -> runScannerProcess(scannerJar, modJar);
     }
 
+    /** The java executable running this server, so the scanner runs on the same JDK; PATH {@code java} as a fallback. */
+    private static String javaExecutable() {
+        return ProcessHandle.current().info().command().orElse("java");
+    }
+
     private static ScanResult runScannerProcess(Path scannerJar, Path modJar) throws IOException, InterruptedException {
         if (!Files.isReadable(scannerJar)) {
-            return new ScanResult(2, "", "scanner jar not found or unreadable: " + scannerJar);
+            throw new ScannerUnavailableException("scanner jar not found or unreadable: "
+                    + scannerJar.toAbsolutePath()
+                    + ". The MultiForge updater installs it next to server.jar (see docs/install.md#updating),"
+                    + " or point -Dmultiforge.scanner.jar at a copy.");
         }
         // stderr goes to a file: reading stdout to EOF first while stderr filled
         // its pipe would leave the scanner blocked on a write, forever.
         Path stderrFile = Files.createTempFile("multiforge-scanner-", ".err");
         try {
             ProcessBuilder pb = new ProcessBuilder(
-                            "java", "-jar", scannerJar.toString(), "--json", "--severity=warn", modJar.toString())
+                            javaExecutable(),
+                            "-jar",
+                            scannerJar.toString(),
+                            "--json",
+                            "--severity=warn",
+                            modJar.toString())
                     .redirectError(stderrFile.toFile());
             Process proc = pb.start();
             String stdout = new String(proc.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
@@ -644,8 +712,13 @@ public final class MultiForgeCommandDispatcher {
             return false;
         }
         boolean allCertified = true;
-        for (Path jar : jars) {
-            allCertified &= certifyOne(jar, output);
+        try {
+            for (Path jar : jars) {
+                allCertified &= certifyOne(jar, output);
+            }
+        } catch (ScannerUnavailableException e) {
+            output.accept("Cannot certify: " + e.getMessage());
+            return false;
         }
         return allCertified;
     }
@@ -675,18 +748,22 @@ public final class MultiForgeCommandDispatcher {
         }
     }
 
-    private boolean certifyOne(Path jar, Consumer<String> output) {
-        output.accept("=== " + jar.getFileName() + " ===");
-        ScanResult result;
+    private boolean certifyOne(Path jar, Consumer<String> output) throws ScannerUnavailableException {
+        ScanResult result = null;
+        String failure = null;
         try {
             result = scannerRunner.run(jar);
+        } catch (ScannerUnavailableException e) {
+            throw e;
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-            output.accept("  scanner run interrupted: " + e.getMessage());
-            output.accept("NOT CERTIFIED: " + jar.getFileName());
-            return false;
+            failure = "scanner run interrupted: " + e.getMessage();
         } catch (IOException e) {
-            output.accept("  scanner failed to run: " + e.getMessage());
+            failure = "scanner failed to run: " + e.getMessage();
+        }
+        output.accept("=== " + jar.getFileName() + " ===");
+        if (failure != null) {
+            output.accept("  " + failure);
             output.accept("NOT CERTIFIED: " + jar.getFileName());
             return false;
         }

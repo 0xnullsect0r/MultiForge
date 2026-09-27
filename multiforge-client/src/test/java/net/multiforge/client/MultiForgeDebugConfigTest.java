@@ -92,9 +92,9 @@ class MultiForgeDebugConfigTest {
 
     @Test
     void theSpecDeclaresAKeyForEverySettingAndGroup() throws IOException {
-        // 11 settings + 3 groups. A new setting without a translation()
+        // 9 settings + 3 groups. A new setting without a translation()
         // call trips this, which is the point.
-        assertThat(declaredKeys()).hasSize(14);
+        assertThat(declaredKeys()).hasSize(12);
     }
 
     @Test

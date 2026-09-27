@@ -52,6 +52,10 @@ public final class SerialLane {
     }
 
     private static volatile Thread laneThread;
+
+    /** Nesting of {@link #run} jobs on the lane thread (touched by the lane thread only). */
+    private static int laneDepth;
+
     private static final ConcurrentLinkedQueue<Job> QUEUE = new ConcurrentLinkedQueue<>();
 
     private SerialLane() {}
@@ -82,15 +86,30 @@ public final class SerialLane {
     public static void run(Runnable task) {
         Objects.requireNonNull(task, "task");
         Thread lane = laneThread;
-        if (lane == null
-                || Thread.currentThread() == lane
-                || OwnerToken.current().domain() != Domain.REGION) {
+        if (lane == null || OwnerToken.current().domain() != Domain.REGION) {
             task.run();
+            return;
+        }
+        if (Thread.currentThread() == lane) {
+            // Already on the lane: a region ticking on the server thread, or a
+            // listener of an event the lane is already posting. Only the
+            // outermost job is a post a worker would have handed off.
+            if (laneDepth == 0) {
+                ProbeRegistry.bump("serial-lane.inline");
+                net.multiforge.runtime.region.RegionTickWatchdog.countSerialPost();
+            }
+            laneDepth++;
+            try {
+                task.run();
+            } finally {
+                laneDepth--;
+            }
             return;
         }
         Job job = new Job(task, OwnerToken.current(), Thread.currentThread());
         QUEUE.add(job);
         ProbeRegistry.bump("serial-lane.handoff");
+        net.multiforge.runtime.region.RegionTickWatchdog.countSerialPost();
         LockSupport.unpark(lane);
         net.multiforge.runtime.region.RegionTickWatchdog.beginWait();
         try {
@@ -118,11 +137,14 @@ public final class SerialLane {
         while ((job = QUEUE.poll()) != null) {
             ran = true;
             Job current = job;
+            boolean onLane = Thread.currentThread() == laneThread;
+            if (onLane) laneDepth++;
             try {
                 OwnerToken.runAs(current.token, current.task);
             } catch (Throwable t) {
                 current.failure = t;
             } finally {
+                if (onLane) laneDepth--;
                 current.done = true;
                 LockSupport.unpark(current.waiter);
             }

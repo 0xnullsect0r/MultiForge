@@ -54,6 +54,7 @@ public final class DebugChannelClient {
             case PIN_LIST -> state.apply(DebugPacketCodec.decodePinList(body));
             case VIOLATION_EVENT -> state.apply(DebugPacketCodec.decodeViolation(body));
             case CHUNK_OWNERSHIP -> state.apply(DebugPacketCodec.decodeOwnership(body));
+            case RUNTIME_STATUS -> state.apply(DebugPacketCodec.decodeRuntimeStatus(body));
             case SUBSCRIBE -> {
                 // Server never sends SUBSCRIBE to a client — ignore politely
                 // rather than throwing on stale/misdirected traffic.

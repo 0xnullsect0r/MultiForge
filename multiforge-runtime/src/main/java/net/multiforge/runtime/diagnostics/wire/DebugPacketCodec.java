@@ -50,8 +50,14 @@ public final class DebugPacketCodec {
      * name does not change and a version-1 peer keeps working — it
      * simply never sets the new bit and therefore never receives the
      * new kind.
+     *
+     * <p>v1.8.0 raised it 2 → 3 for {@link DebugPacketKind#RUNTIME_STATUS}
+     * and {@link DebugPayload.Subscribe#F_RUNTIME}, the same kind of
+     * addition: the server masks a subscription with {@link
+     * DebugPayload.Subscribe#streamsFor}, so a protocol-2 client never
+     * receives a kind it cannot parse.
      */
-    public static final int PROTOCOL_VERSION = 2;
+    public static final int PROTOCOL_VERSION = 3;
 
     /**
      * Oldest protocol version this build can still talk to. Protocol
@@ -212,6 +218,53 @@ public final class DebugPacketCodec {
                 owners.add(new DebugPayload.SectionOwner(in.readInt(), in.readInt(), in.readLong()));
             }
             return new DebugPayload.OwnershipUpdate(world, shift, owners);
+        }
+    }
+
+    public static byte[] encodeRuntimeStatus(DebugPayload.RuntimeStatus st) {
+        return frame(DebugPacketKind.RUNTIME_STATUS, out -> {
+            out.writeDouble(st.laneHandoffsPerSecond());
+            out.writeDouble(st.laneInlinePerSecond());
+            out.writeInt(st.worlds().size());
+            for (DebugPayload.WorldStatus w : st.worlds()) {
+                writeString(out, w.worldId());
+                out.writeByte(w.mode().wire());
+                out.writeInt(w.regionCount());
+            }
+            out.writeInt(st.regions().size());
+            for (DebugPayload.RegionThread r : st.regions()) {
+                out.writeLong(r.regionId());
+                writeString(out, r.worldId());
+                writeString(out, r.thread());
+                out.writeByte(r.placement().wire());
+                out.writeLong(r.serialPosts());
+            }
+        });
+    }
+
+    public static DebugPayload.RuntimeStatus decodeRuntimeStatus(byte[] body) throws IOException {
+        try (DataInputStream in = new DataInputStream(new ByteArrayInputStream(body))) {
+            double handoffs = in.readDouble();
+            double inline = in.readDouble();
+            int nw = in.readInt();
+            requireLen(nw, 4096, "world count");
+            List<DebugPayload.WorldStatus> worlds = new ArrayList<>(nw);
+            for (int i = 0; i < nw; i++) {
+                String world = readString(in);
+                DebugPayload.WorldMode mode = DebugPayload.WorldMode.fromWire(in.readUnsignedByte());
+                worlds.add(new DebugPayload.WorldStatus(world, mode, in.readInt()));
+            }
+            int nr = in.readInt();
+            requireLen(nr, 65536, "region count");
+            List<DebugPayload.RegionThread> regions = new ArrayList<>(nr);
+            for (int i = 0; i < nr; i++) {
+                long id = in.readLong();
+                String world = readString(in);
+                String thread = readString(in);
+                DebugPayload.Placement placement = DebugPayload.Placement.fromWire(in.readUnsignedByte());
+                regions.add(new DebugPayload.RegionThread(id, world, thread, placement, in.readLong()));
+            }
+            return new DebugPayload.RuntimeStatus(handoffs, inline, worlds, regions);
         }
     }
 
