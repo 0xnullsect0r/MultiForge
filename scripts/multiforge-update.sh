@@ -70,9 +70,10 @@ mf_main() {
 
     # --- preflight -----------------------------------------------------------
 
-    if [ ! -d libraries ] && [ ! -f server.properties ] && [ ! -f run.sh ]; then
-        fail "$DIR does not look like a Minecraft server directory (no libraries/, server.properties or run.sh).
-       cd into the server directory first, or pass it: ... | sh -s -- /path/to/server"
+    # A server directory, or an empty one for a fresh install; anything else is probably a mistake.
+    if [ ! -d libraries ] && [ ! -f server.properties ] && [ ! -f run.sh ] && [ -n "$(ls -A)" ]; then
+        fail "$DIR is neither empty nor a Minecraft server directory (no libraries/, server.properties or run.sh).
+       cd into the server directory (or an empty one) first, or pass it: ... | sh -s -- /path/to/server"
     fi
 
     # A running server holds these files open and would keep the old version.
@@ -126,7 +127,7 @@ mf_main() {
         target=$(cat "$BACKUP/VERSION")
         current=$(launched_version)
         [ -d "$BACKUP/versions/$target" ] || fail "$BACKUP/versions/$target is missing; cannot roll back."
-        say "rolling back MultiForge ${current:-unknown} -> $target"
+        say "rolling back ${current:-unknown} -> $target"
         swap="$BACKUP.swap"
         rm -rf "$swap"
         mkdir -p "$swap/versions"
@@ -250,7 +251,7 @@ mf_main() {
     fi
 
     if [ -n "$previous" ] && [ "$previous" != "$current" ]; then
-        say "MultiForge $previous -> $current"
+        say "updated $previous -> $current"
         say "previous version kept in $BACKUP/ (undo with: ... | sh -s -- --rollback)"
     else
         say "MultiForge $current installed"
