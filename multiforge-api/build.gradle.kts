@@ -23,9 +23,12 @@ tasks.processResources {
         "buildTime" to System.currentTimeMillis().toString(),
     )
     inputs.properties(tokens)
-    filesMatching("multiforge-api.properties.in") {
+    // `name = ...` on the file, not `rename { }`: inside filesMatching that
+    // resolves to the task's rename and never applied, so the jar carried the
+    // raw template and MultiForgeApi.VERSION read "dev" (see the runtime module).
+    filesMatching("**/multiforge-api.properties.in") {
         expand(tokens)
-        rename { "multiforge-api.properties" }
+        name = "multiforge-api.properties"
     }
 }
 

@@ -1,5 +1,10 @@
 # CHANGELOG
 
+## v1.7.1 — the debug client shows the truth
+
+- **Heatmap.** It was scattered red tiles that floated with the player: the server sent one chunk per region section, the client drew each at the player's feet height, and a region's tick time included time spent waiting for the server thread to generate terrain. The server now sends every loaded chunk, and region tick time is the region's own work. The client lays the tint on the terrain surface.
+- **Version.** The server reported `@version@` to the debug client, and `MultiForgeApi.VERSION` was always `dev`; both now report the build's version (tested).
+
 ## v1.7.0 — a hundred players, far apart
 
 - **Entity tracking scales with far-apart players.** Vanilla re-checked every tracked entity in the level against a player on each of its movement packets, and every player against an entity whenever it changed section. With about 100 players spread out, each loading their own terrain and mobs, stock NeoForge and MultiForge both stopped on the watchdog. Only the trackers and players a change can affect are re-checked now: the ones showing each other now, and the ones within reach of the player's chunk-tracking view. The result is the same as Vanilla's.

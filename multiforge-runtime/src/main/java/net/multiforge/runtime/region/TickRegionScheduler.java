@@ -466,7 +466,10 @@ public final class TickRegionScheduler implements AutoCloseable, RegionListener 
             if (!reportUncaught) return t;
             Thread.currentThread().getUncaughtExceptionHandler().uncaughtException(Thread.currentThread(), t);
         } finally {
-            s.mspt.recordNanos(System.nanoTime() - start);
+            // The region's own time: designed waits (a chunk load it handed to the
+            // server thread, a serial-lane listener) are left out, as the watchdog
+            // leaves them out. Otherwise exploring players make a region look hot.
+            s.mspt.recordNanos(Math.max(1L, System.nanoTime() - start - RegionTickWatchdog.lastTickWaitNanos()));
             region.markNotTicking();
         }
         return null;

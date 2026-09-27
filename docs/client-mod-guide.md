@@ -65,6 +65,8 @@ Two things to know about the numbers:
 
 - The server measures tick cost per **region**, not per chunk, so every chunk in a region shows that region's average. A single genuinely hot chunk will tint its whole region rather than lighting up alone.
 - Since v1.4.0 the server sends only the chunks within your view distance, and only for the dimension you're actually in. Earlier versions broadcast every loaded chunk in every world to every client four times a second.
+- The number is the region's own tick time. Since v1.7.1 it leaves out time the region spent waiting for the server thread to load or generate a chunk, so exploring new terrain no longer turns a region red.
+- Since v1.7.1 the tint covers every loaded chunk and lies on the terrain surface, drawn for loaded chunks within 12 chunks of you. Before that it painted one chunk per region section, at your feet's height, so it looked like scattered tiles that moved up and down with you.
 
 ### 2.4 Region-pin renderer
 
