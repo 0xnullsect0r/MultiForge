@@ -317,7 +317,19 @@ public final class MultiThreadedSchedulerHost implements SchedulerHost, AutoClos
             taskQueue.queueChunkTask(world, chunkX, chunkZ, mutation);
             return true;
         }
+
+        @Override
+        public boolean isPendingRegistration(WorldRef world, int chunkX, int chunkZ) {
+            return !pendingLoads.isEmpty() && pendingLoads.contains(pendingKey(world, chunkX, chunkZ));
+        }
     };
+
+    /** Chunks loaded while regions ticked, awaiting registration (see {@link #chunkLoaded}). */
+    private final java.util.Set<String> pendingLoads = ConcurrentHashMap.newKeySet();
+
+    private static String pendingKey(WorldRef world, int chunkX, int chunkZ) {
+        return world.dimensionId() + '|' + chunkX + ',' + chunkZ;
+    }
 
     /**
      * Replace the {@link ScheduledTickRunner} the {@code
@@ -431,9 +443,11 @@ public final class MultiThreadedSchedulerHost implements SchedulerHost, AutoClos
      */
     public void chunkLoaded(WorldRef world, int chunkX, int chunkZ) {
         if (regionsTicking) {
+            pendingLoads.add(pendingKey(world, chunkX, chunkZ));
             deferredChunkChanges.add(() -> chunkLoaded(world, chunkX, chunkZ));
             return;
         }
+        pendingLoads.remove(pendingKey(world, chunkX, chunkZ));
         Region region = registerChunk(world, chunkX, chunkZ);
         chunkManagerFor(world).createHolder(new net.multiforge.api.world.ChunkPos(chunkX, chunkZ), region.id());
         taskQueue.rerouteAtChunk(world, chunkX, chunkZ);
@@ -445,6 +459,7 @@ public final class MultiThreadedSchedulerHost implements SchedulerHost, AutoClos
             deferredChunkChanges.add(() -> chunkUnloaded(world, chunkX, chunkZ));
             return;
         }
+        pendingLoads.remove(pendingKey(world, chunkX, chunkZ));
         unregisterChunk(world, chunkX, chunkZ);
         ChunkHolderManager manager = chunkManagerForOrNull(world);
         if (manager != null) manager.dropHolder(new net.multiforge.api.world.ChunkPos(chunkX, chunkZ));
