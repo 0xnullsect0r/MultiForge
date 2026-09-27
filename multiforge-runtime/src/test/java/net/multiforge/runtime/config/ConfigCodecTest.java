@@ -99,7 +99,7 @@ class ConfigCodecTest {
         assertThat(c.regionSize()).isEqualTo(3);
         assertThat(c.warnPerMin()).isEqualTo(9);
         assertThat(c.inlineSingleRegion()).isEqualTo(MultiForgeConfig.DEFAULT_INLINE_SINGLE_REGION);
-        assertThat(c.serialLaneInlineThreshold()).isEqualTo(MultiForgeConfig.DEFAULT_SERIAL_LANE_INLINE_THRESHOLD);
+        assertThat(c.serialLaneHotWaitMs()).isEqualTo(MultiForgeConfig.DEFAULT_SERIAL_LANE_HOT_WAIT_MS);
         assertThat(Files.readString(file)).isEqualTo(old); // loading never rewrites an existing file
     }
 
@@ -109,10 +109,22 @@ class ConfigCodecTest {
                 """
                 [tick]
                 inlineSingleRegion = false
-                serialLaneInlineThreshold = 0
+                serialLaneHotWaitMs = 0
                 """);
         assertThat(c.inlineSingleRegion()).isFalse();
-        assertThat(c.serialLaneInlineThreshold()).isZero();
+        assertThat(c.serialLaneHotWaitMs()).isZero();
         assertThat(ConfigCodec.parse(ConfigCodec.render(c))).isEqualTo(c);
+    }
+
+    @Test
+    void v18PostCountThresholdMapsOnlyItsNever() {
+        assertThat(ConfigCodec.parse("[tick]\nserialLaneInlineThreshold = 0\n").serialLaneHotWaitMs())
+                .isZero();
+        assertThat(ConfigCodec.parse("[tick]\nserialLaneInlineThreshold = 2000\n")
+                        .serialLaneHotWaitMs())
+                .isEqualTo(MultiForgeConfig.DEFAULT_SERIAL_LANE_HOT_WAIT_MS);
+        assertThat(ConfigCodec.parse("[tick]\nserialLaneInlineThreshold = 0\nserialLaneHotWaitMs = 7\n")
+                        .serialLaneHotWaitMs())
+                .isEqualTo(7);
     }
 }

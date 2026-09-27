@@ -240,23 +240,26 @@ public final class MultiThreadedSchedulerHost implements SchedulerHost, AutoClos
     /**
      * Hand the config's tick placement knobs to the scheduler. {@code
      * -Dmultiforge.inlineSingleRegion} and {@code
-     * -Dmultiforge.serialLaneInlineThreshold} override the file (benchmarks
-     * compare with and without).
+     * -Dmultiforge.serialLaneHotWaitMs} override the file (benchmarks compare
+     * with and without); v1.8's {@code -Dmultiforge.serialLaneInlineThreshold=0}
+     * still turns the hot move off.
      */
     private void applyInlinePolicy(MultiForgeConfig c) {
         boolean single = c.inlineSingleRegion();
         String singleProp = System.getProperty("multiforge.inlineSingleRegion");
         if (singleProp != null && !singleProp.isBlank()) single = Boolean.parseBoolean(singleProp.trim());
-        long threshold = c.serialLaneInlineThreshold();
-        String thresholdProp = System.getProperty("multiforge.serialLaneInlineThreshold");
-        if (thresholdProp != null && !thresholdProp.isBlank()) {
+        long hotWaitMs = c.serialLaneHotWaitMs();
+        String legacyProp = System.getProperty("multiforge.serialLaneInlineThreshold");
+        if (legacyProp != null && legacyProp.trim().equals("0")) hotWaitMs = 0;
+        String hotProp = System.getProperty("multiforge.serialLaneHotWaitMs");
+        if (hotProp != null && !hotProp.isBlank()) {
             try {
-                threshold = Long.parseLong(thresholdProp.trim());
+                hotWaitMs = Long.parseLong(hotProp.trim());
             } catch (NumberFormatException ignored) {
                 // keep the configured value
             }
         }
-        scheduler.setInlinePolicy(single, threshold);
+        scheduler.setInlinePolicy(single, hotWaitMs);
     }
 
     /** How a world's regions ticked last: see {@link #tickMode(WorldRef)}. */

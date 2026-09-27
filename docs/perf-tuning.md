@@ -36,7 +36,7 @@ warnPerMin = 5
 
 [tick]
 inlineSingleRegion = true         # see "Tick placement"
-serialLaneInlineThreshold = 2000
+serialLaneHotWaitMs = 5            # see "Tick placement"
 ```
 
 There are no other performance keys: no tick budget, no split/merge
@@ -102,16 +102,25 @@ A region ticks on a worker thread only when that can help:
   only cost: every serial-lane event and every chunk load it needs would be a
   round trip to the server thread. One player alone, or players close
   together, is this case.
-- **A region that posts more than `serialLaneInlineThreshold` serial-lane
-  events in one tick** (default 2000) moves to the server thread, where those
-  events run directly, and ticks there after the parallel regions finish. It
-  goes back to a worker after 200 ticks under a quarter of the threshold.
-  `0` disables this.
+- **A region whose serial-lane hand-offs cost it more than
+  `serialLaneHotWaitMs` per tick** (default 5 ms) for 20 ticks in a row moves
+  to the server thread, where those events run directly, and ticks there
+  after the parallel regions finish. It goes back to a worker after 200 ticks
+  under a quarter of that. The cost is measured on a worker (the time waiting
+  for the lane minus the listeners' own run time) and, on the server thread,
+  estimated from the region's posts and the measured cost of one hand-off, so
+  the rule follows what the hand-offs cost on this machine rather than a
+  count. `0` disables this. (v1.8's `serialLaneInlineThreshold` counted posts;
+  an old file's `0` still disables it, any other value is ignored.)
+
+A region's tick time, in `region list` and on the heatmap, counts the
+listeners the serial lane ran for it and leaves out only the hand-off, so it
+does not change when the region moves between a worker and the server thread.
 
 `/multiforge region list` says, per world, where its regions ticked, and per
 region which thread last ticked it and how many serial-lane events it posted.
 `-Dmultiforge.inlineSingleRegion=false` and
-`-Dmultiforge.serialLaneInlineThreshold=0` override the file for one run.
+`-Dmultiforge.serialLaneHotWaitMs=0` override the file for one run.
 
 ### Heap and garbage collector
 
