@@ -1,5 +1,12 @@
 # CHANGELOG
 
+## Unreleased
+
+- **One-line install and update.** `curl -fsSL https://github.com/0xnullsect0r/MultiForge/releases/latest/download/multiforge-update.sh | sh` in the server directory installs or updates MultiForge. It replaces `server.jar` on every run, so `java -Xms4G -Xmx20G -jar server.jar nogui` always starts the installed version; leaves one version under `libraries/`, with the previous one kept for `--rollback`; and never touches `config/` (including `multiforge-server.toml`), `mods/`, worlds, `server.properties` or `eula.txt`. See `docs/install.md#updating`.
+- **`/multiforge certify` works on an installed server.** Releases now ship `multiforge-scanner.jar` and the updater installs it. A missing scanner is reported once instead of failing every mod, and the scanner runs on the server's own Java.
+- Releases attach `SHA256SUMS`, `server.jar` (NeoForged's server starter, LGPL-2.1, pinned) and the updater.
+- The Pelican egg and the bench harness launch the version `run.sh` names instead of whichever version folder they find first.
+
 ## v1.7.1 — the debug client shows the truth
 
 - **Heatmap.** It was scattered red tiles that floated with the player: the server sent one chunk per region section, the client drew each at the player's feet height, and a region's tick time included time spent waiting for the server thread to generate terrain. The server now sends every loaded chunk, and region tick time is the region's own work. The client lays the tint on the terrain surface.

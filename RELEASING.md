@@ -22,16 +22,23 @@ Standard release flow + fallback if the fork-installer CI job fails.
    ```
    gh run watch --workflow=release.yml
    ```
-   Two jobs fire in parallel-ish: `build-jars` (fast, required) and `build-fork-installer` (~15 min, advisory).
+   `build-jars` runs first, then `build-fork-installer` (~15 min). Both are required: `gh-release` publishes only when both succeed, and it writes `SHA256SUMS` over every asset.
 4. **If both succeed:** the GitHub Release at `https://github.com/0xnullsect0r/MultiForge/releases/tag/v1.3.2` has all artifacts:
+   - `multiforge-update.sh` (the one-line installer/updater: `curl -fsSL …/latest/download/multiforge-update.sh | sh`)
+   - `server.jar` (NeoForged's server starter, LGPL-2.1, mirrored at the version and checksum pinned in `release.yml`; the updater installs it)
+   - `multiforge-scanner-1.3.2.jar` + `multiforge-scanner.jar` (the scanner behind `/multiforge certify`; the updater installs it)
+   - `SHA256SUMS` (checked by the updater)
    - `multiforge-runtime-1.3.2.jar` (mod-author compile target)
-   - `multiforge-installer-1.3.2.jar` (pure-Java stub installer; kept for compat but the fork installer is what actually works)
    - `multiforge-1.3.2-installer.jar` (**the fork installer — this is the one users install with**)
    - `multiforge-installer.jar` (stable-alias copy of the fork installer)
-   - `multiforge-1.3.2-replacement.zip` (drop-in overlay)
+   - `multiforge-1.3.2-replacement.zip` + `multiforge-replacement.zip` (drop-in overlay)
    - `multiforge-client-1.3.2.jar` (optional client debug mod; NeoForge 1.21.1)
    - `multiforge-client.jar` (stable-alias copy of the client mod)
    - `pelican-egg.json` (Pelican Panel / Pterodactyl egg)
+
+   The updater downloads from `…/releases/latest/download/`, so the stable names above (`multiforge-update.sh`, `multiforge-installer.jar`, `server.jar`, `multiforge-scanner.jar`, `SHA256SUMS`) must be present in every release.
+
+   To bump the mirrored `server.jar`, change `SERVER_STARTER_VERSION` and `SERVER_STARTER_SHA256` in `release.yml` and run `scripts/test-multiforge-update.sh` against the new jar first.
 
    No further action needed.
 
@@ -56,7 +63,7 @@ git checkout v1.3.2
 # pristine before compileJava runs)
 cd upstream/neoforge-1.21.1
 ./gradlew :setup :neoforge:applyMultiforgePatches
-./gradlew :neoforge:signInstallerJar
+./gradlew :neoforge:installerJar
 
 # The fork installer's actual filename derives from gradleutils; find it
 # and rename to the release-friendly form

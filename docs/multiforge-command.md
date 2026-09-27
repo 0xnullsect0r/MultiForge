@@ -187,7 +187,7 @@ Typical workflow: `warn clear` before deliberate testing, run the scenario, then
 
 Run the ASM-based `multiforge-scanner` (see `docs/design/scanner-rules.md`) against a mod jar sitting in `./mods/`. The scanner checks 12 rules for known-unsafe patterns (direct `ChunkMap` access, blocking on a worker thread, etc.) and reports WARN/ERROR findings.
 
-- **Requires**: `multiforge-scanner.jar` on the system property `multiforge.scanner.jar` (default: `multiforge-scanner.jar` in the server root). Ship the scanner jar alongside your server if you want to use this subcommand — it's not bundled with the runtime by default.
+- **Requires**: `multiforge-scanner.jar` on the system property `multiforge.scanner.jar` (default: `multiforge-scanner.jar` in the server root). Every release attaches `multiforge-scanner.jar`, and the updater (`docs/install.md#updating`) installs it into the server root; without it the command prints one `Cannot certify:` line.
 
 ### `certify <modId>`
 
@@ -263,4 +263,4 @@ Fix or drop mods with R09 (blocking on worker thread) ERROR findings; WARN-only 
 ## Limits
 
 - `config mode off` (and switching back from it) needs a restart: it decides whether the regionized runtime is installed at all.
-- `certify` needs `multiforge-scanner.jar` on the server (`-Dmultiforge.scanner.jar=…`, default `./multiforge-scanner.jar`).
+- `certify` needs `multiforge-scanner.jar` on the server (`-Dmultiforge.scanner.jar=…`, default `./multiforge-scanner.jar`, which the updater installs).
