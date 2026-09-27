@@ -109,7 +109,7 @@ public final class ModSafetyClassifier {
                         #   region  runs on the region worker that posted it
                         #   serial  runs on the serial lane
                         [events]
-                        # "net.neoforged.neoforge.event.entity.living.LivingEvent$LivingJumpEvent" = "region"
+                        # "net.neoforged.neoforge.event.entity.living.LivingDrownEvent" = "serial"
                         """, StandardCharsets.UTF_8);
                 return out;
             }

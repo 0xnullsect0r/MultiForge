@@ -98,7 +98,7 @@ below) for listeners of `hybrid-safe` mods, by the event's class name:
 
 ```toml
 [events]
-"net.neoforged.neoforge.event.entity.living.LivingEvent$LivingJumpEvent" = "region"   # region | serial
+"it.hurts.sskirillss.relics.api.events.utility.LivingSlippingEvent" = "region"   # region | serial
 ```
 
 It is read at server start and applies to listeners registered before it.
@@ -113,7 +113,13 @@ run in parallel on every region worker.
 Unannotated listeners of a `hybrid-safe` mod for these events take the listed
 domain (`EventTypeDomainMap`); a subclass inherits its superclass's entry.
 All other events default to `LEGACY_SERIAL`. `REGION` entries are events local
-to one block, chunk or entity; `GLOBAL` ones are server-wide.
+to one block, chunk or entity; `GLOBAL` ones are server-wide. The per-entity
+entries from `EnteringSection` to `VanillaGameEvent` were added in v1.8: they
+fire from each entity's own tick, and on an ATM10 bench they were the most
+frequent serial-lane events (`LivingBreatheEvent` and `MobDespawnEvent` fire
+for every living entity or mob, every tick). A mod whose listener for one of
+them is not thread-safe should be classified `legacy`, or the event set back to
+`serial` under `[events]`.
 
 | Event (`net.neoforged.neoforge.event.…`) | Default |
 |---|---|
@@ -136,6 +142,15 @@ to one block, chunk or entity; `GLOBAL` ones are server-wide.
 | `entity.living.MobSpawnEvent.SpawnPlacementCheck` | `REGION` |
 | `entity.living.FinalizeSpawnEvent` | `REGION` |
 | `entity.EntityEvent.Size` | `REGION` |
+| `entity.EntityEvent.EnteringSection` | `REGION` |
+| `entity.EntityMobGriefingEvent` | `REGION` |
+| `entity.living.LivingBreatheEvent` | `REGION` |
+| `entity.living.MobDespawnEvent` | `REGION` |
+| `entity.living.LivingChangeTargetEvent` | `REGION` |
+| `entity.living.LivingEvent.LivingVisibilityEvent` | `REGION` |
+| `entity.living.LivingFallEvent` | `REGION` |
+| `entity.living.LivingEvent.LivingJumpEvent` | `REGION` |
+| `VanillaGameEvent` | `REGION` |
 | `entity.player.PlayerEvent.PlayerLoggedInEvent` | `GLOBAL` |
 | `entity.player.PlayerEvent.PlayerLoggedOutEvent` | `GLOBAL` |
 | `entity.player.PlayerInteractEvent.LeftClickBlock` | `REGION` |
