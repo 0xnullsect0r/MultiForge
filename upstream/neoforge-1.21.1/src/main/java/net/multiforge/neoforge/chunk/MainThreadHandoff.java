@@ -62,6 +62,28 @@ public final class MainThreadHandoff {
     }
 
     /**
+     * The server thread is about to block on {@code load} (Vanilla's
+     * {@code managedBlock} in {@code ServerChunkCache}). When it is ticking a
+     * region inline, that wait is the same designed wait a worker's handoff
+     * is: the time goes to the load, not to the region, so it is left out of
+     * the region's tick time. Otherwise (or when the chunk is already there)
+     * nothing is recorded.
+     *
+     * @return whether a wait was opened; pass it to {@link #exitInline}
+     */
+    public static boolean enterInline(java.util.concurrent.CompletableFuture<?> load) {
+        if (load.isDone() || !net.multiforge.runtime.region.RegionTickWatchdog.inTick()) return false;
+        ProbeRegistry.bump("region.main-thread-chunk-load.inline");
+        net.multiforge.runtime.region.RegionTickWatchdog.beginWait();
+        return true;
+    }
+
+    /** Close the wait {@link #enterInline} opened, if it did. */
+    public static void exitInline(boolean opened) {
+        if (opened) net.multiforge.runtime.region.RegionTickWatchdog.endWait("main-thread-chunk-load");
+    }
+
+    /**
      * Wrap a task handed to a level's main-thread chunk executor. A task from a
      * region worker is counted until it has run, and the barrier's pump runs
      * the executor's tasks while any is pending: the worker may be waiting for

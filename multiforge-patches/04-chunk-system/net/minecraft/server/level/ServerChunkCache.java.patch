@@ -29,7 +29,22 @@
          } else {
              ProfilerFiller profilerfiller = this.level.getProfiler();
              profilerfiller.incrementCounter("getChunk");
-@@ -172,7 +192,13 @@ public class ServerChunkCache extends ChunkSource implements net.neoforged.neofo
+@@ -156,7 +176,14 @@ public class ServerChunkCache extends ChunkSource implements net.neoforged.neofo
+ 
+             profilerfiller.incrementCounter("getChunkCacheMiss");
+             CompletableFuture<ChunkResult<ChunkAccess>> completablefuture = this.getChunkFutureMainThread(p_8360_, p_8361_, p_330876_, p_8363_);
++            // MultiForge: a region ticked inline on the server thread waits here for
++            // the load itself; like a worker's handoff, that is not the region's time.
++            boolean mf$inlineWait = net.multiforge.neoforge.chunk.MainThreadHandoff.enterInline(completablefuture);
++            try {
+             this.mainThreadProcessor.managedBlock(completablefuture::isDone);
++            } finally {
++                net.multiforge.neoforge.chunk.MainThreadHandoff.exitInline(mf$inlineWait);
++            }
+             ChunkResult<ChunkAccess> chunkresult = completablefuture.join();
+             ChunkAccess chunkaccess1 = chunkresult.orElse(null);
+             if (chunkaccess1 == null && p_8363_) {
+@@ -172,7 +199,13 @@ public class ServerChunkCache extends ChunkSource implements net.neoforged.neofo
      @Override
      public LevelChunk getChunkNow(int p_8357_, int p_8358_) {
          if (Thread.currentThread() != this.mainThread) {
@@ -44,3 +59,16 @@
          } else {
              this.level.getProfiler().incrementCounter("getChunkNow");
              long i = ChunkPos.asLong(p_8357_, p_8358_);
+@@ -213,7 +246,12 @@ public class ServerChunkCache extends ChunkSource implements net.neoforged.neofo
+         CompletableFuture<ChunkResult<ChunkAccess>> completablefuture;
+         if (flag) {
+             completablefuture = this.getChunkFutureMainThread(p_8432_, p_8433_, p_330326_, p_8435_);
++            boolean mf$inlineWait = net.multiforge.neoforge.chunk.MainThreadHandoff.enterInline(completablefuture); // MultiForge: see getChunk
++            try {
+             this.mainThreadProcessor.managedBlock(completablefuture::isDone);
++            } finally {
++                net.multiforge.neoforge.chunk.MainThreadHandoff.exitInline(mf$inlineWait);
++            }
+         } else {
+             completablefuture = CompletableFuture.<CompletableFuture<ChunkResult<ChunkAccess>>>supplyAsync(
+                     () -> this.getChunkFutureMainThread(p_8432_, p_8433_, p_330326_, p_8435_), this.mainThreadProcessor

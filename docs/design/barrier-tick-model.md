@@ -48,6 +48,14 @@ such a load to the server thread and waits; `MainThreadHandoff` counts the
 waiting workers and the barrier's pump runs the chunk source's tasks only
 while one is waiting.
 
+A region alone in its level's batch, or one that posted more than
+`serialLaneInlineThreshold` serial-lane events last tick, is ticked on the
+server thread itself (`[tick]` in `multiforge-server.toml`): a worker would
+gain no parallelism and pay a hand-off per lane event and chunk load. There
+the server thread loads a missing chunk itself, in Vanilla's `managedBlock`;
+`MainThreadHandoff.enterInline` brackets that as the same designed wait, so
+the region's tick time and the heatmap still show only its own work.
+
 The worker pool size is `cores × threadsPerCore` from
 `config/multiforge-server.toml` (or `-Dmultiforge.workers=N`).
 

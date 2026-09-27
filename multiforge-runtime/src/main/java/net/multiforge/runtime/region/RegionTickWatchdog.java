@@ -185,6 +185,11 @@ public final class RegionTickWatchdog {
         return WAIT.get()[0];
     }
 
+    /** Whether the calling thread is ticking a region right now (a worker, or the server thread ticking one inline). */
+    public static boolean inTick() {
+        return TICK_START_NANOS.get() != null;
+    }
+
     /**
      * The calling thread starts a designed wait (see the class doc). No-op
      * outside a region tick; nests.

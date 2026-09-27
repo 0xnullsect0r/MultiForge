@@ -220,6 +220,47 @@ class TickRegionSchedulerBarrierModeTest {
     }
 
     @Test
+    void aRegionTickedOnTheCallerLeavesItsDesignedWaitsOutOfItsTime() {
+        // Ticked inline, the region's thread is the server thread, which loads a
+        // missing chunk itself (ServerChunkCache's managedBlock, bracketed by
+        // MainThreadHandoff.enterInline). That wait is not the region's own work:
+        // exploring terrain alone must not make the region look hot.
+        ThreadedRegionizer regionizer = new ThreadedRegionizer(WORLD, 0);
+        RegionizedTaskQueue queue = RegionizedTaskQueue.of(regionizer);
+        AtomicBoolean inTickDuringBody = new AtomicBoolean();
+        AtomicBoolean bracketed = new AtomicBoolean(true);
+        RegionTickBody body = r -> {
+            inTickDuringBody.set(RegionTickWatchdog.inTick());
+            boolean wait = bracketed.get();
+            if (wait) RegionTickWatchdog.beginWait();
+            try {
+                Thread.sleep(200);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            } finally {
+                if (wait) RegionTickWatchdog.endWait("main-thread-chunk-load");
+            }
+        };
+        try (TickRegionScheduler scheduler =
+                new TickRegionScheduler(2, body, queue, 32, TickRegionScheduler.Mode.BARRIER)) {
+            regionizer.addListener(scheduler);
+            Region a = regionizer.addChunk(new ChunkPos(0, 0));
+
+            scheduler.driveTick(List.of(a), 5_000_000_000L, () -> false);
+            assertThat(scheduler.lastTickPlacement(a))
+                    .isEqualTo(TickRegionScheduler.TickPlacement.SERVER_THREAD_SINGLE);
+            assertThat(inTickDuringBody).isTrue();
+            assertThat(RegionTickWatchdog.inTick()).isFalse();
+            assertThat(scheduler.mspt(a).averageMillis()).isLessThan(100.0);
+
+            // The same 200ms of unbracketed work is the region's own time.
+            bracketed.set(false);
+            scheduler.driveTick(List.of(a), 5_000_000_000L, () -> false);
+            assertThat(scheduler.mspt(a).averageMillis()).isGreaterThan(90.0);
+        }
+    }
+
+    @Test
     void aRegionAloneInItsBatchTicksOnTheCaller() {
         ThreadedRegionizer regionizer = new ThreadedRegionizer(WORLD, 0);
         RegionizedTaskQueue queue = RegionizedTaskQueue.of(regionizer);
