@@ -61,8 +61,20 @@ public sealed interface DebugPayload {
         }
     }
 
-    /** One chunk's heat sample. */
-    record ChunkHeat(int chunkX, int chunkZ, float heatMspt) {}
+    /**
+     * One chunk's heat sample.
+     *
+     * <p>{@code heatMspt} is the chunk's own tick time in ms per tick (protocol
+     * 4); {@code regionMspt} is the owning region's average, which is what a
+     * client older than protocol 4 is sent in the same wire slot (see {@link
+     * DebugPacketCodec#encodeHeatmap(HeatmapUpdate, int)}). Decoded samples
+     * carry the wire value in both.
+     */
+    record ChunkHeat(int chunkX, int chunkZ, float heatMspt, float regionMspt) {
+        public ChunkHeat(int chunkX, int chunkZ, float heatMspt) {
+            this(chunkX, chunkZ, heatMspt, heatMspt);
+        }
+    }
 
     /**
      * Per-chunk heat within the client's view radius.

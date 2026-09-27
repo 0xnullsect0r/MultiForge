@@ -18,6 +18,7 @@ import net.multiforge.api.world.WorldRef;
 import net.multiforge.runtime.chunk.ChunkHolderManager;
 import net.multiforge.runtime.chunk.HolderManagerRegionData;
 import net.multiforge.runtime.chunk.TickingBlockEntityRef;
+import net.multiforge.runtime.diagnostics.ChunkCost;
 
 /**
  * Runs one region's slice of block-entity tickers for a single tick —
@@ -98,7 +99,9 @@ public interface BlockEntityTickRunner {
                     continue;
                 }
                 if (!ticker.shouldTick()) continue;
+                long t = ChunkCost.start();
                 ticker.tick();
+                if (t != 0L) ChunkCost.end(ticker.pos().x() >> 4, ticker.pos().z() >> 4, t);
             }
         };
     }

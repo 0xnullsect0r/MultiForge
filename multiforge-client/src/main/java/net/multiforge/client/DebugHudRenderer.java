@@ -21,6 +21,7 @@ import java.util.Locale;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.Font;
 import net.minecraft.client.gui.GuiGraphics;
+import net.multiforge.runtime.diagnostics.wire.DebugPacketCodec;
 import net.multiforge.runtime.diagnostics.wire.DebugPayload;
 import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.neoforge.client.event.RenderGuiEvent;
@@ -88,7 +89,10 @@ public final class DebugHudRenderer {
         if (MultiForgeDebugConfig.HUD.get()) {
             String worldId =
                     mc.level == null ? null : mc.level.dimension().location().toString();
-            for (String line : buildSummaryLines(state, worldId)) {
+            List<String> summary = mc.player == null
+                    ? buildSummaryLines(state, worldId)
+                    : buildSummaryLines(state, worldId, mc.player.chunkPosition().x, mc.player.chunkPosition().z);
+            for (String line : summary) {
                 graphics.drawString(font, line, MARGIN, y, TEXT_COLOR);
                 y += LINE_HEIGHT;
             }
@@ -172,6 +176,53 @@ public final class DebugHudRenderer {
                     rate(status.laneHandoffsPerSecond()), rate(status.laneInlinePerSecond())));
         }
         return lines;
+    }
+
+    /**
+     * As {@link #buildSummaryLines(DebugHudState, String)}, plus a line for
+     * where the player stands: the region owning chunk ({@code chunkX},
+     * {@code chunkZ}), its tick time, and, from a protocol-4 server, the
+     * chunk's own tick time.
+     */
+    static List<String> buildSummaryLines(DebugHudState state, String worldId, int chunkX, int chunkZ) {
+        List<String> lines = new ArrayList<>(buildSummaryLines(state, worldId));
+        if (lines.isEmpty() || state.protocolUnsupported()) return lines;
+        String here = hereLine(state, worldId, chunkX, chunkZ);
+        if (here != null) lines.add(here);
+        return lines;
+    }
+
+    /** "Here: region #3 (p50 4.1 / p95 9.8 ms), this chunk 0.02 ms/tick", or null with nothing to say. */
+    static String hereLine(DebugHudState state, String worldId, int chunkX, int chunkZ) {
+        if (worldId == null || !state.hasOwnershipFor(worldId)) return null;
+        Long regionId = state.regionIdAtChunk(chunkX, chunkZ);
+        StringBuilder sb = new StringBuilder("Here: ");
+        if (regionId == null) {
+            sb.append("no region");
+        } else {
+            sb.append("region #").append(regionId);
+            DebugPayload.RegionSnapshot snapshot = state.latestSnapshot();
+            if (snapshot != null) {
+                for (DebugPayload.RegionStat r : snapshot.regions()) {
+                    if (r.regionId() == regionId) {
+                        sb.append(String.format(Locale.ROOT, " (p50 %.1f / p95 %.1f ms)", r.msptP50(), r.msptP95()));
+                        break;
+                    }
+                }
+            }
+        }
+        DebugPayload.HeatmapUpdate heat = state.latestHeatmap();
+        if (state.serverProtocol() >= DebugPacketCodec.PER_CHUNK_HEAT_PROTOCOL
+                && heat != null
+                && heat.worldId().equals(worldId)) {
+            for (DebugPayload.ChunkHeat h : heat.heats()) {
+                if (h.chunkX() == chunkX && h.chunkZ() == chunkZ) {
+                    sb.append(String.format(Locale.ROOT, ", this chunk %.2f ms/tick", h.heatMspt()));
+                    break;
+                }
+            }
+        }
+        return sb.toString();
     }
 
     /** Where a world's regions tick, in words. */

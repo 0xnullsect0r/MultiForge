@@ -53,6 +53,26 @@ class DebugPacketCodecTest {
     }
 
     @Test
+    void heatmapSendsEachChunksOwnCostFromProtocolFourAndTheRegionAverageBelow() throws IOException {
+        DebugPayload.HeatmapUpdate u = new DebugPayload.HeatmapUpdate(
+                "minecraft:overworld",
+                List.of(new DebugPayload.ChunkHeat(0, 0, 2.0f, 40.0f), new DebugPayload.ChunkHeat(1, 0, 0.01f, 40.0f)));
+
+        DebugPayload.HeatmapUpdate v4 = DebugPacketCodec.decodeHeatmap(
+                DebugPacketCodec.readFrame(DebugPacketCodec.encodeHeatmap(u, 4)).body());
+        assertThat(v4.heats()).extracting(DebugPayload.ChunkHeat::heatMspt).containsExactly(2.0f, 0.01f);
+
+        DebugPayload.HeatmapUpdate v3 = DebugPacketCodec.decodeHeatmap(
+                DebugPacketCodec.readFrame(DebugPacketCodec.encodeHeatmap(u, 3)).body());
+        assertThat(v3.heats()).extracting(DebugPayload.ChunkHeat::heatMspt).containsExactly(40.0f, 40.0f);
+
+        // The frame layout is the same for both: an old client parses either.
+        assertThat(DebugPacketCodec.encodeHeatmap(u, 1)).hasSameSizeAs(DebugPacketCodec.encodeHeatmap(u, 4));
+        assertThat(DebugPacketCodec.encodeHeatmap(u)).isEqualTo(DebugPacketCodec.encodeHeatmap(u, 4));
+        assertThat(DebugPacketCodec.PROTOCOL_VERSION).isGreaterThanOrEqualTo(DebugPacketCodec.PER_CHUNK_HEAT_PROTOCOL);
+    }
+
+    @Test
     void pinListRoundTrip() throws IOException {
         DebugPayload.PinList l = new DebugPayload.PinList(
                 List.of(new DebugPayload.PinBox("base-alpha", "minecraft:overworld", -1, -1, 1, 1)));
