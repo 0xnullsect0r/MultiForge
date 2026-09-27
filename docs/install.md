@@ -1,6 +1,6 @@
 # Installing MultiForge
 
-MultiForge ships three install methods, each suited to a different starting point.
+MultiForge ships three install methods, each suited to a different starting point. To update an existing MultiForge server, or install with one command, see [Updating](#updating).
 
 | Method | Best for | Starts from | Migration effort |
 |---|---|---|---|
@@ -17,6 +17,49 @@ All three land the same runtime + patched NeoForge fork. Post-install steps (EUL
 - **MC 1.21.1 server directory shape**: `world/`, `mods/`, `config/`, `eula.txt`.
 
 **License** — MultiForge is [GPL-3.0-only](../LICENSE). No token, no activation, no phone-home.
+
+---
+
+## Updating
+
+One command installs MultiForge into a server directory or updates it to the latest release. Run it from the server directory (stop the server first):
+
+```
+curl -fsSL https://github.com/0xnullsect0r/MultiForge/releases/latest/download/multiforge-update.sh | sh
+```
+
+Then start the server with:
+
+```
+java -Xms4G -Xmx20G -jar server.jar nogui
+```
+
+(`./run.sh` works too; it reads its JVM flags from `user_jvm_args.txt`, while `java -jar server.jar` takes them from the command line.)
+
+What it does, every run:
+
+- Downloads the release's installer, `server.jar`, `multiforge-scanner.jar` and `SHA256SUMS`, and checks the checksums.
+- Runs the installer, which rewrites `run.sh`/`run.bat` to launch the new version.
+- **Replaces `server.jar` every time.** It is NeoForged's [server starter](https://github.com/NeoForged/serverstarterjar) (LGPL-2.1, mirrored unchanged): it reads `run.sh` and launches the version named there in the same JVM, so it can never start an old one.
+- Installs `multiforge-scanner.jar` next to `server.jar`, where `/multiforge certify` looks for it.
+- Leaves exactly one version under `libraries/net/neoforged/neoforge/`. The version it replaced goes to `.multiforge-backup/` with the previous `run.sh`, `run.bat`, `server.jar` and scanner.
+- Keeps your `user_jvm_args.txt` (the installer would otherwise reset it).
+
+What it never touches: `config/` (including `config/multiforge-server.toml` — MultiForge only writes that file when it does not exist, and settings a newer version adds take their defaults until you set them), `mods/`, the world, `server.properties`, `eula.txt`, and the ops/whitelist/ban lists.
+
+It refuses to run while a server is running in the directory, and needs JDK 21.
+
+Options:
+
+```
+curl -fsSL .../multiforge-update.sh | sh -s -- /path/to/server      # a directory other than the current one
+curl -fsSL .../multiforge-update.sh | sh -s -- --rollback           # back to the version in .multiforge-backup/ (run again to return)
+curl -fsSL .../multiforge-update.sh | MF_VERSION=v1.8.0 sh          # a specific release instead of the latest
+```
+
+`MF_BASE_URL` points it at another asset location (a mirror, or `file:///path/to/assets` for testing), and `JAVA_HOME` selects the JDK. `scripts/test-multiforge-update.sh` checks the whole flow against a real install.
+
+The same command does a fresh install into an empty directory, and converts an existing stock NeoForge 1.21.1 server (the stock version becomes the rollback point). Accept the EULA with `echo eula=true > eula.txt` before the first start.
 
 ---
 

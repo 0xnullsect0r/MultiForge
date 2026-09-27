@@ -66,6 +66,31 @@ jobs:
               echo "::warning::multiforge-client jar not found under multiforge-client/build/libs — client debug mod will not ship in this release."
           fi
 
+          # Mod-safety scanner, run by /multiforge certify from the server
+          # directory. The updater installs it next to server.jar.
+          SCANNER_JAR=$(find multiforge-scanner/build/libs -maxdepth 1 -type f \
+              -name 'multiforge-scanner-*.jar' ! -name '*-sources.jar' | head -1)
+          if [ -z "$SCANNER_JAR" ]; then
+              echo "::error::multiforge-scanner jar not found under multiforge-scanner/build/libs"
+              exit 1
+          fi
+          cp "$SCANNER_JAR" "$RELEASE_DIR/multiforge-scanner-${VER}.jar"
+          cp "$SCANNER_JAR" "$RELEASE_DIR/multiforge-scanner.jar"
+
+          # One-line updater: curl -fsSL .../latest/download/multiforge-update.sh | sh
+          cp scripts/multiforge-update.sh "$RELEASE_DIR/multiforge-update.sh"
+
+          # server.jar: NeoForged's server starter (LGPL-2.1,
+          # https://github.com/NeoForged/serverstarterjar), which launches
+          # whatever run.sh names, so `java -jar server.jar nogui` always
+          # starts the installed version. Mirrored at a pinned version and
+          # checksum so a release never ships a starter we did not test.
+          SERVER_STARTER_VERSION=0.1.35
+          SERVER_STARTER_SHA256=d019d815868d451e57bdb965174b8443ec361336e84e9c41abc41a6c627bacd1
+          curl -fsSL -o "$RELEASE_DIR/server.jar" \
+              "https://github.com/NeoForged/serverstarterjar/releases/download/${SERVER_STARTER_VERSION}/server.jar"
+          echo "${SERVER_STARTER_SHA256}  $RELEASE_DIR/server.jar" | sha256sum -c -
+
           # The drop-in replacement ZIP is NOT built here. It embeds the
           # fork installer, which only exists after the
           # build-fork-installer job runs — so the ZIP is assembled there
@@ -232,6 +257,14 @@ jobs:
           name: fork-installer-${{ github.ref_name }}
           path: release/
 
+      - name: Checksums
+        # The updater verifies every asset it downloads against this file.
+        working-directory: release
+        run: |
+          set -euo pipefail
+          sha256sum -- * > SHA256SUMS
+          cat SHA256SUMS
+
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
@@ -244,7 +277,22 @@ jobs:
           body: |
             MultiForge ${{ github.ref_name }} — GPL-3.0-only.
 
+            **Install or update in one line** (from the server directory; Java 21):
+
+            ```
+            curl -fsSL https://github.com/${{ github.repository }}/releases/latest/download/multiforge-update.sh | sh
+            ```
+
+            Then start the server with `java -Xms4G -Xmx20G -jar server.jar nogui` (or `./run.sh`).
+            The updater never touches `config/`, `mods/`, worlds, `server.properties` or `eula.txt`,
+            and keeps the previous version for `... | sh -s -- --rollback`.
+            See [docs/install.md § Updating](https://github.com/${{ github.repository }}/blob/main/docs/install.md#updating).
+
             Downloads:
+            - `multiforge-update.sh` — the updater above; `server.jar` — NeoForged's
+              [server starter](https://github.com/NeoForged/serverstarterjar) (LGPL-2.1, source at that link),
+              mirrored unchanged; `multiforge-scanner.jar` — the mod-safety scanner behind
+              `/multiforge certify`; `SHA256SUMS` — checksums of every asset.
             - **Fresh installer JAR: `multiforge-*-installer.jar`**
               (stable alias: [multiforge-installer.jar](https://github.com/${{ github.repository }}/releases/latest/download/multiforge-installer.jar))
               Run with `java -jar multiforge-installer.jar --installServer <dir>` —

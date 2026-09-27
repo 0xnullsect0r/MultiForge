@@ -18,6 +18,8 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.Optional;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.util.stream.Stream;
 
 /**
@@ -82,18 +84,50 @@ public final class ServerInstall {
         return open(dir).orElseThrow(() -> new IOException("installer left no unix_args.txt under " + dir));
     }
 
-    /** An existing install at {@code dir}, if it has a NeoForge {@code unix_args.txt}. */
+    private static final Pattern RUN_SH_ARGS =
+            Pattern.compile("@(libraries/net/neoforged/neoforge/[^/\\s]+/unix_args\\.txt)");
+
+    /**
+     * An existing install at {@code dir}, if it has a NeoForge {@code unix_args.txt}: the version
+     * {@code run.sh} launches, else the highest version on disk (numeric parts compared as numbers,
+     * so {@code 1.10} is above {@code 1.9}).
+     */
     public static Optional<ServerInstall> open(Path dir) throws IOException {
         Path root = dir.resolve("libraries/net/neoforged/neoforge");
         if (!Files.isDirectory(root)) return Optional.empty();
+        Path runSh = dir.resolve("run.sh");
+        if (Files.isRegularFile(runSh)) {
+            Matcher m = RUN_SH_ARGS.matcher(Files.readString(runSh));
+            if (m.find() && Files.isRegularFile(dir.resolve(m.group(1)))) {
+                return Optional.of(new ServerInstall(dir, Path.of(m.group(1))));
+            }
+        }
         try (Stream<Path> versions = Files.list(root)) {
-            return versions.map(v -> v.resolve("unix_args.txt"))
-                    .filter(Files::isRegularFile)
-                    .sorted()
-                    .reduce((a, b) -> b)
-                    .map(args -> new ServerInstall(dir, dir.relativize(args)));
+            return versions.filter(v -> Files.isRegularFile(v.resolve("unix_args.txt")))
+                    .max((a, b) -> compareVersions(
+                            a.getFileName().toString(), b.getFileName().toString()))
+                    .map(v -> new ServerInstall(dir, dir.relativize(v.resolve("unix_args.txt"))));
         }
     }
+
+    /** Compares version strings run by run: digit runs as numbers, everything else as text. */
+    static int compareVersions(String a, String b) {
+        Matcher ma = VERSION_PART.matcher(a);
+        Matcher mb = VERSION_PART.matcher(b);
+        while (true) {
+            boolean ha = ma.find();
+            boolean hb = mb.find();
+            if (!ha || !hb) return Boolean.compare(ha, hb);
+            String pa = ma.group();
+            String pb = mb.group();
+            boolean na = Character.isDigit(pa.charAt(0));
+            boolean nb = Character.isDigit(pb.charAt(0));
+            int c = na && nb ? new java.math.BigInteger(pa).compareTo(new java.math.BigInteger(pb)) : pa.compareTo(pb);
+            if (c != 0) return c;
+        }
+    }
+
+    private static final Pattern VERSION_PART = Pattern.compile("\\d+|\\D+");
 
     /** The launch command, before any program arguments: {@code java <jvmArgs> @user_jvm_args.txt @unix_args.txt}. */
     public List<String> command(List<String> jvmArgs) {

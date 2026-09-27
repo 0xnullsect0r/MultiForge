@@ -11,8 +11,10 @@ unaudited.
 
 `multiforge-scanner` is a standalone command-line tool that reads a mod
 jar's bytecode (ASM) and reports findings against 12 rules. It never runs
-mod code. Build it with `./gradlew :multiforge-scanner:jar`; the jar
-bundles its dependencies.
+mod code. Every release attaches it as `multiforge-scanner.jar`, and the
+[updater](install.md#updating) installs it into the server directory. To
+build it yourself: `./gradlew :multiforge-scanner:jar`; the jar bundles its
+dependencies.
 
 ```
 java -jar multiforge-scanner.jar [--json|--sarif] [--severity=warn|error] [--ignore-file <path>] <jar-or-dir>...
@@ -153,7 +155,8 @@ permission.
 ```
 
 For each jar the command runs
-`java -jar <scanner> --json --severity=warn <jar>` as a child process and
+`java -jar <scanner> --json --severity=warn <jar>` as a child process (with
+the same `java` executable that runs the server) and
 prints one PASS/FAIL line per rule and a verdict. The scanner jar is
 `./multiforge-scanner.jar` in the server's working directory, or the path
 in `-Dmultiforge.scanner.jar=<path>`. Suppression files in the server
@@ -181,7 +184,8 @@ The verdict is `CERTIFIED` when no rule has an unsuppressed ERROR
 finding; WARN findings are shown but do not change it (the suppression
 review above is still up to a person). If the scanner jar is missing or
 the scanner fails, the jar is reported `NOT CERTIFIED` with the reason;
-the command never throws. The scanner runs synchronously, so the server
+a missing scanner jar stops the command with one `Cannot certify:` line
+instead. The command never throws. The scanner runs synchronously, so the server
 stalls while it scans.
 
 ### `/multiforge warn`

@@ -21,7 +21,20 @@ Numbers, and the runs that still need bigger hardware, are in [`docs/verificatio
 
 ## Install
 
-Three ways to install, all under GPL-3 — no token, no activation, no phone-home. Full details in [docs/install.md](docs/install.md).
+All under GPL-3 — no token, no activation, no phone-home. Full details in [docs/install.md](docs/install.md).
+
+### Install or update in one line
+
+From the server directory (stop the server first; needs JDK 21):
+
+```
+curl -fsSL https://github.com/0xnullsect0r/MultiForge/releases/latest/download/multiforge-update.sh | sh
+java -Xms4G -Xmx20G -jar server.jar nogui
+```
+
+Run it again for each new release. `server.jar` is replaced every time and always launches the installed version; `config/` (including `multiforge-server.toml`), `mods/`, the world and `server.properties` are never touched; the previous version is kept for `... | sh -s -- --rollback`. See [docs/install.md § Updating](docs/install.md#updating).
+
+The three manual methods:
 
 ### 1. Fresh installer JAR (bare-metal / systemd)
 
