@@ -348,6 +348,21 @@ class MultiForgeCommandDispatcherTest {
         assertThat(out).anyMatch(l -> l.contains("NOT CERTIFIED"));
     }
 
+    @Test
+    void certifyAllReportsAMissingScannerOnceInsteadOfFailingEveryJar(@TempDir Path tmp) throws IOException {
+        Path modsDir = tmp.resolve("mods");
+        Files.createDirectories(modsDir);
+        Files.createFile(modsDir.resolve("a-1.0.jar"));
+        Files.createFile(modsDir.resolve("b-1.0.jar"));
+
+        MultiForgeCommandDispatcher d = makeWithScanner(tmp, modsDir, jar -> {
+            throw new MultiForgeCommandDispatcher.ScannerUnavailableException("scanner jar not found");
+        });
+        List<String> out = new ArrayList<>();
+        assertThat(d.dispatch(new String[] {"certify", "all"}, out::add)).isFalse();
+        assertThat(out).containsExactly("Cannot certify: scanner jar not found");
+    }
+
     private MultiForgeCommandDispatcher makeWithChunks(
             Path tmp,
             java.util.function.Function<

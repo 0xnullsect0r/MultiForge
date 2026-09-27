@@ -599,21 +599,44 @@ public final class MultiForgeCommandDispatcher {
      */
     public record ScanResult(int exitCode, String stdout, String stderr) {}
 
+    /**
+     * The scanner itself cannot run (its jar is missing), so no mod can be
+     * judged. {@code certify} reports this once instead of failing every jar.
+     */
+    public static final class ScannerUnavailableException extends IOException {
+        public ScannerUnavailableException(String message) {
+            super(message);
+        }
+    }
+
     private static ScannerRunner defaultScannerRunner() {
         Path scannerJar = Path.of(System.getProperty("multiforge.scanner.jar", "multiforge-scanner.jar"));
         return modJar -> runScannerProcess(scannerJar, modJar);
     }
 
+    /** The java executable running this server, so the scanner runs on the same JDK; PATH {@code java} as a fallback. */
+    private static String javaExecutable() {
+        return ProcessHandle.current().info().command().orElse("java");
+    }
+
     private static ScanResult runScannerProcess(Path scannerJar, Path modJar) throws IOException, InterruptedException {
         if (!Files.isReadable(scannerJar)) {
-            return new ScanResult(2, "", "scanner jar not found or unreadable: " + scannerJar);
+            throw new ScannerUnavailableException("scanner jar not found or unreadable: "
+                    + scannerJar.toAbsolutePath()
+                    + ". The MultiForge updater installs it next to server.jar (see docs/install.md#updating),"
+                    + " or point -Dmultiforge.scanner.jar at a copy.");
         }
         // stderr goes to a file: reading stdout to EOF first while stderr filled
         // its pipe would leave the scanner blocked on a write, forever.
         Path stderrFile = Files.createTempFile("multiforge-scanner-", ".err");
         try {
             ProcessBuilder pb = new ProcessBuilder(
-                            "java", "-jar", scannerJar.toString(), "--json", "--severity=warn", modJar.toString())
+                            javaExecutable(),
+                            "-jar",
+                            scannerJar.toString(),
+                            "--json",
+                            "--severity=warn",
+                            modJar.toString())
                     .redirectError(stderrFile.toFile());
             Process proc = pb.start();
             String stdout = new String(proc.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
@@ -644,8 +667,13 @@ public final class MultiForgeCommandDispatcher {
             return false;
         }
         boolean allCertified = true;
-        for (Path jar : jars) {
-            allCertified &= certifyOne(jar, output);
+        try {
+            for (Path jar : jars) {
+                allCertified &= certifyOne(jar, output);
+            }
+        } catch (ScannerUnavailableException e) {
+            output.accept("Cannot certify: " + e.getMessage());
+            return false;
         }
         return allCertified;
     }
@@ -675,18 +703,22 @@ public final class MultiForgeCommandDispatcher {
         }
     }
 
-    private boolean certifyOne(Path jar, Consumer<String> output) {
-        output.accept("=== " + jar.getFileName() + " ===");
-        ScanResult result;
+    private boolean certifyOne(Path jar, Consumer<String> output) throws ScannerUnavailableException {
+        ScanResult result = null;
+        String failure = null;
         try {
             result = scannerRunner.run(jar);
+        } catch (ScannerUnavailableException e) {
+            throw e;
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-            output.accept("  scanner run interrupted: " + e.getMessage());
-            output.accept("NOT CERTIFIED: " + jar.getFileName());
-            return false;
+            failure = "scanner run interrupted: " + e.getMessage();
         } catch (IOException e) {
-            output.accept("  scanner failed to run: " + e.getMessage());
+            failure = "scanner failed to run: " + e.getMessage();
+        }
+        output.accept("=== " + jar.getFileName() + " ===");
+        if (failure != null) {
+            output.accept("  " + failure);
             output.accept("NOT CERTIFIED: " + jar.getFileName());
             return false;
         }
