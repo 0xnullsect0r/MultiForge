@@ -71,4 +71,18 @@ class TickStatsTest {
         assertThat(s.ticks()).isEqualTo(TickStats.WINDOW * 2L);
         assertThat(t).isLessThan(600 * SEC);
     }
+
+    @Test
+    void windowMeanCoversOnlyTheLastTenMinutesWhileMeanCoversTheWholeRun() {
+        // A long idle stretch at 1 ms, then ten minutes at 40 ms: the lifetime mean
+        // stays low, the recent one reports what the server does now.
+        long t = 0;
+        for (int i = 0; i < 20 * 60 * 20; i++) TickStats.record(MS, t += 50 * MS);
+        for (int i = 0; i < 10 * 60 * 20; i++) TickStats.record(40 * MS, t += 50 * MS);
+        TickStats.Snapshot s = TickStats.snapshot(t);
+        assertThat(s.windowMeanMs()).isCloseTo(40.0, within(0.01));
+        assertThat(s.meanMs()).isCloseTo((20 * 1 + 10 * 40) / 30.0, within(0.01));
+        assertThat(s.render()).matches(".* window=600\\.0s mean10m=39\\.99[0-9]ms");
+        assertThat(s.legend()).contains("mean and max: all 36000 ticks since the last reset");
+    }
 }

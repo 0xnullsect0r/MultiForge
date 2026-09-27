@@ -122,6 +122,7 @@ public final class MultiForgeCommandBinder {
         return Commands.literal("region")
                 .then(Commands.literal("list").executes(ctx -> run(dispatcher, ctx, "region", "list")))
                 .then(Commands.literal("size")
+                        .executes(ctx -> run(dispatcher, ctx, "region", "size"))
                         .then(Commands.argument("chunks", IntegerArgumentType.integer(1, 256))
                                 .executes(ctx -> run(dispatcher, ctx, "region", "size", intArg(ctx, "chunks")))))
                 .then(pinSubtree(dispatcher))

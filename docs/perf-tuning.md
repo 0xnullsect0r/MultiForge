@@ -73,7 +73,10 @@ when at least one whole unloaded section lies between them.
   and regions that sit closer together.
 - **Larger sections** (32 chunks and up): fewer, larger regions and less
   topology churn, but bases need to be further apart before they tick in
-  parallel.
+  parallel. Sections merge with all eight neighbours, so at 128 chunks a
+  base and a player 2000–4000 blocks away can share one region: one thread,
+  and one tick-time reading (and heat colour) for both. `/multiforge region
+  size` warns above 32 chunks and prints the current size with no argument.
 
 After changing it, compare `/multiforge tickstats` over similar play and
 check the probes listed below.
@@ -136,17 +139,24 @@ the loaded terrain: about 16 GB for 100 players spread across 4000 blocks.
 
 ### Whole-server tick time
 
-`/multiforge tickstats` reports every tick since the last
-`/multiforge tickstats reset`: tick count, mean, p50/p95/p99, the true
-maximum, and the TPS actually achieved over the last ten minutes. Reset it,
-play or run the load for a while, then read it. This is the number to
-compare between configurations.
+`/multiforge tickstats` prints one line and a legend of what each figure covers:
+
+```
+ticks=496937 mean=33.430ms p50=34.228ms p95=74.965ms p99=112.504ms max=4070.212ms tps=17.32 window=600.0s mean10m=47.092ms
+mean and max: all 496937 ticks since the last reset; p50-p99: the last 12800 ticks; tps and mean10m: the last 600s
+```
+
+`mean` and `max` cover the whole run since the last `/multiforge tickstats
+reset` (or boot), so after hours of an idle server they say little about
+now; `mean10m` is the mean over the same ten minutes as `tps`. Reset it, play
+or run the load for a while, then read it. This is the number to compare
+between configurations.
 
 ### Regions
 
-- `/multiforge region list`: regions per world, their section counts and
-  states. If the busy part of the world is one region, more workers will
-  not help.
+- `/multiforge region list`: regions per world, their section counts,
+  states and p50/p95 tick time over the last 5 seconds. If the busy part of
+  the world is one region, more workers will not help.
 - `/multiforge chunks <world>`: loaded chunks per region.
 - The optional client debug mod (`multiforge-client`) shows per-region
   p50/p95 tick time in its HUD (`region-<id> mspt=p50/p95 owned=N

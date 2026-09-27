@@ -57,7 +57,7 @@ import net.multiforge.runtime.scheduler.MultiThreadedSchedulerHost;
  *   /multiforge config cores &lt;n&gt; | threads &lt;n&gt;
  *   /multiforge config mode &lt;hybrid|strict|off&gt; | policy &lt;warn|reroute-only|fail&gt;
  *   /multiforge config warnPerMin &lt;n&gt;
- *   /multiforge region size &lt;chunks&gt;
+ *   /multiforge region size [&lt;chunks&gt;]
  *   /multiforge region pin &lt;id&gt; &lt;world&gt; &lt;fromCX&gt; &lt;fromCZ&gt; &lt;toCX&gt; &lt;toCZ&gt;
  *   /multiforge region unpin &lt;id&gt;
  *   /multiforge region list
@@ -197,7 +197,8 @@ public final class MultiForgeCommandDispatcher {
         output.accept("");
         output.accept("Region topology:");
         output.accept("  /multiforge region list            — show materialized regions + owners");
-        output.accept("  /multiforge region size <chunks>   — square region edge in chunks (power of 2, 1..256)");
+        output.accept(
+                "  /multiforge region size [chunks]   — show or set the region edge in chunks (power of 2, 1..256)");
         output.accept("  /multiforge region pin <id> <world> <fromCX> <fromCZ> <toCX> <toCZ>");
         output.accept("                                     — tick a rectangle's loaded chunks as one region");
         output.accept("  /multiforge region unpin <id>      — release a pinned region");
@@ -208,7 +209,7 @@ public final class MultiForgeCommandDispatcher {
         output.accept(
                 "  /multiforge probes top [prefix] [n] — the largest counters, e.g. `probes top event.dispatch.serial`");
         output.accept(
-                "  /multiforge tickstats              — tick times since reset: mean, p50/p95/p99, max, 10-min TPS");
+                "  /multiforge tickstats              — tick times: mean/max since reset, p50/p95/p99, 10-min TPS and mean");
         output.accept("  /multiforge tickstats reset        — start a new measurement window");
         output.accept("  /multiforge chunks <world>         — loaded chunks per region for one world");
         output.accept("                                     — world = namespaced id, e.g. minecraft:overworld");
@@ -324,7 +325,9 @@ public final class MultiForgeCommandDispatcher {
             output.accept("Usage: /multiforge tickstats [reset]");
             return false;
         }
-        output.accept(TickStats.snapshot().render());
+        TickStats.Snapshot snapshot = TickStats.snapshot();
+        output.accept(snapshot.render());
+        output.accept(snapshot.legend());
         return true;
     }
 
@@ -444,9 +447,27 @@ public final class MultiForgeCommandDispatcher {
         };
     }
 
+    /**
+     * Section edges above this many chunks start merging areas a player would call
+     * separate: sections merge with all eight neighbours, so at 128 chunks a base and
+     * a player two thousand blocks away share one region, one thread and one heat
+     * reading. Allowed, but warned about.
+     */
+    static final int LARGE_REGION_CHUNKS = 32;
+
+    private static final org.slf4j.Logger CONFIG_LOG = org.slf4j.LoggerFactory.getLogger("multiforge.config");
+
     private boolean handleRegionSize(String[] args, Consumer<String> output) {
-        if (args.length < 3) {
-            output.accept("Usage: /multiforge region size <chunks> (must be a power of 2 from 1..256)");
+        if (args.length == 2) {
+            int shift = configStore.get().regionSize();
+            int chunks = 1 << shift;
+            output.accept("Region size is " + chunks + " chunks per side (shift=" + shift + ", " + (chunks * 16)
+                    + " blocks). Change it with /multiforge region size <chunks>.");
+            if (chunks > LARGE_REGION_CHUNKS) output.accept(largeRegionWarning(chunks));
+            return true;
+        }
+        if (args.length != 3) {
+            output.accept("Usage: /multiforge region size [chunks] (a power of 2 from 1..256; no argument shows it)");
             return false;
         }
         int chunks;
@@ -465,11 +486,22 @@ public final class MultiForgeCommandDispatcher {
             configStore.update(c -> c.withRegionSize(shift));
             output.accept(
                     "Region size set to " + chunks + " chunks per side (shift=" + shift + "); regions re-partitioned");
+            if (chunks > LARGE_REGION_CHUNKS) {
+                String warning = largeRegionWarning(chunks);
+                output.accept(warning);
+                CONFIG_LOG.warn(warning);
+            }
             return true;
         } catch (IOException e) {
             output.accept("Failed to persist: " + e.getMessage());
             return false;
         }
+    }
+
+    static String largeRegionWarning(int chunks) {
+        return "Warning: " + chunks + "-chunk sections are large. Sections merge with every neighbour, diagonals"
+                + " included, so areas up to " + (2 * chunks * 16) + " blocks apart can end up in one region:"
+                + " one thread, and one tick cost for all of it. The default is 16 chunks.";
     }
 
     private boolean handlePin(String[] args, Consumer<String> output) {
@@ -542,6 +574,7 @@ public final class MultiForgeCommandDispatcher {
                     String thread = host.scheduler().lastTickThread(r);
                     output.accept("  region " + r.id() + " — " + r.sectionCount() + " section(s), up to "
                             + (long) r.sectionCount() * sectionChunks + " chunks, " + r.state()
+                            + describeCost(host.scheduler().mspt(r))
                             + (thread == null ? "" : ", last ticked on " + thread)
                             + ", " + host.scheduler().lastTickSerialPosts(r) + " serial-lane post(s) last tick");
                 }
@@ -559,6 +592,16 @@ public final class MultiForgeCommandDispatcher {
                     + p.toChunkX() + "," + p.toChunkZ() + "] (" + p.chunkCount() + " chunks)");
         }
         return true;
+    }
+
+    /** {@code ", tick 3.2/7.9 ms (p50/p95, last 5 s)"}, or nothing before the region's first tick. */
+    static String describeCost(net.multiforge.runtime.region.RegionMspt mspt) {
+        if (mspt == null || mspt.averageMillis() == 0.0) return "";
+        return String.format(
+                Locale.ROOT,
+                ", tick %.1f/%.1f ms (p50/p95, last 5 s)",
+                mspt.percentileMillis(0.5),
+                mspt.percentileMillis(0.95));
     }
 
     private static String describe(MultiThreadedSchedulerHost.WorldTickMode mode) {

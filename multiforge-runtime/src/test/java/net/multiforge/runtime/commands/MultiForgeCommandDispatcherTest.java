@@ -110,6 +110,40 @@ class MultiForgeCommandDispatcherTest {
     }
 
     @Test
+    void regionSizeWithoutArgumentShowsTheCurrentSize(@TempDir Path tmp) throws IOException {
+        MultiForgeCommandDispatcher d = make(tmp);
+        List<String> out = new ArrayList<>();
+        assertThat(d.dispatch(new String[] {"region", "size"}, out::add)).isTrue();
+        assertThat(out).hasSize(1);
+        assertThat(out.get(0)).startsWith("Region size is 16 chunks per side (shift=4, 256 blocks)");
+    }
+
+    @Test
+    void largeRegionSizeIsAllowedButWarned(@TempDir Path tmp) throws IOException {
+        MultiForgeCommandDispatcher d = make(tmp);
+        List<String> out = new ArrayList<>();
+        assertThat(d.dispatch(new String[] {"region", "size", "128"}, out::add)).isTrue();
+        assertThat(out).anyMatch(l -> l.startsWith("Region size set to 128"));
+        assertThat(out).anyMatch(l -> l.startsWith("Warning: 128-chunk sections are large"));
+        out.clear();
+        d.dispatch(new String[] {"region", "size"}, out::add);
+        assertThat(out.get(0)).contains("128 chunks per side (shift=7");
+        assertThat(out).anyMatch(l -> l.startsWith("Warning:"));
+        out.clear();
+        d.dispatch(new String[] {"region", "size", "32"}, out::add);
+        assertThat(out).noneMatch(l -> l.startsWith("Warning:"));
+    }
+
+    @Test
+    void regionCostIsShownAsP50AndP95() {
+        net.multiforge.runtime.region.RegionMspt mspt = new net.multiforge.runtime.region.RegionMspt(100);
+        assertThat(MultiForgeCommandDispatcher.describeCost(mspt)).isEmpty();
+        for (int i = 1; i <= 100; i++) mspt.recordNanos(i * 100_000L); // 0.1 .. 10 ms
+        assertThat(MultiForgeCommandDispatcher.describeCost(mspt)).isEqualTo(", tick 5.1/9.6 ms (p50/p95, last 5 s)");
+        assertThat(MultiForgeCommandDispatcher.describeCost(null)).isEmpty();
+    }
+
+    @Test
     void pinListRoundTrip(@TempDir Path tmp) throws IOException {
         MultiForgeCommandDispatcher d = make(tmp);
         List<String> out = new ArrayList<>();
