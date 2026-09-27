@@ -18,6 +18,8 @@ import java.util.Objects;
 import java.util.concurrent.ScheduledFuture;
 import java.util.function.Consumer;
 import net.multiforge.api.world.WorldRef;
+import net.multiforge.runtime.chunk.ChunkHolderManager;
+import net.multiforge.runtime.chunk.NewChunkHolder;
 import net.multiforge.runtime.diagnostics.wire.DebugPayload;
 import net.multiforge.runtime.region.Region;
 import net.multiforge.runtime.region.RegionMspt;
@@ -33,18 +35,12 @@ import net.multiforge.runtime.scheduler.MultiThreadedSchedulerHost;
  * <p>{@code HEATMAP_UPDATE} is scoped to a single {@code worldId} and
  * to per-<em>chunk</em> samples (§7.3), but this MC-free runtime only
  * tracks tick cost at region granularity (there is no per-chunk MSPT
- * instrumentation yet) and regions themselves are tracked at
- * <em>section</em> granularity ({@code 2^sectionChunkShift} chunks per
- * side, see {@link SectionPos}). This emitter approximates: each
- * section a region owns contributes one {@link
- * DebugPayload.ChunkHeat} sample, using that section's origin chunk
- * as its representative chunk coordinate and the region's rolling
- * average MSPT ({@link RegionMspt#averageMillis()}) as the heat value
- * for every section it owns. This is coarser than true per-chunk
- * heat — replacing it with real per-chunk instrumentation is future
- * work, tracked separately from Track C1 — but it is a well-formed,
- * schema-correct approximation available today from data this module
- * already collects.
+ * instrumentation), so every loaded chunk a region owns contributes one
+ * {@link DebugPayload.ChunkHeat} sample carrying the region's rolling
+ * average MSPT ({@link RegionMspt#averageMillis()}, its own time, without
+ * designed waits). Until v1.7.1 each <em>section</em> contributed one
+ * sample at its origin chunk only, so the client painted one chunk per
+ * section and the map looked like scattered tiles.
  *
  * <p>One instance targets one {@link WorldRef}, mirroring the wire
  * schema's per-world scoping; the fork's production wiring installs
@@ -76,13 +72,20 @@ public final class TpsHistogramEmitter {
         ThreadedRegionizer regionizer = host.regionizerForOrNull(world);
         if (regionizer != null) {
             int shift = regionizer.sectionChunkShift();
+            ChunkHolderManager chunks = host.chunkManagerForOrNull(world);
             for (Region region : regionizer.regions()) {
                 RegionMspt mspt = host.scheduler().mspt(region);
                 float heat = mspt == null ? 0.0f : (float) mspt.averageMillis();
-                for (SectionPos section : region.sections()) {
-                    int chunkX = section.x() << shift;
-                    int chunkZ = section.z() << shift;
-                    heats.add(new DebugPayload.ChunkHeat(chunkX, chunkZ, heat));
+                if (chunks != null) {
+                    // Every loaded chunk the region owns carries the region's heat.
+                    for (NewChunkHolder holder : chunks.holdersOwnedBy(region.id())) {
+                        heats.add(new DebugPayload.ChunkHeat(
+                                holder.position().x(), holder.position().z(), heat));
+                    }
+                } else {
+                    for (SectionPos section : region.sections()) {
+                        heats.add(new DebugPayload.ChunkHeat(section.x() << shift, section.z() << shift, heat));
+                    }
                 }
             }
         }
