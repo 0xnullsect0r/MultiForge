@@ -40,4 +40,22 @@ class ProbeSummaryTest {
                 .containsOnlyKeys(
                         "Level.setBlock:off-thread", "entity-ai.wrong-owner", "region-tick.block-fluid.off-thread");
     }
+
+    @Test
+    void collectPagesThroughRepliesThatRconWouldCutOff() throws Exception {
+        java.util.Map<String, Long> server = new java.util.TreeMap<>();
+        for (int i = 0; i < 300; i++) server.put("event.dispatch.serial.event.Event" + i, (long) i);
+        server.put("serial-lane.handoff", 42L);
+        ProbeSummary.Query rcon = prefix -> {
+            StringBuilder sb = new StringBuilder();
+            server.forEach((k, v) -> {
+                if (k.startsWith(prefix)) sb.append(k).append(" = ").append(v).append('\n');
+            });
+            return sb.length() > 4096 ? sb.substring(0, 4096) : sb.toString(); // RCON's packet limit
+        };
+
+        ProbeSummary summary = ProbeSummary.collect(rcon);
+
+        assertThat(summary.counters()).isEqualTo(server);
+    }
 }

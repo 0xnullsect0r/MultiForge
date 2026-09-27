@@ -164,8 +164,9 @@ public final class SwarmBench {
                 return;
             }
             if (runner.hasTickStats()) {
-                String probeDump = runner.rcon().command("multiforge probes");
-                ProbeSummary probes = ProbeSummary.parse(probeDump);
+                ProbeSummary probes =
+                        ProbeSummary.collect(prefix -> runner.rcon().command(("multiforge probes " + prefix).strip()));
+                String probeDump = probes.render();
                 // The whole dump next to the result, for the serial-lane breakdown
                 // (event.dispatch.serial.event.* / .mod.* / .world.*).
                 Path probeFile = outputFile.resolveSibling(outputFile.getFileName() + ".probes.txt");
