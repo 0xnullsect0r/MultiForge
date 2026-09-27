@@ -249,7 +249,10 @@ The policy, per CLAUDE.md rules 4 and 5:
   thread to load a chunk (`MainThreadHandoff`) and a worker waiting for its
   serial-lane listener (`SerialLane`) — are bracketed with
   `RegionTickWatchdog.beginWait()/endWait(kind)`, totalled in
-  `region-tick.wait-ms.<kind>`, and excluded from the overrun check.
+  `region-tick.wait-ns.<kind>`, and excluded from the overrun check. For the
+  serial lane only the hand-off is excluded: the listeners' own run time is
+  the region's work and counts, as it does when the region ticks on the
+  server thread.
 - **Auto-reroute + warn is the default.** MultiForge never refuses to load
   a mod and never throws from a mod's code path in the default mode.
 

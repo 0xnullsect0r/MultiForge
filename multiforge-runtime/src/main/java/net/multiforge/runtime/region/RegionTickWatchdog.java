@@ -42,8 +42,10 @@ import net.multiforge.runtime.diagnostics.ViolationLogger;
  * <p><b>Designed waits do not count.</b> Two waits are part of the
  * design, bounded, and not the region's own work: a hand-off to the server
  * thread for a chunk that is not loaded yet (its generation can take
- * hundreds of milliseconds), and a listener run on the serial event lane.
- * Their callers bracket them with {@link #beginWait()}/{@link #endWait()};
+ * hundreds of milliseconds), and a hand-off to the serial event lane. The
+ * listeners the lane runs for the region are its own work, though, and
+ * count, as they do when the region ticks on the server thread and runs them
+ * directly (see {@link #endWait(String, long)}). Their callers bracket them with {@link #beginWait()}/{@link #endWait()};
  * the overrun check measures the tick minus that time, and the waits are
  * totalled in the probes {@code region-tick.wait-ms.<kind>}. Anything else
  * that stalls a region tick — a {@code Future.get}, a contended lock, a
@@ -111,6 +113,10 @@ public final class RegionTickWatchdog {
         final java.util.HashMap<String, long[]> kinds = new java.util.HashMap<>();
         long serialThisTick;
         long serialLastTick;
+        /** Serial-lane hand-off overhead (wait minus the jobs' own run time) this tick and last. */
+        long serialOverheadThisTick;
+
+        long serialOverheadLastTick;
     }
 
     /** {@code region-tick.wait-ms.<kind>}, {@code .wait-ns.<kind>}, {@code .waits.<kind>} per kind. */
@@ -161,7 +167,9 @@ public final class RegionTickWatchdog {
         wait[0] = 0;
         wait[1] = 0;
         wait[2] = 0;
-        TALLY.get().serialThisTick = 0;
+        Tally tally = TALLY.get();
+        tally.serialThisTick = 0;
+        tally.serialOverheadThisTick = 0;
         TICK_START_NANOS.set(System.nanoTime());
     }
 
@@ -178,6 +186,15 @@ public final class RegionTickWatchdog {
     /** Serial-lane posts made by the calling thread's most recent region tick. */
     public static long lastTickSerialPosts() {
         return TALLY.get().serialLastTick;
+    }
+
+    /**
+     * Serial-lane hand-off overhead of the calling thread's most recent region
+     * tick: time spent waiting for the lane minus the jobs' own run time. Zero
+     * for a region ticked on the server thread, which runs its jobs directly.
+     */
+    public static long lastTickSerialOverheadNanos() {
+        return TALLY.get().serialOverheadLastTick;
     }
 
     /** Nanoseconds of designed waits in the calling worker's most recent region tick. */
@@ -206,23 +223,42 @@ public final class RegionTickWatchdog {
      * the tick ends.
      */
     public static void endWait(String kind) {
+        endWait(kind, 0L);
+    }
+
+    /**
+     * Like {@link #endWait(String)}, for a wait during which {@code workNanos}
+     * of the region's own work ran on another thread on its behalf: a
+     * serial-lane job runs the region's listeners on the server thread while
+     * the worker waits. That work counts as the region's time, as it does when
+     * the region ticks on the server thread and runs the job itself; only the
+     * rest of the wait, the hand-off, is left out.
+     */
+    public static void endWait(String kind, long workNanos) {
         if (TICK_START_NANOS.get() == null) return;
         long[] wait = WAIT.get();
         if (wait[2] == 0) return;
         if (--wait[2] == 0) {
-            long waited = System.nanoTime() - wait[1];
+            long waited = Math.max(0L, System.nanoTime() - wait[1] - Math.max(0L, workNanos));
             wait[0] += waited;
-            long[] tally = TALLY.get().kinds.computeIfAbsent(kind, k -> new long[3]);
+            Tally t = TALLY.get();
+            long[] tally = t.kinds.computeIfAbsent(kind, k -> new long[3]);
             tally[0] += waited;
             tally[1]++;
+            if (SERIAL_LANE.equals(kind)) t.serialOverheadThisTick += waited;
         }
     }
+
+    /** The wait kind of a serial-lane hand-off. */
+    public static final String SERIAL_LANE = "serial-lane";
 
     /** Report this tick's designed waits and serial posts to the probes, and start the next tick's tally. */
     private static void flushTally() {
         Tally tally = TALLY.get();
         tally.serialLastTick = tally.serialThisTick;
         tally.serialThisTick = 0;
+        tally.serialOverheadLastTick = tally.serialOverheadThisTick;
+        tally.serialOverheadThisTick = 0;
         for (java.util.Map.Entry<String, long[]> e : tally.kinds.entrySet()) {
             long[] k = e.getValue();
             if (k[1] == 0) continue;
