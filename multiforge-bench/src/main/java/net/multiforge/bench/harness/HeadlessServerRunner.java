@@ -343,7 +343,14 @@ public final class HeadlessServerRunner implements AutoCloseable {
         } catch (IOException e) {
             // The server may close RCON before it answers; the exit code decides.
         }
-        if (!serverProcess.waitFor(JVM_EXIT_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS)) {
+        // A stop that runs long leaves a thread dump each minute, so there is
+        // evidence of where the time went even when it finishes.
+        long stopDeadline = System.nanoTime() + JVM_EXIT_TIMEOUT.toNanos();
+        int dumps = 0;
+        while (!serverProcess.waitFor(60, TimeUnit.SECONDS) && System.nanoTime() < stopDeadline) {
+            dumpThreads("stop-" + (++dumps) + "min");
+        }
+        if (serverProcess.isAlive()) {
             cleanStop = false;
             dumpThreads("stop-timeout");
             serverProcess.destroy();
@@ -370,7 +377,7 @@ public final class HeadlessServerRunner implements AutoCloseable {
                     .redirectOutput(out.toFile())
                     .start();
             if (!p.waitFor(60, TimeUnit.SECONDS)) p.destroyForcibly();
-            System.err.println("bench: server did not exit; thread dump in " + out);
+            System.err.println("bench: server still stopping; thread dump in " + out);
         } catch (IOException | InterruptedException e) {
             System.err.println("bench: could not take a thread dump: " + e);
         }
