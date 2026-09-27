@@ -70,7 +70,7 @@ Two things to know about the numbers:
 
 ### 2.4 Region-pin renderer
 
-When an op runs `/multiforge region pin <id> <world> <fromCX> <fromCZ> <toCX> <toCZ>` on the server, the pinned rectangle appears in-world as a labelled **line box** — a yellow-ish wireframe outline around the chunks in the pin's rectangle, with the pin's id billboarded above the box's north-east top corner. The box's vertical extent is clamped to a 48-block band around the player (16 below, 32 above) so it stays crisp at any altitude. Pinned regions are exempt from automatic merge/split, so this shows the "hand-frozen" boundaries the operator has locked in. As of v1.3.16 the box appears within ~250 ms of the pin being set (previous releases had a shared-state bug where the pin never reached the client until a server restart).
+When an op runs `/multiforge region pin <id> <world> <fromCX> <fromCZ> <toCX> <toCZ>` on the server, the pinned rectangle appears in-world as a labelled **line box** — a yellow-ish wireframe outline around the chunks in the pin's rectangle, with the pin's id billboarded at the box's north-east corner, just above your eye level. The box runs from the bottom of the world to the build limit, since a pin owns whole chunks (before v1.7.2 it was a 48-block band that followed the player's height). Pinned regions are exempt from automatic merge/split, so this shows the "hand-frozen" boundaries the operator has locked in. As of v1.3.16 the box appears within ~250 ms of the pin being set (previous releases had a shared-state bug where the pin never reached the client until a server restart).
 
 ### 2.5 Toggle overlays with a keybind
 

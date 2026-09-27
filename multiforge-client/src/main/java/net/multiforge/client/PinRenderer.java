@@ -22,7 +22,6 @@ import net.minecraft.client.renderer.LevelRenderer;
 import net.minecraft.client.renderer.LightTexture;
 import net.minecraft.client.renderer.MultiBufferSource;
 import net.minecraft.client.renderer.RenderType;
-import net.minecraft.util.Mth;
 import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.Vec3;
 import net.multiforge.runtime.diagnostics.wire.DebugPayload;
@@ -32,10 +31,9 @@ import org.joml.Matrix4f;
 
 /**
  * Renders each operator-created region pin as a labelled bounding
- * box in-world. Same configurable Y-band as {@link ChunkBorderRenderer}
- * (dodges z-fighting at high altitudes; pre-v1.3.16 code drew only a
- * floating billboard label with no box at all, and the docs
- * incorrectly claimed a box was drawn).
+ * box in-world, from the level's bottom to its build limit: a pin owns
+ * whole chunks, so the box spans them top to bottom rather than a band
+ * that follows the player's height.
  */
 public final class PinRenderer {
 
@@ -81,10 +79,8 @@ public final class PinRenderer {
         MultiBufferSource.BufferSource bufferSource = mc.renderBuffers().bufferSource();
 
         double playerY = player.getY();
-        double yLow = Mth.clamp(
-                playerY - MultiForgeDebugConfig.Y_BELOW.get(), level.getMinBuildHeight(), level.getMaxBuildHeight());
-        double yHigh = Mth.clamp(
-                playerY + MultiForgeDebugConfig.Y_ABOVE.get(), level.getMinBuildHeight(), level.getMaxBuildHeight());
+        double yLow = level.getMinBuildHeight();
+        double yHigh = level.getMaxBuildHeight();
 
         for (DebugPayload.PinBox pin : pins) {
             if (!pin.worldId().equals(currentWorld)) {
