@@ -72,3 +72,18 @@
          } else {
              completablefuture = CompletableFuture.<CompletableFuture<ChunkResult<ChunkAccess>>>supplyAsync(
                      () -> this.getChunkFutureMainThread(p_8432_, p_8433_, p_330326_, p_8435_), this.mainThreadProcessor
+@@ -502,11 +540,14 @@ public class ServerChunkCache extends ChunkSource implements net.neoforged.neofo
+     }
+ 
+     private void mfRunChunkTick(MfChunkTick entry, NaturalSpawner.SpawnState spawnState) {
++        long mf$cost = net.multiforge.runtime.diagnostics.ChunkCost.start();
+         entry.chunk.incrementInhabitedTime(this.mfInhabitedDelta);
+         if (entry.spawn && spawnState != null) {
+             NaturalSpawner.spawnForChunk(this.level, entry.chunk, spawnState, this.spawnFriendlies, this.spawnEnemies, this.mfSpawnPersistent);
+         }
+         if (entry.tick) this.level.tickChunk(entry.chunk, this.mfRandomTickSpeed);
++        // Random ticks and spawning, charged to the chunk for the debug heatmap.
++        net.multiforge.runtime.diagnostics.ChunkCost.end(entry.chunk.getPos().x, entry.chunk.getPos().z, mf$cost);
+     }
+ 
+     /**

@@ -50,31 +50,42 @@ Set cores = 8 (worker pool 8 threads)
 
 ### `region list`
 
-Every world's live regions (largest first) with their size, where they tick,
-which thread last ticked each one and how many serial-lane events it posted,
-then the pins.
+Every world's live regions (largest first) with their size, their tick time
+over the last 5 seconds (p50/p95), where they tick, which thread last ticked
+each one and how many serial-lane events it posted, then the pins.
 
 ```
 /multiforge region list
 minecraft:overworld: 3 region(s), ticking on worker threads
-  region region#7 — 41 section(s), up to 10496 chunks, READY, last ticked on multiforge-tick-3, 12 serial-lane post(s) last tick
-  region region#9 — 2 section(s), up to 512 chunks, READY, last ticked on multiforge-tick-5, 0 serial-lane post(s) last tick
+  region region#7 — 41 section(s), up to 10496 chunks, READY, tick 3.1/6.8 ms (p50/p95, last 5 s), last ticked on multiforge-tick-3, 12 serial-lane post(s) last tick
+  region region#9 — 2 section(s), up to 512 chunks, READY, tick 0.4/0.9 ms (p50/p95, last 5 s), last ticked on multiforge-tick-5, 0 serial-lane post(s) last tick
   ...
 minecraft:the_nether: 1 region(s), ticking on the server thread (one region)
-  region region#12 — 1 section(s), up to 256 chunks, READY, last ticked on Server thread, 40 serial-lane post(s) last tick
+  region region#12 — 1 section(s), up to 256 chunks, READY, tick 1.2/2.0 ms (p50/p95, last 5 s), last ticked on Server thread, 40 serial-lane post(s) last tick
 No pinned regions.
 ```
+
+A region made by a split starts with its share of the old region's recent tick
+times, and a merged region with the sum of both, so the figures do not read as
+zero for the first seconds after the topology changes.
 
 A world with a single region ticks it on the server thread, and a region that
 posts many serial-lane events ticks there after the others; see
 [`perf-tuning.md`](perf-tuning.md#tick-placement).
 
-### `region size <chunks>`
+### `region size [chunks]`
 
-Section edge length in chunks (a power of two, 1..256). Regions merge when
-their sections touch, so larger sections mean fewer, larger regions. Every
+Section edge length in chunks (a power of two, 1..256; default 16). With no
+argument it prints the current size. Regions merge when their sections touch,
+diagonals included, so larger sections mean fewer, larger regions. Every
 world is re-partitioned immediately: queued work is applied first, then each
 loaded chunk and block-entity ticker moves to its new region.
+
+Above 32 chunks the command warns (in chat and in the server log) but still
+applies the size: at 128 chunks two sections that touch span up to 4096
+blocks, so a base and a player exploring a couple of thousand blocks away end
+up in one region, ticked by one thread, with one tick-time reading for all of
+it.
 
 ### `region pin <id> <world> <fromCX> <fromCZ> <toCX> <toCZ>`
 
@@ -151,6 +162,39 @@ which events, mods and dimensions send the most work to the serial lane:
 Use `probes region-tick.overrun` to answer "have we ever hit a region-tick overrun since boot" and `probes ownership.reroute` to check how many mod calls have been silently rerouted to the owner thread.
 
 ---
+
+## `tickstats [reset]` — whole-server tick time
+
+One `key=value` line (the bench harness parses it) and a legend saying what
+each figure covers:
+
+```
+/multiforge tickstats
+ticks=496937 mean=33.430ms p50=34.228ms p95=74.965ms p99=112.504ms max=4070.212ms tps=17.32 window=600.0s mean10m=47.092ms
+mean and max: all 496937 ticks since the last reset; p50-p99: the last 12800 ticks; tps and mean10m: the last 600s
+```
+
+`mean` and `max` cover every tick since the last `tickstats reset` (or boot),
+so on a server that sat idle for hours they describe the idle time.
+`mean10m` is the mean over the same last ten minutes as `tps`: read that one
+for how the server is doing now. `reset` starts a new measurement.
+
+## `chunkcost on|off|report <world> <cx> <cz> <r>` — tick time per chunk
+
+The numbers behind the debug client's heatmap, without a client. `on` starts
+timing each chunk's entities, block entities, scheduled ticks and chunk ticks
+(a few tens of nanoseconds per timed unit); `off` stops it. A debug client
+watching the heatmap turns timing on by itself.
+
+`report` takes the samples since the previous report (or `on`) and prints one
+line; a watching client's heatmap keeps its own samples: the ticks covered, how many
+chunks cost anything, their total, the chunks within `r` of chunk
+(`cx`, `cz`), and the five costliest chunks, all in ms per tick:
+
+```
+/multiforge chunkcost report minecraft:overworld -61 220 2
+chunkcost world=minecraft:overworld ticks=412 chunks=301 total=21.480ms near=[-61,220]r2 chunks=25 sum=0.041ms max=0.004ms top=[0,1]=1.212 [-1,0]=0.988 ...
+```
 
 ## `chunks <world>` — loaded chunks per region
 

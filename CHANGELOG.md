@@ -1,5 +1,16 @@
 # CHANGELOG
 
+## v1.9.0 — the heatmap shows where the cost is
+
+- **Check your region size.** A server with `region.size = 7` (128×128-chunk sections) merges areas up to about 4000 blocks apart into one region, because sections merge with all eight neighbours, diagonals included. A player in the wilderness then shares a region, a thread and a tick cost with a base thousands of blocks away. The default is 4 (16 chunks). Run `/multiforge region size 16` to go back to it; `/multiforge region size` with no argument now shows the current size, and sizes above 32 chunks warn (still applied). The updater never changes your config.
+- **The heatmap colours each chunk by its own cost.** It painted every chunk of a region with the region's whole tick time, so a force-loaded base made the wilderness around a distant player red. The server now times each entity, block entity, scheduled tick and chunk tick against its chunk (about 50 ns per timed unit, only while someone watches the heatmap or `/multiforge chunkcost on`), and the client colours per chunk: green under 0.1 ms, yellow under 1 ms, red at 5 ms and above. The HUD shows the region under you and its p50/p95. Older debug clients still get region averages. On the ATM10 bench, an empty area in the same region as a 45 ms/tick busy area now reads 0.011 ms/tick.
+- **Region time means the same thing wherever a region ticks.** On a worker thread, serial-lane listeners' run time was left out as waiting; on the server thread it counted. A region's heat jumped when it moved between them. Now only the hand-off itself is left out, in both places.
+- **A region moves to the server thread on cost, not a post count.** It goes when serial-lane hand-offs cost it more than 5 ms per tick for 20 ticks (`serialLaneHotWaitMs` in `[tick]`), and comes back after 200 quiet ticks. `serialLaneInlineThreshold = 0` in an older config still turns this off; other old values are ignored and the file is not rewritten.
+- **Fewer events go through the serial lane.** `EntityInvulnerabilityCheckEvent`, `LevelEvent.PotentialSpawns` and `GetEnchantmentLevelEvent` run on the owning region; every listener for them in ATM10's 464 mods was checked for shared state. `LivingHealEvent` stays serial: two Relics items skip their effect off the server thread.
+- A region that splits or merges keeps its tick-time history, so its heat no longer drops to nothing at a section edge.
+- `/multiforge region list` shows each region's p50/p95 tick time; `tickstats` adds `mean10m` and a legend (its `mean` covers everything since boot); `/multiforge chunkcost on|off|report` reads per-chunk cost without a client.
+- Mekanism's "Failed to load chunk for searcher cache" is not MultiForge's: the Digital Miner asks on the server thread, which MultiForge does not change (`docs/compatibility.md`).
+
 ## v1.8.1 — the heatmap is green in empty wilderness again
 
 - A region ticked on the server thread (a lone region, new in v1.8.0) counted chunk loading and terrain generation as its own tick time, so exploring painted the whole heatmap orange. That wait is now left out, as it is on a worker thread (probe `region.main-thread-chunk-load.inline`).

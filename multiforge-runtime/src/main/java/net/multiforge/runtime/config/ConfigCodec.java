@@ -51,8 +51,14 @@ public final class ConfigCodec {
                         .toUpperCase(Locale.ROOT));
         int warnPerMin = intOr(r, "violations.warnPerMin", d.warnPerMin());
         boolean inlineSingle = boolOr(r, "tick.inlineSingleRegion", d.inlineSingleRegion());
-        int serialThreshold = intOr(r, "tick.serialLaneInlineThreshold", d.serialLaneInlineThreshold());
-        return new MultiForgeConfig(cores, tpc, mode, regionSize, vp, warnPerMin, inlineSingle, serialThreshold);
+        // v1.8 counted serial-lane posts (`serialLaneInlineThreshold`); the knob is now
+        // the time the hand-offs cost. An old file's 0 ("never") still means never;
+        // any other old count is not a time and gives way to the default.
+        int hotWaitMs = d.serialLaneHotWaitMs();
+        if (r.get("tick.serialLaneHotWaitMs") != null) hotWaitMs = intOr(r, "tick.serialLaneHotWaitMs", hotWaitMs);
+        else if (r.get("tick.serialLaneInlineThreshold") != null && intOr(r, "tick.serialLaneInlineThreshold", 1) <= 0)
+            hotWaitMs = 0;
+        return new MultiForgeConfig(cores, tpc, mode, regionSize, vp, warnPerMin, inlineSingle, hotWaitMs);
     }
 
     public static String render(MultiForgeConfig c) {
@@ -78,11 +84,10 @@ public final class ConfigCodec {
         sb.append("# A level with a single region ticks it on the server thread: a worker would\n");
         sb.append("# add nothing but a hand-off for every serial-lane event and chunk load.\n");
         sb.append("inlineSingleRegion = ").append(c.inlineSingleRegion()).append("\n");
-        sb.append("# A region whose tick posts more serial-lane events than this ticks on the\n");
-        sb.append("# server thread after the others, until it quiets down. 0 disables.\n");
-        sb.append("serialLaneInlineThreshold = ")
-                .append(c.serialLaneInlineThreshold())
-                .append("\n");
+        sb.append("# A region whose serial-lane hand-offs cost it more than this many\n");
+        sb.append("# milliseconds per tick ticks on the server thread after the others,\n");
+        sb.append("# until it quiets down. 0 disables.\n");
+        sb.append("serialLaneHotWaitMs = ").append(c.serialLaneHotWaitMs()).append("\n");
         return sb.toString();
     }
 

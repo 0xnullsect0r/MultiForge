@@ -34,6 +34,7 @@ import net.multiforge.runtime.chunk.NewChunkHolder;
 import net.multiforge.runtime.config.ConfigCodec;
 import net.multiforge.runtime.config.MultiForgeConfig;
 import net.multiforge.runtime.config.MultiForgeConfigStore;
+import net.multiforge.runtime.diagnostics.ChunkCost;
 import net.multiforge.runtime.diagnostics.ProbeRegistry;
 import net.multiforge.runtime.diagnostics.TickStats;
 import net.multiforge.runtime.diagnostics.ViolationLogger;
@@ -57,7 +58,7 @@ import net.multiforge.runtime.scheduler.MultiThreadedSchedulerHost;
  *   /multiforge config cores &lt;n&gt; | threads &lt;n&gt;
  *   /multiforge config mode &lt;hybrid|strict|off&gt; | policy &lt;warn|reroute-only|fail&gt;
  *   /multiforge config warnPerMin &lt;n&gt;
- *   /multiforge region size &lt;chunks&gt;
+ *   /multiforge region size [&lt;chunks&gt;]
  *   /multiforge region pin &lt;id&gt; &lt;world&gt; &lt;fromCX&gt; &lt;fromCZ&gt; &lt;toCX&gt; &lt;toCZ&gt;
  *   /multiforge region unpin &lt;id&gt;
  *   /multiforge region list
@@ -68,6 +69,8 @@ import net.multiforge.runtime.scheduler.MultiThreadedSchedulerHost;
  *   /multiforge warn list         — show recent violations from ViolationLogger
  *   /multiforge warn clear        — reset the violation history ring buffer
  *   /multiforge tickstats [reset] — tick times: mean, p50/p95/p99, true max, 10-min TPS
+ *   /multiforge chunkcost on|off  — measure tick time per chunk without a debug client
+ *   /multiforge chunkcost report &lt;world&gt; &lt;cx&gt; &lt;cz&gt; &lt;r&gt; — per-chunk cost since the last report
  *   /multiforge certify &lt;modId&gt;  — run the scanner against a jar in ./mods,
  *                                  print pass/fail per rule (see docs/certification.md)
  *   /multiforge certify all       — same, for every jar under ./mods
@@ -169,6 +172,7 @@ public final class MultiForgeCommandDispatcher {
             case "chunks" -> handleChunks(args, output);
             case "warn" -> handleWarn(args, output);
             case "tickstats" -> handleTickStats(args, output);
+            case "chunkcost" -> handleChunkCost(args, output);
             case "certify" -> handleCertify(args, output);
             default -> {
                 output.accept("Unknown subcommand: " + args[0] + ". Try `/multiforge help`.");
@@ -197,7 +201,8 @@ public final class MultiForgeCommandDispatcher {
         output.accept("");
         output.accept("Region topology:");
         output.accept("  /multiforge region list            — show materialized regions + owners");
-        output.accept("  /multiforge region size <chunks>   — square region edge in chunks (power of 2, 1..256)");
+        output.accept(
+                "  /multiforge region size [chunks]   — show or set the region edge in chunks (power of 2, 1..256)");
         output.accept("  /multiforge region pin <id> <world> <fromCX> <fromCZ> <toCX> <toCZ>");
         output.accept("                                     — tick a rectangle's loaded chunks as one region");
         output.accept("  /multiforge region unpin <id>      — release a pinned region");
@@ -208,8 +213,11 @@ public final class MultiForgeCommandDispatcher {
         output.accept(
                 "  /multiforge probes top [prefix] [n] — the largest counters, e.g. `probes top event.dispatch.serial`");
         output.accept(
-                "  /multiforge tickstats              — tick times since reset: mean, p50/p95/p99, max, 10-min TPS");
+                "  /multiforge tickstats              — tick times: mean/max since reset, p50/p95/p99, 10-min TPS and mean");
         output.accept("  /multiforge tickstats reset        — start a new measurement window");
+        output.accept("  /multiforge chunkcost on|off       — measure tick time per chunk (the heatmap's data)");
+        output.accept("  /multiforge chunkcost report <world> <cx> <cz> <r> — per-chunk cost since the last report,");
+        output.accept("                                     — the top chunks and the chunks within r of (cx, cz)");
         output.accept("  /multiforge chunks <world>         — loaded chunks per region for one world");
         output.accept("                                     — world = namespaced id, e.g. minecraft:overworld");
         output.accept("  /multiforge warn list              — recent ViolationLogger events");
@@ -324,8 +332,94 @@ public final class MultiForgeCommandDispatcher {
             output.accept("Usage: /multiforge tickstats [reset]");
             return false;
         }
-        output.accept(TickStats.snapshot().render());
+        TickStats.Snapshot snapshot = TickStats.snapshot();
+        output.accept(snapshot.render());
+        output.accept(snapshot.legend());
         return true;
+    }
+
+    /**
+     * {@code /multiforge chunkcost on|off|report <world> <cx> <cz> <r>} — the
+     * per-chunk tick time the heatmap shows ({@link ChunkCost}), readable
+     * without a debug client (the bench uses it). {@code report} takes the
+     * samples since the previous report (or {@code on}); the heatmap keeps
+     * its own.
+     */
+    private boolean handleChunkCost(String[] args, Consumer<String> output) {
+        if (args.length == 2 && (args[1].equals("on") || args[1].equals("off"))) {
+            ChunkCost.setReporting(args[1].equals("on"));
+            output.accept("Per-chunk tick timing " + args[1] + ".");
+            return true;
+        }
+        if (args.length == 6 && args[1].equals("report")) {
+            int cx;
+            int cz;
+            int r;
+            try {
+                cx = Integer.parseInt(args[3]);
+                cz = Integer.parseInt(args[4]);
+                r = Integer.parseInt(args[5]);
+            } catch (NumberFormatException e) {
+                output.accept("Usage: /multiforge chunkcost report <world> <cx> <cz> <r>");
+                return false;
+            }
+            if (!ChunkCost.reporting()) {
+                output.accept("Per-chunk tick timing is off; run /multiforge chunkcost on first.");
+                return false;
+            }
+            output.accept(renderChunkCost(ChunkCost.drainReport(args[2]), args[2], cx, cz, r));
+            return true;
+        }
+        output.accept("Usage: /multiforge chunkcost on|off|report <world> <cx> <cz> <r>");
+        return false;
+    }
+
+    /** One line: totals, the chunks within {@code r} of ({@code cx}, {@code cz}), and the five costliest chunks. */
+    static String renderChunkCost(ChunkCost.Drained d, String world, int cx, int cz, int r) {
+        long ticks = Math.max(1L, d.ticks());
+        double total = 0;
+        double near = 0;
+        double nearMax = 0;
+        int nearCount = 0;
+        Integer[] order = new Integer[d.size()];
+        for (int i = 0; i < d.size(); i++) {
+            order[i] = i;
+            double ms = d.nanos()[i] / 1e6 / ticks;
+            total += ms;
+            int x = ChunkCost.unpackX(d.keys()[i]);
+            int z = ChunkCost.unpackZ(d.keys()[i]);
+            if (Math.abs(x - cx) <= r && Math.abs(z - cz) <= r) {
+                nearCount++;
+                near += ms;
+                nearMax = Math.max(nearMax, ms);
+            }
+        }
+        java.util.Arrays.sort(order, (a, b) -> Long.compare(d.nanos()[b], d.nanos()[a]));
+        StringBuilder top = new StringBuilder();
+        for (int k = 0; k < Math.min(5, order.length); k++) {
+            int i = order[k];
+            if (k > 0) top.append(' ');
+            top.append(String.format(
+                    java.util.Locale.ROOT,
+                    "[%d,%d]=%.3f",
+                    ChunkCost.unpackX(d.keys()[i]),
+                    ChunkCost.unpackZ(d.keys()[i]),
+                    d.nanos()[i] / 1e6 / ticks));
+        }
+        return String.format(
+                java.util.Locale.ROOT,
+                "chunkcost world=%s ticks=%d chunks=%d total=%.3fms near=[%d,%d]r%d chunks=%d sum=%.3fms max=%.3fms top=%s",
+                world,
+                d.ticks(),
+                d.size(),
+                total,
+                cx,
+                cz,
+                r,
+                nearCount,
+                near,
+                nearMax,
+                top);
     }
 
     private boolean handleConfig(String[] args, Consumer<String> output) {
@@ -444,9 +538,27 @@ public final class MultiForgeCommandDispatcher {
         };
     }
 
+    /**
+     * Section edges above this many chunks start merging areas a player would call
+     * separate: sections merge with all eight neighbours, so at 128 chunks a base and
+     * a player two thousand blocks away share one region, one thread and one heat
+     * reading. Allowed, but warned about.
+     */
+    static final int LARGE_REGION_CHUNKS = 32;
+
+    private static final org.slf4j.Logger CONFIG_LOG = org.slf4j.LoggerFactory.getLogger("multiforge.config");
+
     private boolean handleRegionSize(String[] args, Consumer<String> output) {
-        if (args.length < 3) {
-            output.accept("Usage: /multiforge region size <chunks> (must be a power of 2 from 1..256)");
+        if (args.length == 2) {
+            int shift = configStore.get().regionSize();
+            int chunks = 1 << shift;
+            output.accept("Region size is " + chunks + " chunks per side (shift=" + shift + ", " + (chunks * 16)
+                    + " blocks). Change it with /multiforge region size <chunks>.");
+            if (chunks > LARGE_REGION_CHUNKS) output.accept(largeRegionWarning(chunks));
+            return true;
+        }
+        if (args.length != 3) {
+            output.accept("Usage: /multiforge region size [chunks] (a power of 2 from 1..256; no argument shows it)");
             return false;
         }
         int chunks;
@@ -465,11 +577,22 @@ public final class MultiForgeCommandDispatcher {
             configStore.update(c -> c.withRegionSize(shift));
             output.accept(
                     "Region size set to " + chunks + " chunks per side (shift=" + shift + "); regions re-partitioned");
+            if (chunks > LARGE_REGION_CHUNKS) {
+                String warning = largeRegionWarning(chunks);
+                output.accept(warning);
+                CONFIG_LOG.warn(warning);
+            }
             return true;
         } catch (IOException e) {
             output.accept("Failed to persist: " + e.getMessage());
             return false;
         }
+    }
+
+    static String largeRegionWarning(int chunks) {
+        return "Warning: " + chunks + "-chunk sections are large. Sections merge with every neighbour, diagonals"
+                + " included, so areas up to " + (2 * chunks * 16) + " blocks apart can end up in one region:"
+                + " one thread, and one tick cost for all of it. The default is 16 chunks.";
     }
 
     private boolean handlePin(String[] args, Consumer<String> output) {
@@ -542,6 +665,7 @@ public final class MultiForgeCommandDispatcher {
                     String thread = host.scheduler().lastTickThread(r);
                     output.accept("  region " + r.id() + " — " + r.sectionCount() + " section(s), up to "
                             + (long) r.sectionCount() * sectionChunks + " chunks, " + r.state()
+                            + describeCost(host.scheduler().mspt(r))
                             + (thread == null ? "" : ", last ticked on " + thread)
                             + ", " + host.scheduler().lastTickSerialPosts(r) + " serial-lane post(s) last tick");
                 }
@@ -559,6 +683,16 @@ public final class MultiForgeCommandDispatcher {
                     + p.toChunkX() + "," + p.toChunkZ() + "] (" + p.chunkCount() + " chunks)");
         }
         return true;
+    }
+
+    /** {@code ", tick 3.2/7.9 ms (p50/p95, last 5 s)"}, or nothing before the region's first tick. */
+    static String describeCost(net.multiforge.runtime.region.RegionMspt mspt) {
+        if (mspt == null || mspt.averageMillis() == 0.0) return "";
+        return String.format(
+                Locale.ROOT,
+                ", tick %.1f/%.1f ms (p50/p95, last 5 s)",
+                mspt.percentileMillis(0.5),
+                mspt.percentileMillis(0.95));
     }
 
     private static String describe(MultiThreadedSchedulerHost.WorldTickMode mode) {

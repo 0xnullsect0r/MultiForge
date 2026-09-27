@@ -28,6 +28,7 @@ import net.multiforge.api.world.WorldRef;
 import net.multiforge.neoforge.MultiForgeServerState;
 import net.multiforge.runtime.MultiForge;
 import net.multiforge.runtime.config.MultiForgeConfig;
+import net.multiforge.runtime.diagnostics.ChunkCost;
 import net.multiforge.runtime.diagnostics.emitters.HeartbeatEmitter;
 import net.multiforge.runtime.diagnostics.emitters.OwnershipEmitter;
 import net.multiforge.runtime.diagnostics.emitters.PermissionFilter;
@@ -89,6 +90,14 @@ public final class DebugChannelServer {
 
     /** Player UUID → subscription mask (see {@code DebugPayload.Subscribe.F_*}). */
     private static final Map<UUID, Integer> SUBSCRIPTIONS = new ConcurrentHashMap<>();
+
+    /**
+     * Player UUID → the debug protocol their client speaks (from SUBSCRIBE).
+     * v1.9.0: the heatmap is encoded per protocol — a client below {@link
+     * DebugPacketCodec#PER_CHUNK_HEAT_PROTOCOL} gets the region average it
+     * was built to colour.
+     */
+    private static final Map<UUID, Integer> PROTOCOLS = new ConcurrentHashMap<>();
 
     /** Player UUID → connection handle. */
     private static final Map<UUID, ServerPlayer> PLAYERS = new ConcurrentHashMap<>();
@@ -212,6 +221,8 @@ public final class DebugChannelServer {
         OWNERSHIP_BY_WORLD.clear();
         PLAYERS.clear();
         SUBSCRIPTIONS.clear();
+        PROTOCOLS.clear();
+        ChunkCost.setEnabled(false);
         DENIED_LOG_NANOS.clear();
         heartbeat = null;
         // v1.3.16: clear the shared pin manager for this server so the
@@ -281,7 +292,24 @@ public final class DebugChannelServer {
         if (!(event.getEntity() instanceof ServerPlayer player)) return;
         PLAYERS.remove(player.getUUID());
         SUBSCRIPTIONS.remove(player.getUUID());
+        PROTOCOLS.remove(player.getUUID());
         DENIED_LOG_NANOS.remove(player.getUUID());
+        updateChunkCost();
+    }
+
+    /**
+     * Measure per-chunk tick time ({@link ChunkCost}) only while someone
+     * watches the heatmap; otherwise the tick pays one volatile read.
+     */
+    private static void updateChunkCost() {
+        boolean watched = false;
+        for (int mask : SUBSCRIPTIONS.values()) {
+            if ((mask & DebugPayload.Subscribe.F_HEATMAP) != 0) {
+                watched = true;
+                break;
+            }
+        }
+        if (watched != ChunkCost.enabled()) ChunkCost.setEnabled(watched);
     }
 
     // ------------------------------------------------------------------
@@ -352,7 +380,7 @@ public final class DebugChannelServer {
         String worldId = worldIdOf(payload);
         if (worldId == null) return;
 
-        Map<Long, DebugFramePayload> byChunk = new HashMap<>();
+        Map<ViewKey, DebugFramePayload> byChunk = new HashMap<>();
         for (Map.Entry<UUID, ServerPlayer> entry : PLAYERS.entrySet()) {
             int mask = SUBSCRIPTIONS.getOrDefault(entry.getKey(), 0);
             if ((mask & flag) == 0) continue;
@@ -361,12 +389,13 @@ public final class DebugChannelServer {
 
             ChunkPos at = player.chunkPosition();
             int radius = viewRadiusChunks(player);
-            long key = ChunkPos.asLong(at.x, at.z);
+            int protocol = PROTOCOLS.getOrDefault(entry.getKey(), DebugPacketCodec.PROTOCOL_VERSION);
+            ViewKey key = new ViewKey(ChunkPos.asLong(at.x, at.z), protocol);
             DebugFramePayload wrapped = byChunk.get(key);
             if (wrapped == null) {
                 DebugPayload narrowed = narrowToRadius(payload, at, radius);
                 try {
-                    wrapped = new DebugFramePayload(encode(narrowed));
+                    wrapped = new DebugFramePayload(encode(narrowed, protocol));
                 } catch (Throwable t) {
                     LOGGER.warn(
                             "multiforge:debug/v1 — encode failed for {}: {}",
@@ -461,6 +490,15 @@ public final class DebugChannelServer {
         return 0;
     }
 
+    /** Memo key for {@link #sendPerViewer}: the viewer's chunk and debug protocol. */
+    private record ViewKey(long chunk, int protocol) {}
+
+    /** As {@link #encode(DebugPayload)}, for a viewer speaking {@code protocol}. */
+    private static byte[] encode(DebugPayload payload, int protocol) {
+        if (payload instanceof DebugPayload.HeatmapUpdate u) return DebugPacketCodec.encodeHeatmap(u, protocol);
+        return encode(payload);
+    }
+
     private static byte[] encode(DebugPayload payload) {
         if (payload instanceof DebugPayload.Hello h) return DebugPacketCodec.encodeHello(h);
         if (payload instanceof DebugPayload.RegionSnapshot s) return DebugPacketCodec.encodeRegionSnapshot(s);
@@ -519,7 +557,9 @@ public final class DebugChannelServer {
                 return;
             }
 
+            PROTOCOLS.put(sp.getUUID(), sub.clientProtocol());
             Integer prev = SUBSCRIPTIONS.put(sp.getUUID(), mask);
+            updateChunkCost();
             if (prev == null || prev.intValue() != mask) {
                 LOGGER.info(
                         "multiforge:debug/v1 — SUBSCRIBE from {} (mask=0x{})",

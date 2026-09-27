@@ -92,6 +92,7 @@ public final class MultiForgeCommandBinder {
                 .then(Commands.literal("tickstats")
                         .executes(ctx -> run(dispatcher, ctx, "tickstats"))
                         .then(Commands.literal("reset").executes(ctx -> run(dispatcher, ctx, "tickstats", "reset"))))
+                .then(chunkCostSubtree(dispatcher))
                 .then(certifySubtree(dispatcher));
     }
 
@@ -122,6 +123,7 @@ public final class MultiForgeCommandBinder {
         return Commands.literal("region")
                 .then(Commands.literal("list").executes(ctx -> run(dispatcher, ctx, "region", "list")))
                 .then(Commands.literal("size")
+                        .executes(ctx -> run(dispatcher, ctx, "region", "size"))
                         .then(Commands.argument("chunks", IntegerArgumentType.integer(1, 256))
                                 .executes(ctx -> run(dispatcher, ctx, "region", "size", intArg(ctx, "chunks")))))
                 .then(pinSubtree(dispatcher))
@@ -135,6 +137,29 @@ public final class MultiForgeCommandBinder {
      * broken into a helper so the deeply-nested Brigadier tree doesn't
      * exceed Google-Java-Format's parser depth.
      */
+    private static LiteralArgumentBuilder<CommandSourceStack> chunkCostSubtree(MultiForgeCommandDispatcher dispatcher) {
+        var r = Commands.argument("r", IntegerArgumentType.integer(0, 1024))
+                .executes(ctx -> run(
+                        dispatcher,
+                        ctx,
+                        "chunkcost",
+                        "report",
+                        worldArg(ctx),
+                        intArg(ctx, "cx"),
+                        intArg(ctx, "cz"),
+                        intArg(ctx, "r")));
+        var cz = Commands.argument("cz", IntegerArgumentType.integer()).then(r);
+        var cx = Commands.argument("cx", IntegerArgumentType.integer()).then(cz);
+        var world = Commands.argument("world", ResourceLocationArgument.id())
+                .suggests((ctx, b) -> SharedSuggestionProvider.suggestResource(
+                        ctx.getSource().levels().stream().map(level -> level.location()), b))
+                .then(cx);
+        return Commands.literal("chunkcost")
+                .then(Commands.literal("on").executes(ctx -> run(dispatcher, ctx, "chunkcost", "on")))
+                .then(Commands.literal("off").executes(ctx -> run(dispatcher, ctx, "chunkcost", "off")))
+                .then(Commands.literal("report").then(world));
+    }
+
     private static LiteralArgumentBuilder<CommandSourceStack> pinSubtree(MultiForgeCommandDispatcher dispatcher) {
         // Build inside-out so we avoid Java 21 parser limits and keep it readable.
         var toCZ = Commands.argument("toCZ", IntegerArgumentType.integer())

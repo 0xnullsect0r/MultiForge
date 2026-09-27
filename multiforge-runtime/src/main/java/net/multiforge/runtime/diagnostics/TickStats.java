@@ -72,6 +72,8 @@ public final class TickStats {
      * @param tps ticks per second over the last ten minutes of wall time, or since
      *     the oldest retained tick when that is more recent
      * @param tpsWindowSeconds the wall-time span {@code tps} was measured over
+     * @param windowMeanMs mean tick duration over the ticks {@code tps} counts: the
+     *     recent figure, where {@code meanMs} covers the whole run since the last reset
      */
     public record Snapshot(
             long ticks,
@@ -81,13 +83,18 @@ public final class TickStats {
             double p95Ms,
             double p99Ms,
             double tps,
-            double tpsWindowSeconds) {
+            double tpsWindowSeconds,
+            double windowMeanMs) {
 
-        /** One line, {@code key=value} pairs, parsed by the bench harness. */
+        /**
+         * One line, {@code key=value} pairs, parsed by the bench harness. The keys up
+         * to {@code window} keep their order; {@code mean10m} is appended after them.
+         */
         public String render() {
             return String.format(
                     Locale.ROOT,
-                    "ticks=%d mean=%.3fms p50=%.3fms p95=%.3fms p99=%.3fms max=%.3fms tps=%.2f window=%.1fs",
+                    "ticks=%d mean=%.3fms p50=%.3fms p95=%.3fms p99=%.3fms max=%.3fms tps=%.2f window=%.1fs"
+                            + " mean10m=%.3fms",
                     ticks,
                     meanMs,
                     p50Ms,
@@ -95,6 +102,18 @@ public final class TickStats {
                     p99Ms,
                     maxMs,
                     tps,
+                    tpsWindowSeconds,
+                    windowMeanMs);
+        }
+
+        /** What each figure covers, for the operator reading {@link #render()}. */
+        public String legend() {
+            return String.format(
+                    Locale.ROOT,
+                    "mean and max: all %d ticks since the last reset; p50-p99: the last %d ticks;"
+                            + " tps and mean10m: the last %.0fs",
+                    ticks,
+                    Math.min(ticks, WINDOW),
                     tpsWindowSeconds);
         }
     }
@@ -104,7 +123,7 @@ public final class TickStats {
     }
 
     static synchronized Snapshot snapshot(long nowNanos) {
-        if (count == 0) return new Snapshot(0, 0, 0, 0, 0, 0, 0, 0);
+        if (count == 0) return new Snapshot(0, 0, 0, 0, 0, 0, 0, 0, 0);
         int retained = (int) Math.min(count, WINDOW);
         long[] sorted = new long[retained];
         System.arraycopy(DURATIONS, 0, sorted, 0, retained);
@@ -113,9 +132,11 @@ public final class TickStats {
         // Ticks that ended within the last ten minutes, walking back from the newest.
         long windowStart = nowNanos - TEN_MINUTES_NANOS;
         long inWindow = 0;
+        long inWindowNanos = 0;
         for (long i = count - 1; i >= count - retained; i--) {
             if (END_TIMES[(int) (i % WINDOW)] < windowStart) break;
             inWindow++;
+            inWindowNanos += DURATIONS[(int) (i % WINDOW)];
         }
         // When every retained tick is inside the window, the ring (or the run) is
         // younger than ten minutes: measure from the oldest retained tick's end
@@ -136,7 +157,8 @@ public final class TickStats {
                 percentile(sorted, 0.95),
                 percentile(sorted, 0.99),
                 tps,
-                spanNanos / 1e9);
+                spanNanos / 1e9,
+                inWindow == 0 ? 0 : inWindowNanos / (double) inWindow / 1e6);
     }
 
     private static double percentile(long[] sorted, double q) {

@@ -80,6 +80,12 @@ public final class EventTypeDomainMap {
         return Optional.empty();
     }
 
+    /** The entry for exactly {@code eventClassName}, no hierarchy walk (tests: the NeoForge classes are not on their classpath). */
+    static Optional<DispatchDomainKind> entryFor(String eventClassName) {
+        ensureInitialized();
+        return Optional.ofNullable(MAP.get(eventClassName));
+    }
+
     /**
      * Registers (or overrides) the default domain for the event class named
      * {@code eventClassName}. Extension hook for downstream code — safe to
@@ -167,6 +173,29 @@ public final class EventTypeDomainMap {
         put("net.neoforged.neoforge.event.entity.EntityEvent$EnteringSection", DispatchDomainKind.REGION);
         // A game event at one position, posted by whatever caused it there (CommonHooks.onVanillaGameEvent).
         put("net.neoforged.neoforge.event.VanillaGameEvent", DispatchDomainKind.REGION);
+
+        // The next three were the most frequent serial-lane events left on an ATM10
+        // modpack server running the defaults above (~630, ~600 and ~240 per tick).
+        // Their listeners in that pack (Apotheosis, Apothic Enchanting, Advanced AE,
+        // Ars Elemental, Just Dire Things, Mekanism, Relics, Neo Vitae, Silent Gear,
+        // Twilight Forest) were read from their bytecode: they read the entity, its
+        // equipment, the damage source, the item stack or the structure at the
+        // position, and write only the event, that entity or its items. None writes a
+        // static field or a shared collection; Apotheosis guards its re-entry with a
+        // ThreadLocal.
+        // Entity.isInvulnerableTo -> CommonHooks.isEntityInvulnerableTo: the entity
+        // being hurt, checked in its own damage path.
+        put("net.neoforged.neoforge.event.entity.EntityInvulnerabilityCheckEvent", DispatchDomainKind.REGION);
+        // NaturalSpawner -> EventHooks.getPotentialSpawns: one position of a region
+        // spawning mobs in its own chunks (per-region spawning).
+        put("net.neoforged.neoforge.event.level.LevelEvent$PotentialSpawns", DispatchDomainKind.REGION);
+        // EventHooks.getEnchantmentLevelSpecific / getAllEnchantmentLevels: a query on
+        // one item stack, posted by whoever holds or uses it.
+        put("net.neoforged.neoforge.event.enchanting.GetEnchantmentLevelEvent", DispatchDomainKind.REGION);
+        // LivingHealEvent (~220 per tick there) stays serial: two Relics listeners
+        // (JellyfishNecklaceItem, MidnightMantleItem) return early unless
+        // MinecraftServer.isSameThread(), which is false on a region worker, so on the
+        // region their effects would silently stop.
 
         // Player events.
         put("net.neoforged.neoforge.event.entity.player.PlayerEvent$PlayerLoggedInEvent", DispatchDomainKind.GLOBAL);

@@ -11,7 +11,7 @@ this page covers how regions are formed and how an operator configures them.
 | Term | Meaning |
 |---|---|
 | Chunk | The 16×16-block column Vanilla already tracks. |
-| Section | A square of `2^size` chunks per side (`[region] size`, default 4 → 16×16 chunks). |
+| Section | A square of `2^size` chunks per side (`[region] size`, default 4 → 16×16 chunks; `/multiforge region size` with no argument shows it, and warns above 32 chunks). |
 | Region | An 8-connected group of occupied sections; the unit that one worker ticks. |
 | Global region | A synthetic region, ticked once per server tick before the overworld's level tick. It runs work queued on the global domain (`ServerDomains.global()` tasks and GLOBAL-domain event listeners). |
 

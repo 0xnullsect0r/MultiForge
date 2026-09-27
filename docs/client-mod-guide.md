@@ -39,11 +39,13 @@ MultiForge regions=8 workers~=8 tps~=20.0
 MultiForge worstP95=8.3ms warns=3(last 200)
 This dimension: minecraft:overworld — worker threads (3 regions)
 Serial lane: 1.2k/s handed to server thread, 0/s run in place
+Here: region #3 (p50 4.1 / p95 9.8 ms), this chunk 0.02 ms/tick
 ```
 
 - **Line 1** — server build label, wire-protocol version, and the server's target tick rate (20 Hz for a normal 1.21.1 world).
 - **Line 2** — live region count, an approximate worker-thread count (currently reported as `≈ region count`, since regions each own one worker at a time), and an estimated TPS (`min(tickHz, 1000 / worstP95)`).
 - **Line 3** — worst region's MSPT at the p95 percentile, and the number of ownership/reroute warnings in a rolling 200-event ring buffer.
+- **Here line** (v1.9.0 servers, last line) — `Here: region #3 (p50 4.1 / p95 9.8 ms), this chunk 0.02 ms/tick`: the region that owns the chunk you stand in, its tick time, and that chunk's own share. Shows `Here: no region` where nothing owns the chunk.
 - **Line 4** (v1.8.0 servers) — how the dimension you are in ticks:
   - `server thread (no regions)` — nothing loaded there has a region; it ticks on the server thread like stock NeoForge.
   - `server thread (1 region, nothing to run beside it)` — one region, which MultiForge ticks on the server thread because a worker would gain nothing and only add hand-off cost.
@@ -68,11 +70,11 @@ If you see no seams at all, either the whole area you're standing in is owned by
 
 ### 2.3 Tick-cost heatmap
 
-A translucent tint on the ground, coloured by how expensive each chunk was to tick: green under 5 ms, yellow under 20 ms, red at 50 ms and above. Useful for spotting a mob farm or entity swarm eating one region's tick budget.
+A translucent tint on the ground, coloured by how expensive each chunk was to tick. Useful for spotting the mob farm, the machine room or the entity pile eating a region's tick budget.
 
-Two things to know about the numbers:
-
-- The server measures tick cost per **region**, not per chunk, so every chunk in a region shows that region's average. A single genuinely hot chunk will tint its whole region rather than lighting up alone.
+- **Since v1.9.0 (server and client both 1.9.0+) each chunk shows its own tick time**: the entities in it, its block entities, its scheduled block and fluid ticks, and its random ticks and mob spawning. Green under 0.1 ms per tick, yellow at 1 ms, red at 5 ms and above. Empty wilderness is green even when it shares a region with a busy base.
+- Before v1.9.0, and still when either side is older, every chunk showed its **region's** average on the old scale (green under 5 ms, yellow 20 ms, red 50 ms), so a busy base painted every chunk it shared a region with, however far away.
+- The server only measures per-chunk time while someone has the heatmap on, so it costs nothing when no one is looking.
 - Since v1.4.0 the server sends only the chunks within your view distance, and only for the dimension you're actually in. Earlier versions broadcast every loaded chunk in every world to every client four times a second.
 - The number is the region's own tick time. Since v1.7.1 it leaves out time the region spent waiting for the server thread to load or generate a chunk, so exploring new terrain no longer turns a region red.
 - Since v1.7.1 the tint covers every loaded chunk and lies on the terrain surface, drawn for loaded chunks within 12 chunks of you. Before that it painted one chunk per region section, at your feet's height, so it looked like scattered tiles that moved up and down with you.
@@ -206,7 +208,7 @@ Not caused by MultiForge — that's a Minecraft narrator crash. Install `libflit
 
 - No client-side commands. All operator commands live on the server side (see [`docs/multiforge-command.md`](multiforge-command.md)).
 - No modification of world data — the mod is purely read-only display glue on top of a server-pushed data stream.
-- No per-chunk tick timings. The heatmap's resolution is bounded by what the server measures, which is per-region (§2.3).
+- Per-chunk tick time needs a v1.9.0+ server; older servers only measure per region (§2.3).
 - No sub-section ownership detail. Seams land on section boundaries because that is where ownership actually changes (§2.2).
 
 Extension points that *may* land in future releases are tracked in [`docs/design/client-debug-protocol.md`](design/client-debug-protocol.md).

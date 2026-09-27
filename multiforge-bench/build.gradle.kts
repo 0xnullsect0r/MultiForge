@@ -160,7 +160,7 @@ tasks.register<JavaExec>("vanilla") {
 tasks.register<JavaExec>("swarm") {
     description = "Real-time player swarm: -Pplayers protocol bots walk, place and break for ticks/20 s. " +
             "[-Pplayers=20] [-Pticks=12000] [-Pworkers] [-Pspread=512] [-PrenderDistance=8] " +
-            "[-PswarmMode=bots|armor-stand] [-Pmobs=0] [-PmodpackDir=<dir>] [-Pserver=stock]."
+            "[-PswarmMode=bots|armor-stand] [-Pmobs=0] [-PregionSize=<chunks>] [-PfarArea=x,z] [-PmodpackDir=<dir>] [-Pserver=stock]."
     val players = (project.findProperty("players") as String?) ?: "20"
     benchCommon("swarm-$players")
     mainClass.set("net.multiforge.bench.harness.SwarmBench")
@@ -169,7 +169,7 @@ tasks.register<JavaExec>("swarm") {
         val server = (project.findProperty("server") as String?) ?: "multiforge"
         systemProperty("bench.outputFile", benchResultsDir.resolve("swarm-$players-$server.json").absolutePath)
     }
-    listOf("spread", "renderDistance", "swarmMode", "mobs").forEach { prop ->
+    listOf("spread", "renderDistance", "swarmMode", "mobs", "regionSize", "farArea").forEach { prop ->
         (project.findProperty(prop) as String?)?.let { systemProperty("bench.$prop", it) }
     }
 }

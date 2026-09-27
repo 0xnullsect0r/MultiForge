@@ -43,6 +43,8 @@ public final class SerialLane {
         final Thread waiter;
         volatile boolean done;
         volatile Throwable failure;
+        /** Nanoseconds the job itself ran; written before {@link #done}. */
+        long runNanos;
 
         Job(Runnable task, OwnerToken token, Thread waiter) {
             this.task = task;
@@ -118,7 +120,9 @@ public final class SerialLane {
                 if (laneThread == null && !job.done) drain(); // lane went away while we waited
             }
         } finally {
-            net.multiforge.runtime.region.RegionTickWatchdog.endWait("serial-lane");
+            // The listeners the lane ran are the region's work; only the hand-off is a wait.
+            net.multiforge.runtime.region.RegionTickWatchdog.endWait(
+                    net.multiforge.runtime.region.RegionTickWatchdog.SERIAL_LANE, job.done ? job.runNanos : 0L);
         }
         Throwable failure = job.failure;
         if (failure instanceof RuntimeException re) throw re;
@@ -139,12 +143,14 @@ public final class SerialLane {
             Job current = job;
             boolean onLane = Thread.currentThread() == laneThread;
             if (onLane) laneDepth++;
+            long start = System.nanoTime();
             try {
                 OwnerToken.runAs(current.token, current.task);
             } catch (Throwable t) {
                 current.failure = t;
             } finally {
                 if (onLane) laneDepth--;
+                current.runNanos = System.nanoTime() - start;
                 current.done = true;
                 LockSupport.unpark(current.waiter);
             }

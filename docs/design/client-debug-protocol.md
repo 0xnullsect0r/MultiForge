@@ -21,6 +21,12 @@ changes require a Phase 0 amendment and a version bump per §8.
   thread), and the serial lane's rate. Backward-compatible under §8 like
   v1.4.0's addition; `Subscribe.streamsFor(2)` excludes `F_RUNTIME`, so a
   protocol-2 client (whose decoder rejects unknown kinds) never gets it.
+- **v1.9.0 — protocol version 4.** `HEATMAP_UPDATE`'s `heatMspt` (§7.3)
+  becomes each chunk's own tick time, measured per chunk, instead of the
+  owning region's average. The layout is unchanged; the server encodes the
+  heatmap per viewer and sends a client below 4 the region average in the
+  same slot, so an older client's colour scale stays right. A client reads
+  which one it gets from `HELLO.protocolVersion`.
 
 Cite convention: `file:line` refers to a snippet in the repo at the time
 of freezing. `net.mf.rt.*` = `net.multiforge.runtime.*`; `net.mf.c.*` =
@@ -354,7 +360,12 @@ Each `ChunkHeat` element:
 |---|---|---|
 | `chunkX` | i32 | Chunk-grid X coordinate. |
 | `chunkZ` | i32 | Chunk-grid Z coordinate. |
-| `heatMspt` | f32 | Tick-cost delta attributed to this chunk, milliseconds. `float32`, not `double` — the only `f32` field in this protocol; chosen for this high-cardinality, per-chunk stream to roughly halve heatmap frame size relative to `double`. |
+| `heatMspt` | f32 | Protocol 4+ (v1.9.0): this chunk's own tick time in ms per tick — entities (charged to the chunk they were in when their tick began), block entities, scheduled block/fluid ticks and chunk ticks (random ticks, natural spawning), smoothed over about a second; `0` for a chunk that cost nothing. To a client below 4 the server sends the owning region's rolling average here instead (`DebugPacketCodec.encodeHeatmap(update, protocol)`). `float32`, not `double` — the only `f32` field in this protocol; chosen for this high-cardinality, per-chunk stream to roughly halve heatmap frame size relative to `double`. |
+
+The server measures per-chunk time (`ChunkCost`) only while at least one
+client subscribes to `F_HEATMAP`; otherwise the tick pays one volatile read
+per unit of work. Measured cost when on: about 54 ns per entity, block
+entity or scheduled tick (`ChunkCostTest`).
 
 ### 7.4 `PIN_LIST` (0x04) — `DebugPayload.PinList`
 
@@ -471,8 +482,8 @@ Semantics:
 
 ## 8. Versioning and forward compatibility
 
-- `DebugPacketCodec.PROTOCOL_VERSION` (currently `3`: `2` in v1.4.0,
-  `3` in v1.8.0) is carried in every `HELLO` (§7.1) and is the single source
+- `DebugPacketCodec.PROTOCOL_VERSION` (currently `4`: `2` in v1.4.0,
+  `3` in v1.8.0, `4` in v1.9.0) is carried in every `HELLO` (§7.1) and is the single source
   of truth for "what version does this server speak." There is no
   separate per-packet version field — versioning is whole-protocol, not
   per-kind.
@@ -489,7 +500,10 @@ Semantics:
   once — the same shape as a permission failure (§6). Otherwise it masks
   the requested streams with `Subscribe.streamsFor(clientProtocol)`, so a
   protocol-1 client never receives a protocol-2 stream (`CHUNK_OWNERSHIP`)
-  and a protocol-2 client never receives `RUNTIME_STATUS`.
+  and a protocol-2 client never receives `RUNTIME_STATUS`. It also
+  remembers the client's protocol and encodes a stream whose meaning
+  changed for it: a client below 4 gets `HEATMAP_UPDATE` with the region
+  average (§7.3).
 - **Backward-compatible changes** (allowed within `multiforge:debug/v1`
   without a channel rename):
   - Adding a new packet kind at a reserved ID (§2).
@@ -499,6 +513,9 @@ Semantics:
   - Widening a list-count ceiling (`requireLen` bounds) upward. Never
     narrow one without a version bump — a narrower ceiling can turn a
     previously-valid frame into a rejected one.
+  - Changing what a field *means* without changing its type or position,
+    with a `PROTOCOL_VERSION` bump, provided the server keeps sending the
+    old meaning to clients below the new version (v1.9.0's `heatMspt`).
 - **Breaking changes** (require `multiforge:debug/v2` per §1, plus a
   `PROTOCOL_VERSION` bump so `HELLO` self-reports correctly on the new
   channel):

@@ -292,34 +292,54 @@ class TickRegionSchedulerBarrierModeTest {
     }
 
     @Test
-    void aRegionPostingManySerialJobsTicksOnTheCallerUntilItQuietsDown() {
+    void aRegionWhoseHandOffsCostTooMuchTicksOnTheCallerUntilItQuietsDown() {
         ThreadedRegionizer regionizer = new ThreadedRegionizer(WORLD, 0);
         RegionizedTaskQueue queue = RegionizedTaskQueue.of(regionizer);
         AtomicInteger posts = new AtomicInteger(50);
         Map<RegionId, Thread> tickedOn = new ConcurrentHashMap<>();
         Region[] hot = new Region[1];
+        // 50 posts whose hand-offs cost the worker 8 ms in all (a designed wait with
+        // no listener work in it), over the 5 ms threshold.
         RegionTickBody body = r -> {
             tickedOn.put(r.id(), Thread.currentThread());
-            if (r == hot[0]) {
-                for (int i = posts.get(); i > 0; i--) RegionTickWatchdog.countSerialPost();
+            if (r != hot[0]) return;
+            int n = posts.get();
+            for (int i = n; i > 0; i--) RegionTickWatchdog.countSerialPost();
+            if (n > 0 && Thread.currentThread().getName().startsWith("multiforge-tick-")) {
+                RegionTickWatchdog.beginWait();
+                spin(8_000_000L);
+                RegionTickWatchdog.endWait(RegionTickWatchdog.SERIAL_LANE, 0L);
             }
         };
         try (TickRegionScheduler scheduler =
                 new TickRegionScheduler(2, body, queue, 32, TickRegionScheduler.Mode.BARRIER)) {
-            scheduler.setInlinePolicy(true, 20);
+            scheduler.setInlinePolicy(true, 5);
             regionizer.addListener(scheduler);
             Region a = regionizer.addChunk(new ChunkPos(0, 0));
             Region b = regionizer.addChunk(new ChunkPos(500, 500));
             hot[0] = a;
 
-            scheduler.driveTick(List.of(a, b), 5_000_000_000L, () -> false);
+            for (int i = 1; i < TickRegionScheduler.HOT_ENTER_TICKS; i++) {
+                scheduler.driveTick(List.of(a, b), 5_000_000_000L, () -> false);
+                assertThat(scheduler.lastTickPlacement(a)).isEqualTo(TickRegionScheduler.TickPlacement.WORKER);
+            }
             assertThat(scheduler.lastTickSerialPosts(a)).isEqualTo(50);
-            assertThat(tickedOn.get(a.id())).isNotSameAs(Thread.currentThread()); // measured on a worker
+            assertThat(scheduler.lastTickSerialOverheadNanos(a)).isGreaterThanOrEqualTo(8_000_000L);
+            // The hand-off time is left out of the region's time.
+            assertThat(scheduler.mspt(a).averageMillis()).isLessThan(4.0);
+            scheduler.driveTick(List.of(a, b), 5_000_000_000L, () -> false); // 20th tick over: now hot
 
             scheduler.driveTick(List.of(a, b), 5_000_000_000L, () -> false);
             assertThat(tickedOn.get(a.id())).isSameAs(Thread.currentThread());
             assertThat(scheduler.lastTickPlacement(a)).isEqualTo(TickRegionScheduler.TickPlacement.SERVER_THREAD_HOT);
             assertThat(tickedOn.get(b.id())).isNotSameAs(Thread.currentThread());
+            assertThat(scheduler.serialHandoffNanos()).isGreaterThan(TickRegionScheduler.DEFAULT_HANDOFF_NANOS);
+
+            // Still posting: the estimate (posts × measured hand-off) keeps it hot.
+            for (int i = 0; i < TickRegionScheduler.HOT_RELEASE_TICKS + 5; i++) {
+                scheduler.driveTick(List.of(a, b), 5_000_000_000L, () -> false);
+            }
+            assertThat(scheduler.lastTickPlacement(a)).isEqualTo(TickRegionScheduler.TickPlacement.SERVER_THREAD_HOT);
 
             posts.set(0);
             for (int i = 0; i < TickRegionScheduler.HOT_RELEASE_TICKS; i++) {
@@ -328,5 +348,75 @@ class TickRegionSchedulerBarrierModeTest {
             scheduler.driveTick(List.of(a, b), 5_000_000_000L, () -> false);
             assertThat(scheduler.lastTickPlacement(a)).isEqualTo(TickRegionScheduler.TickPlacement.WORKER);
         }
+    }
+
+    @Test
+    void aFewCheapHandOffsNeverMoveARegion() {
+        // Many posts are not by themselves a reason to move: only the time they cost.
+        ThreadedRegionizer regionizer = new ThreadedRegionizer(WORLD, 0);
+        RegionizedTaskQueue queue = RegionizedTaskQueue.of(regionizer);
+        RegionTickBody body = r -> {
+            for (int i = 0; i < 5000; i++) RegionTickWatchdog.countSerialPost();
+        };
+        try (TickRegionScheduler scheduler =
+                new TickRegionScheduler(2, body, queue, 32, TickRegionScheduler.Mode.BARRIER)) {
+            scheduler.setInlinePolicy(true, 5);
+            regionizer.addListener(scheduler);
+            Region a = regionizer.addChunk(new ChunkPos(0, 0));
+            Region b = regionizer.addChunk(new ChunkPos(500, 500));
+            for (int i = 0; i < TickRegionScheduler.HOT_ENTER_TICKS + 5; i++) {
+                scheduler.driveTick(List.of(a, b), 5_000_000_000L, () -> false);
+            }
+            assertThat(scheduler.lastTickPlacement(a)).isEqualTo(TickRegionScheduler.TickPlacement.WORKER);
+        }
+    }
+
+    @Test
+    void serialLaneListenersCountTheSameOnAWorkerAndOnTheCaller() {
+        // Five lane jobs of 2 ms of listener work each: 10 ms of the region's own
+        // work per tick, whether a worker hands them to the lane or the region
+        // ticks on the lane thread and runs them itself. Only the hand-off is left out.
+        ThreadedRegionizer regionizer = new ThreadedRegionizer(WORLD, 0);
+        RegionizedTaskQueue queue = RegionizedTaskQueue.of(regionizer);
+        Region[] measured = new Region[1];
+        RegionTickBody body = r -> {
+            if (r != measured[0]) return;
+            for (int i = 0; i < 5; i++) net.multiforge.runtime.event.SerialLane.run(() -> spin(2_000_000L));
+        };
+        net.multiforge.runtime.event.SerialLane.bind(Thread.currentThread());
+        try (TickRegionScheduler scheduler =
+                new TickRegionScheduler(2, body, queue, 32, TickRegionScheduler.Mode.BARRIER)) {
+            scheduler.setInlinePolicy(true, 0);
+            regionizer.addListener(scheduler);
+            Region a = regionizer.addChunk(new ChunkPos(0, 0));
+            Region b = regionizer.addChunk(new ChunkPos(500, 500));
+            measured[0] = a;
+
+            for (int i = 0; i < 20; i++) {
+                scheduler.driveTick(List.of(a, b), 5_000_000_000L, net.multiforge.runtime.event.SerialLane::drain);
+            }
+            assertThat(scheduler.lastTickPlacement(a)).isEqualTo(TickRegionScheduler.TickPlacement.WORKER);
+            double onWorker = scheduler.mspt(a).averageMillis();
+
+            Region c = regionizer.addChunk(new ChunkPos(-500, -500));
+            measured[0] = c;
+            for (int i = 0; i < 20; i++) {
+                scheduler.driveTick(List.of(c), 5_000_000_000L, net.multiforge.runtime.event.SerialLane::drain);
+            }
+            assertThat(scheduler.lastTickPlacement(c))
+                    .isEqualTo(TickRegionScheduler.TickPlacement.SERVER_THREAD_SINGLE);
+            double onCaller = scheduler.mspt(c).averageMillis();
+
+            assertThat(onWorker).isGreaterThan(9.0);
+            assertThat(onCaller).isGreaterThan(9.0);
+            assertThat(onWorker).isCloseTo(onCaller, org.assertj.core.data.Percentage.withPercentage(25));
+        } finally {
+            net.multiforge.runtime.event.SerialLane.unbind();
+        }
+    }
+
+    private static void spin(long nanos) {
+        long end = System.nanoTime() + nanos;
+        while (System.nanoTime() < end) Thread.onSpinWait();
     }
 }
