@@ -34,6 +34,7 @@ import net.multiforge.runtime.chunk.NewChunkHolder;
 import net.multiforge.runtime.config.ConfigCodec;
 import net.multiforge.runtime.config.MultiForgeConfig;
 import net.multiforge.runtime.config.MultiForgeConfigStore;
+import net.multiforge.runtime.diagnostics.ChunkCost;
 import net.multiforge.runtime.diagnostics.ProbeRegistry;
 import net.multiforge.runtime.diagnostics.TickStats;
 import net.multiforge.runtime.diagnostics.ViolationLogger;
@@ -68,6 +69,8 @@ import net.multiforge.runtime.scheduler.MultiThreadedSchedulerHost;
  *   /multiforge warn list         — show recent violations from ViolationLogger
  *   /multiforge warn clear        — reset the violation history ring buffer
  *   /multiforge tickstats [reset] — tick times: mean, p50/p95/p99, true max, 10-min TPS
+ *   /multiforge chunkcost on|off  — measure tick time per chunk without a debug client
+ *   /multiforge chunkcost report &lt;world&gt; &lt;cx&gt; &lt;cz&gt; &lt;r&gt; — per-chunk cost since the last report
  *   /multiforge certify &lt;modId&gt;  — run the scanner against a jar in ./mods,
  *                                  print pass/fail per rule (see docs/certification.md)
  *   /multiforge certify all       — same, for every jar under ./mods
@@ -169,6 +172,7 @@ public final class MultiForgeCommandDispatcher {
             case "chunks" -> handleChunks(args, output);
             case "warn" -> handleWarn(args, output);
             case "tickstats" -> handleTickStats(args, output);
+            case "chunkcost" -> handleChunkCost(args, output);
             case "certify" -> handleCertify(args, output);
             default -> {
                 output.accept("Unknown subcommand: " + args[0] + ". Try `/multiforge help`.");
@@ -211,6 +215,9 @@ public final class MultiForgeCommandDispatcher {
         output.accept(
                 "  /multiforge tickstats              — tick times: mean/max since reset, p50/p95/p99, 10-min TPS and mean");
         output.accept("  /multiforge tickstats reset        — start a new measurement window");
+        output.accept("  /multiforge chunkcost on|off       — measure tick time per chunk (the heatmap's data)");
+        output.accept("  /multiforge chunkcost report <world> <cx> <cz> <r> — per-chunk cost since the last report,");
+        output.accept("                                     — the top chunks and the chunks within r of (cx, cz)");
         output.accept("  /multiforge chunks <world>         — loaded chunks per region for one world");
         output.accept("                                     — world = namespaced id, e.g. minecraft:overworld");
         output.accept("  /multiforge warn list              — recent ViolationLogger events");
@@ -329,6 +336,90 @@ public final class MultiForgeCommandDispatcher {
         output.accept(snapshot.render());
         output.accept(snapshot.legend());
         return true;
+    }
+
+    /**
+     * {@code /multiforge chunkcost on|off|report <world> <cx> <cz> <r>} — the
+     * per-chunk tick time the heatmap shows ({@link ChunkCost}), readable
+     * without a debug client (the bench uses it). {@code report} takes the
+     * samples since the previous report, so it competes with a watching
+     * client's heatmap for them.
+     */
+    private boolean handleChunkCost(String[] args, Consumer<String> output) {
+        if (args.length == 2 && (args[1].equals("on") || args[1].equals("off"))) {
+            ChunkCost.setEnabled(args[1].equals("on"));
+            output.accept("Per-chunk tick timing " + args[1] + ".");
+            return true;
+        }
+        if (args.length == 6 && args[1].equals("report")) {
+            int cx;
+            int cz;
+            int r;
+            try {
+                cx = Integer.parseInt(args[3]);
+                cz = Integer.parseInt(args[4]);
+                r = Integer.parseInt(args[5]);
+            } catch (NumberFormatException e) {
+                output.accept("Usage: /multiforge chunkcost report <world> <cx> <cz> <r>");
+                return false;
+            }
+            if (!ChunkCost.enabled()) {
+                output.accept("Per-chunk tick timing is off; run /multiforge chunkcost on first.");
+                return false;
+            }
+            output.accept(renderChunkCost(ChunkCost.drain(args[2]), args[2], cx, cz, r));
+            return true;
+        }
+        output.accept("Usage: /multiforge chunkcost on|off|report <world> <cx> <cz> <r>");
+        return false;
+    }
+
+    /** One line: totals, the chunks within {@code r} of ({@code cx}, {@code cz}), and the five costliest chunks. */
+    static String renderChunkCost(ChunkCost.Drained d, String world, int cx, int cz, int r) {
+        long ticks = Math.max(1L, d.ticks());
+        double total = 0;
+        double near = 0;
+        double nearMax = 0;
+        int nearCount = 0;
+        Integer[] order = new Integer[d.size()];
+        for (int i = 0; i < d.size(); i++) {
+            order[i] = i;
+            double ms = d.nanos()[i] / 1e6 / ticks;
+            total += ms;
+            int x = ChunkCost.unpackX(d.keys()[i]);
+            int z = ChunkCost.unpackZ(d.keys()[i]);
+            if (Math.abs(x - cx) <= r && Math.abs(z - cz) <= r) {
+                nearCount++;
+                near += ms;
+                nearMax = Math.max(nearMax, ms);
+            }
+        }
+        java.util.Arrays.sort(order, (a, b) -> Long.compare(d.nanos()[b], d.nanos()[a]));
+        StringBuilder top = new StringBuilder();
+        for (int k = 0; k < Math.min(5, order.length); k++) {
+            int i = order[k];
+            if (k > 0) top.append(' ');
+            top.append(String.format(
+                    java.util.Locale.ROOT,
+                    "[%d,%d]=%.3f",
+                    ChunkCost.unpackX(d.keys()[i]),
+                    ChunkCost.unpackZ(d.keys()[i]),
+                    d.nanos()[i] / 1e6 / ticks));
+        }
+        return String.format(
+                java.util.Locale.ROOT,
+                "chunkcost world=%s ticks=%d chunks=%d total=%.3fms near=[%d,%d]r%d chunks=%d sum=%.3fms max=%.3fms top=%s",
+                world,
+                d.ticks(),
+                d.size(),
+                total,
+                cx,
+                cz,
+                r,
+                nearCount,
+                near,
+                nearMax,
+                top);
     }
 
     private boolean handleConfig(String[] args, Consumer<String> output) {

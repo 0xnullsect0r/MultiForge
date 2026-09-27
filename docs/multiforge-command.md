@@ -179,6 +179,23 @@ so on a server that sat idle for hours they describe the idle time.
 `mean10m` is the mean over the same last ten minutes as `tps`: read that one
 for how the server is doing now. `reset` starts a new measurement.
 
+## `chunkcost on|off|report <world> <cx> <cz> <r>` — tick time per chunk
+
+The numbers behind the debug client's heatmap, without a client. `on` starts
+timing each chunk's entities, block entities, scheduled ticks and chunk ticks
+(a few tens of nanoseconds per timed unit); `off` stops it. A debug client
+watching the heatmap turns it on by itself.
+
+`report` takes the samples since the previous report (so it competes with a
+watching client for them) and prints one line: the ticks covered, how many
+chunks cost anything, their total, the chunks within `r` of chunk
+(`cx`, `cz`), and the five costliest chunks, all in ms per tick:
+
+```
+/multiforge chunkcost report minecraft:overworld -61 220 2
+chunkcost world=minecraft:overworld ticks=412 chunks=301 total=21.480ms near=[-61,220]r2 chunks=25 sum=0.041ms max=0.004ms top=[0,1]=1.212 [-1,0]=0.988 ...
+```
+
 ## `chunks <world>` — loaded chunks per region
 
 ```

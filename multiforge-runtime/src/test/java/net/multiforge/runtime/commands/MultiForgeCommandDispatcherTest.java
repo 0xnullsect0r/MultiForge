@@ -21,6 +21,7 @@ import java.util.ArrayList;
 import java.util.List;
 import net.multiforge.runtime.config.MultiForgeConfig;
 import net.multiforge.runtime.config.MultiForgeConfigStore;
+import net.multiforge.runtime.diagnostics.ChunkCost;
 import net.multiforge.runtime.diagnostics.ViolationLogger;
 import net.multiforge.runtime.region.pin.RegionPinManager;
 import org.junit.jupiter.api.AfterEach;
@@ -422,5 +423,30 @@ class MultiForgeCommandDispatcherTest {
         MultiForgeConfigStore store = new MultiForgeConfigStore(tmp.resolve("mf.toml"), MultiForgeConfig.defaults());
         RegionPinManager pins = new RegionPinManager(tmp.resolve("pins.toml"));
         return new MultiForgeCommandDispatcher(store, pins, chunkManagers);
+    }
+
+    @Test
+    void chunkCostReportSplitsNearFromTopAndDividesByTicks() {
+        long busy = ChunkCost.pack(0, 0);
+        long far = ChunkCost.pack(-60, 220);
+        ChunkCost.Drained d = new ChunkCost.Drained(new long[] {busy, far}, new long[] {40_000_000L, 200_000L}, 2, 20);
+
+        String line = MultiForgeCommandDispatcher.renderChunkCost(d, "minecraft:overworld", -60, 220, 2);
+
+        assertThat(line)
+                .contains("ticks=20 chunks=2")
+                .contains("total=2.010ms")
+                .contains("near=[-60,220]r2 chunks=1 sum=0.010ms max=0.010ms")
+                .contains("top=[0,0]=2.000 [-60,220]=0.010");
+    }
+
+    @Test
+    void chunkCostReportNeedsTimingOn(@TempDir Path tmp) throws IOException {
+        ChunkCost.setEnabled(false);
+        List<String> out = new ArrayList<>();
+        boolean ok = make(tmp)
+                .dispatch(new String[] {"chunkcost", "report", "minecraft:overworld", "0", "0", "2"}, out::add);
+        assertThat(ok).isFalse();
+        assertThat(out).anyMatch(l -> l.contains("chunkcost on"));
     }
 }
