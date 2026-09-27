@@ -98,7 +98,51 @@ class DebugPacketCodecTest {
         DebugPayload.Subscribe old = DebugPacketCodec.decodeSubscribe(v1Body);
         assertThat(old.clientProtocol()).isEqualTo(1);
         assertThat(old.flags() & DebugPayload.Subscribe.streamsFor(old.clientProtocol()))
-                .isEqualTo(DebugPayload.Subscribe.F_ALL & ~DebugPayload.Subscribe.F_OWNERSHIP);
+                .isEqualTo(DebugPayload.Subscribe.F_ALL
+                        & ~(DebugPayload.Subscribe.F_OWNERSHIP | DebugPayload.Subscribe.F_RUNTIME));
+    }
+
+    @Test
+    void runtimeStatusRoundTrip() throws IOException {
+        DebugPayload.RuntimeStatus st = new DebugPayload.RuntimeStatus(
+                1234.5,
+                67.0,
+                java.util.List.of(
+                        new DebugPayload.WorldStatus(
+                                "minecraft:overworld", DebugPayload.WorldMode.SERVER_THREAD_SINGLE_REGION, 1),
+                        new DebugPayload.WorldStatus(
+                                "allthemodium:mining", DebugPayload.WorldMode.WORKERS_AND_SERVER_THREAD, 3)),
+                java.util.List.of(
+                        new DebugPayload.RegionThread(
+                                7L,
+                                "minecraft:overworld",
+                                "Server thread",
+                                DebugPayload.Placement.SERVER_THREAD_SINGLE,
+                                42L),
+                        new DebugPayload.RegionThread(
+                                9L, "allthemodium:mining", "", DebugPayload.Placement.UNKNOWN, 0L)));
+        DebugPacketCodec.Frame frame = DebugPacketCodec.readFrame(DebugPacketCodec.encodeRuntimeStatus(st));
+        assertThat(frame.kind()).isEqualTo(DebugPacketKind.RUNTIME_STATUS);
+        assertThat(DebugPacketCodec.decodeRuntimeStatus(frame.body())).isEqualTo(st);
+    }
+
+    @Test
+    void runtimeStatusReachesOnlyProtocolThreeClients() {
+        int wantsAll = DebugPayload.Subscribe.F_ALL;
+        assertThat(wantsAll & DebugPayload.Subscribe.streamsFor(3) & DebugPayload.Subscribe.F_RUNTIME)
+                .isNotZero();
+        // A protocol-2 client (v1.4.0 .. v1.7.x) cannot parse kind 0x07:
+        // its readFrame rejects unknown kinds, so the server must mask it off.
+        assertThat(wantsAll & DebugPayload.Subscribe.streamsFor(2) & DebugPayload.Subscribe.F_RUNTIME)
+                .isZero();
+        assertThat(wantsAll & DebugPayload.Subscribe.streamsFor(2) & DebugPayload.Subscribe.F_OWNERSHIP)
+                .isNotZero();
+    }
+
+    @Test
+    void unknownModeAndPlacementCodesFromANewerServerDecodeNeutrally() {
+        assertThat(DebugPayload.WorldMode.fromWire(99)).isEqualTo(DebugPayload.WorldMode.WORKERS);
+        assertThat(DebugPayload.Placement.fromWire(99)).isEqualTo(DebugPayload.Placement.UNKNOWN);
     }
 
     @Test
@@ -186,5 +230,6 @@ class DebugPacketCodecTest {
         assertThat(all & DebugPayload.Subscribe.F_PINS).isNotZero();
         assertThat(all & DebugPayload.Subscribe.F_VIOLATIONS).isNotZero();
         assertThat(all & DebugPayload.Subscribe.F_OWNERSHIP).isNotZero();
+        assertThat(all & DebugPayload.Subscribe.F_RUNTIME).isNotZero();
     }
 }

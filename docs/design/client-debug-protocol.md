@@ -15,6 +15,12 @@ changes require a Phase 0 amendment and a version bump per §8.
   version-1 peer keeps working. Also names `MIN_SUPPORTED_PROTOCOL`
   (§8, closing the §10 gap) and **changes §6's default grant for
   `multiforge.debug.view` from operator level 2 to allow-all**.
+- **v1.8.0 — protocol version 3.** Adds the `RUNTIME_STATUS` kind
+  (§2, §7.8) and the `F_RUNTIME` subscription bit (§5): which thread last
+  ticked each region, how each world ticks (worker threads or the server
+  thread), and the serial lane's rate. Backward-compatible under §8 like
+  v1.4.0's addition; `Subscribe.streamsFor(2)` excludes `F_RUNTIME`, so a
+  protocol-2 client (whose decoder rejects unknown kinds) never gets it.
 
 Cite convention: `file:line` refers to a snippet in the repo at the time
 of freezing. `net.mf.rt.*` = `net.multiforge.runtime.*`; `net.mf.c.*` =
@@ -72,7 +78,8 @@ Frozen 1:1 with `DebugPacketKind` (`DebugPacketKind.java:30-52`). Do not
 renumber existing values; new kinds append at the next free ID within
 their direction's block (`0x07`–`0x0F` reserved for future
 server→client kinds, `0x11`–`0x1F` reserved for future client→server
-kinds; `0x06` was taken by `CHUNK_OWNERSHIP` in v1.4.0).
+kinds; `0x06` was taken by `CHUNK_OWNERSHIP` in v1.4.0, `0x07` by
+`RUNTIME_STATUS` in v1.8.0).
 
 | Kind | Wire ID | Direction | Purpose |
 |---|---|---|---|
@@ -82,7 +89,8 @@ kinds; `0x06` was taken by `CHUNK_OWNERSHIP` in v1.4.0).
 | `PIN_LIST` | `0x04` | server → client | Full snapshot of every operator-created region pin from `RegionPinManager`, so the client can draw selection boxes. |
 | `VIOLATION_EVENT` | `0x05` | server → client | One ownership-violation / reroute event for the live side panel, sourced from `ViolationLogger`. |
 | `CHUNK_OWNERSHIP` | `0x06` | server → client | Which region owns each loaded section of one world. Drives the chunk-border overlay's region seams. **Added in protocol version 2 (v1.4.0).** |
-| `SUBSCRIBE` | `0x10` | client → server | Per-viewer subscription bitmask: which of the five push streams above this client wants. |
+| `RUNTIME_STATUS` | `0x07` | server → client | Which thread last ticked each region, each world's tick mode, and the serial lane's rate. **Added in protocol version 3 (v1.8.0).** |
+| `SUBSCRIBE` | `0x10` | client → server | Per-viewer subscription bitmask: which of the six push streams above this client wants. |
 
 Notes on the ID layout:
 
@@ -91,7 +99,7 @@ Notes on the ID layout:
   direction from the ID's high nibble without a lookup table, even though
   today's `DebugPacketCodec` does not enforce it (see §9 for the
   invariant that *is* enforced: unknown-kind rejection).
-- `0x07`–`0x0F` and `0x11`–`0x1F` are reserved, not merely unused. A
+- `0x08`–`0x0F` and `0x11`–`0x1F` are reserved, not merely unused. A
   future packet kind added under `multiforge:debug/v1` (a
   backward-compatible addition per §8) must draw from these ranges.
 
@@ -107,6 +115,7 @@ Notes on the ID layout:
 | `PIN_LIST` | event-driven | Sent once on subscribe (if `F_PINS` set) and again whenever `RegionPinManager.add`/`remove`/`save` changes the pin set. Not part of the 250 ms tick — a static pin list should not cost bandwidth every quarter-second. |
 | `VIOLATION_EVENT` | event-driven | One frame per `ViolationLogger.warn(...)` call site that actually fires (i.e. one frame per emitted WARN, not per rate-limiter-suppressed call — see §9 and `ViolationLogger.java:61-75`). Fan-out to every subscribed viewer. |
 | `CHUNK_OWNERSHIP` | 4 Hz (every 250 ms) | Same 250 ms heartbeat tick, gated by `F_OWNERSHIP`. Ownership changes only on region merge/split, so most frames repeat the previous one; the cost is bounded by the per-viewer view-radius narrowing described in §7.7. |
+| `RUNTIME_STATUS` | 4 Hz (every 250 ms) | Same 250 ms heartbeat tick, gated by `F_RUNTIME`. One frame for every subscriber (not narrowed per viewer); the lane rates are differenced server-side between frames. |
 | `SUBSCRIBE` | client-initiated, any time | Sent on connect (to establish the viewer's non-zero mask; see §5) and again whenever the player toggles overlays client-side. No rate limit is placed on this packet by the protocol, but the server MAY apply a generic per-connection payload-channel flood guard as part of its normal NeoForge networking hygiene — that guard is out of scope for this document. |
 
 Rationale for 4 Hz: matches the existing HUD refresh cadence used
@@ -198,8 +207,9 @@ not a target size.
   | `F_PINS` | `0x04` | `PIN_LIST` |
   | `F_VIOLATIONS` | `0x08` | `VIOLATION_EVENT` |
   | `F_OWNERSHIP` | `0x10` | `CHUNK_OWNERSHIP` (protocol 2+) |
+  | `F_RUNTIME` | `0x20` | `RUNTIME_STATUS` (protocol 3+) |
 
-  Bits `0x20` and above are reserved for future streams; a server
+  Bits `0x40` and above are reserved for future streams; a server
   receiving an unrecognized bit set MUST ignore that bit (mask it off)
   rather than reject the whole `SUBSCRIBE` — this keeps a newer client
   talking to an older server forward-compatible per §8, at the cost of
@@ -302,7 +312,7 @@ Source: `DebugPacketCodec.encodeHello`/`decodeHello`
 
 | Field | Wire type | Meaning |
 |---|---|---|
-| `protocolVersion` | i32 | This document's version — currently `DebugPacketCodec.PROTOCOL_VERSION = 1`. See §8. |
+| `protocolVersion` | i32 | This document's version — currently `DebugPacketCodec.PROTOCOL_VERSION = 3`. See §8. |
 | `tickHz` | i32 | Server's configured tick rate (ticks/sec), for the client to reason about staleness of subsequent snapshots. |
 | `buildLabel` | string | Free-form server build identifier. Bounded to 256 UTF-16 chars by the record's compact constructor (`DebugPayload.java:23-24`); the wire string-length ceiling is a separate, looser 65535-UTF-8-byte cap from §4. |
 
@@ -434,10 +444,35 @@ Semantics:
   the edge of the view still reaches the client — otherwise the client
   loses the neighbour it needs to detect the outermost seam.
 
+### 7.8 `RUNTIME_STATUS` (0x07) — `DebugPayload.RuntimeStatus`
+
+Added in protocol version 3 (v1.8.0). Produced by `RuntimeStatusEmitter`.
+
+| Field | Wire type | Notes |
+|---|---|---|
+| `laneHandoffsPerSecond` | `float64` | Serial-lane events a worker handed to the server thread, per second since the previous frame (`serial-lane.handoff` probe). |
+| `laneInlinePerSecond` | `float64` | Serial-lane events run in place because their region ticked on the server thread (`serial-lane.inline`). |
+| `worlds` count | `int32` | Ceiling 4096. |
+| `worlds[i].worldId` | UTF-8 string | Dimension id. |
+| `worlds[i].mode` | `uint8` | `0` server thread, no regions; `1` server thread, one region; `2` worker threads; `3` workers plus lane-bound regions on the server thread. An unknown code reads as `2`. |
+| `worlds[i].regionCount` | `int32` | Live regions in the world. |
+| `regions` count | `int32` | Ceiling 65536. |
+| `regions[i].regionId` | `int64` | Matches `RegionStat.regionId` (§7.2). |
+| `regions[i].worldId` | UTF-8 string | The region's world. |
+| `regions[i].thread` | UTF-8 string | Name of the thread that ran the region's last tick (`multiforge-tick-N`, or the server thread's name); empty before its first tick. |
+| `regions[i].placement` | `uint8` | `0` unknown; `1` worker; `2` server thread, alone in its batch; `3` server thread, for posting too much to the serial lane. |
+| `regions[i].serialPosts` | `int64` | Serial-lane events the region's last tick posted. |
+
+Semantics:
+
+- A world with no regions is **absent**; a client reads a missing world
+  as mode `0`.
+- Every frame is a full replacement.
+
 ## 8. Versioning and forward compatibility
 
-- `DebugPacketCodec.PROTOCOL_VERSION` (currently `2`, raised from `1`
-  in v1.4.0) is carried in every `HELLO` (§7.1) and is the single source
+- `DebugPacketCodec.PROTOCOL_VERSION` (currently `3`: `2` in v1.4.0,
+  `3` in v1.8.0) is carried in every `HELLO` (§7.1) and is the single source
   of truth for "what version does this server speak." There is no
   separate per-packet version field — versioning is whole-protocol, not
   per-kind.
@@ -453,7 +488,8 @@ Semantics:
   it, the server keeps that player's mask at `0` and logs the mismatch
   once — the same shape as a permission failure (§6). Otherwise it masks
   the requested streams with `Subscribe.streamsFor(clientProtocol)`, so a
-  protocol-1 client never receives a protocol-2 stream (`CHUNK_OWNERSHIP`).
+  protocol-1 client never receives a protocol-2 stream (`CHUNK_OWNERSHIP`)
+  and a protocol-2 client never receives `RUNTIME_STATUS`.
 - **Backward-compatible changes** (allowed within `multiforge:debug/v1`
   without a channel rename):
   - Adding a new packet kind at a reserved ID (§2).

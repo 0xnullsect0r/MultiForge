@@ -34,6 +34,9 @@ package net.multiforge.runtime.diagnostics.wire;
  *   <li>{@link #CHUNK_OWNERSHIP} — server → client, which region owns
  *       each loaded section of one world. Drives the chunk-border
  *       overlay's region seams. Added in protocol version 2 (v1.4.0).</li>
+ *   <li>{@link #RUNTIME_STATUS} — server → client, which thread ticks
+ *       each region, each world's tick mode, and the serial lane's rate.
+ *       Added in protocol version 3 (v1.8.0).</li>
  *   <li>{@link #SUBSCRIBE} — client → server, adjust which streams the
  *       client wants pushed to it.</li>
  * </ul>
@@ -45,6 +48,7 @@ public enum DebugPacketKind {
     PIN_LIST(0x04),
     VIOLATION_EVENT(0x05),
     CHUNK_OWNERSHIP(0x06),
+    RUNTIME_STATUS(0x07),
     SUBSCRIBE(0x10);
 
     private final int wireId;

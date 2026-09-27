@@ -34,6 +34,7 @@ import net.multiforge.runtime.diagnostics.emitters.PermissionFilter;
 import net.multiforge.runtime.diagnostics.emitters.PinListEmitter;
 import net.multiforge.runtime.diagnostics.emitters.PlayerRef;
 import net.multiforge.runtime.diagnostics.emitters.RegionMapEmitter;
+import net.multiforge.runtime.diagnostics.emitters.RuntimeStatusEmitter;
 import net.multiforge.runtime.diagnostics.emitters.TpsHistogramEmitter;
 import net.multiforge.runtime.diagnostics.emitters.ViolationEmitter;
 import net.multiforge.runtime.diagnostics.wire.DebugPacketCodec;
@@ -174,6 +175,7 @@ public final class DebugChannelServer {
         INSTALLED.add(() -> heartbeatFuture.cancel(false));
 
         INSTALLED.add(RegionMapEmitter.install(host, DebugChannelServer::broadcast, PermissionFilter.ALWAYS_ALLOW));
+        INSTALLED.add(RuntimeStatusEmitter.install(host, DebugChannelServer::broadcast, PermissionFilter.ALWAYS_ALLOW));
         // v1.3.16: use the shared RegionPinManager instance so
         // /multiforge region pin mutations propagate to the emitter
         // within one 4 Hz tick.
@@ -455,6 +457,7 @@ public final class DebugChannelServer {
         if (payload instanceof DebugPayload.PinList) return DebugPayload.Subscribe.F_PINS;
         if (payload instanceof DebugPayload.ViolationEvent) return DebugPayload.Subscribe.F_VIOLATIONS;
         if (payload instanceof DebugPayload.OwnershipUpdate) return DebugPayload.Subscribe.F_OWNERSHIP;
+        if (payload instanceof DebugPayload.RuntimeStatus) return DebugPayload.Subscribe.F_RUNTIME;
         return 0;
     }
 
@@ -465,6 +468,7 @@ public final class DebugChannelServer {
         if (payload instanceof DebugPayload.PinList l) return DebugPacketCodec.encodePinList(l);
         if (payload instanceof DebugPayload.ViolationEvent e) return DebugPacketCodec.encodeViolation(e);
         if (payload instanceof DebugPayload.OwnershipUpdate u) return DebugPacketCodec.encodeOwnership(u);
+        if (payload instanceof DebugPayload.RuntimeStatus st) return DebugPacketCodec.encodeRuntimeStatus(st);
         throw new IllegalArgumentException("unknown DebugPayload subtype: " + payload.getClass().getName());
     }
 
