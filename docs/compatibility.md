@@ -131,6 +131,20 @@ The mod calls a NeoForge API that does not exist in 21.1.251. It slipped past th
 
 Harmless noise. Client-only classes are absent on a dedicated server and mixins targeting them are skipped. Present on stock NeoForge too.
 
+### `[mekanism.common.content.miner.MinerRegionCache/]: Failed to load chunk for searcher cache: X, Z`
+
+Logged by Mekanism when a Digital Miner starts a search and a chunk in its
+search area comes back empty. With an Anchor upgrade it asks for each chunk
+with `ServerChunkCache.getChunkFuture(x, z, FULL, true).get()` and logs when
+the result is empty or the future fails; without one it uses `getChunkNow`,
+which is `null` for any chunk that is not loaded. Seen on a MultiForge 1.8.0
+server on the server thread, where MultiForge does not change either call:
+its `getChunk`/`getChunkNow` changes apply only off the server thread, and the
+server-thread wait it adds in 1.8.1 only brackets the wait for the watchdog.
+The miner treats a missing chunk as empty and searches the rest. If it recurs on the same
+coordinates, check whether they are loaded (or reachable by the miner's
+anchor) on stock NeoForge.
+
 ### `zip END header not found` on a file in `mods/`
 
 That file is not a valid jar. Usually a truncated download or a placeholder. Not MultiForge-specific.
