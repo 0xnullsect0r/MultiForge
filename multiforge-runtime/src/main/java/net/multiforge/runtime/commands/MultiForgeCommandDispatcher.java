@@ -342,12 +342,12 @@ public final class MultiForgeCommandDispatcher {
      * {@code /multiforge chunkcost on|off|report <world> <cx> <cz> <r>} — the
      * per-chunk tick time the heatmap shows ({@link ChunkCost}), readable
      * without a debug client (the bench uses it). {@code report} takes the
-     * samples since the previous report, so it competes with a watching
-     * client's heatmap for them.
+     * samples since the previous report (or {@code on}); the heatmap keeps
+     * its own.
      */
     private boolean handleChunkCost(String[] args, Consumer<String> output) {
         if (args.length == 2 && (args[1].equals("on") || args[1].equals("off"))) {
-            ChunkCost.setEnabled(args[1].equals("on"));
+            ChunkCost.setReporting(args[1].equals("on"));
             output.accept("Per-chunk tick timing " + args[1] + ".");
             return true;
         }
@@ -363,11 +363,11 @@ public final class MultiForgeCommandDispatcher {
                 output.accept("Usage: /multiforge chunkcost report <world> <cx> <cz> <r>");
                 return false;
             }
-            if (!ChunkCost.enabled()) {
+            if (!ChunkCost.reporting()) {
                 output.accept("Per-chunk tick timing is off; run /multiforge chunkcost on first.");
                 return false;
             }
-            output.accept(renderChunkCost(ChunkCost.drain(args[2]), args[2], cx, cz, r));
+            output.accept(renderChunkCost(ChunkCost.drainReport(args[2]), args[2], cx, cz, r));
             return true;
         }
         output.accept("Usage: /multiforge chunkcost on|off|report <world> <cx> <cz> <r>");

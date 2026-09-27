@@ -146,4 +146,29 @@ class ChunkCostTest {
         for (int i = 0; i < d.size(); i++) m.put(d.keys()[i], d.nanos()[i]);
         return m;
     }
+
+    @Test
+    void reportKeepsItsOwnTotalWhileTheHeatmapDrains() {
+        ChunkCost.setReporting(true);
+        assertThat(ChunkCost.enabled()).isTrue();
+        for (int tick = 0; tick < 3; tick++) {
+            ChunkCost.beginLevelTick(WORLD);
+            ChunkCost.add(4, 4, 1000);
+            ChunkCost.flush(WORLD);
+            ChunkCost.endLevelTick();
+            ChunkCost.drain(WORLD); // the heatmap emitter, four times a second
+        }
+
+        ChunkCost.Drained report = ChunkCost.drainReport(WORLD);
+        assertThat(report.ticks()).isEqualTo(3);
+        assertThat(asMap(report)).containsEntry(ChunkCost.pack(4, 4), 3000L);
+        assertThat(ChunkCost.drainReport(WORLD).size()).isZero();
+
+        // A client leaving the heatmap does not stop a report in progress.
+        ChunkCost.setEnabled(true);
+        ChunkCost.setEnabled(false);
+        assertThat(ChunkCost.enabled()).isTrue();
+        ChunkCost.setReporting(false);
+        assertThat(ChunkCost.enabled()).isFalse();
+    }
 }

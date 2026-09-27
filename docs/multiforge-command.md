@@ -184,10 +184,10 @@ for how the server is doing now. `reset` starts a new measurement.
 The numbers behind the debug client's heatmap, without a client. `on` starts
 timing each chunk's entities, block entities, scheduled ticks and chunk ticks
 (a few tens of nanoseconds per timed unit); `off` stops it. A debug client
-watching the heatmap turns it on by itself.
+watching the heatmap turns timing on by itself.
 
-`report` takes the samples since the previous report (so it competes with a
-watching client for them) and prints one line: the ticks covered, how many
+`report` takes the samples since the previous report (or `on`) and prints one
+line; a watching client's heatmap keeps its own samples: the ticks covered, how many
 chunks cost anything, their total, the chunks within `r` of chunk
 (`cx`, `cz`), and the five costliest chunks, all in ms per tick:
 

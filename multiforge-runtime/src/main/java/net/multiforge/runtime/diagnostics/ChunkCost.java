@@ -42,7 +42,12 @@ import org.jetbrains.annotations.ApiStatus;
 @ApiStatus.Internal
 public final class ChunkCost {
 
+    /** {@link #watched} or {@link #reporting}: measure at all. */
     private static volatile boolean enabled;
+    /** A debug client watches the heatmap (the emitter drains the window). */
+    private static volatile boolean watched;
+    /** {@code /multiforge chunkcost on}: also keep a separate total for {@link #drainReport}. */
+    private static volatile boolean reporting;
     /** Set while a level's regions tick and {@link #enabled} is on. */
     private static volatile boolean sampling;
 
@@ -53,15 +58,37 @@ public final class ChunkCost {
 
     /** Turn measurement on or off (the debug channel: on while anyone watches the heatmap). */
     public static void setEnabled(boolean on) {
-        enabled = on;
-        if (!on) {
+        watched = on;
+        update();
+    }
+
+    /**
+     * Keep a second running total per world for {@link #drainReport} (the
+     * {@code /multiforge chunkcost} command), independent of the heatmap
+     * emitter, which drains {@link #drain} four times a second.
+     */
+    public static void setReporting(boolean on) {
+        reporting = on;
+        update();
+    }
+
+    private static synchronized void update() {
+        enabled = watched || reporting;
+        if (!enabled) {
             sampling = false;
             WINDOWS.clear();
+        } else if (!reporting) {
+            for (Window w : WINDOWS.values()) w.clearReport();
         }
     }
 
     public static boolean enabled() {
         return enabled;
+    }
+
+    /** Whether {@link #drainReport} totals are being kept. */
+    public static boolean reporting() {
+        return reporting;
     }
 
     /**
@@ -121,6 +148,12 @@ public final class ChunkCost {
         return window == null ? Drained.EMPTY : window.drain();
     }
 
+    /** Like {@link #drain}, but the {@link #setReporting reporting} total: samples since the last report. */
+    public static Drained drainReport(String worldId) {
+        Window window = WINDOWS.get(worldId);
+        return window == null ? Drained.EMPTY : window.drainReport();
+    }
+
     public static long pack(int chunkX, int chunkZ) {
         return ((long) chunkX & 0xFFFFFFFFL) | (((long) chunkZ & 0xFFFFFFFFL) << 32);
     }
@@ -136,6 +169,8 @@ public final class ChunkCost {
     /** Test hook: forget every window and this thread's samples. */
     public static void resetForTesting() {
         enabled = false;
+        watched = false;
+        reporting = false;
         sampling = false;
         WINDOWS.clear();
         LOCAL.get().clear();
@@ -150,20 +185,45 @@ public final class ChunkCost {
     private static final class Window {
         private final Accumulator totals = new Accumulator();
         private long ticks;
+        private final Accumulator reportTotals = new Accumulator();
+        private long reportTicks;
 
         synchronized void countTick() {
             ticks++;
+            if (reporting) reportTicks++;
         }
 
         synchronized void addAll(Accumulator from) {
             long[] keys = from.keys;
             long[] vals = from.vals;
+            boolean report = reporting;
             for (int i = 0; i < keys.length; i++) {
-                if (vals[i] != 0L) totals.add(keys[i], vals[i]);
+                if (vals[i] != 0L) {
+                    totals.add(keys[i], vals[i]);
+                    if (report) reportTotals.add(keys[i], vals[i]);
+                }
             }
         }
 
+        synchronized void clearReport() {
+            reportTotals.clear();
+            reportTicks = 0;
+        }
+
         synchronized Drained drain() {
+            Drained out = snapshot(totals, ticks);
+            totals.clear();
+            ticks = 0;
+            return out;
+        }
+
+        synchronized Drained drainReport() {
+            Drained out = snapshot(reportTotals, reportTicks);
+            clearReport();
+            return out;
+        }
+
+        private static Drained snapshot(Accumulator totals, long ticks) {
             long[] keys = new long[totals.size];
             long[] nanos = new long[totals.size];
             int n = 0;
@@ -174,10 +234,7 @@ public final class ChunkCost {
                     n++;
                 }
             }
-            Drained out = new Drained(keys, nanos, n, ticks);
-            totals.clear();
-            ticks = 0;
-            return out;
+            return new Drained(keys, nanos, n, ticks);
         }
     }
 

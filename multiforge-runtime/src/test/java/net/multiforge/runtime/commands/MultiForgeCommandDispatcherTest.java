@@ -442,7 +442,7 @@ class MultiForgeCommandDispatcherTest {
 
     @Test
     void chunkCostReportNeedsTimingOn(@TempDir Path tmp) throws IOException {
-        ChunkCost.setEnabled(false);
+        ChunkCost.setReporting(false);
         List<String> out = new ArrayList<>();
         boolean ok = make(tmp)
                 .dispatch(new String[] {"chunkcost", "report", "minecraft:overworld", "0", "0", "2"}, out::add);
