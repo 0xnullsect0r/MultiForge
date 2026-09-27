@@ -56,6 +56,19 @@ class EventTypeDomainMapTest {
     }
 
     @Test
+    void theModpackHotEventsRunOnTheRegionButHealingStaysSerial() {
+        assertThat(EventTypeDomainMap.entryFor("net.neoforged.neoforge.event.entity.EntityInvulnerabilityCheckEvent"))
+                .contains(DispatchDomainKind.REGION);
+        assertThat(EventTypeDomainMap.entryFor("net.neoforged.neoforge.event.level.LevelEvent$PotentialSpawns"))
+                .contains(DispatchDomainKind.REGION);
+        assertThat(EventTypeDomainMap.entryFor("net.neoforged.neoforge.event.enchanting.GetEnchantmentLevelEvent"))
+                .contains(DispatchDomainKind.REGION);
+        // Relics gates its heal listeners on MinecraftServer.isSameThread().
+        assertThat(EventTypeDomainMap.entryFor("net.neoforged.neoforge.event.entity.living.LivingHealEvent"))
+                .isEmpty();
+    }
+
+    @Test
     void lookupUnknownEventReturnsEmpty() {
         assertThat(EventTypeDomainMap.lookup(UnknownEvent.class)).isEmpty();
     }
