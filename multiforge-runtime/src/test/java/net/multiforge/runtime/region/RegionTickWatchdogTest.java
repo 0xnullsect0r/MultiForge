@@ -141,6 +141,22 @@ class RegionTickWatchdogTest {
     }
 
     @Test
+    void subMillisecondWaitsAddUp() throws Exception {
+        Region region = new ThreadedRegionizer(WORLD, 0).addChunk(new ChunkPos(0, 0));
+        RegionTickWatchdog.enterTick(region);
+        for (int i = 0; i < 40; i++) {
+            RegionTickWatchdog.beginWait();
+            long until = System.nanoTime() + 200_000L; // 0.2ms each, 8ms in all
+            while (System.nanoTime() < until) Thread.onSpinWait();
+            RegionTickWatchdog.endWait("tiny");
+        }
+        RegionTickWatchdog.exitTick(region);
+        assertThat(ProbeRegistry.get("region-tick.waits.tiny")).isEqualTo(40);
+        assertThat(ProbeRegistry.get("region-tick.wait-ns.tiny")).isGreaterThanOrEqualTo(8_000_000L);
+        assertThat(ProbeRegistry.get("region-tick.wait-ms.tiny")).isGreaterThanOrEqualTo(7);
+    }
+
+    @Test
     void waitsOutsideARegionTickAreIgnored() {
         RegionTickWatchdog.beginWait();
         RegionTickWatchdog.endWait("outside");

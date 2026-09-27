@@ -183,6 +183,22 @@ class MultiForgeCommandDispatcherTest {
         assertThat(out).anyMatch(l -> l.contains("no probes matching prefix 'nomatch'"));
     }
 
+    @Test
+    void probesTopListsTheLargestCountersFirst(@TempDir Path tmp) throws IOException {
+        net.multiforge.runtime.diagnostics.ProbeRegistry.resetForTesting();
+        net.multiforge.runtime.diagnostics.ProbeRegistry.add("event.dispatch.serial.event.A", 5);
+        net.multiforge.runtime.diagnostics.ProbeRegistry.add("event.dispatch.serial.event.B", 50);
+        net.multiforge.runtime.diagnostics.ProbeRegistry.add("event.dispatch.serial.event.C", 20);
+        net.multiforge.runtime.diagnostics.ProbeRegistry.add("region-tick.overrun", 999);
+
+        MultiForgeCommandDispatcher d = make(tmp);
+        List<String> out = new ArrayList<>();
+        // As the command binder passes it: the rest of the line in one argument.
+        assertThat(d.dispatch(new String[] {"probes", "top event.dispatch.serial 2"}, out::add))
+                .isTrue();
+        assertThat(out).containsExactly("event.dispatch.serial.event.B = 50", "event.dispatch.serial.event.C = 20");
+    }
+
     // /multiforge chunks — loaded chunks per region, from the world's ChunkHolderManager.
     @Test
     void chunksNotInstalledReportsFailure(@TempDir Path tmp) throws IOException {

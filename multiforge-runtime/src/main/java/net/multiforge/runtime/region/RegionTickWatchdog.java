@@ -98,6 +98,25 @@ public final class RegionTickWatchdog {
     /** Per worker: {nanos waited this tick, start of the wait in progress or 0, nesting depth}. */
     private static final ThreadLocal<long[]> WAIT = ThreadLocal.withInitial(() -> new long[3]);
 
+    /**
+     * Per worker: each wait kind's {nanos, count} this tick plus a carry of
+     * nanos not yet reported as a whole millisecond, and the serial-lane
+     * posts of this tick and of the last one. Flushed to the probes once per
+     * tick, so a hot wait costs no map update per wait, and sub-millisecond
+     * waits add up instead of each rounding to zero.
+     */
+    private static final ThreadLocal<Tally> TALLY = ThreadLocal.withInitial(Tally::new);
+
+    private static final class Tally {
+        final java.util.HashMap<String, long[]> kinds = new java.util.HashMap<>();
+        long serialThisTick;
+        long serialLastTick;
+    }
+
+    /** {@code region-tick.wait-ms.<kind>}, {@code .wait-ns.<kind>}, {@code .waits.<kind>} per kind. */
+    private static final java.util.concurrent.ConcurrentMap<String, String[]> WAIT_KEYS =
+            new java.util.concurrent.ConcurrentHashMap<>();
+
     private RegionTickWatchdog() {}
 
     public static Mode mode() {
@@ -142,7 +161,23 @@ public final class RegionTickWatchdog {
         wait[0] = 0;
         wait[1] = 0;
         wait[2] = 0;
+        TALLY.get().serialThisTick = 0;
         TICK_START_NANOS.set(System.nanoTime());
+    }
+
+    /**
+     * The calling thread's region tick sent one job to the serial lane (or,
+     * ticking on the server thread, ran one there directly). No-op outside a
+     * region tick.
+     */
+    public static void countSerialPost() {
+        if (TICK_START_NANOS.get() == null) return;
+        TALLY.get().serialThisTick++;
+    }
+
+    /** Serial-lane posts made by the calling thread's most recent region tick. */
+    public static long lastTickSerialPosts() {
+        return TALLY.get().serialLastTick;
     }
 
     /** Nanoseconds of designed waits in the calling worker's most recent region tick. */
@@ -162,7 +197,8 @@ public final class RegionTickWatchdog {
 
     /**
      * The designed wait begun by {@link #beginWait()} is over; {@code kind}
-     * names it in the {@code region-tick.wait-ms.<kind>} probe.
+     * names it in the {@code region-tick.wait-*.<kind>} probes, reported when
+     * the tick ends.
      */
     public static void endWait(String kind) {
         if (TICK_START_NANOS.get() == null) return;
@@ -171,7 +207,30 @@ public final class RegionTickWatchdog {
         if (--wait[2] == 0) {
             long waited = System.nanoTime() - wait[1];
             wait[0] += waited;
-            ProbeRegistry.add("region-tick.wait-ms." + kind, waited / 1_000_000L);
+            long[] tally = TALLY.get().kinds.computeIfAbsent(kind, k -> new long[3]);
+            tally[0] += waited;
+            tally[1]++;
+        }
+    }
+
+    /** Report this tick's designed waits and serial posts to the probes, and start the next tick's tally. */
+    private static void flushTally() {
+        Tally tally = TALLY.get();
+        tally.serialLastTick = tally.serialThisTick;
+        tally.serialThisTick = 0;
+        for (java.util.Map.Entry<String, long[]> e : tally.kinds.entrySet()) {
+            long[] k = e.getValue();
+            if (k[1] == 0) continue;
+            String[] keys = WAIT_KEYS.computeIfAbsent(e.getKey(), kind -> new String[] {
+                "region-tick.wait-ms." + kind, "region-tick.wait-ns." + kind, "region-tick.waits." + kind
+            });
+            long total = k[0] + k[2];
+            ProbeRegistry.add(keys[0], total / 1_000_000L);
+            ProbeRegistry.add(keys[1], k[0]);
+            ProbeRegistry.add(keys[2], k[1]);
+            k[2] = total % 1_000_000L;
+            k[0] = 0;
+            k[1] = 0;
         }
     }
 
@@ -186,6 +245,7 @@ public final class RegionTickWatchdog {
         Long start = TICK_START_NANOS.get();
         TICK_START_NANOS.remove();
         if (start == null) return; // enterTick wasn't called — defensive, should never happen
+        flushTally();
         long waitedNs = WAIT.get()[0];
         long elapsedNs = System.nanoTime() - start - waitedNs;
         long elapsedMs = elapsedNs / 1_000_000L;
@@ -213,6 +273,7 @@ public final class RegionTickWatchdog {
      * or without silently absorbing an overrun the body itself masked.
      */
     public static void exitTickAfterThrow() {
+        if (TICK_START_NANOS.get() != null) flushTally();
         TICK_START_NANOS.remove();
     }
 

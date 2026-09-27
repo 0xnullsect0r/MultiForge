@@ -50,7 +50,9 @@ public final class ConfigCodec {
                                 '-', '_')
                         .toUpperCase(Locale.ROOT));
         int warnPerMin = intOr(r, "violations.warnPerMin", d.warnPerMin());
-        return new MultiForgeConfig(cores, tpc, mode, regionSize, vp, warnPerMin);
+        boolean inlineSingle = boolOr(r, "tick.inlineSingleRegion", d.inlineSingleRegion());
+        int serialThreshold = intOr(r, "tick.serialLaneInlineThreshold", d.serialLaneInlineThreshold());
+        return new MultiForgeConfig(cores, tpc, mode, regionSize, vp, warnPerMin, inlineSingle, serialThreshold);
     }
 
     public static String render(MultiForgeConfig c) {
@@ -71,7 +73,16 @@ public final class ConfigCodec {
         sb.append("policy = \"")
                 .append(c.violationPolicy().name().toLowerCase(Locale.ROOT).replace('_', '-'))
                 .append("\"\n");
-        sb.append("warnPerMin = ").append(c.warnPerMin()).append("\n");
+        sb.append("warnPerMin = ").append(c.warnPerMin()).append("\n\n");
+        sb.append("[tick]\n");
+        sb.append("# A level with a single region ticks it on the server thread: a worker would\n");
+        sb.append("# add nothing but a hand-off for every serial-lane event and chunk load.\n");
+        sb.append("inlineSingleRegion = ").append(c.inlineSingleRegion()).append("\n");
+        sb.append("# A region whose tick posts more serial-lane events than this ticks on the\n");
+        sb.append("# server thread after the others, until it quiets down. 0 disables.\n");
+        sb.append("serialLaneInlineThreshold = ")
+                .append(c.serialLaneInlineThreshold())
+                .append("\n");
         return sb.toString();
     }
 
@@ -96,6 +107,13 @@ public final class ConfigCodec {
         if (v == null) return null;
         if (v instanceof Number n && !(v instanceof Double) && !(v instanceof Float)) return n;
         throw new IllegalArgumentException("Key '" + key + "' must be an integer, got: " + v);
+    }
+
+    private static boolean boolOr(UnmodifiableConfig r, String key, boolean fallback) {
+        Object v = r.get(key);
+        if (v == null) return fallback;
+        if (v instanceof Boolean b) return b;
+        throw new IllegalArgumentException("Key '" + key + "' must be true or false, got: " + v);
     }
 
     private static int intOr(UnmodifiableConfig r, String key, int fallback) {

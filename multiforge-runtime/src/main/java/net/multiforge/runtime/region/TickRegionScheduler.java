@@ -25,6 +25,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.locks.LockSupport;
 import java.util.function.BooleanSupplier;
+import net.multiforge.runtime.diagnostics.ProbeRegistry;
 import net.multiforge.runtime.ownership.OwnerToken;
 
 /**
@@ -312,21 +313,41 @@ public final class TickRegionScheduler implements AutoCloseable, RegionListener 
         if (regions.isEmpty()) return TickAllResult.EMPTY;
         long deadline = System.nanoTime() + Math.max(0L, deadlineNanos);
         List<Region> batch = List.copyOf(regions);
-        AtomicInteger remaining = new AtomicInteger(batch.size());
-        long[] finishedAt = new long[batch.size()];
+        int n = batch.size();
+        RegionState_[] states = new RegionState_[n];
+        // Where each region ticks: on a worker, or here on the calling (server)
+        // thread — see TickPlacement. A region alone in its batch gains nothing
+        // from a worker and pays a hand-off for every serial-lane post and chunk
+        // load; a hot one runs after the parallel ones, when nothing needs pumping.
+        TickPlacement[] placement = new TickPlacement[n];
+        int parallel = 0;
+        for (int i = 0; i < n; i++) {
+            Region region = batch.get(i);
+            states[i] = perRegion.computeIfAbsent(region.id(), id -> new RegionState_(region));
+            if (n == 1 && inlineSingleRegion) placement[i] = TickPlacement.SERVER_THREAD_SINGLE;
+            else if (states[i].hot) placement[i] = TickPlacement.SERVER_THREAD_HOT;
+            else {
+                placement[i] = TickPlacement.WORKER;
+                parallel++;
+            }
+        }
+        AtomicInteger remaining = new AtomicInteger(parallel);
+        long[] finishedAt = new long[n];
         // Designed waits (a main-thread chunk load, a serial-lane listener) are not
         // the region's own time: RegionTickWatchdog leaves them out per region, and
         // so does the deadline.
-        long[] waited = new long[batch.size()];
-        Throwable[] failures = new Throwable[batch.size()];
+        long[] waited = new long[n];
+        Throwable[] failures = new Throwable[n];
         Thread waiter = Thread.currentThread();
-        for (int i = 0; i < batch.size(); i++) {
+        for (int i = 0; i < n; i++) {
+            if (placement[i] != TickPlacement.WORKER) continue;
             final int idx = i;
             Region region = batch.get(i);
-            RegionState_ s = perRegion.computeIfAbsent(region.id(), id -> new RegionState_(region));
+            RegionState_ s = states[i];
             pool.execute(() -> {
                 try {
                     if (region.tryMarkTicking()) {
+                        s.placement = TickPlacement.WORKER;
                         failures[idx] = tickClaimed(s, region, false);
                         waited[idx] = RegionTickWatchdog.lastTickWaitNanos();
                     }
@@ -347,10 +368,33 @@ public final class TickRegionScheduler implements AutoCloseable, RegionListener 
             }
             if (!didWork && remaining.get() > 0) LockSupport.parkNanos(100_000L);
         }
+        // Server-thread regions run now, one after another, with no worker
+        // running: the caller is the serial lane and the chunk source's thread,
+        // so their posts and chunk loads run directly instead of being handed off.
+        long[] startedAt = new long[n];
+        for (int i = 0; i < n; i++) {
+            if (placement[i] == TickPlacement.WORKER) continue;
+            Region region = batch.get(i);
+            startedAt[i] = System.nanoTime();
+            if (region.tryMarkTicking()) {
+                states[i].placement = placement[i];
+                ProbeRegistry.bump(
+                        placement[i] == TickPlacement.SERVER_THREAD_SINGLE
+                                ? "region-tick.inline.single"
+                                : "region-tick.inline.hot");
+                failures[i] = tickClaimed(states[i], region, false);
+                waited[i] = RegionTickWatchdog.lastTickWaitNanos();
+            }
+            finishedAt[i] = System.nanoTime();
+        }
         List<RegionId> overrun = new ArrayList<>();
         Throwable first = null;
-        for (int i = 0; i < batch.size(); i++) {
-            if (finishedAt[i] - waited[i] > deadline) overrun.add(batch.get(i).id());
+        for (int i = 0; i < n; i++) {
+            boolean late = placement[i] == TickPlacement.WORKER
+                    ? finishedAt[i] - waited[i] > deadline
+                    : finishedAt[i] - startedAt[i] - waited[i] > Math.max(0L, deadlineNanos);
+            if (late) overrun.add(batch.get(i).id());
+            updateHot(states[i]);
             if (failures[i] != null) {
                 if (first == null) first = failures[i];
                 else if (first != failures[i]) first.addSuppressed(failures[i]);
@@ -359,7 +403,77 @@ public final class TickRegionScheduler implements AutoCloseable, RegionListener 
         if (first instanceof RuntimeException re) throw re;
         if (first instanceof Error err) throw err;
         if (first != null) throw new IllegalStateException("region tick failed", first);
-        return new TickAllResult(batch.size(), overrun);
+        return new TickAllResult(n, overrun);
+    }
+
+    /**
+     * Where a region's tick ran last: on a worker, or on the server thread
+     * because it was the only region of its batch or because it posts so many
+     * events to the serial lane that a worker would spend its tick handing
+     * them off.
+     */
+    public enum TickPlacement {
+        WORKER,
+        SERVER_THREAD_SINGLE,
+        SERVER_THREAD_HOT
+    }
+
+    /** Quiet ticks (under a quarter of the threshold) before a hot region goes back to a worker. */
+    static final int HOT_RELEASE_TICKS = 200;
+
+    private volatile boolean inlineSingleRegion = true;
+    private volatile long serialLaneInlineThreshold = 2000;
+
+    /**
+     * @param single tick a batch of one region on the calling thread
+     * @param serialThreshold serial-lane posts in one tick above which a region
+     *     ticks on the calling thread after the parallel ones; 0 or less: never
+     */
+    public void setInlinePolicy(boolean single, long serialThreshold) {
+        this.inlineSingleRegion = single;
+        this.serialLaneInlineThreshold = serialThreshold;
+        if (serialThreshold <= 0) {
+            for (RegionState_ s : perRegion.values()) s.hot = false;
+        }
+    }
+
+    /** Server thread, after the barrier: mark a region hot, or release it after a quiet spell. */
+    private void updateHot(RegionState_ s) {
+        long threshold = serialLaneInlineThreshold;
+        if (threshold <= 0) return;
+        long posts = s.lastSerialPosts;
+        if (!s.hot) {
+            if (posts > threshold) {
+                s.hot = true;
+                s.quietTicks = 0;
+                ProbeRegistry.bump("region-tick.hot");
+            }
+        } else if (posts < threshold / 4) {
+            if (++s.quietTicks >= HOT_RELEASE_TICKS) {
+                s.hot = false;
+                ProbeRegistry.bump("region-tick.hot-released");
+            }
+        } else {
+            s.quietTicks = 0;
+        }
+    }
+
+    /** Name of the thread that last ticked {@code region}, or null if it has not ticked. */
+    public String lastTickThread(Region region) {
+        RegionState_ s = perRegion.get(region.id());
+        return s == null ? null : s.lastThread;
+    }
+
+    /** Serial-lane posts of {@code region}'s last tick (hand-offs on a worker, direct runs on the server thread). */
+    public long lastTickSerialPosts(Region region) {
+        RegionState_ s = perRegion.get(region.id());
+        return s == null ? 0L : s.lastSerialPosts;
+    }
+
+    /** Where {@code region} last ticked, or null if it has not ticked. */
+    public TickPlacement lastTickPlacement(Region region) {
+        RegionState_ s = perRegion.get(region.id());
+        return s == null ? null : s.placement;
     }
 
     public static final class TickAllResult {
@@ -451,6 +565,7 @@ public final class TickRegionScheduler implements AutoCloseable, RegionListener 
      */
     private Throwable tickClaimed(RegionState_ s, Region region, boolean reportUncaught) {
         long start = System.nanoTime();
+        s.lastThread = Thread.currentThread().getName();
         RegionTickWatchdog.enterTick(region);
         try {
             OwnerToken.runAs(OwnerToken.forRegion(region.id().value()), () -> {
@@ -470,6 +585,7 @@ public final class TickRegionScheduler implements AutoCloseable, RegionListener 
             // server thread, a serial-lane listener) are left out, as the watchdog
             // leaves them out. Otherwise exploring players make a region look hot.
             s.mspt.recordNanos(Math.max(1L, System.nanoTime() - start - RegionTickWatchdog.lastTickWaitNanos()));
+            s.lastSerialPosts = RegionTickWatchdog.lastTickSerialPosts();
             region.markNotTicking();
         }
         return null;
@@ -495,6 +611,12 @@ public final class TickRegionScheduler implements AutoCloseable, RegionListener 
     private static final class RegionState_ {
         final Region region;
         final RegionMspt mspt = new RegionMspt(100); // ~5s at 20 TPS
+        volatile String lastThread;
+        volatile long lastSerialPosts;
+        volatile TickPlacement placement;
+        // Server thread only (driveTick): serial-lane heat.
+        boolean hot;
+        int quietTicks;
 
         RegionState_(Region region) {
             this.region = region;

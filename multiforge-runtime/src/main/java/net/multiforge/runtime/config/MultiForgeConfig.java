@@ -35,10 +35,40 @@ import org.slf4j.LoggerFactory;
  *   [violations]
  *   policy = "warn"         # warn | reroute-only | fail
  *   warnPerMin = 5          # warnings per minute per violation site
+ *
+ *   [tick]
+ *   inlineSingleRegion = true         # a level with one region ticks it on the server thread
+ *   serialLaneInlineThreshold = 2000  # serial-lane posts per tick that move a region to the
+ *                                     # server thread; 0 = never
  * </pre>
+ * A file written by an older version lacks the newer keys; they take their defaults.
  */
 public record MultiForgeConfig(
-        int cores, int threadsPerCore, Mode mode, int regionSize, ViolationPolicy violationPolicy, int warnPerMin) {
+        int cores,
+        int threadsPerCore,
+        Mode mode,
+        int regionSize,
+        ViolationPolicy violationPolicy,
+        int warnPerMin,
+        boolean inlineSingleRegion,
+        int serialLaneInlineThreshold) {
+
+    public static final boolean DEFAULT_INLINE_SINGLE_REGION = true;
+    public static final int DEFAULT_SERIAL_LANE_INLINE_THRESHOLD = 2000;
+
+    /** The pre-{@code [tick]} layout; the tick placement knobs take their defaults. */
+    public MultiForgeConfig(
+            int cores, int threadsPerCore, Mode mode, int regionSize, ViolationPolicy violationPolicy, int warnPerMin) {
+        this(
+                cores,
+                threadsPerCore,
+                mode,
+                regionSize,
+                violationPolicy,
+                warnPerMin,
+                DEFAULT_INLINE_SINGLE_REGION,
+                DEFAULT_SERIAL_LANE_INLINE_THRESHOLD);
+    }
 
     public enum Mode {
         OFF,
@@ -144,26 +174,70 @@ public record MultiForgeConfig(
 
     /** Builder-style with-methods so /multiforge commands can produce a new snapshot. */
     public MultiForgeConfig withCores(int v) {
-        return new MultiForgeConfig(v, threadsPerCore, mode, regionSize, violationPolicy, warnPerMin);
+        return new MultiForgeConfig(
+                v,
+                threadsPerCore,
+                mode,
+                regionSize,
+                violationPolicy,
+                warnPerMin,
+                inlineSingleRegion,
+                serialLaneInlineThreshold);
     }
 
     public MultiForgeConfig withThreadsPerCore(int v) {
-        return new MultiForgeConfig(cores, v, mode, regionSize, violationPolicy, warnPerMin);
+        return new MultiForgeConfig(
+                cores, v, mode, regionSize, violationPolicy, warnPerMin, inlineSingleRegion, serialLaneInlineThreshold);
     }
 
     public MultiForgeConfig withMode(Mode v) {
-        return new MultiForgeConfig(cores, threadsPerCore, v, regionSize, violationPolicy, warnPerMin);
+        return new MultiForgeConfig(
+                cores,
+                threadsPerCore,
+                v,
+                regionSize,
+                violationPolicy,
+                warnPerMin,
+                inlineSingleRegion,
+                serialLaneInlineThreshold);
     }
 
     public MultiForgeConfig withRegionSize(int v) {
-        return new MultiForgeConfig(cores, threadsPerCore, mode, v, violationPolicy, warnPerMin);
+        return new MultiForgeConfig(
+                cores,
+                threadsPerCore,
+                mode,
+                v,
+                violationPolicy,
+                warnPerMin,
+                inlineSingleRegion,
+                serialLaneInlineThreshold);
     }
 
     public MultiForgeConfig withViolationPolicy(ViolationPolicy v) {
-        return new MultiForgeConfig(cores, threadsPerCore, mode, regionSize, v, warnPerMin);
+        return new MultiForgeConfig(
+                cores, threadsPerCore, mode, regionSize, v, warnPerMin, inlineSingleRegion, serialLaneInlineThreshold);
     }
 
     public MultiForgeConfig withWarnPerMin(int v) {
-        return new MultiForgeConfig(cores, threadsPerCore, mode, regionSize, violationPolicy, v);
+        return new MultiForgeConfig(
+                cores,
+                threadsPerCore,
+                mode,
+                regionSize,
+                violationPolicy,
+                v,
+                inlineSingleRegion,
+                serialLaneInlineThreshold);
+    }
+
+    public MultiForgeConfig withInlineSingleRegion(boolean v) {
+        return new MultiForgeConfig(
+                cores, threadsPerCore, mode, regionSize, violationPolicy, warnPerMin, v, serialLaneInlineThreshold);
+    }
+
+    public MultiForgeConfig withSerialLaneInlineThreshold(int v) {
+        return new MultiForgeConfig(
+                cores, threadsPerCore, mode, regionSize, violationPolicy, warnPerMin, inlineSingleRegion, v);
     }
 }
