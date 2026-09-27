@@ -59,7 +59,8 @@ public final class HeadlessServerRunner implements AutoCloseable {
 
     private static final Duration RCON_BOOT_TIMEOUT = Duration.ofSeconds(300);
     private static final Duration RCON_IO_TIMEOUT = Duration.ofSeconds(30);
-    private static final Duration JVM_EXIT_TIMEOUT = Duration.ofSeconds(300);
+    private static final Duration JVM_EXIT_TIMEOUT =
+            Duration.ofMinutes(20); // saving a world 100 bots explored takes minutes
     private static final String RCON_PASSWORD = "multiforge";
     private static final Pattern LAST_NUMBER = Pattern.compile("(\\d+)");
 
@@ -342,8 +343,16 @@ public final class HeadlessServerRunner implements AutoCloseable {
         } catch (IOException e) {
             // The server may close RCON before it answers; the exit code decides.
         }
-        if (!serverProcess.waitFor(JVM_EXIT_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS)) {
+        // A stop that runs long leaves a thread dump each minute, so there is
+        // evidence of where the time went even when it finishes.
+        long stopDeadline = System.nanoTime() + JVM_EXIT_TIMEOUT.toNanos();
+        int dumps = 0;
+        while (!serverProcess.waitFor(60, TimeUnit.SECONDS) && System.nanoTime() < stopDeadline) {
+            dumpThreads("stop-" + (++dumps) + "min");
+        }
+        if (serverProcess.isAlive()) {
             cleanStop = false;
+            dumpThreads("stop-timeout");
             serverProcess.destroy();
             if (!serverProcess.waitFor(10, TimeUnit.SECONDS)) serverProcess.destroyForcibly();
             serverProcess.waitFor(10, TimeUnit.SECONDS);
@@ -352,6 +361,26 @@ public final class HeadlessServerRunner implements AutoCloseable {
         }
         running.set(false);
         return cleanStop;
+    }
+
+    /**
+     * Write the server JVM's thread dump next to the boot log ({@code
+     * <bootLog>.<label>.threads.txt}), so a server that would not stop leaves
+     * evidence of where it was. Best effort.
+     */
+    private void dumpThreads(String label) {
+        try {
+            Path jstack = Path.of(System.getProperty("java.home"), "bin", "jstack");
+            Path out = bootLog.resolveSibling(bootLog.getFileName() + "." + label + ".threads.txt");
+            Process p = new ProcessBuilder(jstack.toString(), Long.toString(serverProcess.pid()))
+                    .redirectErrorStream(true)
+                    .redirectOutput(out.toFile())
+                    .start();
+            if (!p.waitFor(60, TimeUnit.SECONDS)) p.destroyForcibly();
+            System.err.println("bench: server still stopping; thread dump in " + out);
+        } catch (IOException | InterruptedException e) {
+            System.err.println("bench: could not take a thread dump: " + e);
+        }
     }
 
     @Override

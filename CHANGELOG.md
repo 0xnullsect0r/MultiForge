@@ -1,6 +1,15 @@
 # CHANGELOG
 
-## v1.6.0 — the regions actually tick
+## v1.7.0 — a hundred players, far apart
+
+- **Entity tracking scales with far-apart players.** Vanilla re-checked every tracked entity in the level against a player on each of its movement packets, and every player against an entity whenever it changed section. With about 100 players spread out, each loading their own terrain and mobs, stock NeoForge and MultiForge both stopped on the watchdog. Only the trackers and players a change can affect are re-checked now: the ones showing each other now, and the ones within reach of the player's chunk-tracking view. The result is the same as Vanilla's.
+  - `-Dmultiforge.tracking.indexed=false` restores Vanilla's full scans.
+  - `-Dmultiforge.tracking.verify=<n>` checks one update in n against the full pass (probe `tracking.mismatch`).
+  - A per-tick check keeps the index in step with Vanilla's tracker state (probe `tracking.reconciled`).
+- 100 bots spread across 4000 blocks hold 15.9 TPS. A 60-minute strict-mode run on that setup (with ZGC) had no ownership violation or region overrun, and a verify run found no mismatch. 200 and 500 far-apart players still saturate the server thread with movement packets; see `docs/verification/README.md`.
+- `docs/perf-tuning.md`: use ZGC for many or far-apart players. A full G1 collection pauses every region at once.
+- Bench: `-PserverRoot`; a thread dump each minute of a long stop; a 20-minute stop timeout for big worlds.
+
 
 Everything since v1.5.1. The short version: before this, a production MultiForge server installed an **empty region tick body** and the patched `ServerLevel` skipped Vanilla's own passes, so scheduled ticks, mob AI and block entities most likely never ran on an installed server; nothing in CI booted a server to notice. Now the server ticks every region in parallel under a barrier model, is rebased onto NeoForge 21.1.251, and is checked against stock NeoForge by live runs.
 

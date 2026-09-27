@@ -35,6 +35,42 @@ clients: they log in, walk, place and break blocks over the real protocol.
 
 Every bench task takes `-PoutputFile=<json>` and `-PbootLog=<log>`.
 
+## Results — 2026-09-26, indexed entity tracking (v1.7.0)
+
+Same 32-thread machine and flags as below, MultiForge with 24 workers and
+`-Xmx16G` (`-Xmx24G`/`-Xmx28G` for 200/500 bots). These runs shared the machine
+with the 24-hour soak. Raw results: [`results/2026-09-26-tracking/`](results/2026-09-26-tracking/).
+
+Vanilla re-checks every tracked entity in the level against a player on each of
+its movement packets (`ChunkMap.move`), which stopped both stock NeoForge and
+MultiForge with 100 players spread far apart (see below). v1.7.0 re-checks only
+the trackers a move can change: those that show the player their entity now, and
+those whose entity is in a chunk the player's view reaches. It also updates a
+tracker only for the players whose view reaches it. The result is Vanilla's; see
+`multiforge-patches/README.md` and the `ChunkMap` patch.
+
+| Run | Result | file |
+|---|---|---|
+| Vanilla parity, workers 1/4/8/16; scenarios x1–x4 | PASS, PASS | — |
+| 100 bots, rings to 4000 blocks, 10 min | **15.9 TPS**, mean tick 42.4 ms, p99 92.8 ms; 8 regions; 0 violations; all 100 connected (stock NeoForge: crashed) | [`swarm100-spread4000-multiforge-w24.json`](results/2026-09-26-tracking/swarm100-spread4000-multiforge-w24.json) |
+| The same with `-Dmultiforge.tracking.verify=50` (one update in 50 checked against Vanilla's full pass) | **0 mismatches**; 15.4 TPS | [`swarm100-spread4000-multiforge-verify50.json`](results/2026-09-26-tracking/swarm100-spread4000-multiforge-verify50.json) |
+| **X.8 strict mode, 100 bots, rings to 4000, 60 minutes**, ZGC | **0 ownership violations, 0 region overruns**; 15.9 TPS, mean 44.3 ms, p99 61.2 ms; all 100 connected for the hour; 60,030 blocks placed, 60,000 broken; clean stop | [`x8-strict-swarm100-60min.json`](results/2026-09-26-tracking/x8-strict-swarm100-60min.json) |
+| 200 bots, rings to 6000 | crashed: mean tick 194 ms, then the watchdog | [`swarm200-spread6000-multiforge-w24.json`](results/2026-09-26-tracking/swarm200-spread6000-multiforge-w24.json) |
+| 500 bots, rings to 8000 | crashed during placement (184 of 500 placed) | [`swarm500-spread8000-multiforge-w24.json`](results/2026-09-26-tracking/swarm500-spread8000-multiforge-w24.json) |
+
+Checking every update (`verify=true`) at 100 bots costs as much as the scan it
+replaces, so that run stopped on the watchdog; it logged no mismatch before it
+did ([`swarm100-spread4000-multiforge-verify.json`](results/2026-09-26-tracking/swarm100-spread4000-multiforge-verify.json)).
+An earlier strict run with the default G1 collector stopped when a 630 ms full GC
+paused every region at once; see [`../perf-tuning.md`](../perf-tuning.md) on
+the collector.
+
+**The next limit** is still the server thread: at 200 and 500 players it is
+saturated by movement packets, each re-checking the entities near its player.
+Packets are handled on the server thread in both stock and MultiForge. Raising
+the limit further means handling a player's movement and tracking in the
+region that owns the player, as Folia does.
+
 ## Results — 2026-09-26, 32-core workstation
 
 Build: branch `claude/epic-archimedes-ndcba6` at the fixes below, NeoForge
@@ -75,7 +111,7 @@ The file says `clean_stop: false`. That is the bench, not the server: its
 `save-all flush` of the explored world took 40 s, past the RCON timeout, so it
 never sent `stop`. The bench now stops with `stop` alone.
 
-#### Where 100 far-apart players stop both servers
+#### Where 100 far-apart players stopped both servers (fixed in v1.7.0)
 
 Both servers die in the same Vanilla code, on the server thread:
 `ServerGamePacketListenerImpl.handleMovePlayer` → `ChunkMap.move`. For every
@@ -346,7 +382,7 @@ Live servers surfaced defects that unit tests and GameTests had not:
 - **A 24-hour soak.** Running: 50 bots, rings to 4000 blocks, strict mode
   (`./gradlew :multiforge-bench:x8StrictSwarm -Pplayers=50 -Pspread=4000
   -Pticks=1728000 -PextraJvmArgs=-Xmx16G`).
-- **100+ far-apart players**, after the entity-tracking change above.
+- **200+ far-apart players**: movement and tracking in the player's region (see the v1.7.0 results).
 - **X.4 client HUD**: join with the `multiforge-client` debug mod and check
   the region overlay against `/multiforge region list`. This needs a person
   at a graphical client.

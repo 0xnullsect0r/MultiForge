@@ -229,7 +229,7 @@
      }
  
      @Override
-@@ -303,7 +348,9 @@ public class PersistentEntitySectionManager<T extends EntityAccess> implements A
+@@ -303,84 +348,125 @@ public class PersistentEntitySectionManager<T extends EntityAccess> implements A
      }
  
      public boolean isLoaded(UUID p_157551_) {
@@ -240,9 +240,36 @@
      }
  
      public LevelEntityGetter<T> getEntityGetter() {
-@@ -311,76 +358,88 @@ public class PersistentEntitySectionManager<T extends EntityAccess> implements A
+         return this.entityGetter;
      }
  
++    /**
++     * MultiForge (multiforge-patches/05-entity-migration/): the entities in
++     * accessible sections of chunks [{@code minX}, {@code maxX}] × [{@code minZ},
++     * {@code maxZ}], read under {@link #mfLock} and returned after it is released.
++     * Accessible sections hold exactly the entities that are tracked, so this is
++     * how ChunkMap finds the tracked entities near a player without scanning the
++     * whole level.
++     */
++    public List<T> mfEntitiesInChunks(int minX, int minZ, int maxX, int maxZ) {
++        List<T> found = new java.util.ArrayList<>();
++        synchronized (this.mfLock) {
++            for (int x = minX; x <= maxX; x++) {
++                for (int z = minZ; z <= maxZ; z++) {
++                    java.util.Iterator<EntitySection<T>> sections =
++                            this.sectionStorage.getExistingSectionsInChunk(ChunkPos.asLong(x, z)).iterator();
++                    while (sections.hasNext()) {
++                        EntitySection<T> section = sections.next();
++                        if (section.isEmpty() || !section.getStatus().isAccessible()) continue;
++                        java.util.Iterator<T> entities = section.getEntities().iterator();
++                        while (entities.hasNext()) found.add(entities.next());
++                    }
++                }
++            }
++        }
++        return found;
++    }
++
      public boolean canPositionTick(BlockPos p_202168_) {
 -        return this.chunkVisibility.get(ChunkPos.asLong(p_202168_)).isTicking();
 +        synchronized (this.mfLock) {
@@ -380,7 +407,7 @@
      }
  
      class Callback implements EntityInLevelCallback {
-@@ -401,19 +460,27 @@ public class PersistentEntitySectionManager<T extends EntityAccess> implements A
+@@ -401,19 +487,27 @@ public class PersistentEntitySectionManager<T extends EntityAccess> implements A
              BlockPos blockpos = this.entity.blockPosition();
              long i = SectionPos.asLong(blockpos);
              if (i != this.currentSectionKey) {
@@ -414,7 +441,7 @@
                  if (this.realEntity != null) net.neoforged.neoforge.common.CommonHooks.onEntityEnterSection(this.realEntity, oldSectionKey, i);
              }
          }
-@@ -450,12 +517,18 @@ public class PersistentEntitySectionManager<T extends EntityAccess> implements A
+@@ -450,12 +544,18 @@ public class PersistentEntitySectionManager<T extends EntityAccess> implements A
  
          @Override
          public void onRemove(Entity.RemovalReason p_157619_) {
@@ -435,7 +462,7 @@
              if (visibility.isTicking()) {
                  PersistentEntitySectionManager.this.stopTicking(this.entity);
              }
-@@ -468,9 +541,13 @@ public class PersistentEntitySectionManager<T extends EntityAccess> implements A
+@@ -468,9 +568,13 @@ public class PersistentEntitySectionManager<T extends EntityAccess> implements A
                  PersistentEntitySectionManager.this.callbacks.onDestroyed(this.entity);
              }
  
@@ -451,7 +478,7 @@
          }
      }
  
-@@ -479,4 +556,19 @@ public class PersistentEntitySectionManager<T extends EntityAccess> implements A
+@@ -479,4 +583,19 @@ public class PersistentEntitySectionManager<T extends EntityAccess> implements A
          PENDING,
          LOADED;
      }

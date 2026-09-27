@@ -1,6 +1,51 @@
 --- a/net/minecraft/server/level/ChunkMap.java
 +++ b/net/minecraft/server/level/ChunkMap.java
-@@ -1095,11 +1095,24 @@ public class ChunkMap extends ChunkStorage implements ChunkHolder.PlayerProvider
+@@ -136,6 +136,25 @@ public class ChunkMap extends ChunkStorage implements ChunkHolder.PlayerProvider
+     private final String storageName;
+     private final PlayerMap playerMap = new PlayerMap();
+     private final Int2ObjectMap<ChunkMap.TrackedEntity> entityMap = new Int2ObjectOpenHashMap<>();
++    // MultiForge (multiforge-patches/05-entity-migration/): indexed entity tracking.
++    // Vanilla re-checks every tracked entity in the level against a player on each
++    // of its movement packets (move) and each time it changes section (tick), which
++    // stops the server with ~100 players spread far apart. updatePlayer only changes
++    // anything for entities the player sees now or that sit in chunks it tracks, so
++    // those are the only ones re-checked: mfSeenBy is the reverse of
++    // TrackedEntity.seenBy (for each player, the trackers that show it their entity),
++    // and the entity section storage supplies the entities in the player's chunks.
++    // -Dmultiforge.tracking.indexed=false restores the full scans;
++    // -Dmultiforge.tracking.verify=true checks every indexed update against the full
++    // result (=<n>: one update in n, for a live server where a check on every
++    // movement packet would cost as much as Vanilla's scan). The index is also checked against seenBy for one player per tick
++    // (mfReconcileNext), which repairs and counts (probe tracking.reconciled) drift.
++    private static final boolean MF_INDEXED_TRACKING = !"false".equals(System.getProperty("multiforge.tracking.indexed"));
++    private static final int MF_VERIFY_EVERY = mfVerifyEvery(System.getProperty("multiforge.tracking.verify"));
++    private int mfVerifyCounter;
++    final java.util.concurrent.ConcurrentHashMap<ServerPlayer, Set<ChunkMap.TrackedEntity>> mfSeenBy =
++            new java.util.concurrent.ConcurrentHashMap<>();
++    private int mfReconcileCursor;
+     private final Long2ByteMap chunkTypeCache = new Long2ByteOpenHashMap();
+     private final Long2LongMap chunkSaveCooldowns = new Long2LongOpenHashMap();
+     private final Queue<Runnable> unloadQueue = Queues.newConcurrentLinkedQueue();
+@@ -995,6 +1014,10 @@ public class ChunkMap extends ChunkStorage implements ChunkHolder.PlayerProvider
+     }
+ 
+     public void move(ServerPlayer p_140185_) {
++        if (MF_INDEXED_TRACKING) {
++            // MultiForge: the same updates, on the trackers they can change (see mfSeenBy).
++            this.mfUpdateTrackingNear(p_140185_, true);
++        } else {
+         for (ChunkMap.TrackedEntity chunkmap$trackedentity : this.entityMap.values()) {
+             if (chunkmap$trackedentity.entity == p_140185_) {
+                 chunkmap$trackedentity.updatePlayers(this.level.players());
+@@ -1002,6 +1025,7 @@ public class ChunkMap extends ChunkStorage implements ChunkHolder.PlayerProvider
+                 chunkmap$trackedentity.updatePlayer(p_140185_);
+             }
+         }
++        }
+ 
+         SectionPos sectionpos = p_140185_.getLastSectionPos();
+         SectionPos sectionpos1 = SectionPos.of(p_140185_);
+@@ -1083,11 +1107,26 @@ public class ChunkMap extends ChunkStorage implements ChunkHolder.PlayerProvider
              int i = entitytype.clientTrackingRange() * 16;
              if (i != 0) {
                  int j = entitytype.updateInterval();
@@ -25,11 +70,16 @@
                  } else {
 -                    ChunkMap.TrackedEntity chunkmap$trackedentity = new ChunkMap.TrackedEntity(p_140200_, i, j, entitytype.trackDeltas());
 -                    this.entityMap.put(p_140200_.getId(), chunkmap$trackedentity);
++                    if (MF_INDEXED_TRACKING) this.mfUpdateViewers(chunkmap$trackedentity, this.level.players());
++                    else
                      chunkmap$trackedentity.updatePlayers(this.level.players());
                      if (p_140200_ instanceof ServerPlayer serverplayer) {
                          this.updatePlayerStatus(serverplayer, true);
-@@ -1124,7 +1137,10 @@ public class ChunkMap extends ChunkStorage implements ChunkHolder.PlayerProvider
+@@ -1110,11 +1149,19 @@ public class ChunkMap extends ChunkStorage implements ChunkHolder.PlayerProvider
+             for (ChunkMap.TrackedEntity chunkmap$trackedentity : this.entityMap.values()) {
+                 chunkmap$trackedentity.removePlayer(serverplayer);
              }
++            this.mfSeenBy.remove(serverplayer);
          }
  
 -        ChunkMap.TrackedEntity chunkmap$trackedentity1 = this.entityMap.remove(p_140332_.getId());
@@ -39,8 +89,197 @@
 +        }
          if (chunkmap$trackedentity1 != null) {
              chunkmap$trackedentity1.broadcastRemoved();
++            // MultiForge: the viewers no longer see a tracker that is gone.
++            for (ServerPlayerConnection mf$viewer : chunkmap$trackedentity1.seenBy) {
++                this.mfUnseen(mf$viewer.getPlayer(), chunkmap$trackedentity1);
++            }
          }
-@@ -1165,14 +1181,20 @@ public class ChunkMap extends ChunkStorage implements ChunkHolder.PlayerProvider
+     }
+ 
+@@ -1131,6 +1178,8 @@ public class ChunkMap extends ChunkStorage implements ChunkHolder.PlayerProvider
+             SectionPos sectionpos1 = SectionPos.of(chunkmap$trackedentity.entity);
+             boolean flag = !Objects.equals(sectionpos, sectionpos1);
+             if (flag) {
++                if (MF_INDEXED_TRACKING) this.mfUpdateViewers(chunkmap$trackedentity, list1);
++                else
+                 chunkmap$trackedentity.updatePlayers(list1);
+                 Entity entity = chunkmap$trackedentity.entity;
+                 if (entity instanceof ServerPlayer) {
+@@ -1146,21 +1195,194 @@ public class ChunkMap extends ChunkStorage implements ChunkHolder.PlayerProvider
+         }
+ 
+         if (!list.isEmpty()) {
++            if (MF_INDEXED_TRACKING) {
++                // MultiForge: each player that changed section, against the trackers it can change.
++                for (ServerPlayer mf$player : list) this.mfUpdateTrackingNear(mf$player, false);
++            } else {
+             for (ChunkMap.TrackedEntity chunkmap$trackedentity1 : this.entityMap.values()) {
+                 chunkmap$trackedentity1.updatePlayers(list);
+             }
++            }
++        }
++        if (MF_INDEXED_TRACKING) this.mfReconcileNext(list1);
++    }
++
++    /**
++     * MultiForge: record that {@code tracker}'s entity is shown to {@code player}
++     * (called where TrackedEntity.seenBy gains the player's connection).
++     */
++    void mfSeen(ServerPlayer player, ChunkMap.TrackedEntity tracker) {
++        this.mfSeenBy.computeIfAbsent(player, ChunkMap.MfLambdas.NEW_TRACKER_SET).add(tracker);
++    }
++
++    /** MultiForge: {@code multiforge.tracking.verify}: "true" → 1 (every update), a number n → n, else 0 (off). */
++    static int mfVerifyEvery(String raw) {
++        if (raw == null || raw.isBlank() || raw.equalsIgnoreCase("false")) return 0;
++        if (raw.equalsIgnoreCase("true")) return 1;
++        try {
++            return Math.max(0, Integer.parseInt(raw.trim()));
++        } catch (NumberFormatException e) {
++            return 0;
++        }
++    }
++
++    /** MultiForge: the reverse of {@link #mfSeen}. */
++    void mfUnseen(ServerPlayer player, ChunkMap.TrackedEntity tracker) {
++        Set<ChunkMap.TrackedEntity> seen = this.mfSeenBy.get(player);
++        if (seen != null) seen.remove(tracker);
++    }
++
++    /**
++     * MultiForge: Vanilla's per-player tracking update, on the trackers whose
++     * result can differ from their current state: those showing {@code player}
++     * their entity now (which may leave view), and those whose entity is in a
++     * chunk {@code player} tracks (which may come into view; updatePlayer
++     * requires isChunkTracked). Every other tracker's updatePlayer would leave
++     * it as it is. With {@code includeSelf}, the player's own tracker is updated
++     * against every player, as Vanilla's move does.
++     */
++    private void mfUpdateTrackingNear(ServerPlayer player, boolean includeSelf) {
++        java.util.List<ChunkMap.TrackedEntity> candidates = new ArrayList<>();
++        it.unimi.dsi.fastutil.objects.ReferenceOpenHashSet<ChunkMap.TrackedEntity> dedupe =
++                new it.unimi.dsi.fastutil.objects.ReferenceOpenHashSet<>();
++        Set<ChunkMap.TrackedEntity> seen = this.mfSeenBy.get(player);
++        if (seen != null) {
++            for (ChunkMap.TrackedEntity tracker : seen) {
++                if (dedupe.add(tracker)) candidates.add(tracker);
++            }
++        }
++        if (player.getChunkTrackingView() instanceof ChunkTrackingView.Positioned view) {
++            // ChunkTrackingView.contains reaches viewDistance + 1 chunks from the centre.
++            int r = view.viewDistance() + 2;
++            java.util.List<Entity> near = this.level.mfEntitiesInChunks(
++                    view.center().x - r, view.center().z - r, view.center().x + r, view.center().z + r);
++            synchronized (this.entityMap) {
++                for (Entity entity : near) {
++                    ChunkMap.TrackedEntity tracker = this.entityMap.get(entity.getId());
++                    if (tracker != null && tracker.entity == entity && dedupe.add(tracker)) candidates.add(tracker);
++                }
++            }
++        }
++        ChunkMap.TrackedEntity self = null;
++        for (ChunkMap.TrackedEntity tracker : candidates) {
++            if (tracker.entity == player) {
++                self = tracker;
++            } else {
++                tracker.updatePlayer(player);
++            }
++        }
++        if (includeSelf) {
++            if (self == null) {
++                synchronized (this.entityMap) {
++                    self = this.entityMap.get(player.getId());
++                }
++            }
++            if (self != null && self.entity == player) this.mfUpdateViewers(self, this.level.players());
++        }
++        if (MF_VERIFY_EVERY > 0 && ++this.mfVerifyCounter % MF_VERIFY_EVERY == 0) this.mfCheckTracking(player);
++    }
++
++    /**
++     * MultiForge: {@code tracker.updatePlayers(players)}, on the players it can
++     * change: those it shows its entity to now, and those whose chunk-tracking
++     * view reaches the entity's chunk (updatePlayer requires isChunkTracked, and
++     * ChunkTrackingView.contains reaches viewDistance + 2 chunks from the view's
++     * centre). For every other player updatePlayer would change nothing.
++     */
++    private void mfUpdateViewers(ChunkMap.TrackedEntity tracker, List<ServerPlayer> players) {
++        ChunkPos chunk = tracker.entity.chunkPosition();
++        for (ServerPlayer player : players) {
++            if (tracker.seenBy.contains(player.connection) || mfViewMayContain(player, chunk.x, chunk.z)) {
++                tracker.updatePlayer(player);
++            }
++        }
++    }
++
++    /** MultiForge: whether {@code player}'s chunk-tracking view could contain chunk ({@code x}, {@code z}). */
++    private static boolean mfViewMayContain(ServerPlayer player, int x, int z) {
++        if (!(player.getChunkTrackingView() instanceof ChunkTrackingView.Positioned view)) return false;
++        int reach = view.viewDistance() + 2;
++        return Math.abs(x - view.center().x) <= reach && Math.abs(z - view.center().z) <= reach;
++    }
++
++    /**
++     * MultiForge: check one player per tick, round robin, that the reverse index
++     * matches every tracker's seenBy, and repair it where it does not (probe
++     * {@code tracking.reconciled}). This is a structural check, true at any
++     * moment; a player whose index drifted would otherwise keep seeing an entity
++     * that left its view.
++     */
++    private void mfReconcileNext(List<ServerPlayer> players) {
++        if (players.isEmpty()) return;
++        if (this.mfReconcileCursor >= players.size()) this.mfReconcileCursor = 0;
++        ServerPlayer player = players.get(this.mfReconcileCursor++);
++        java.util.List<ChunkMap.TrackedEntity> all;
++        synchronized (this.entityMap) {
++            all = new ArrayList<>(this.entityMap.values());
++        }
++        Set<ChunkMap.TrackedEntity> seen = this.mfSeenBy.get(player);
++        for (ChunkMap.TrackedEntity tracker : all) {
++            boolean shown = tracker.seenBy.contains(player.connection);
++            boolean indexed = seen != null && seen.contains(tracker);
++            if (shown == indexed) continue;
++            net.multiforge.runtime.diagnostics.ProbeRegistry.bump("tracking.reconciled");
++            if (shown) this.mfSeen(player, tracker);
++            else this.mfUnseen(player, tracker);
++        }
++    }
++
++    /**
++     * MultiForge ({@code -Dmultiforge.tracking.verify=true}): right after an indexed
++     * update of {@code player}, a full Vanilla pass would have left every tracker
++     * showing its entity exactly when updatePlayer's condition holds now. Check
++     * that, and that the reverse index matches seenBy; bump {@code
++     * tracking.mismatch} and warn on any difference.
++     */
++    private void mfCheckTracking(ServerPlayer player) {
++        java.util.List<ChunkMap.TrackedEntity> all;
++        synchronized (this.entityMap) {
++            all = new ArrayList<>(this.entityMap.values());
++        }
++        Set<ChunkMap.TrackedEntity> seen = this.mfSeenBy.get(player);
++        for (ChunkMap.TrackedEntity tracker : all) {
++            if (tracker.entity == player) {
++                // The player's own tracker: every other player's view of it.
++                for (ServerPlayer other : this.level.players()) {
++                    if (other == player || tracker.seenBy.contains(other.connection) == tracker.mfWouldSee(other)) continue;
++                    net.multiforge.runtime.diagnostics.ProbeRegistry.bump("tracking.mismatch");
++                    net.multiforge.runtime.diagnostics.ViolationLogger.warn(
++                            "ChunkMap.tracking",
++                            "indexed tracking disagrees with a full check: " + player.getScoreboardName() + " for "
++                                    + other.getScoreboardName());
++                }
++                continue;
++            }
++            boolean shown = tracker.seenBy.contains(player.connection);
++            boolean indexed = seen != null && seen.contains(tracker);
++            if (shown == tracker.mfWouldSee(player) && shown == indexed) continue;
++            net.multiforge.runtime.diagnostics.ProbeRegistry.bump("tracking.mismatch");
++            net.multiforge.runtime.diagnostics.ViolationLogger.warn(
++                    "ChunkMap.tracking",
++                    "indexed tracking disagrees with a full check: " + tracker.entity + " for " + player.getScoreboardName()
++                            + " (shown=" + shown + ", indexed=" + indexed + ")");
+         }
      }
  
      public void broadcast(Entity p_140202_, Packet<?> p_140203_) {
@@ -63,7 +302,7 @@
          if (chunkmap$trackedentity != null) {
              chunkmap$trackedentity.broadcastAndSend(p_140335_);
          }
-@@ -1222,7 +1244,10 @@ public class ChunkMap extends ChunkStorage implements ChunkHolder.PlayerProvider
+@@ -1210,7 +1432,10 @@ public class ChunkMap extends ChunkStorage implements ChunkHolder.PlayerProvider
  
      // Neo: Getter for players watching an entity.
      public List<ServerPlayer> getPlayersWatching(Entity entity) {
@@ -75,3 +314,60 @@
          if (trackedEntity != null) {
              var ret = new java.util.ArrayList<ServerPlayer>(trackedEntity.seenBy.size());
              for (var connection : trackedEntity.seenBy) {
+@@ -1290,6 +1515,7 @@ public class ChunkMap extends ChunkStorage implements ChunkHolder.PlayerProvider
+ 
+         public void removePlayer(ServerPlayer p_140486_) {
+             if (this.seenBy.remove(p_140486_.connection)) {
++                ChunkMap.this.mfUnseen(p_140486_, this);
+                 this.serverEntity.removePairing(p_140486_);
+             }
+         }
+@@ -1306,14 +1532,30 @@ public class ChunkMap extends ChunkStorage implements ChunkHolder.PlayerProvider
+                     && ChunkMap.this.isChunkTracked(p_140498_, this.entity.chunkPosition().x, this.entity.chunkPosition().z);
+                 if (flag) {
+                     if (this.seenBy.add(p_140498_.connection)) {
++                        ChunkMap.this.mfSeen(p_140498_, this);
+                         this.serverEntity.addPairing(p_140498_);
+                     }
+                 } else if (this.seenBy.remove(p_140498_.connection)) {
++                    ChunkMap.this.mfUnseen(p_140498_, this);
+                     this.serverEntity.removePairing(p_140498_);
+                 }
+             }
+         }
+ 
++        /**
++         * MultiForge: whether {@link #updatePlayer} would show this entity to
++         * {@code player} now — the same condition, without its effects. Used only
++         * to check indexed tracking.
++         */
++        boolean mfWouldSee(ServerPlayer player) {
++            Vec3 vec3 = player.position().subtract(this.entity.position());
++            int i = ChunkMap.this.getPlayerViewDistance(player);
++            double d0 = (double)Math.min(this.getEffectiveRange(), i * 16);
++            return vec3.x * vec3.x + vec3.z * vec3.z <= d0 * d0
++                && this.entity.broadcastToPlayer(player)
++                && ChunkMap.this.isChunkTracked(player, this.entity.chunkPosition().x, this.entity.chunkPosition().z);
++        }
++
+         private int scaledRange(int p_140484_) {
+             return ChunkMap.this.level.getServer().getScaledTrackingDistance(p_140484_);
+         }
+@@ -1352,4 +1594,17 @@ public class ChunkMap extends ChunkStorage implements ChunkHolder.PlayerProvider
+     public void scheduleOnMainThreadMailbox(ChunkTaskPriorityQueueSorter.Message<Runnable> msg) {
+         mainThreadMailbox.tell(msg);
+     }
++
++    /**
++     * MultiForge: the lambdas MultiForge's patches need, kept out of ChunkMap itself.
++     * javac numbers a class's synthetic lambda methods in source order, so a lambda
++     * added to ChunkMap would renumber Vanilla's, and mixins that target those by
++     * name would fail to apply.
++     */
++    static final class MfLambdas {
++        private MfLambdas() {}
++
++        static final java.util.function.Function<ServerPlayer, Set<ChunkMap.TrackedEntity>> NEW_TRACKER_SET =
++                player -> java.util.concurrent.ConcurrentHashMap.newKeySet();
++    }
+ }
