@@ -56,8 +56,18 @@ public final class DebugPacketCodec {
      * addition: the server masks a subscription with {@link
      * DebugPayload.Subscribe#streamsFor}, so a protocol-2 client never
      * receives a kind it cannot parse.
+     *
+     * <p>v1.9.0 raised it 3 → 4: {@link DebugPacketKind#HEATMAP_UPDATE}'s
+     * value is each chunk's own tick time instead of its region's average.
+     * The layout is unchanged; a client below 4 is sent the region average
+     * in the same slot ({@link #encodeHeatmap(DebugPayload.HeatmapUpdate,
+     * int)}), and a client reads which one it got from {@code
+     * HELLO.protocolVersion}.
      */
-    public static final int PROTOCOL_VERSION = 3;
+    public static final int PROTOCOL_VERSION = 4;
+
+    /** First protocol whose {@code HEATMAP_UPDATE} carries per-chunk tick time. */
+    public static final int PER_CHUNK_HEAT_PROTOCOL = 4;
 
     /**
      * Oldest protocol version this build can still talk to. Protocol
@@ -122,14 +132,25 @@ public final class DebugPacketCodec {
         }
     }
 
+    /** Encode for a current-protocol peer: each chunk's own tick time. */
     public static byte[] encodeHeatmap(DebugPayload.HeatmapUpdate u) {
+        return encodeHeatmap(u, PROTOCOL_VERSION);
+    }
+
+    /**
+     * Encode for a peer speaking {@code protocol}: from {@link
+     * #PER_CHUNK_HEAT_PROTOCOL} on, each chunk's own tick time; below it, the
+     * region average those clients' colour scale expects.
+     */
+    public static byte[] encodeHeatmap(DebugPayload.HeatmapUpdate u, int protocol) {
+        boolean perChunk = protocol >= PER_CHUNK_HEAT_PROTOCOL;
         return frame(DebugPacketKind.HEATMAP_UPDATE, out -> {
             writeString(out, u.worldId());
             out.writeInt(u.heats().size());
             for (DebugPayload.ChunkHeat h : u.heats()) {
                 out.writeInt(h.chunkX());
                 out.writeInt(h.chunkZ());
-                out.writeFloat(h.heatMspt());
+                out.writeFloat(perChunk ? h.heatMspt() : h.regionMspt());
             }
         });
     }

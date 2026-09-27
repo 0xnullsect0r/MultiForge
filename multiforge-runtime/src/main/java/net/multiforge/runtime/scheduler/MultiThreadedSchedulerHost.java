@@ -41,6 +41,7 @@ import net.multiforge.runtime.chunk.ChunkHolderManager;
 import net.multiforge.runtime.chunk.NewChunkHolder;
 import net.multiforge.runtime.chunk.TickingBlockEntityRef;
 import net.multiforge.runtime.config.MultiForgeConfig;
+import net.multiforge.runtime.diagnostics.ChunkCost;
 import net.multiforge.runtime.diagnostics.ProbeRegistry;
 import net.multiforge.runtime.diagnostics.ViolationLogger;
 import net.multiforge.runtime.ownership.Domain;
@@ -420,9 +421,11 @@ public final class MultiThreadedSchedulerHost implements SchedulerHost, AutoClos
         ThreadedRegionizer regionizer = regionizerForOrNull(world);
         if (regionizer == null) return scheduler.driveTick(List.of(), deadlineNanos, pump);
         regionsTicking = true;
+        ChunkCost.beginLevelTick(world.dimensionId());
         try {
             return scheduler.driveTick(regionizer.regions(), deadlineNanos, pump);
         } finally {
+            ChunkCost.endLevelTick();
             regionsTicking = false;
             applyDeferredChunkChanges();
         }
@@ -733,7 +736,18 @@ public final class MultiThreadedSchedulerHost implements SchedulerHost, AutoClos
      * TickRegionScheduler#driveTick}), where Vanilla's crash handling applies.
      */
     private void phaseBlockFluidTicksTick(Region region) {
-        blockFluidRunner.runBlockFluidTicks(region);
+        try {
+            blockFluidRunner.runBlockFluidTicks(region);
+        } finally {
+            flushChunkCost(region);
+        }
+    }
+
+    /** Move the per-chunk tick time this thread measured for {@code region} to its world's window. */
+    private void flushChunkCost(Region region) {
+        if (!ChunkCost.enabled()) return;
+        WorldRef world = worldForRegion(region.id());
+        if (world != null) ChunkCost.flush(world.dimensionId());
     }
 
     /**
@@ -772,7 +786,11 @@ public final class MultiThreadedSchedulerHost implements SchedulerHost, AutoClos
                             + " — skipping this tick rather than ticking foreign entity state");
             return;
         }
-        entityTickRunner.tickEntitiesForRegion(region);
+        try {
+            entityTickRunner.tickEntitiesForRegion(region);
+        } finally {
+            flushChunkCost(region);
+        }
     }
 
     /**
@@ -801,7 +819,11 @@ public final class MultiThreadedSchedulerHost implements SchedulerHost, AutoClos
                             + " — skipping per-region block-entity tick (foreign-thread guard)");
             return;
         }
-        blockEntityTickRunner.tickBlockEntitiesForRegion(region);
+        try {
+            blockEntityTickRunner.tickBlockEntitiesForRegion(region);
+        } finally {
+            flushChunkCost(region);
+        }
     }
 
     /**
