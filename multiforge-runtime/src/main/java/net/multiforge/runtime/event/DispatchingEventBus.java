@@ -23,6 +23,8 @@ import java.util.Objects;
 import java.util.Set;
 import java.util.function.Consumer;
 import net.multiforge.runtime.event.AnnotationScanner.MetadataEntry;
+import net.multiforge.runtime.ownership.Domain;
+import net.multiforge.runtime.ownership.OwnerToken;
 import net.neoforged.bus.api.Event;
 import net.neoforged.bus.api.EventPriority;
 import net.neoforged.bus.api.IEventBus;
@@ -49,14 +51,19 @@ public class DispatchingEventBus implements IEventBus {
     /** {@code -Dmultiforge.event-dispatch=off} disables routing — see {@link #isEnabled()}. */
     public static final String DISABLE_PROPERTY = "multiforge.event-dispatch";
 
+    /** {@code -Dmultiforge.event-dispatch.batch=off} hands serial listeners to the lane one by one again. */
+    public static final String BATCH_PROPERTY = "multiforge.event-dispatch.batch";
+
     private final IEventBus inner;
     private final DomainDispatcher dispatcher;
     private final boolean enabled;
+    private final boolean batchPosts;
 
     public DispatchingEventBus(IEventBus inner, DispatchExecutor executor) {
         this.inner = Objects.requireNonNull(inner, "inner");
         this.dispatcher = new DomainDispatcher(Objects.requireNonNull(executor, "executor"));
         this.enabled = !"off".equalsIgnoreCase(System.getProperty(DISABLE_PROPERTY));
+        this.batchPosts = !"off".equalsIgnoreCase(System.getProperty(BATCH_PROPERTY));
     }
 
     /**
@@ -118,7 +125,8 @@ public class DispatchingEventBus implements IEventBus {
 
         MetadataEntry metadata = AnnotationScanner.scan(method);
         Consumer<T> raw = invoker(method, receiver);
-        Consumer<T> wrapped = new RoutingListenerWrapper<>(raw, metadata, dispatcher, method.getDeclaringClass());
+        RoutingListenerWrapper<T> wrapped =
+                new RoutingListenerWrapper<>(raw, metadata, dispatcher, method.getDeclaringClass(), eventClass);
         inner.addListener(ann.priority(), ann.receiveCanceled(), eventClass, wrapped);
         track(receiver != null ? receiver : method.getDeclaringClass(), wrapped);
     }
@@ -192,8 +200,8 @@ public class DispatchingEventBus implements IEventBus {
             EventPriority priority, boolean receiveCanceled, Class<T> eventType, Consumer<T> consumer) {
         Objects.requireNonNull(consumer, "consumer");
         Objects.requireNonNull(eventType, "eventType");
-        Consumer<T> wrapped = new RoutingListenerWrapper<>(
-                consumer, AnnotationScanner.forUnannotated(eventType), dispatcher, consumer.getClass());
+        RoutingListenerWrapper<T> wrapped = new RoutingListenerWrapper<>(
+                consumer, AnnotationScanner.forUnannotated(eventType), dispatcher, consumer.getClass(), eventType);
         inner.addListener(priority, receiveCanceled, eventType, wrapped);
         track(consumer, wrapped);
     }
@@ -212,12 +220,44 @@ public class DispatchingEventBus implements IEventBus {
     // wrappers installed on the inner bus for it.
     private final java.util.Map<Object, java.util.List<Consumer<?>>> registrations = new java.util.IdentityHashMap<>();
 
-    private void track(Object owner, Consumer<?> wrapped) {
+    private void track(Object owner, RoutingListenerWrapper<?> wrapped) {
         synchronized (registrations) {
             registrations
                     .computeIfAbsent(owner, k -> new java.util.ArrayList<>())
                     .add(wrapped);
         }
+        listeners.add(wrapped);
+        laneNeeded.clear();
+    }
+
+    // Every installed wrapper, and per posted event class whether any listener
+    // it reaches waits for the serial lane (see post). The cache is dropped when
+    // a listener comes or goes, or the RoutingEpoch moves.
+    private final java.util.concurrent.CopyOnWriteArrayList<RoutingListenerWrapper<?>> listeners =
+            new java.util.concurrent.CopyOnWriteArrayList<>();
+    private final java.util.concurrent.ConcurrentMap<Class<?>, Boolean> laneNeeded =
+            new java.util.concurrent.ConcurrentHashMap<>();
+    private volatile int laneNeededEpoch = RoutingEpoch.current();
+
+    /** Whether posting {@code eventClass} on a region worker reaches a listener that runs on the serial lane. */
+    boolean needsSerialLane(Class<?> eventClass) {
+        int epoch = RoutingEpoch.current();
+        if (epoch != laneNeededEpoch) {
+            laneNeeded.clear();
+            laneNeededEpoch = epoch;
+        }
+        Boolean cached = laneNeeded.get(eventClass);
+        if (cached != null) return cached;
+        boolean needed = false;
+        for (RoutingListenerWrapper<?> w : listeners) {
+            Class<?> type = w.eventType();
+            if ((type == null || type.isAssignableFrom(eventClass)) && w.routesSerial()) {
+                needed = true;
+                break;
+            }
+        }
+        laneNeeded.put(eventClass, needed);
+        return needed;
     }
 
     // ---------------------------------------------------------------
@@ -231,19 +271,45 @@ public class DispatchingEventBus implements IEventBus {
             wrappers = registrations.remove(target);
         }
         if (wrappers != null) {
-            for (Consumer<?> w : wrappers) inner.unregister(w);
+            for (Consumer<?> w : wrappers) {
+                inner.unregister(w);
+                listeners.remove(w);
+            }
+            laneNeeded.clear();
         }
         inner.unregister(target);
     }
 
+    /**
+     * Posted on a region worker, an event that reaches any serial-lane listener
+     * is posted whole on the lane: one hand-off to the server thread per event
+     * instead of one per serial listener (see {@link
+     * DomainDispatcher#runPostOnSerialLane}). Anywhere else, or with only
+     * region-safe listeners, it is posted where it is.
+     */
     @Override
     public <T extends Event> T post(T event) {
+        if (postOnLane(event)) {
+            dispatcher.runPostOnSerialLane(() -> inner.post(event));
+            return event;
+        }
         return inner.post(event);
     }
 
     @Override
     public <T extends Event> T post(EventPriority priority, T event) {
+        if (postOnLane(event)) {
+            dispatcher.runPostOnSerialLane(() -> inner.post(priority, event));
+            return event;
+        }
         return inner.post(priority, event);
+    }
+
+    private boolean postOnLane(Event event) {
+        return batchPosts
+                && event != null
+                && OwnerToken.current().domain() == Domain.REGION
+                && needsSerialLane(event.getClass());
     }
 
     @Override

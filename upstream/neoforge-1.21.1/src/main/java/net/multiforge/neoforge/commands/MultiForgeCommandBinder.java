@@ -165,7 +165,7 @@ public final class MultiForgeCommandBinder {
                 .executes(ctx -> run(dispatcher, ctx, "probes"))
                 .then(Commands.argument("prefix", StringArgumentType.greedyString())
                         .suggests((ctx, b) -> SharedSuggestionProvider.suggest(
-                                Stream.of("region-tick", "chunk-system", "event-dispatch", "ownership"), b))
+                                Stream.of("top event.dispatch.serial", "event.dispatch", "serial-lane", "region-tick", "ownership"), b))
                         .executes(ctx -> run(dispatcher, ctx, "probes", strArg(ctx, "prefix"))));
     }
 

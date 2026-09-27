@@ -122,12 +122,20 @@ class LazyDispatchingEventBusTest {
     }
 
     private static final class RecordingDispatchExecutor implements DispatchExecutor {
+        /** Hand-offs to the lane: like SerialLane, a job run from inside a job runs directly. */
         final AtomicInteger serial = new AtomicInteger();
+
+        private int depth;
 
         @Override
         public void runSerial(Runnable task) {
-            serial.incrementAndGet();
-            task.run();
+            if (depth == 0) serial.incrementAndGet();
+            depth++;
+            try {
+                task.run();
+            } finally {
+                depth--;
+            }
         }
 
         @Override

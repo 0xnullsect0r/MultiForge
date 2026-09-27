@@ -33,8 +33,27 @@ worker hands the listener over and parks; the server thread runs it under the
 worker's owner token, so world writes it makes are checked and rerouted
 exactly as the worker's own would be (`docs/concurrency-contract.md`). Two
 listeners on the lane never overlap, which is what code with unsynchronised
-static state needs. Probe counters: `event.dispatch.{inline,serial,async,global}`,
-`serial-lane.handoff`.
+static state needs.
+
+A worker hands over **whole events**, not single listeners: when an event it
+posts reaches at least one serial-lane listener, the entire `post` runs on the
+lane — one hand-off per event, however many listeners it has — and each
+listener is still routed as above from there (a `REGION` listener runs on the
+lane too, an `ASYNC` one still goes to the pool). Before v1.8 each serial
+listener was its own hand-off, which on a large modpack meant tens of
+thousands of thread round trips per tick. `-Dmultiforge.event-dispatch.batch=off`
+restores the old behaviour.
+
+A region that ticks on the server thread itself (see
+[`perf-tuning.md`](perf-tuning.md#tick-placement)) runs its serial listeners
+directly, with no hand-off at all.
+
+Probe counters: `event.dispatch.{inline,serial,async,global,serial-post}`,
+`serial-lane.handoff` (a worker waited for the lane), `serial-lane.inline`
+(an event ran on the lane from a region ticking on the server thread), and the
+breakdown `event.dispatch.serial.event.<class>`, `.mod.<module>` and
+`.world.<dimension>` — `/multiforge probes top event.dispatch.serial` lists
+the heaviest.
 
 ## A listener's effective domain
 
@@ -73,6 +92,16 @@ A server operator overrides that in `config/multiforge-mods.toml`
 [mods]
 examplemod = "legacy"
 ```
+
+The same file sets an event type's default domain (see *Event-type defaults*
+below) for listeners of `hybrid-safe` mods, by the event's class name:
+
+```toml
+[events]
+"net.neoforged.neoforge.event.entity.living.LivingEvent$LivingJumpEvent" = "region"   # region | serial
+```
+
+It is read at server start and applies to listeners registered before it.
 
 Use `legacy` for a mod whose listeners share unsynchronised state (a static
 `HashMap` updated from entity events) and misbehave under `hybrid-safe`.

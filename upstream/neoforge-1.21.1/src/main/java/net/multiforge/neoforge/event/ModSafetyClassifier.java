@@ -22,7 +22,9 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import net.minecraft.server.MinecraftServer;
+import net.multiforge.api.event.DispatchDomainKind;
 import net.multiforge.runtime.diagnostics.ViolationLogger;
+import net.multiforge.runtime.event.EventTypeDomainMap;
 import net.multiforge.runtime.event.ModClassifier;
 import net.multiforge.runtime.event.ModSafety;
 import net.neoforged.fml.ModList;
@@ -57,6 +59,7 @@ public final class ModSafetyClassifier {
     public static void bind(MinecraftServer server) {
         Path file = server.getServerDirectory().resolve("config").resolve(FILE);
         Map<String, ModSafety> configured = readConfig(file);
+        readEventOverrides(file).forEach(EventTypeDomainMap::register);
         Map<String, ModSafety> byModule = new HashMap<>();
         for (IModFileInfo fileInfo : ModList.get().getModFiles()) {
             ModSafety safety = null;
@@ -101,6 +104,12 @@ public final class ModSafetyClassifier {
                         # See docs/events.md.
                         [mods]
                         # examplemod = "legacy"
+
+                        # Per-event default for listeners of hybrid-safe mods, by event class:
+                        #   region  runs on the region worker that posted it
+                        #   serial  runs on the serial lane
+                        [events]
+                        # "net.neoforged.neoforge.event.entity.living.LivingEvent$LivingJumpEvent" = "region"
                         """, StandardCharsets.UTF_8);
                 return out;
             }
@@ -117,6 +126,40 @@ public final class ModSafetyClassifier {
             }
         } catch (IOException | RuntimeException e) {
             ViolationLogger.warn("ModSafetyClassifier", "could not read " + file + ": " + e.getMessage());
+        }
+        return out;
+    }
+
+    /**
+     * The {@code [events]} table: event class name to {@code "region"} or
+     * {@code "serial"} (also {@code "global"}, {@code "async"}). Applied through
+     * {@link EventTypeDomainMap#register}, so it reaches listeners registered
+     * before the server started.
+     */
+    static Map<String, DispatchDomainKind> readEventOverrides(Path file) {
+        Map<String, DispatchDomainKind> out = new HashMap<>();
+        if (!Files.isRegularFile(file)) return out;
+        try {
+            UnmodifiableConfig root = new TomlParser().parse(Files.readString(file, StandardCharsets.UTF_8));
+            if (!(root.get("events") instanceof UnmodifiableConfig events)) return out;
+            for (UnmodifiableConfig.Entry entry : events.entrySet()) {
+                String value = entry.getValue() instanceof String s ? s.trim().toLowerCase(java.util.Locale.ROOT) : "";
+                DispatchDomainKind kind = switch (value) {
+                    case "region" -> DispatchDomainKind.REGION;
+                    case "serial", "legacy-serial" -> DispatchDomainKind.LEGACY_SERIAL;
+                    case "global" -> DispatchDomainKind.GLOBAL;
+                    case "async" -> DispatchDomainKind.ASYNC;
+                    default -> null;
+                };
+                if (kind == null) {
+                    ViolationLogger.warn(
+                            "ModSafetyClassifier", FILE + ": [events] " + entry.getKey() + " = \"" + entry.getValue() + "\" is not region or serial");
+                    continue;
+                }
+                out.put(entry.getKey(), kind);
+            }
+        } catch (IOException | RuntimeException e) {
+            ViolationLogger.warn("ModSafetyClassifier", "could not read [events] of " + file + ": " + e.getMessage());
         }
         return out;
     }

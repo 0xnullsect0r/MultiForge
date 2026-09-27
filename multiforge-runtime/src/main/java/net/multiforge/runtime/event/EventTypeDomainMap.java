@@ -90,6 +90,7 @@ public final class EventTypeDomainMap {
         Objects.requireNonNull(eventClassName, "eventClassName");
         Objects.requireNonNull(kind, "kind");
         MAP.put(eventClassName, kind);
+        RoutingEpoch.bump();
     }
 
     /** Test-only: drops every entry, including the lazily-built defaults, so the next {@link #lookup} repopulates them. */
@@ -97,6 +98,7 @@ public final class EventTypeDomainMap {
         synchronized (INIT_LOCK) {
             MAP.clear();
             initialized = false;
+            RoutingEpoch.bump();
         }
     }
 

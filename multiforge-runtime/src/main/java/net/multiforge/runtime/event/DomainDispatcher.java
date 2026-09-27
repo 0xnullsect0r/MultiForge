@@ -29,7 +29,9 @@ import net.multiforge.runtime.ownership.OwnerToken;
  *   <li>{@code GLOBAL}, {@code LEGACY_SERIAL}, or {@code @Ordering(GLOBAL_TOTAL)}:
  *       on the {@link SerialLane} (the server thread, one listener at a
  *       time, under the worker's owner token), while the worker waits — so a
- *       cancellation or result the listener sets is seen by the poster.</li>
+ *       cancellation or result the listener sets is seen by the poster. The
+ *       bus normally moves the whole post to the lane first ({@link
+ *       #runPostOnSerialLane}), so this runs there directly.</li>
  *   <li>{@code ASYNC}: handed to the async pool; the poster does not wait,
  *       so such a listener cannot cancel the event or set its result.</li>
  * </ul>
@@ -51,14 +53,26 @@ public final class DomainDispatcher {
     /** Route one listener invocation; {@code invocation} runs the listener. */
     public void dispatch(
             Object event, DispatchDomainKind listenerDomain, OrderingContract listenerOrdering, Runnable invocation) {
+        dispatch(event, listenerDomain, listenerOrdering, invocation, null);
+    }
+
+    /**
+     * Route one listener invocation; {@code listenerClass} (nullable) names the
+     * listener's mod in the {@code event.dispatch.serial.mod.*} probes.
+     */
+    public void dispatch(
+            Object event,
+            DispatchDomainKind listenerDomain,
+            OrderingContract listenerOrdering,
+            Runnable invocation,
+            Class<?> listenerClass) {
         Objects.requireNonNull(listenerDomain, "listenerDomain");
         Objects.requireNonNull(listenerOrdering, "listenerOrdering");
         Objects.requireNonNull(invocation, "invocation");
 
-        Domain caller = OwnerToken.current().domain();
-        boolean serial = listenerOrdering == OrderingContract.GLOBAL_TOTAL
-                || listenerDomain == DispatchDomainKind.GLOBAL
-                || listenerDomain == DispatchDomainKind.LEGACY_SERIAL;
+        OwnerToken token = OwnerToken.current();
+        Domain caller = token.domain();
+        boolean serial = isSerial(listenerDomain, listenerOrdering);
         switch (caller) {
             case REGION -> {
                 if (listenerDomain == DispatchDomainKind.ASYNC && listenerOrdering != OrderingContract.GLOBAL_TOTAL) {
@@ -67,6 +81,7 @@ public final class DomainDispatcher {
                 } else if (serial) {
                     executor.runSerial(invocation);
                     ProbeRegistry.bump("event.dispatch.serial");
+                    SerialDispatchProbes.record(event, listenerClass, token.regionId());
                 } else {
                     runInline(invocation);
                 }
@@ -85,6 +100,26 @@ public final class DomainDispatcher {
             }
             default -> runInline(invocation);
         }
+    }
+
+    /**
+     * Run a whole {@code post} on the serial lane: an event posted on a region
+     * worker with at least one serial listener costs one hand-off to the server
+     * thread, not one per listener. Every listener is still routed by {@link
+     * #dispatch} on the lane — the worker's owner token travels with the job —
+     * so a serial listener runs there directly, a region one inline and an
+     * async one on the async pool, in the bus's listener order.
+     */
+    public void runPostOnSerialLane(Runnable post) {
+        executor.runSerial(post);
+        ProbeRegistry.bump("event.dispatch.serial-post");
+    }
+
+    /** Whether a listener with this domain and ordering waits for the serial lane when posted on a region worker. */
+    static boolean isSerial(DispatchDomainKind domain, OrderingContract ordering) {
+        return ordering == OrderingContract.GLOBAL_TOTAL
+                || domain == DispatchDomainKind.GLOBAL
+                || domain == DispatchDomainKind.LEGACY_SERIAL;
     }
 
     private void runInline(Runnable invocation) {
