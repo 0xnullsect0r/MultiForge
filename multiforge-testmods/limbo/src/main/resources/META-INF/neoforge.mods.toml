@@ -1,0 +1,18 @@
+# Fixture mod for MultiForge's bench stress runs (multiforge-testmods/README.md).
+modLoader = "javafml"
+loaderVersion = "[4,)"
+license = "GPL-3.0-only"
+
+[[mods]]
+modId = "mftest_limbo"
+version = "${version}"
+displayName = "MultiForge test: entity-limbo stress"
+description = "Toggles a forced chunk and loads chunks from a region worker. Test fixture; not for real servers."
+authors = "MultiForge authors"
+
+[[dependencies.mftest_limbo]]
+modId = "neoforge"
+type = "required"
+versionRange = "[21.1,)"
+ordering = "NONE"
+side = "SERVER"

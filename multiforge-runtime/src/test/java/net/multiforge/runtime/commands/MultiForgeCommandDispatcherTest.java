@@ -136,11 +136,12 @@ class MultiForgeCommandDispatcherTest {
     }
 
     @Test
-    void regionCostIsShownAsP50AndP95() {
+    void regionCostIsShownAsP50P95AndP99() {
         net.multiforge.runtime.region.RegionMspt mspt = new net.multiforge.runtime.region.RegionMspt(100);
         assertThat(MultiForgeCommandDispatcher.describeCost(mspt)).isEmpty();
         for (int i = 1; i <= 100; i++) mspt.recordNanos(i * 100_000L); // 0.1 .. 10 ms
-        assertThat(MultiForgeCommandDispatcher.describeCost(mspt)).isEqualTo(", tick 5.1/9.6 ms (p50/p95, last 5 s)");
+        assertThat(MultiForgeCommandDispatcher.describeCost(mspt))
+                .isEqualTo(", tick 5.1/9.6/10.0 ms (p50/p95/p99, last 5 s)");
         assertThat(MultiForgeCommandDispatcher.describeCost(null)).isEmpty();
     }
 
@@ -448,5 +449,76 @@ class MultiForgeCommandDispatcherTest {
                 .dispatch(new String[] {"chunkcost", "report", "minecraft:overworld", "0", "0", "2"}, out::add);
         assertThat(ok).isFalse();
         assertThat(out).anyMatch(l -> l.contains("chunkcost on"));
+    }
+
+    private static net.multiforge.runtime.diagnostics.EntityCensus censusOf(String level, int healed) {
+        return new net.multiforge.runtime.diagnostics.EntityCensus(
+                level,
+                3,
+                0,
+                3,
+                2,
+                3,
+                2,
+                1,
+                0,
+                1,
+                0,
+                java.util.Map.of(5L, java.util.Map.of("minecraft:squid", 3)),
+                List.of("minecraft:squid 'Squid' at (1, 60, 1) region#5 [accessible-not-visible]"),
+                healed);
+    }
+
+    @Test
+    void entitiesParsesLevelViewAndHeal(@TempDir Path tmp) throws IOException {
+        List<String> calls = new ArrayList<>();
+        MultiForgeCommandDispatcher d = make(tmp).withEntityCensus((level, heal) -> {
+            calls.add(level + "/" + heal);
+            return List.of(censusOf(level == null ? "minecraft:overworld" : level, heal ? 2 : 0));
+        });
+        List<String> out = new ArrayList<>();
+        assertThat(d.dispatch(new String[] {"entities"}, out::add)).isTrue();
+        assertThat(out.get(0)).startsWith("minecraft:overworld: known=3");
+        assertThat(d.dispatch(new String[] {"entities", "minecraft:the_nether", "top", "3"}, out::add))
+                .isTrue();
+        out.clear();
+        assertThat(d.dispatch(new String[] {"entities", "region", "region#5"}, out::add))
+                .isTrue();
+        assertThat(out.get(0)).contains("region#5: 3 entities");
+        out.clear();
+        assertThat(d.dispatch(new String[] {"entities", "audit"}, out::add)).isTrue();
+        assertThat(out).anyMatch(l -> l.contains("limbo: minecraft:squid"));
+        out.clear();
+        assertThat(d.dispatch(new String[] {"entities", "overworld", "audit", "heal"}, out::add))
+                .isTrue();
+        assertThat(out).last().isEqualTo("Healed 2 visibility/ticking transition(s).");
+        assertThat(calls)
+                .containsExactly(
+                        "null/false", "minecraft:the_nether/false", "null/false", "null/false", "overworld/true");
+    }
+
+    @Test
+    void entitiesRejectsBadArguments(@TempDir Path tmp) throws IOException {
+        MultiForgeCommandDispatcher d = make(tmp).withEntityCensus((level, heal) -> List.of(censusOf("x", 0)));
+        List<String> out = new ArrayList<>();
+        assertThat(d.dispatch(new String[] {"entities", "top", "many"}, out::add))
+                .isFalse();
+        assertThat(d.dispatch(new String[] {"entities", "region"}, out::add)).isFalse();
+        assertThat(d.dispatch(new String[] {"entities", "audit", "now"}, out::add))
+                .isFalse();
+        assertThat(d.dispatch(new String[] {"entities", "lvl", "bogus"}, out::add))
+                .isFalse();
+        assertThat(out).allMatch(l -> l.startsWith("Usage: /multiforge entities"));
+        MultiForgeCommandDispatcher unknown = make(tmp).withEntityCensus((level, heal) -> List.of());
+        out.clear();
+        assertThat(unknown.dispatch(new String[] {"entities", "minecraft:nowhere"}, out::add))
+                .isFalse();
+        assertThat(out).containsExactly("Unknown level: minecraft:nowhere");
+        MultiForgeCommandDispatcher busy = make(tmp).withEntityCensus((level, heal) -> {
+            throw new IllegalStateException("region workers are running; try again");
+        });
+        out.clear();
+        assertThat(busy.dispatch(new String[] {"entities"}, out::add)).isFalse();
+        assertThat(out).containsExactly("region workers are running; try again");
     }
 }

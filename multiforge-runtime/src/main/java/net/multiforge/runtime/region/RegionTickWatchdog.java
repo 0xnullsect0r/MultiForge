@@ -123,6 +123,79 @@ public final class RegionTickWatchdog {
     private static final java.util.concurrent.ConcurrentMap<String, String[]> WAIT_KEYS =
             new java.util.concurrent.ConcurrentHashMap<>();
 
+    /**
+     * What one thread is ticking right now, read by {@code HangReporter} to tag a
+     * stalled worker's stack with its region and phase. Written only by the
+     * owning thread (plain volatile writes, no lock, no allocation per tick);
+     * one per thread that ever ticked a region.
+     */
+    public static final class ActiveTick {
+        private final java.lang.ref.WeakReference<Thread> thread;
+        private volatile boolean ticking;
+        private volatile long regionId = -1L;
+        private volatile long startNanos;
+        private volatile String phase;
+
+        ActiveTick(Thread thread) {
+            this.thread = new java.lang.ref.WeakReference<>(thread);
+        }
+
+        /** The thread, or {@code null} once it died. */
+        public Thread thread() {
+            return thread.get();
+        }
+
+        public boolean ticking() {
+            return ticking;
+        }
+
+        public long regionId() {
+            return regionId;
+        }
+
+        /** {@link System#nanoTime()} at the start of the region tick in progress. */
+        public long startNanos() {
+            return startNanos;
+        }
+
+        /** The phase last noted by {@link #notePhase}, or {@code null} (mailbox, before the first phase). */
+        public String phase() {
+            return phase;
+        }
+    }
+
+    private static final java.util.concurrent.ConcurrentLinkedQueue<ActiveTick> ACTIVE_TICKS =
+            new java.util.concurrent.ConcurrentLinkedQueue<>();
+
+    private static final ThreadLocal<ActiveTick> ACTIVE = ThreadLocal.withInitial(RegionTickWatchdog::registerActive);
+
+    private static ActiveTick registerActive() {
+        ActiveTick a = new ActiveTick(Thread.currentThread());
+        ACTIVE_TICKS.add(a);
+        return a;
+    }
+
+    /** Threads ticking a region right now (a snapshot; dead threads are pruned). Any thread may call. */
+    public static java.util.List<ActiveTick> activeTicks() {
+        java.util.List<ActiveTick> out = new java.util.ArrayList<>();
+        for (java.util.Iterator<ActiveTick> it = ACTIVE_TICKS.iterator(); it.hasNext(); ) {
+            ActiveTick a = it.next();
+            Thread t = a.thread();
+            if (t == null || !t.isAlive()) {
+                it.remove();
+                continue;
+            }
+            if (a.ticking) out.add(a);
+        }
+        return out;
+    }
+
+    /** The calling thread's region tick entered {@code phase}; no-op outside a region tick. */
+    public static void notePhase(String phase) {
+        ActiveTick a = ACTIVE.get();
+        if (a.ticking) a.phase = phase;
+    }
+
     private RegionTickWatchdog() {}
 
     public static Mode mode() {
@@ -170,7 +243,13 @@ public final class RegionTickWatchdog {
         Tally tally = TALLY.get();
         tally.serialThisTick = 0;
         tally.serialOverheadThisTick = 0;
-        TICK_START_NANOS.set(System.nanoTime());
+        long now = System.nanoTime();
+        TICK_START_NANOS.set(now);
+        ActiveTick active = ACTIVE.get();
+        active.regionId = region.id().value();
+        active.phase = null;
+        active.startNanos = now;
+        active.ticking = true;
     }
 
     /**
@@ -285,6 +364,7 @@ public final class RegionTickWatchdog {
     public static void exitTick(Region region) {
         Long start = TICK_START_NANOS.get();
         TICK_START_NANOS.remove();
+        ACTIVE.get().ticking = false;
         if (start == null) return; // enterTick wasn't called — defensive, should never happen
         flushTally();
         long waitedNs = WAIT.get()[0];
@@ -316,6 +396,7 @@ public final class RegionTickWatchdog {
     public static void exitTickAfterThrow() {
         if (TICK_START_NANOS.get() != null) flushTally();
         TICK_START_NANOS.remove();
+        ACTIVE.get().ticking = false;
     }
 
     /**

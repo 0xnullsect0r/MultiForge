@@ -44,6 +44,13 @@ import net.multiforge.runtime.ownership.OwnerToken;
  */
 public final class DomainDispatcher {
 
+    // Outcome counters, bound once: dispatch runs for every listener of every event.
+    private static final ProbeRegistry.Counter PROBE_ASYNC = ProbeRegistry.counter("event.dispatch.async");
+    private static final ProbeRegistry.Counter PROBE_SERIAL = ProbeRegistry.counter("event.dispatch.serial");
+    private static final ProbeRegistry.Counter PROBE_GLOBAL = ProbeRegistry.counter("event.dispatch.global");
+    private static final ProbeRegistry.Counter PROBE_SERIAL_POST = ProbeRegistry.counter("event.dispatch.serial-post");
+    private static final ProbeRegistry.Counter PROBE_INLINE = ProbeRegistry.counter("event.dispatch.inline");
+
     private final DispatchExecutor executor;
 
     public DomainDispatcher(DispatchExecutor executor) {
@@ -77,10 +84,10 @@ public final class DomainDispatcher {
             case REGION -> {
                 if (listenerDomain == DispatchDomainKind.ASYNC && listenerOrdering != OrderingContract.GLOBAL_TOTAL) {
                     executor.enqueueAsync(invocation);
-                    ProbeRegistry.bump("event.dispatch.async");
+                    PROBE_ASYNC.increment();
                 } else if (serial) {
                     executor.runSerial(invocation);
-                    ProbeRegistry.bump("event.dispatch.serial");
+                    PROBE_SERIAL.increment();
                     SerialDispatchProbes.record(event, listenerClass, token.regionId());
                 } else {
                     runInline(invocation);
@@ -93,7 +100,7 @@ public final class DomainDispatcher {
                     // An async task cannot wait for the server thread, which only
                     // pumps during a tick barrier; run it at the next global tick.
                     executor.enqueueGlobal(invocation);
-                    ProbeRegistry.bump("event.dispatch.global");
+                    PROBE_GLOBAL.increment();
                 } else {
                     runInline(invocation);
                 }
@@ -112,7 +119,7 @@ public final class DomainDispatcher {
      */
     public void runPostOnSerialLane(Runnable post) {
         executor.runSerial(post);
-        ProbeRegistry.bump("event.dispatch.serial-post");
+        PROBE_SERIAL_POST.increment();
     }
 
     /** Whether a listener with this domain and ordering waits for the serial lane when posted on a region worker. */
@@ -124,6 +131,6 @@ public final class DomainDispatcher {
 
     private void runInline(Runnable invocation) {
         invocation.run();
-        ProbeRegistry.bump("event.dispatch.inline");
+        PROBE_INLINE.increment();
     }
 }

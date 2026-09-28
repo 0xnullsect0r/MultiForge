@@ -27,7 +27,52 @@ public final class ProbeRegistry {
 
     private static final ConcurrentMap<String, LongAdder> COUNTERS = new ConcurrentHashMap<>();
 
+    /** Bumped by {@link #resetForTesting}, so a {@link Counter} handle re-binds to the fresh map. */
+    private static volatile int generation;
+
     private ProbeRegistry() {}
+
+    /**
+     * A handle on counter {@code name}, for a hot call site: {@link
+     * Counter#increment()} and {@link Counter#add(long)} skip the name lookup
+     * {@link #bump} does on every call. Hold it in a {@code static final}.
+     */
+    public static Counter counter(String name) {
+        return new Counter(name);
+    }
+
+    /** See {@link #counter(String)}. Same counter as {@code bump(name)} / {@code add(name, n)}. */
+    public static final class Counter {
+        private final String name;
+        private volatile Binding binding;
+
+        private record Binding(int generation, LongAdder adder) {}
+
+        private Counter(String name) {
+            this.name = java.util.Objects.requireNonNull(name, "name");
+        }
+
+        public String name() {
+            return name;
+        }
+
+        public void increment() {
+            adder().increment();
+        }
+
+        public void add(long amount) {
+            adder().add(amount);
+        }
+
+        private LongAdder adder() {
+            int gen = generation;
+            Binding b = binding;
+            if (b != null && b.generation() == gen) return b.adder();
+            LongAdder a = COUNTERS.computeIfAbsent(name, k -> new LongAdder());
+            binding = new Binding(gen, a);
+            return a;
+        }
+    }
 
     public static void bump(String name) {
         COUNTERS.computeIfAbsent(name, k -> new LongAdder()).increment();
@@ -55,5 +100,6 @@ public final class ProbeRegistry {
     /** Test-only: zeroes every counter. */
     public static void resetForTesting() {
         COUNTERS.clear();
+        generation++;
     }
 }

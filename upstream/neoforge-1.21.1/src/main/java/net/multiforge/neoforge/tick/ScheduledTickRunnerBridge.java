@@ -118,12 +118,34 @@ public final class ScheduledTickRunnerBridge implements ScheduledTickRunner {
         ChunkHolderManager manager = host.chunkManagerForOrNull(world);
         if (manager == null) return; // no chunk of this world indexed yet
 
-        List<ChunkPos> owned = region.ownedChunkSnapshot();
-        List<net.minecraft.world.level.ChunkPos> chunks = new java.util.ArrayList<>(owned.size());
-        for (ChunkPos pos : owned) {
-            if (manager.holderAt(pos) == null) continue; // holder unloaded between snapshot and now
-            chunks.add(new net.minecraft.world.level.ChunkPos(pos.x(), pos.z()));
+        // Normally the level bucketed this tick's due ticks by region and the
+        // chunk list is never built; it is the fallback when it did not.
+        level.mfTickRegionScheduledTicks(region.id().value(), new OwnedChunks(region, manager));
+    }
+
+    /** The region's loaded chunks, built on first use and reused. */
+    private static final class OwnedChunks implements java.util.function.Supplier<List<net.minecraft.world.level.ChunkPos>> {
+        private final Region region;
+        private final ChunkHolderManager manager;
+        private List<net.minecraft.world.level.ChunkPos> chunks;
+
+        OwnedChunks(Region region, ChunkHolderManager manager) {
+            this.region = region;
+            this.manager = manager;
         }
-        level.mfTickRegionScheduledTicks(region.id().value(), chunks);
+
+        @Override
+        public List<net.minecraft.world.level.ChunkPos> get() {
+            if (chunks == null) {
+                List<ChunkPos> owned = region.ownedChunkSnapshot();
+                List<net.minecraft.world.level.ChunkPos> out = new java.util.ArrayList<>(owned.size());
+                for (ChunkPos pos : owned) {
+                    if (manager.holderAt(pos) == null) continue; // holder unloaded between snapshot and now
+                    out.add(new net.minecraft.world.level.ChunkPos(pos.x(), pos.z()));
+                }
+                chunks = out;
+            }
+            return chunks;
+        }
     }
 }

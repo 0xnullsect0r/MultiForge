@@ -74,7 +74,14 @@ public final class EntityTickRunnerBridge implements EntityTickRunner {
         }
         ServerLevel level = resolveLevel(world);
         if (level == null) return;
-        level.mfTickEntitiesForRegion(region.id().value());
+        // Entity activation range: throttle this region's distant mobs, with the
+        // region's last tick time for load shedding.
+        net.multiforge.neoforge.world.EntityActivation.beginRegion(level, host.scheduler().lastTickNanos(region));
+        try {
+            level.mfTickEntitiesForRegion(region.id().value());
+        } finally {
+            net.multiforge.neoforge.world.EntityActivation.endRegion();
+        }
     }
 
     private ServerLevel resolveLevel(WorldRef world) {

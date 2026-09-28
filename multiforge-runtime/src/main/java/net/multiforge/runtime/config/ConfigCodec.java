@@ -58,7 +58,35 @@ public final class ConfigCodec {
         if (r.get("tick.serialLaneHotWaitMs") != null) hotWaitMs = intOr(r, "tick.serialLaneHotWaitMs", hotWaitMs);
         else if (r.get("tick.serialLaneInlineThreshold") != null && intOr(r, "tick.serialLaneInlineThreshold", 1) <= 0)
             hotWaitMs = 0;
-        return new MultiForgeConfig(cores, tpc, mode, regionSize, vp, warnPerMin, inlineSingle, hotWaitMs);
+        boolean deferVisibility = boolOr(r, "entities.deferVisibility", d.deferVisibility());
+        boolean lockFree = boolOr(r, "perf.lockFreeOutsidePhase", d.lockFreeOutsidePhase());
+        boolean workerChunkCache = boolOr(r, "perf.workerChunkCache", d.workerChunkCache());
+        ActivationConfig a = d.activation();
+        ActivationConfig activation = new ActivationConfig(
+                boolOr(r, "entities.activation", a.activation()),
+                intOr(r, "entities.monsterRange", a.monsterRange()),
+                intOr(r, "entities.animalRange", a.animalRange()),
+                intOr(r, "entities.villagerRange", a.villagerRange()),
+                intOr(r, "entities.flyingRange", a.flyingRange()),
+                intOr(r, "entities.raiderRange", a.raiderRange()),
+                intOr(r, "entities.waterRange", a.waterRange()),
+                intOr(r, "entities.ambientRange", a.ambientRange()),
+                intOr(r, "entities.wakeInterval", a.wakeInterval()),
+                intOr(r, "entities.maxEntityCollisions", a.maxEntityCollisions()),
+                stringsOr(r, "entities.activationExempt", a.exempt()));
+        return new MultiForgeConfig(
+                cores,
+                tpc,
+                mode,
+                regionSize,
+                vp,
+                warnPerMin,
+                inlineSingle,
+                hotWaitMs,
+                deferVisibility,
+                lockFree,
+                workerChunkCache,
+                activation);
     }
 
     public static String render(MultiForgeConfig c) {
@@ -87,7 +115,55 @@ public final class ConfigCodec {
         sb.append("# A region whose serial-lane hand-offs cost it more than this many\n");
         sb.append("# milliseconds per tick ticks on the server thread after the others,\n");
         sb.append("# until it quiets down. 0 disables.\n");
-        sb.append("serialLaneHotWaitMs = ").append(c.serialLaneHotWaitMs()).append("\n");
+        sb.append("serialLaneHotWaitMs = ").append(c.serialLaneHotWaitMs()).append("\n\n");
+        sb.append("[entities]\n");
+        sb.append("# While region workers run, entity-visibility changes from chunk loads and\n");
+        sb.append("# unloads wait for the tick barrier, so a worker moving an entity cannot race\n");
+        sb.append("# them. false restores v1.10's behaviour (kill switch).\n");
+        sb.append("deferVisibility = ").append(c.deferVisibility()).append("\n");
+        ActivationConfig a = c.activation();
+        sb.append("# Entity activation range. A mob further than its category's range (blocks)\n");
+        sb.append("# from every player runs a full tick only once every wakeInterval ticks; on\n");
+        sb.append("# the other ticks it only ages, so it still despawns and grows up. Anything\n");
+        sb.append("# that is not a mob (items, projectiles, minecarts, contraptions) always\n");
+        sb.append("# ticks, and so do mobs that are riding or ridden, leashed, targeting, hurt\n");
+        sb.append("# in the last 5 s, in love, under 1 s old, bosses and multipart mobs,\n");
+        sb.append("# falling land mobs and land mobs in water (farms), and the types in the\n");
+        sb.append("# #multiforge:activation_exempt tag or activationExempt. A region running\n");
+        sb.append("# slower than 40 ms per tick stretches the interval, up to 80 ticks. This\n");
+        sb.append("# changes Vanilla behaviour far from players: see docs/compatibility.md.\n");
+        sb.append("# A range of 0 never throttles that category. false ticks every mob every\n");
+        sb.append("# tick (kill switch). Ignored in mode = \"off\".\n");
+        sb.append("activation = ").append(a.activation()).append("\n");
+        sb.append("monsterRange = ").append(a.monsterRange()).append("\n");
+        sb.append("animalRange = ").append(a.animalRange()).append("\n");
+        sb.append("villagerRange = ").append(a.villagerRange()).append("\n");
+        sb.append("flyingRange = ").append(a.flyingRange()).append("\n");
+        sb.append("raiderRange = ").append(a.raiderRange()).append("\n");
+        sb.append("waterRange = ").append(a.waterRange()).append("\n");
+        sb.append("ambientRange = ").append(a.ambientRange()).append("\n");
+        sb.append("wakeInterval = ").append(a.wakeInterval()).append("\n");
+        sb.append("# Entity type ids (\"modid:name\") or tags (\"#modid:tag\") that always tick.\n");
+        sb.append("activationExempt = [");
+        for (int i = 0; i < a.exempt().size(); i++) {
+            if (i > 0) sb.append(", ");
+            sb.append('"')
+                    .append(a.exempt().get(i).replace("\\", "\\\\").replace("\"", "\\\""))
+                    .append('"');
+        }
+        sb.append("]\n");
+        sb.append("# A living entity pushes at most this many of the entities overlapping it\n");
+        sb.append("# per tick (0 = no cap, Vanilla). Cramming damage still counts them all.\n");
+        sb.append("# Ignored in mode = \"off\".\n");
+        sb.append("maxEntityCollisions = ").append(a.maxEntityCollisions()).append("\n\n");
+        sb.append("[perf]\n");
+        sb.append("# Entity queries on the server thread while no region worker runs read the\n");
+        sb.append("# entity storage directly, as Vanilla does, instead of under its lock with a\n");
+        sb.append("# copy. false takes the lock everywhere (kill switch).\n");
+        sb.append("lockFreeOutsidePhase = ").append(c.lockFreeOutsidePhase()).append("\n");
+        sb.append("# Each region worker keeps its last four full-chunk reads, invalidated whenever\n");
+        sb.append("# a chunk's status or the loaded-chunk map changes. false = no cache (kill switch).\n");
+        sb.append("workerChunkCache = ").append(c.workerChunkCache()).append("\n");
         return sb.toString();
     }
 
@@ -119,6 +195,22 @@ public final class ConfigCodec {
         if (v == null) return fallback;
         if (v instanceof Boolean b) return b;
         throw new IllegalArgumentException("Key '" + key + "' must be true or false, got: " + v);
+    }
+
+    private static java.util.List<String> stringsOr(UnmodifiableConfig r, String key, java.util.List<String> fallback) {
+        Object v = r.get(key);
+        if (v == null) return fallback;
+        if (v instanceof java.util.List<?> list) {
+            java.util.List<String> out = new java.util.ArrayList<>();
+            for (Object o : list) {
+                if (!(o instanceof String s)) {
+                    throw new IllegalArgumentException("Key '" + key + "' must be a list of strings, got: " + v);
+                }
+                out.add(s);
+            }
+            return out;
+        }
+        throw new IllegalArgumentException("Key '" + key + "' must be a list of strings, got: " + v);
     }
 
     private static int intOr(UnmodifiableConfig r, String key, int fallback) {

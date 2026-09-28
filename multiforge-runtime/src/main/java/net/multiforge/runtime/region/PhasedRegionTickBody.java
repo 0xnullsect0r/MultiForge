@@ -73,6 +73,7 @@ public final class PhasedRegionTickBody implements RegionTickBody {
         Throwable first = null;
         for (Phase p : Phase.values()) {
             try {
+                RegionTickWatchdog.notePhase(p.name());
                 phases.getOrDefault(p, NOOP).tickOnce(region);
             } catch (Throwable t) {
                 if (first == null) first = t;

@@ -123,7 +123,7 @@ public final class RegionizedTickCoordinator {
         level.tick(haveTime);
 
         WorldRef world = asWorldRef(level);
-        if (host.regionizerForOrNull(world) == null) {
+        if (regionizerOf(host, level) == null) {
             // No chunk of this level is loaded yet; the regionsHandle* guards
             // reported false, so ServerLevel.tick above ran everything inline.
             LevelTickDispatchProbes.noRegionizerInline(world.dimensionId());
@@ -132,13 +132,26 @@ public final class RegionizedTickCoordinator {
         // A throwable from a region's tick is rethrown here, after every region
         // finished, so MinecraftServer.tickChildren's "Exception ticking world"
         // crash handling applies exactly as for Vanilla's inline level tick.
-        checkOverrun(world, host.driveRegions(world, DISPATCH_DEADLINE_NANOS, pump));
+        // Entity activation range: where this level's players are, before any region reads it.
+        net.multiforge.neoforge.world.EntityActivation.snapshotPlayers(level);
+        // Scheduled ticks due now, by region, so a region visits only chunks with due
+        // ticks; and navigating mobs by region, for sendBlockUpdated on a worker.
+        net.multiforge.runtime.chunk.ChunkHolderManager chunks = host.chunkManagerForOrNull(world);
+        if (chunks != null) level.mfBucketScheduledTicks(ownerOf(chunks));
+        level.mfIndexNavigatingMobs();
+        try {
+            checkOverrun(world, host.driveRegions(world, DISPATCH_DEADLINE_NANOS, pump));
+        } finally {
+            level.mfEndNavigatingMobsIndex();
+        }
         // Entities no region ticked (outside every region, or moved across a
         // region border mid-tick).
         level.mfTickEntitiesAfterRegions();
         // Chunk work a region could not take this tick, then the block-change
         // broadcast Vanilla sends right after its chunk loop.
         level.getChunkSource().mfAfterRegions();
+        // Every minute: census the level's entities and heal any left in limbo.
+        net.multiforge.neoforge.world.EntityAudit.autoAudit(level);
     }
 
     /**
@@ -148,17 +161,57 @@ public final class RegionizedTickCoordinator {
      */
     public static boolean regionsHandleChunkTicks(ServerLevel level) {
         MultiThreadedSchedulerHost host = MultiForgeRegionizedRuntime.current();
-        return host != null && host.regionizerForOrNull(asWorldRef(level)) != null;
+        return host != null && regionizerOf(host, level) != null;
     }
 
     /** The id of the region owning chunk ({@code chunkX}, {@code chunkZ}) of {@code level}, or -1. */
     public static long regionIdAt(ServerLevel level, int chunkX, int chunkZ) {
         MultiThreadedSchedulerHost host = MultiForgeRegionizedRuntime.current();
         if (host == null) return -1L;
-        net.multiforge.runtime.region.ThreadedRegionizer regionizer = host.regionizerForOrNull(asWorldRef(level));
+        net.multiforge.runtime.region.ThreadedRegionizer regionizer = regionizerOf(host, level);
         if (regionizer == null) return -1L;
         net.multiforge.runtime.region.Region region = regionizer.regionAtChunk(chunkX, chunkZ);
         return region == null ? -1L : region.id().value();
+    }
+
+    /**
+     * Chunk key ({@code ChunkPos.toLong}) to the id of the region owning it in
+     * {@code chunks}' index, or -1: exactly the ownership {@code
+     * Region.ownedChunkSnapshot} reports, which the region tick walks otherwise.
+     * Safe from any thread.
+     */
+    private static java.util.function.LongUnaryOperator ownerOf(net.multiforge.runtime.chunk.ChunkHolderManager chunks) {
+        return key -> {
+            net.multiforge.runtime.chunk.NewChunkHolder holder = chunks.holderAt(
+                    new net.multiforge.api.world.ChunkPos(net.minecraft.world.level.ChunkPos.getX(key), net.minecraft.world.level.ChunkPos.getZ(key)));
+            net.multiforge.runtime.region.RegionId owner = holder == null ? null : holder.owningRegion();
+            return owner == null ? -1L : owner.value();
+        };
+    }
+
+    /** {@code level}'s regionizer lookup as of one host and regionizer generation (immutable). */
+    private record CachedRegionizer(
+            MultiThreadedSchedulerHost host, long generation, net.multiforge.runtime.region.ThreadedRegionizer regionizer) {}
+
+    /**
+     * {@code level}'s regionizer in {@code host}, or {@code null} — {@link
+     * MultiThreadedSchedulerHost#regionizerForOrNull} cached on the level
+     * ({@code ServerLevel.mfRegionizerCache}) so the per-block, per-entity
+     * lookups allocate nothing and skip the map. The cache is dropped when the
+     * host changes (server restart, mode change) or the host's regionizer
+     * generation moves (a regionizer created, or replaced by a live
+     * re-partition). A racing refresh writes an equal immutable record.
+     */
+    public static net.multiforge.runtime.region.ThreadedRegionizer regionizerOf(
+            MultiThreadedSchedulerHost host, ServerLevel level) {
+        long generation = host.regionizerGeneration();
+        if (level.mfRegionizerCache instanceof CachedRegionizer c && c.host() == host && c.generation() == generation) {
+            return c.regionizer();
+        }
+        // Generation read before the lookup: a change after it bumps the generation again.
+        net.multiforge.runtime.region.ThreadedRegionizer regionizer = host.regionizerForOrNull(level.mfWorldRef());
+        level.mfRegionizerCache = new CachedRegionizer(host, generation, regionizer);
+        return regionizer;
     }
 
     private static void checkOverrun(WorldRef world, TickRegionScheduler.TickAllResult result) {
@@ -194,7 +247,7 @@ public final class RegionizedTickCoordinator {
     public static boolean regionsHandleBlockFluidTicks(ServerLevel level) {
         MultiThreadedSchedulerHost host = MultiForgeRegionizedRuntime.current();
         if (host == null) return false;
-        if (host.regionizerForOrNull(asWorldRef(level)) == null) return false;
+        if (regionizerOf(host, level) == null) return false;
         return host.hasBlockFluidRunner();
     }
 
@@ -237,10 +290,11 @@ public final class RegionizedTickCoordinator {
      * Convert a vanilla {@link ServerLevel} to a {@link WorldRef} — the
      * public API's dimension identifier. Kept here rather than in
      * {@link WorldRef} itself because {@code WorldRef} is in
-     * multiforge-api and must not depend on Minecraft classes.
+     * multiforge-api and must not depend on Minecraft classes. The level
+     * caches it ({@code Level.mfWorldRef}), so this allocates nothing.
      */
     public static WorldRef asWorldRef(ServerLevel level) {
-        return WorldRef.of(level.dimension().location().toString());
+        return level.mfWorldRef();
     }
 
     /**
@@ -266,7 +320,7 @@ public final class RegionizedTickCoordinator {
     public static boolean regionsHandleEntityTicks(ServerLevel level) {
         MultiThreadedSchedulerHost host = MultiForgeRegionizedRuntime.current();
         if (host == null) return false;
-        if (host.regionizerForOrNull(asWorldRef(level)) == null) return false;
+        if (regionizerOf(host, level) == null) return false;
         return host.hasEntityTickRunner();
     }
 

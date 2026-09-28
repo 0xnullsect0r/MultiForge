@@ -1,0 +1,18 @@
+# Fixture mod for MultiForge's bench stress runs (multiforge-testmods/README.md).
+modLoader = "javafml"
+loaderVersion = "[4,)"
+license = "GPL-3.0-only"
+
+[[mods]]
+modId = "mftest_slowtick"
+version = "${version}"
+displayName = "MultiForge test: slow server ticks"
+description = "Sleeps on the server thread for a set number of ticks. Test fixture; not for real servers."
+authors = "MultiForge authors"
+
+[[dependencies.mftest_slowtick]]
+modId = "neoforge"
+type = "required"
+versionRange = "[21.1,)"
+ordering = "NONE"
+side = "SERVER"

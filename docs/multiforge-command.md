@@ -51,17 +51,17 @@ Set cores = 8 (worker pool 8 threads)
 ### `region list`
 
 Every world's live regions (largest first) with their size, their tick time
-over the last 5 seconds (p50/p95), where they tick, which thread last ticked
+over the last 5 seconds (p50/p95/p99), where they tick, which thread last ticked
 each one and how many serial-lane events it posted, then the pins.
 
 ```
 /multiforge region list
 minecraft:overworld: 3 region(s), ticking on worker threads
-  region region#7 — 41 section(s), up to 10496 chunks, READY, tick 3.1/6.8 ms (p50/p95, last 5 s), last ticked on multiforge-tick-3, 12 serial-lane post(s) last tick
-  region region#9 — 2 section(s), up to 512 chunks, READY, tick 0.4/0.9 ms (p50/p95, last 5 s), last ticked on multiforge-tick-5, 0 serial-lane post(s) last tick
+  region region#7 — 41 section(s), up to 10496 chunks, READY, tick 3.1/6.8/7.4 ms (p50/p95/p99, last 5 s), last ticked on multiforge-tick-3, 12 serial-lane post(s) last tick
+  region region#9 — 2 section(s), up to 512 chunks, READY, tick 0.4/0.9/1.1 ms (p50/p95/p99, last 5 s), last ticked on multiforge-tick-5, 0 serial-lane post(s) last tick
   ...
 minecraft:the_nether: 1 region(s), ticking on the server thread (one region)
-  region region#12 — 1 section(s), up to 256 chunks, READY, tick 1.2/2.0 ms (p50/p95, last 5 s), last ticked on Server thread, 40 serial-lane post(s) last tick
+  region region#12 — 1 section(s), up to 256 chunks, READY, tick 1.2/2.0/2.3 ms (p50/p95/p99, last 5 s), last ticked on Server thread, 40 serial-lane post(s) last tick
 No pinned regions.
 ```
 
@@ -205,6 +205,45 @@ world=minecraft:overworld loaded chunks=1024 regions=3
   region region#9: 48 chunk(s)
   region region#12: 15 chunk(s)
 ```
+
+---
+
+## `entities` — entity census and limbo audit
+
+```
+/multiforge entities [world] [top N]
+/multiforge entities [world] region <id>
+/multiforge entities [world] audit [heal]
+```
+
+Counts each world's entities (every world when `world` is left out): how
+many the entity storage knows, how many are visible, in accessible sections
+and hidden, how many are in ticking sections and on the tick list, the
+`N` most numerous types (default 10) and entities per region. `region <id>`
+lists one region's entities by type.
+
+An entity in **limbo** is known and in a loaded section but not visible or
+not ticking: it never moves, never counts toward mob caps and never
+despawns, and it is saved and reloaded like a normal mob. v1.10 could leave
+entities in limbo on a busy server; v1.11 fixes the cause. Three gaps show it,
+and all three are 0 on a healthy world:
+
+```
+/multiforge entities minecraft:overworld audit
+minecraft:overworld: known=3120 visible=3120 accessible=3120 hidden=0 ticking-sections=2988 tick-list=2988 | gaps known-visible=0 accessible-visible=0 ticking-ticklist=0
+  accessible-not-visible=0 visible-not-accessible=0 ticking-not-listed=0 listed-not-ticking=0
+  no limbo entities
+```
+
+`audit` lists up to five limbo entities with type, name, position and region. `audit heal`
+re-applies their missing visibility and ticking changes, in Vanilla's order,
+and prints how many it fixed. The server also audits every world every 1200
+ticks (one minute), heals what it finds (probe `entity.limbo.healed`), and
+logs a warning while a gap is open. `-Dmultiforge.entities.autoHeal=false`
+keeps the audit and the warning without healing.
+
+The command runs on the server thread between ticks. It is read-only unless
+`heal` is given.
 
 ---
 

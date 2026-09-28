@@ -1,0 +1,28 @@
+--- a/net/minecraft/world/entity/LivingEntity.java
++++ b/net/minecraft/world/entity/LivingEntity.java
+@@ -640,6 +640,11 @@ public abstract class LivingEntity extends Entity implements Attackable, net.neo
+         this.lastHurtMobTimestamp = this.tickCount;
+     }
+ 
++    /** MultiForge: game time of the last damage taken (entity activation's "hurt recently"). */
++    public long mfLastDamageStamp() {
++        return this.lastDamageStamp;
++    }
++
+     public int getNoActionTime() {
+         return this.noActionTime;
+     }
+@@ -2848,7 +2853,13 @@ public abstract class LivingEntity extends Entity implements Attackable, net.neo
+                     }
+                 }
+ 
++                // MultiForge (multiforge-patches/02-region-tick/): push at most
++                // maxEntityCollisions entities per tick (0 = all, Vanilla). The cramming
++                // check above still counts every overlapping entity.
++                int mf$maxPushes = net.multiforge.neoforge.world.EntityActivation.maxEntityCollisions();
++                int mf$pushes = 0;
+                 for (Entity entity1 : list) {
++                    if (mf$maxPushes > 0 && mf$pushes++ >= mf$maxPushes) break;
+                     this.doPush(entity1);
+                 }
+             }

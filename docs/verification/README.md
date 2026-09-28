@@ -27,6 +27,8 @@ clients: they log in, walk, place and break blocks over the real protocol.
 |---|---|
 | Vanilla-parity gate | `./gradlew :multiforge-bench:determinism -Pworkers=1,4` |
 | Phase X scenarios (x1–x4) | `./gradlew :multiforge-bench:scenario [-Pscenario=x1]` |
+| Entity-limbo and watchdog stress (MultiForge only) | `./gradlew :multiforge-bench:stress [-Pstress=limbo\|slowtick] [-PlimboSeconds=180]` |
+| Water-mob crowd (the v1.11 incident's load) | `./gradlew :multiforge-bench:swarm -Pplayers=1 -Pspread=0 -PwaterMobs=15000` |
 | No-mods MSPT (sprint) | `./gradlew :multiforge-bench:vanilla [-Pserver=stock] [-Pworkers=4]` |
 | Modpack MSPT (sprint) | `./gradlew :multiforge-bench:atm10 -PmodpackDir=<dir>` or `-PmodpackUrl=<zip> -PmodpackSha256=<hex>` |
 | Player swarm (real time) | `./gradlew :multiforge-bench:swarm -Pplayers=20 [-Pspread=512] [-Pticks=6000] [-Pserver=stock]` |

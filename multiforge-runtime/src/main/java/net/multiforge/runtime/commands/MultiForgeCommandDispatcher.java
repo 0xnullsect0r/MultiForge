@@ -35,6 +35,7 @@ import net.multiforge.runtime.config.ConfigCodec;
 import net.multiforge.runtime.config.MultiForgeConfig;
 import net.multiforge.runtime.config.MultiForgeConfigStore;
 import net.multiforge.runtime.diagnostics.ChunkCost;
+import net.multiforge.runtime.diagnostics.EntityCensus;
 import net.multiforge.runtime.diagnostics.ProbeRegistry;
 import net.multiforge.runtime.diagnostics.TickStats;
 import net.multiforge.runtime.diagnostics.ViolationLogger;
@@ -71,6 +72,8 @@ import net.multiforge.runtime.scheduler.MultiThreadedSchedulerHost;
  *   /multiforge tickstats [reset] — tick times: mean, p50/p95/p99, true max, 10-min TPS
  *   /multiforge chunkcost on|off  — measure tick time per chunk without a debug client
  *   /multiforge chunkcost report &lt;world&gt; &lt;cx&gt; &lt;cz&gt; &lt;r&gt; — per-chunk cost since the last report
+ *   /multiforge entities [level] [top N | region &lt;id&gt; | audit [heal]]
+ *                                — entity census: known/visible/ticking, per type and region
  *   /multiforge certify &lt;modId&gt;  — run the scanner against a jar in ./mods,
  *                                  print pass/fail per rule (see docs/certification.md)
  *   /multiforge certify all       — same, for every jar under ./mods
@@ -101,6 +104,7 @@ public final class MultiForgeCommandDispatcher {
     private final Function<WorldRef, ChunkHolderManager> chunkManagers;
     private final Path modsDir;
     private final ScannerRunner scannerRunner;
+    private volatile EntityCensusSource entityCensus;
 
     public MultiForgeCommandDispatcher(MultiForgeConfigStore configStore, RegionPinManager pins) {
         this(configStore, pins, null);
@@ -146,6 +150,12 @@ public final class MultiForgeCommandDispatcher {
         this.scannerRunner = Objects.requireNonNull(scannerRunner, "scannerRunner");
     }
 
+    /** Wire {@code /multiforge entities} to the server's levels (the fork's binder does this). */
+    public MultiForgeCommandDispatcher withEntityCensus(EntityCensusSource source) {
+        this.entityCensus = source;
+        return this;
+    }
+
     /**
      * Handle a parsed command. {@code output} receives one or more
      * lines of feedback; the caller sends those to the operator's
@@ -173,6 +183,7 @@ public final class MultiForgeCommandDispatcher {
             case "warn" -> handleWarn(args, output);
             case "tickstats" -> handleTickStats(args, output);
             case "chunkcost" -> handleChunkCost(args, output);
+            case "entities" -> handleEntities(args, output);
             case "certify" -> handleCertify(args, output);
             default -> {
                 output.accept("Unknown subcommand: " + args[0] + ". Try `/multiforge help`.");
@@ -220,6 +231,11 @@ public final class MultiForgeCommandDispatcher {
         output.accept("                                     — the top chunks and the chunks within r of (cx, cz)");
         output.accept("  /multiforge chunks <world>         — loaded chunks per region for one world");
         output.accept("                                     — world = namespaced id, e.g. minecraft:overworld");
+        output.accept(
+                "  /multiforge entities [level] [top N] — entity census: known/visible/ticking, top types, per region");
+        output.accept("  /multiforge entities [level] region <id> — one region's entities by type");
+        output.accept("  /multiforge entities [level] audit [heal] — limbo entities (known but not ticking);");
+        output.accept("                                     — heal re-applies their visibility and ticking");
         output.accept("  /multiforge warn list              — recent ViolationLogger events");
         output.accept("  /multiforge warn clear             — reset the violation history ring buffer");
         output.accept("");
@@ -336,6 +352,108 @@ public final class MultiForgeCommandDispatcher {
         output.accept(snapshot.render());
         output.accept(snapshot.legend());
         return true;
+    }
+
+    /** Default number of types and regions {@code /multiforge entities} lists. */
+    static final int ENTITIES_DEFAULT_TOP = 10;
+
+    /**
+     * {@code /multiforge entities [level] [top N | region <id> | audit [heal]]}
+     * — see {@link EntityCensus}. Without a level, every level is reported.
+     */
+    private boolean handleEntities(String[] args, Consumer<String> output) {
+        EntityCensusSource source = entityCensus;
+        if (source == null) {
+            output.accept("Entity census not available (no server bound).");
+            return true;
+        }
+        int i = 1;
+        String level = null;
+        if (i < args.length && !List.of("top", "region", "audit").contains(args[i])) level = args[i++];
+        String view = i < args.length ? args[i++] : "summary";
+        int topN = ENTITIES_DEFAULT_TOP;
+        long regionId = 0;
+        boolean heal = false;
+        try {
+            switch (view) {
+                case "summary" -> {}
+                case "top" -> {
+                    if (i < args.length) topN = Math.max(1, Integer.parseInt(args[i++]));
+                }
+                case "region" -> {
+                    if (i >= args.length) return entitiesUsage(output);
+                    regionId = parseRegionId(args[i++]);
+                }
+                case "audit" -> {
+                    if (i < args.length && args[i].equals("heal")) {
+                        heal = true;
+                        i++;
+                    }
+                }
+                default -> {
+                    return entitiesUsage(output);
+                }
+            }
+        } catch (NumberFormatException e) {
+            return entitiesUsage(output);
+        }
+        if (i != args.length) return entitiesUsage(output);
+        List<EntityCensus> censuses;
+        try {
+            censuses = source.census(level, heal);
+        } catch (IllegalStateException e) {
+            output.accept(e.getMessage());
+            return false;
+        }
+        if (censuses.isEmpty()) {
+            output.accept(level == null ? "No levels." : "Unknown level: " + level);
+            return false;
+        }
+        for (EntityCensus c : censuses) {
+            List<String> lines =
+                    switch (view) {
+                        case "region" -> c.renderRegion(regionId, topN);
+                        case "audit" -> c.renderAudit();
+                        default -> c.render(topN);
+                    };
+            lines.forEach(output);
+        }
+        if (heal) {
+            int healed = censuses.stream().mapToInt(EntityCensus::healed).sum();
+            output.accept("Healed " + healed + " visibility/ticking transition(s).");
+        }
+        return true;
+    }
+
+    /** {@code 12}, {@code #12} or {@code region#12}. */
+    static long parseRegionId(String raw) {
+        String s = raw.startsWith("region#") ? raw.substring(7) : raw.startsWith("#") ? raw.substring(1) : raw;
+        return Long.parseLong(s);
+    }
+
+    private static boolean entitiesUsage(Consumer<String> output) {
+        output.accept("Usage: /multiforge entities [level] [top N | region <id> | audit [heal]]");
+        return false;
+    }
+
+    /**
+     * The server side of {@code /multiforge entities}: takes each level's
+     * {@link EntityCensus} on the server thread (between ticks, where commands
+     * run), healing first when asked. Implemented by the fork.
+     */
+    @FunctionalInterface
+    public interface EntityCensusSource {
+        /**
+         * @param level a dimension id ({@code minecraft:overworld}, or just
+         *     {@code overworld}), or {@code null} for every level
+         * @param heal re-apply the visibility and ticking transitions of limbo
+         *     entities; the census returned is the one taken before the heal,
+         *     with {@link EntityCensus#healed()} set
+         * @return one census per matching level; empty for an unknown level
+         * @throws IllegalStateException when a census cannot be taken now
+         *     (region workers are running); its message is shown
+         */
+        List<EntityCensus> census(String level, boolean heal);
     }
 
     /**
@@ -685,14 +803,15 @@ public final class MultiForgeCommandDispatcher {
         return true;
     }
 
-    /** {@code ", tick 3.2/7.9 ms (p50/p95, last 5 s)"}, or nothing before the region's first tick. */
+    /** {@code ", tick 3.2/7.9/9.4 ms (p50/p95/p99, last 5 s)"}, or nothing before the region's first tick. */
     static String describeCost(net.multiforge.runtime.region.RegionMspt mspt) {
         if (mspt == null || mspt.averageMillis() == 0.0) return "";
         return String.format(
                 Locale.ROOT,
-                ", tick %.1f/%.1f ms (p50/p95, last 5 s)",
+                ", tick %.1f/%.1f/%.1f ms (p50/p95/p99, last 5 s)",
                 mspt.percentileMillis(0.5),
-                mspt.percentileMillis(0.95));
+                mspt.percentileMillis(0.95),
+                mspt.percentileMillis(0.99));
     }
 
     private static String describe(MultiThreadedSchedulerHost.WorldTickMode mode) {

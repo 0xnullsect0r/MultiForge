@@ -127,4 +127,65 @@ class ConfigCodecTest {
                         .serialLaneHotWaitMs())
                 .isEqualTo(7);
     }
+
+    @Test
+    void deferVisibilityDefaultsOnAndRoundTrips() {
+        assertThat(MultiForgeConfig.defaults().deferVisibility()).isTrue();
+        assertThat(ConfigCodec.parse("[mtserver]\ncores = 2\n").deferVisibility())
+                .isTrue();
+        MultiForgeConfig off = ConfigCodec.parse("[entities]\ndeferVisibility = false\n");
+        assertThat(off.deferVisibility()).isFalse();
+        assertThat(ConfigCodec.parse(ConfigCodec.render(off))).isEqualTo(off);
+        assertThat(MultiForgeConfig.defaults().withDeferVisibility(false)).isEqualTo(off);
+    }
+
+    @Test
+    void lockFreeOutsidePhaseDefaultsOnAndRoundTrips() {
+        assertThat(MultiForgeConfig.defaults().lockFreeOutsidePhase()).isTrue();
+        MultiForgeConfig off = ConfigCodec.parse("[perf]\nlockFreeOutsidePhase = false\n");
+        assertThat(off.lockFreeOutsidePhase()).isFalse();
+        assertThat(ConfigCodec.parse(ConfigCodec.render(off))).isEqualTo(off);
+        assertThat(MultiForgeConfig.defaults().withLockFreeOutsidePhase(false)).isEqualTo(off);
+        String prev = System.getProperty("multiforge.perf.lockFreeOutsidePhase");
+        try {
+            System.setProperty("multiforge.perf.lockFreeOutsidePhase", "true");
+            assertThat(off.effectiveLockFreeOutsidePhase()).isTrue();
+        } finally {
+            if (prev == null) System.clearProperty("multiforge.perf.lockFreeOutsidePhase");
+            else System.setProperty("multiforge.perf.lockFreeOutsidePhase", prev);
+        }
+    }
+
+    @Test
+    void workerChunkCacheDefaultsOnAndRoundTrips() {
+        assertThat(MultiForgeConfig.defaults().workerChunkCache()).isTrue();
+        MultiForgeConfig off = ConfigCodec.parse("[perf]\nworkerChunkCache = false\n");
+        assertThat(off.workerChunkCache()).isFalse();
+        assertThat(off.lockFreeOutsidePhase()).isTrue();
+        assertThat(ConfigCodec.parse(ConfigCodec.render(off))).isEqualTo(off);
+        assertThat(MultiForgeConfig.defaults().withWorkerChunkCache(false)).isEqualTo(off);
+        String prev = System.getProperty("multiforge.perf.workerChunkCache");
+        try {
+            System.setProperty("multiforge.perf.workerChunkCache", "true");
+            assertThat(off.effectiveWorkerChunkCache()).isTrue();
+        } finally {
+            if (prev == null) System.clearProperty("multiforge.perf.workerChunkCache");
+            else System.setProperty("multiforge.perf.workerChunkCache", prev);
+        }
+    }
+
+    @Test
+    void deferVisibilitySystemPropertyWins() {
+        String prev = System.getProperty("multiforge.entities.deferVisibility");
+        try {
+            System.setProperty("multiforge.entities.deferVisibility", "false");
+            assertThat(MultiForgeConfig.defaults().effectiveDeferVisibility()).isFalse();
+            System.setProperty("multiforge.entities.deferVisibility", "true");
+            assertThat(MultiForgeConfig.defaults().withDeferVisibility(false).effectiveDeferVisibility())
+                    .isTrue();
+        } finally {
+            if (prev == null) System.clearProperty("multiforge.entities.deferVisibility");
+            else System.setProperty("multiforge.entities.deferVisibility", prev);
+        }
+    }
 }

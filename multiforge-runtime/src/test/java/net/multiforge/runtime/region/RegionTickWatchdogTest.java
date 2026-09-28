@@ -172,4 +172,20 @@ class RegionTickWatchdogTest {
         assertThat(RegionTickWatchdog.parseMode("nonsense")).isEqualTo(RegionTickWatchdog.Mode.WARN);
         assertThat(RegionTickWatchdog.parseMode(null)).isEqualTo(RegionTickWatchdog.Mode.WARN);
     }
+
+    @Test
+    void activeTicksTagTheRegionAndPhaseInProgress() {
+        Region region = new ThreadedRegionizer(WORLD, 0).addChunk(new ChunkPos(0, 0));
+        RegionTickWatchdog.enterTick(region);
+        RegionTickWatchdog.notePhase("ENTITY_AI");
+        assertThat(RegionTickWatchdog.activeTicks()).anySatisfy(a -> {
+            assertThat(a.thread()).isSameAs(Thread.currentThread());
+            assertThat(a.regionId()).isEqualTo(region.id().value());
+            assertThat(a.phase()).isEqualTo("ENTITY_AI");
+        });
+        RegionTickWatchdog.exitTick(region);
+        assertThat(RegionTickWatchdog.activeTicks()).noneMatch(a -> a.thread() == Thread.currentThread());
+        RegionTickWatchdog.notePhase("BLOCK_ENTITIES"); // outside a tick: ignored
+        assertThat(RegionTickWatchdog.activeTicks()).noneMatch(a -> a.thread() == Thread.currentThread());
+    }
 }

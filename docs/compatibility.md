@@ -86,6 +86,38 @@ It does not check dependencies *between* mods. A jar it lists as loadable can st
 
 MultiForge ticks regions in parallel (see `docs/design/barrier-tick-model.md`). A mod that mutates the world from its *own* thread, or reaches into a chunk another region owns, has the mutation rerouted to the owning region with a rate-limited warning — never refused. `/multiforge warn list` shows what was rerouted and from where; `mode = "strict"` in `config/multiforge-server.toml` turns the same events into errors for debugging.
 
+### 3.1 Entity activation range and the push cap (behaviour change)
+
+Two settings in `[entities]` of `config/multiforge-server.toml` change Vanilla behaviour on purpose, to keep large mob crowds from dominating a region's tick. Both are **on by default**, both are off in `mode = "off"`, and the vanilla-parity gate (`:multiforge-bench:determinism`) runs with both off.
+
+**Activation range** (`activation = true`). A mob further than its category's range from every player of its level (a square of that half-width around the player, 256 blocks vertically; spectators do not count) is *inactive*: it runs its full tick only once every `wakeInterval` ticks (20; staggered by entity id), and on the other ticks only ages — `tickCount`, `noActionTime` and a baby's growth advance, so it despawns and grows up at Vanilla's pace. Its despawn check still runs every tick. Ranges, in blocks:
+
+| Key | Default | Mobs |
+|---|---|---|
+| `monsterRange` | 32 | monsters |
+| `animalRange` | 32 | animals and every other creature |
+| `villagerRange` | 32 | villagers, wandering traders |
+| `flyingRange` | 32 | flying monsters (ghasts, phantoms) |
+| `raiderRange` | 48 | raiders (pillagers, vindicators, evokers, witches, ravagers) |
+| `waterRange` | 16 | squid, fish, dolphins, axolotls |
+| `ambientRange` | 16 | bats |
+
+A range of `0` turns throttling off for that category. A region whose last tick took more than 40 ms doubles the wake interval of its inactive mobs (80 ms: doubles again), up to 80 ticks; mobs near players are never slowed.
+
+These always tick, near a player or not:
+
+- anything that is not a mob — items, XP orbs, projectiles, minecarts, boats, armor stands, Create contraptions and other mod entities that do not extend `Mob`;
+- mobs riding or ridden, leashed, with an attack target, hurt in the last 100 ticks, in love, or less than 20 ticks old;
+- bosses (`#c:bosses`), multipart mobs, and mobs whose `isAlwaysTicking()` is true;
+- farm cases: a land mob with AI that is falling (drop chutes) or in water (water streams);
+- entity types in the `#multiforge:activation_exempt` tag (ships with `#c:bosses`, the warden and the elder guardian; a datapack can add to it) or in `activationExempt` (ids like `"mymod:golem"` or tags like `"#mymod:machines"`).
+
+What this changes: far from players, mob AI, pathfinding, breeding cooldowns, villager work and trading restock, and mob-driven farms not covered above run at a twentieth of the speed. `EntityTickEvent.Pre/Post` fire only on full ticks. If a farm or a mod depends on distant mobs acting normally, add the type to `activationExempt`, raise the range, or set `activation = false` (also `-Dmultiforge.entities.activation=false`). `/multiforge probes` counts inactive ticks (`entity.activation.skipped`).
+
+**Push cap** (`maxEntityCollisions = 8`). A living entity pushes at most 8 of the entities overlapping it each tick; Vanilla pushes all of them, which is quadratic in a crowd. Entity cramming is unchanged: the cramming check still counts every overlapping entity (`maxEntityCramming`), with Vanilla's random roll. `0` restores Vanilla's pushing (also `-Dmultiforge.entities.maxEntityCollisions=0`).
+
+Every key can be overridden with `-Dmultiforge.entities.<key>=<value>`.
+
 ---
 
 ## 4. Known errors and what they mean

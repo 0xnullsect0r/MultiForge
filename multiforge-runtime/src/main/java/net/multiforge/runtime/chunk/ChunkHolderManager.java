@@ -45,7 +45,21 @@ public final class ChunkHolderManager implements RegionListener {
     private final ConcurrentMap<RegionId, HolderManagerRegionData> perRegion = new ConcurrentHashMap<>();
     // Owner index: region -> the chunks it owns. Kept in step with each
     // holder's owningRegion so ownership queries never scan every holder.
-    private final ConcurrentMap<RegionId, Set<ChunkPos>> byRegion = new ConcurrentHashMap<>();
+    private final ConcurrentMap<RegionId, Owned> byRegion = new ConcurrentHashMap<>();
+
+    /**
+     * One region's owned chunks, plus the lists {@link #holdersOwnedBy} and
+     * {@link #ownedPositions} last built from them. {@code version} is bumped
+     * after every change to the set or to a member holder's owner, so a cached
+     * list is served only while nothing it was built from has changed.
+     */
+    private static final class Owned {
+        final Set<ChunkPos> chunks = ConcurrentHashMap.newKeySet();
+        final java.util.concurrent.atomic.AtomicLong version = new java.util.concurrent.atomic.AtomicLong();
+        volatile Snapshot snapshot;
+    }
+
+    private record Snapshot(long version, List<NewChunkHolder> holders, List<ChunkPos> positions) {}
 
     public ChunkHolderManager(WorldRef world) {
         this.world = Objects.requireNonNull(world, "world");
@@ -76,18 +90,26 @@ public final class ChunkHolderManager implements RegionListener {
         RegionId prev = holder.owningRegion();
         if (!holder.setOwningRegion(owner)) return;
         if (prev != null) {
-            Set<ChunkPos> prevSet = byRegion.get(prev);
-            if (prevSet != null) prevSet.remove(holder.position());
+            Owned prevOwned = byRegion.get(prev);
+            if (prevOwned != null) {
+                prevOwned.chunks.remove(holder.position());
+                prevOwned.version.incrementAndGet();
+            }
         }
-        byRegion.computeIfAbsent(owner, r -> ConcurrentHashMap.newKeySet()).add(holder.position());
+        Owned owned = byRegion.computeIfAbsent(owner, r -> new Owned());
+        owned.chunks.add(holder.position());
+        owned.version.incrementAndGet();
     }
 
     /** Forget the chunk at {@code pos} (it unloaded). */
     public NewChunkHolder dropHolder(ChunkPos pos) {
         NewChunkHolder h = byChunk.remove(pos);
         if (h != null && h.owningRegion() != null) {
-            Set<ChunkPos> set = byRegion.get(h.owningRegion());
-            if (set != null) set.remove(pos);
+            Owned owned = byRegion.get(h.owningRegion());
+            if (owned != null) {
+                owned.chunks.remove(pos);
+                owned.version.incrementAndGet();
+            }
         }
         return h;
     }
@@ -104,25 +126,50 @@ public final class ChunkHolderManager implements RegionListener {
         return byChunk.size();
     }
 
-    /** The holders owned by {@code region}, from the owner index. */
+    /**
+     * The holders owned by {@code region}, from the owner index (immutable). The
+     * same list is returned until the region's chunks change.
+     */
     public List<NewChunkHolder> holdersOwnedBy(RegionId region) {
-        Set<ChunkPos> chunks = byRegion.get(region);
-        if (chunks == null) return List.of();
-        List<NewChunkHolder> out = new ArrayList<>(chunks.size());
-        for (ChunkPos pos : chunks) {
+        Snapshot s = snapshotOf(region);
+        return s == null ? List.of() : s.holders();
+    }
+
+    /** The positions of {@link #holdersOwnedBy}, in the same order (immutable, cached the same way). */
+    public List<ChunkPos> ownedPositions(RegionId region) {
+        Snapshot s = snapshotOf(region);
+        return s == null ? List.of() : s.positions();
+    }
+
+    private Snapshot snapshotOf(RegionId region) {
+        Owned owned = byRegion.get(region);
+        if (owned == null) return null;
+        long version = owned.version.get();
+        Snapshot cached = owned.snapshot;
+        if (cached != null && cached.version() == version) return cached;
+        List<NewChunkHolder> holders = new ArrayList<>(owned.chunks.size());
+        List<ChunkPos> positions = new ArrayList<>(owned.chunks.size());
+        for (ChunkPos pos : owned.chunks) {
             NewChunkHolder h = byChunk.get(pos);
-            if (h != null && region.equals(h.owningRegion())) out.add(h);
+            if (h != null && region.equals(h.owningRegion())) {
+                holders.add(h);
+                positions.add(pos);
+            }
         }
-        return List.copyOf(out);
+        // Tagged with the version read before the walk: a change during it bumps
+        // the version after it, so this snapshot is never served past the change.
+        Snapshot fresh = new Snapshot(version, List.copyOf(holders), List.copyOf(positions));
+        owned.snapshot = fresh;
+        return fresh;
     }
 
     /** Merge {@code source}'s chunks and data into {@code target}. */
     public void onRegionMerged(RegionId target, RegionId source) {
         HolderManagerRegionData sourceData = perRegion.remove(source);
         if (sourceData != null) regionData(target).merge(sourceData);
-        Set<ChunkPos> moved = byRegion.remove(source);
+        Owned moved = byRegion.remove(source);
         if (moved != null) {
-            for (ChunkPos pos : moved) {
+            for (ChunkPos pos : moved.chunks) {
                 NewChunkHolder h = byChunk.get(pos);
                 if (h != null && source.equals(h.owningRegion())) assignOwner(h, target);
             }
@@ -133,9 +180,9 @@ public final class ChunkHolderManager implements RegionListener {
     public void onRegionSplit(RegionId source, RegionId target, Predicate<ChunkPos> shouldLeave) {
         HolderManagerRegionData src = perRegion.get(source);
         if (src != null) regionData(target).merge(src.split(shouldLeave));
-        Set<ChunkPos> sourceChunks = byRegion.get(source);
-        if (sourceChunks != null) {
-            for (ChunkPos pos : List.copyOf(sourceChunks)) {
+        Owned sourceOwned = byRegion.get(source);
+        if (sourceOwned != null) {
+            for (ChunkPos pos : List.copyOf(sourceOwned.chunks)) {
                 if (!shouldLeave.test(pos)) continue;
                 NewChunkHolder h = byChunk.get(pos);
                 if (h != null && source.equals(h.owningRegion())) assignOwner(h, target);

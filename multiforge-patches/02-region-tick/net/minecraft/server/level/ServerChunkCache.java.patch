@@ -1,6 +1,18 @@
 --- a/net/minecraft/server/level/ServerChunkCache.java
 +++ b/net/minecraft/server/level/ServerChunkCache.java
-@@ -358,6 +358,12 @@ public class ServerChunkCache extends ChunkSource implements net.neoforged.neofo
+@@ -348,8 +348,10 @@ public class ServerChunkCache extends ChunkSource implements net.neoforged.neofo
+             if (this.level.tickRateManager().runsNormally()) {
+                 profilerfiller.popPush("naturalSpawnCount");
+                 int l = this.distanceManager.getNaturalSpawnChunkCount();
++                // MultiForge (multiforge-patches/02-region-tick/): one entity snapshot, shared with the per-region spawn states.
++                Iterable<Entity> mf$entities = this.level.getAllEntities();
+                 NaturalSpawner.SpawnState naturalspawner$spawnstate = NaturalSpawner.createState(
+-                    l, this.level.getAllEntities(), this::getFullChunk, new LocalMobCapCalculator(this.chunkMap)
++                    l, mf$entities, this::getFullChunk, new LocalMobCapCalculator(this.chunkMap)
+                 );
+                 this.lastSpawnState = naturalspawner$spawnstate;
+                 profilerfiller.popPush("spawnAndTick");
+@@ -358,6 +360,12 @@ public class ServerChunkCache extends ChunkSource implements net.neoforged.neofo
                  int k = this.level.getGameRules().getInt(GameRules.RULE_RANDOMTICKING);
                  boolean flag = this.level.getLevelData().getGameTime() % 400L == 0L;
  
@@ -8,12 +20,12 @@
 +                // active, each chunk's random ticks and natural spawning run in
 +                // the region owning it (mfTickRegionChunks), after this method.
 +                if (net.multiforge.neoforge.RegionizedTickCoordinator.regionsHandleChunkTicks(this.level)) {
-+                    this.mfQueueRegionChunkTicks(list, j, flag1, k, flag, naturalspawner$spawnstate);
++                    this.mfQueueRegionChunkTicks(list, j, flag1, k, flag, naturalspawner$spawnstate, l, mf$entities);
 +                } else
                  for (ServerChunkCache.ChunkAndHolder serverchunkcache$chunkandholder : list) {
                      LevelChunk levelchunk1 = serverchunkcache$chunkandholder.chunk;
                      ChunkPos chunkpos = levelchunk1.getPos();
-@@ -380,12 +386,149 @@ public class ServerChunkCache extends ChunkSource implements net.neoforged.neofo
+@@ -380,12 +388,175 @@ public class ServerChunkCache extends ChunkSource implements net.neoforged.neofo
              }
  
              profilerfiller.popPush("broadcast");
@@ -38,6 +50,9 @@
 +    }
 +
 +    private final java.util.concurrent.ConcurrentHashMap<Long, MfRegionChunkTicks> mfRegionChunkTicks = new java.util.concurrent.ConcurrentHashMap<>();
++    // Server thread: this tick's natural-spawn chunks (deduped level-wide) and each region's share of them.
++    private final it.unimi.dsi.fastutil.longs.LongOpenHashSet mfSpawnChunks = new it.unimi.dsi.fastutil.longs.LongOpenHashSet();
++    private final it.unimi.dsi.fastutil.longs.Long2IntOpenHashMap mfSpawnChunkCredits = new it.unimi.dsi.fastutil.longs.Long2IntOpenHashMap();
 +    private long mfInhabitedDelta;
 +    private int mfRandomTickSpeed;
 +    private boolean mfSpawnPersistent;
@@ -49,9 +64,11 @@
 +    /**
 +     * Server thread: sort this tick's chunk work by owning region. Each region
 +     * gets its own spawn state, counting only its entities and with its mob
-+     * caps scaled to its own spawnable chunks, because a spawn state is
-+     * mutable scratch that regions cannot share. A chunk no region owns runs
-+     * inline against the level-wide state, as in Vanilla.
++     * caps scaled to its share of Vanilla's spawn chunk count (the 17×17
++     * squares around its players' chunks, deduped level-wide:
++     * SpawnChunkCredit), because a spawn state is mutable scratch that regions
++     * cannot share. A chunk no region owns runs inline against the level-wide
++     * state, as in Vanilla.
 +     */
 +    private void mfQueueRegionChunkTicks(
 +            List<ServerChunkCache.ChunkAndHolder> list,
@@ -59,7 +76,9 @@
 +            boolean doMobSpawning,
 +            int randomTickSpeed,
 +            boolean spawnPersistent,
-+            NaturalSpawner.SpawnState levelSpawnState) {
++            NaturalSpawner.SpawnState levelSpawnState,
++            int levelSpawnChunks,
++            Iterable<Entity> entities) {
 +        this.mfRegionChunkTicks.clear();
 +        this.mfInhabitedDelta = inhabitedDelta;
 +        this.mfRandomTickSpeed = randomTickSpeed;
@@ -84,11 +103,21 @@
 +                this.mfRegionChunkTicks.put(region, work);
 +            }
 +            work.chunks.add(new MfChunkTick(chunk, spawn, tick));
-+            if (spawnable) work.spawnChunks++;
++        }
++        net.multiforge.neoforge.world.SpawnChunkCredit.credit(
++                this.level, this.distanceManager.playersPerChunk.keySet(), this.mfSpawnChunks, this.mfSpawnChunkCredits);
++        int credited = 0;
++        for (it.unimi.dsi.fastutil.longs.Long2IntMap.Entry e : this.mfSpawnChunkCredits.long2IntEntrySet()) {
++            if (e.getLongKey() >= 0) credited += e.getIntValue();
++        }
++        // A player chunk no region owns: its chunks run inline against the level-wide state.
++        if (credited != levelSpawnChunks) net.multiforge.runtime.diagnostics.ProbeRegistry.bump("spawn.chunkcount.mismatch");
++        for (java.util.Map.Entry<Long, MfRegionChunkTicks> e : this.mfRegionChunkTicks.entrySet()) {
++            e.getValue().spawnChunks = this.mfSpawnChunkCredits.get(e.getKey().longValue());
 +        }
 +        if (!doMobSpawning || this.mfRegionChunkTicks.isEmpty()) return;
 +        java.util.Map<Long, List<Entity>> entitiesByRegion = new java.util.HashMap<>();
-+        for (Entity entity : this.level.getAllEntities()) {
++        for (Entity entity : entities) {
 +            ChunkPos pos = entity.chunkPosition();
 +            long region = net.multiforge.neoforge.RegionizedTickCoordinator.regionIdAt(this.level, pos.x, pos.z);
 +            if (!this.mfRegionChunkTicks.containsKey(region)) continue;
@@ -104,6 +133,15 @@
 +            work.spawnState = NaturalSpawner.createState(
 +                    work.spawnChunks, entitiesByRegion.getOrDefault(e.getKey(), List.of()), this::getFullChunk, new LocalMobCapCalculator(this.chunkMap));
 +        }
++    }
++
++    /**
++     * Each region's share of this level's natural-spawn chunk count, as of the
++     * last tick ({@code -1}: player chunks no region owns). Server thread;
++     * diagnostics and tests.
++     */
++    public it.unimi.dsi.fastutil.longs.Long2IntMap mfSpawnChunkCredits() {
++        return it.unimi.dsi.fastutil.longs.Long2IntMaps.unmodifiable(this.mfSpawnChunkCredits);
 +    }
 +
 +    /**
@@ -163,7 +201,7 @@
      private void getFullChunk(long p_8371_, Consumer<LevelChunk> p_8372_) {
          ChunkHolder chunkholder = this.getVisibleChunkIfPresent(p_8371_);
          if (chunkholder != null) {
-@@ -535,7 +678,11 @@ public class ServerChunkCache extends ChunkSource implements net.neoforged.neofo
+@@ -535,7 +706,11 @@ public class ServerChunkCache extends ChunkSource implements net.neoforged.neofo
  
          @Override
          protected Runnable wrapRunnable(Runnable p_8506_) {
@@ -176,7 +214,7 @@
          }
  
          @Override
-@@ -569,4 +716,18 @@ public class ServerChunkCache extends ChunkSource implements net.neoforged.neofo
+@@ -569,4 +744,18 @@ public class ServerChunkCache extends ChunkSource implements net.neoforged.neofo
              }
          }
      }

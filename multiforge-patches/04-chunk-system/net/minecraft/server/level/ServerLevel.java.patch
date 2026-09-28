@@ -1,0 +1,14 @@
+--- a/net/minecraft/server/level/ServerLevel.java
++++ b/net/minecraft/server/level/ServerLevel.java
+@@ -1635,6 +1635,11 @@ public class ServerLevel extends Level implements WorldGenLevel {
+     }
+ 
+     public boolean setChunkForced(int p_8603_, int p_8604_, boolean p_8605_) {
++        // MultiForge (multiforge-patches/04-chunk-system/): a region worker's forced-chunk
++        // change runs on the server thread after the barrier; the caller gets the
++        // predicted result.
++        Boolean mf$deferred = net.multiforge.neoforge.OwnershipGuard.deferSetChunkForced(this, p_8603_, p_8604_, p_8605_);
++        if (mf$deferred != null) return mf$deferred;
+         ForcedChunksSavedData forcedchunkssaveddata = this.getDataStorage().computeIfAbsent(ForcedChunksSavedData.factory(), "chunks");
+         ChunkPos chunkpos = new ChunkPos(p_8603_, p_8604_);
+         long i = chunkpos.toLong();

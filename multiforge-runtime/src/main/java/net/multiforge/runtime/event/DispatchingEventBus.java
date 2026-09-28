@@ -289,7 +289,8 @@ public class DispatchingEventBus implements IEventBus {
      */
     @Override
     public <T extends Event> T post(T event) {
-        if (deferPost(event, () -> inner.post(event))) return event;
+        // The deferred post's closure is built only on that branch: post runs for every event.
+        if (shouldDefer(event) && deferPost(event, () -> inner.post(event))) return event;
         if (postOnLane(event)) {
             dispatcher.runPostOnSerialLane(() -> inner.post(event));
             return event;
@@ -299,7 +300,7 @@ public class DispatchingEventBus implements IEventBus {
 
     @Override
     public <T extends Event> T post(EventPriority priority, T event) {
-        if (deferPost(event, () -> inner.post(priority, event))) return event;
+        if (shouldDefer(event) && deferPost(event, () -> inner.post(priority, event))) return event;
         if (postOnLane(event)) {
             dispatcher.runPostOnSerialLane(() -> inner.post(priority, event));
             return event;
@@ -314,12 +315,14 @@ public class DispatchingEventBus implements IEventBus {
      * does not wait (see {@link SerialLane#defer}). A cancellable event is never
      * deferred — its poster reads the result — and is logged once.
      */
+    private static boolean shouldDefer(Event event) {
+        return event != null
+                && OwnerToken.current().domain() == Domain.REGION
+                && EventTypeDomainMap.isDeferred(event.getClass());
+    }
+
+    /** {@link #shouldDefer} holds for {@code event}: defer it unless it is cancellable. */
     private boolean deferPost(Event event, Runnable post) {
-        if (event == null
-                || OwnerToken.current().domain() != Domain.REGION
-                || !EventTypeDomainMap.isDeferred(event.getClass())) {
-            return false;
-        }
         if (event instanceof net.neoforged.bus.api.ICancellableEvent) {
             if (CANCELLABLE_LOGGED.add(event.getClass())) {
                 net.multiforge.runtime.diagnostics.ViolationLogger.warn(

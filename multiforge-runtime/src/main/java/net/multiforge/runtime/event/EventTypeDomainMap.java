@@ -154,12 +154,39 @@ public final class EventTypeDomainMap {
      */
     public static boolean isDeferred(Class<?> eventType) {
         ensureInitialized();
+        // Cached per class, tagged with the RoutingEpoch it was computed at: every
+        // change to DEFERRED (registerDeferred, register, reset) bumps the epoch
+        // after it, so a stale answer is recomputed on the next call.
+        DeferredSlot slot = DEFERRED_CACHE.get(eventType);
+        int epoch = RoutingEpoch.current();
+        DeferredAnswer cached = slot.answer;
+        if (cached != null && cached.epoch() == epoch) return cached.deferred();
+        boolean deferred = computeDeferred(eventType);
+        slot.answer = new DeferredAnswer(epoch, deferred);
+        return deferred;
+    }
+
+    private static boolean computeDeferred(Class<?> eventType) {
         if (DEFERRED.isEmpty()) return false;
         for (Class<?> cls = eventType; cls != null && cls != Object.class; cls = cls.getSuperclass()) {
             if (DEFERRED.contains(cls.getName())) return true;
         }
         return false;
     }
+
+    /** One class's cached {@link #isDeferred} answer: see {@link #isDeferred}. */
+    private static final class DeferredSlot {
+        volatile DeferredAnswer answer;
+    }
+
+    private record DeferredAnswer(int epoch, boolean deferred) {}
+
+    private static final ClassValue<DeferredSlot> DEFERRED_CACHE = new ClassValue<>() {
+        @Override
+        protected DeferredSlot computeValue(Class<?> type) {
+            return new DeferredSlot();
+        }
+    };
 
     /**
      * Posts of {@code eventClassName} from a region worker are deferred: the

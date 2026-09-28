@@ -1,6 +1,6 @@
 --- a/net/minecraft/world/level/entity/PersistentEntitySectionManager.java
 +++ b/net/minecraft/world/level/entity/PersistentEntitySectionManager.java
-@@ -41,6 +41,17 @@ public class PersistentEntitySectionManager<T extends EntityAccess> implements A
+@@ -41,6 +41,21 @@ public class PersistentEntitySectionManager<T extends EntityAccess> implements A
      private final Long2ObjectMap<PersistentEntitySectionManager.ChunkLoadStatus> chunkLoadStatuses = new Long2ObjectOpenHashMap<>();
      private final LongSet chunksToUnload = new LongOpenHashSet();
      private final Queue<ChunkEntities<T>> loadingInbox = Queues.newConcurrentLinkedQueue();
@@ -15,10 +15,14 @@
 +    final Object mfLock = new Object();
 +    // The transition list of the updateChunkStatus call in progress; guarded by mfLock.
 +    private List<Runnable> mfTransitions;
++    // MultiForge test hook (GameTests only): run by updateChunkStatus between
++    // releasing mfLock and applying the transitions it recorded, where a region
++    // worker's entity move could interleave.
++    public static volatile Runnable mfTestHook;
  
      public PersistentEntitySectionManager(Class<T> p_157503_, LevelCallback<T> p_157504_, EntityPersistentStorage<T> p_157505_) {
          this.visibleEntityStorage = new EntityLookup<>();
-@@ -49,7 +60,8 @@ public class PersistentEntitySectionManager<T extends EntityAccess> implements A
+@@ -49,7 +64,8 @@ public class PersistentEntitySectionManager<T extends EntityAccess> implements A
          this.chunkLoadStatuses.defaultReturnValue(PersistentEntitySectionManager.ChunkLoadStatus.FRESH);
          this.callbacks = p_157504_;
          this.permanentStorage = p_157505_;
@@ -28,7 +32,7 @@
      }
  
      void removeSectionIfEmpty(long p_157510_, EntitySection<T> p_157511_) {
-@@ -59,7 +71,11 @@ public class PersistentEntitySectionManager<T extends EntityAccess> implements A
+@@ -59,7 +75,11 @@ public class PersistentEntitySectionManager<T extends EntityAccess> implements A
      }
  
      private boolean addEntityUuid(T p_157558_) {
@@ -41,7 +45,7 @@
              LOGGER.warn("UUID of added entity already exists: {}", p_157558_);
              return false;
          } else {
-@@ -85,14 +101,19 @@ public class PersistentEntitySectionManager<T extends EntityAccess> implements A
+@@ -85,14 +105,19 @@ public class PersistentEntitySectionManager<T extends EntityAccess> implements A
              return false;
          } else {
              long i = SectionPos.asLong(p_157539_.blockPosition());
@@ -64,7 +68,7 @@
              if (visibility.isAccessible()) {
                  this.startTracking(p_157539_);
              }
-@@ -132,13 +153,17 @@ public class PersistentEntitySectionManager<T extends EntityAccess> implements A
+@@ -132,51 +157,78 @@ public class PersistentEntitySectionManager<T extends EntityAccess> implements A
      }
  
      void startTracking(T p_157576_) {
@@ -84,7 +88,18 @@
      }
  
      public void updateChunkStatus(ChunkPos p_287590_, FullChunkStatus p_287623_) {
-@@ -148,35 +173,47 @@ public class PersistentEntitySectionManager<T extends EntityAccess> implements A
++        // MultiForge (multiforge-patches/05-entity-migration/): while region workers
++        // run, a chunk promotion or demotion pumped on the server thread would race
++        // their entity moves (a stale stop-ticking landing after a worker's
++        // start-ticking leaves the entity in limbo). Hold the call back; the barrier
++        // replays it, in order, once no worker runs (RegionPhase).
++        if (net.multiforge.runtime.region.RegionPhase.workersInFlight()
++                && net.multiforge.runtime.region.RegionPhase.defer(new PersistentEntitySectionManager.MfDeferredStatus(this, p_287590_, p_287623_))) {
++            return;
++        }
+         Visibility visibility = Visibility.fromFullChunkStatus(p_287623_);
+         this.updateChunkStatus(p_287590_, visibility);
+     }
  
      public void updateChunkStatus(ChunkPos p_157528_, Visibility p_157529_) {
          long i = p_157528_.toLong();
@@ -154,11 +169,13 @@
 +            });
 +            this.mfTransitions = mf$outer;
 +        }
++        Runnable mf$hook = mfTestHook;
++        if (mf$hook != null) mf$hook.run();
 +        mf$transitions.forEach(Runnable::run);
      }
  
      private void ensureChunkQueuedForLoad(long p_157556_) {
-@@ -252,8 +289,12 @@ public class PersistentEntitySectionManager<T extends EntityAccess> implements A
+@@ -252,8 +304,12 @@ public class PersistentEntitySectionManager<T extends EntityAccess> implements A
      }
  
      public void tick() {
@@ -173,7 +190,7 @@
      }
  
      private LongSet getAllChunksToSave() {
-@@ -269,31 +310,35 @@ public class PersistentEntitySectionManager<T extends EntityAccess> implements A
+@@ -269,31 +325,35 @@ public class PersistentEntitySectionManager<T extends EntityAccess> implements A
      }
  
      public void autoSave() {
@@ -229,7 +246,7 @@
      }
  
      @Override
-@@ -303,84 +348,125 @@ public class PersistentEntitySectionManager<T extends EntityAccess> implements A
+@@ -303,84 +363,202 @@ public class PersistentEntitySectionManager<T extends EntityAccess> implements A
      }
  
      public boolean isLoaded(UUID p_157551_) {
@@ -404,10 +421,87 @@
 +        synchronized (this.mfLock) {
 +            return this.visibleEntityStorage.count();
 +        }
++    }
++
++    /**
++     * MultiForge (multiforge-patches/05-entity-migration/): a raw census of this
++     * manager, read under {@link #mfLock} (no foreign code runs; the lists are
++     * returned after it is released). Every sectioned entity is listed once, by
++     * its section's effective status; see net.multiforge.neoforge.world.EntityAudit.
++     */
++    public net.multiforge.neoforge.world.EntityAudit.Raw<T> mfCensus() {
++        synchronized (this.mfLock) {
++            List<T> hidden = new java.util.ArrayList<>();
++            List<T> accessible = new java.util.ArrayList<>();
++            List<T> ticking = new java.util.ArrayList<>();
++            for (it.unimi.dsi.fastutil.longs.LongIterator chunks = this.sectionStorage.getAllChunksWithExistingSections().iterator(); chunks.hasNext(); ) {
++                java.util.Iterator<EntitySection<T>> sections = this.sectionStorage.getExistingSectionsInChunk(chunks.nextLong()).iterator();
++                while (sections.hasNext()) {
++                    EntitySection<T> section = sections.next();
++                    Visibility status = section.getStatus();
++                    java.util.Iterator<T> entities = section.getEntities().iterator();
++                    while (entities.hasNext()) {
++                        T entity = entities.next();
++                        Visibility effective = getEffectiveStatus(entity, status);
++                        if (!effective.isAccessible()) {
++                            hidden.add(entity);
++                            continue;
++                        }
++                        accessible.add(entity);
++                        if (effective.isTicking()) ticking.add(entity);
++                    }
++                }
++            }
++            List<T> visible = new java.util.ArrayList<>(this.visibleEntityStorage.count());
++            this.visibleEntityStorage.getAllEntities().forEach(visible::add);
++            return new net.multiforge.neoforge.world.EntityAudit.Raw<>(this.knownUuids.size(), hidden, accessible, ticking, visible);
++        }
++    }
++
++    /** MultiForge: re-apply a missing tracking start (EntityAudit's heal); calls out, so never under mfLock. */
++    public void mfStartTracking(T entity) {
++        this.startTracking(entity);
++    }
++
++    /** MultiForge: re-apply a missing tracking end (EntityAudit's heal). */
++    public void mfStopTracking(T entity) {
++        this.stopTracking(entity);
++    }
++
++    /** MultiForge: re-apply a missing ticking start (EntityAudit's heal). */
++    public void mfStartTicking(T entity) {
++        this.startTicking(entity);
++    }
++
++    /** MultiForge: re-apply a missing ticking end (EntityAudit's heal). */
++    public void mfStopTicking(T entity) {
++        this.stopTicking(entity);
++    }
++
++    /**
++     * MultiForge: an {@link #updateChunkStatus(ChunkPos, FullChunkStatus)} call held
++     * back while region workers ran, replayed on the server thread at the barrier.
++     * A class rather than a lambda, which would renumber Vanilla's.
++     */
++    static final class MfDeferredStatus implements net.multiforge.runtime.region.RegionPhase.Deferred {
++        private final PersistentEntitySectionManager<?> manager;
++        private final ChunkPos pos;
++        private final FullChunkStatus status;
++
++        MfDeferredStatus(PersistentEntitySectionManager<?> manager, ChunkPos pos, FullChunkStatus status) {
++            this.manager = manager;
++            this.pos = pos;
++            this.status = status;
++        }
++
++        @Override
++        public void replay() {
++            this.manager.updateChunkStatus(this.pos, this.status);
++        }
      }
  
      class Callback implements EntityInLevelCallback {
-@@ -401,19 +487,27 @@ public class PersistentEntitySectionManager<T extends EntityAccess> implements A
+@@ -401,19 +579,27 @@ public class PersistentEntitySectionManager<T extends EntityAccess> implements A
              BlockPos blockpos = this.entity.blockPosition();
              long i = SectionPos.asLong(blockpos);
              if (i != this.currentSectionKey) {
@@ -441,7 +535,7 @@
                  if (this.realEntity != null) net.neoforged.neoforge.common.CommonHooks.onEntityEnterSection(this.realEntity, oldSectionKey, i);
              }
          }
-@@ -450,12 +544,18 @@ public class PersistentEntitySectionManager<T extends EntityAccess> implements A
+@@ -450,12 +636,18 @@ public class PersistentEntitySectionManager<T extends EntityAccess> implements A
  
          @Override
          public void onRemove(Entity.RemovalReason p_157619_) {
@@ -462,7 +556,7 @@
              if (visibility.isTicking()) {
                  PersistentEntitySectionManager.this.stopTicking(this.entity);
              }
-@@ -468,9 +568,13 @@ public class PersistentEntitySectionManager<T extends EntityAccess> implements A
+@@ -468,9 +660,13 @@ public class PersistentEntitySectionManager<T extends EntityAccess> implements A
                  PersistentEntitySectionManager.this.callbacks.onDestroyed(this.entity);
              }
  
@@ -478,7 +572,7 @@
          }
      }
  
-@@ -479,4 +583,19 @@ public class PersistentEntitySectionManager<T extends EntityAccess> implements A
+@@ -479,4 +675,19 @@ public class PersistentEntitySectionManager<T extends EntityAccess> implements A
          PENDING,
          LOADED;
      }

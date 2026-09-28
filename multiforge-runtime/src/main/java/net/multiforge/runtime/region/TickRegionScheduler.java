@@ -101,7 +101,7 @@ public final class TickRegionScheduler implements AutoCloseable, RegionListener 
         this.mailboxDrainBatch = mailboxDrainBatch;
         AtomicInteger seq = new AtomicInteger();
         this.pool = (java.util.concurrent.ThreadPoolExecutor) Executors.newFixedThreadPool(workerCount, r -> {
-            Thread t = new Thread(r, "multiforge-tick-" + seq.incrementAndGet());
+            Thread t = new RegionWorkerThread(r, "multiforge-tick-" + seq.incrementAndGet());
             t.setDaemon(true);
             return t;
         });
@@ -371,34 +371,13 @@ public final class TickRegionScheduler implements AutoCloseable, RegionListener 
         long[] waited = new long[n];
         Throwable[] failures = new Throwable[n];
         Thread waiter = Thread.currentThread();
-        for (int i = 0; i < n; i++) {
-            if (placement[i] != TickPlacement.WORKER) continue;
-            final int idx = i;
-            Region region = batch.get(i);
-            RegionState_ s = states[i];
-            pool.execute(() -> {
-                try {
-                    if (region.tryMarkTicking()) {
-                        s.placement = TickPlacement.WORKER;
-                        failures[idx] = tickClaimed(s, region, false);
-                        waited[idx] = RegionTickWatchdog.lastTickWaitNanos();
-                    }
-                } finally {
-                    finishedAt[idx] = System.nanoTime();
-                    if (remaining.decrementAndGet() == 0) LockSupport.unpark(waiter);
-                }
-            });
-        }
-        while (remaining.get() > 0) {
-            boolean didWork;
-            try {
-                didWork = pump.getAsBoolean();
-            } catch (RuntimeException e) {
-                // A failing main-thread task must not wedge the barrier; the
-                // pump's own owner reports it. Keep waiting on the regions.
-                didWork = true;
-            }
-            if (!didWork && remaining.get() > 0) LockSupport.parkNanos(100_000L);
+        // While a worker runs, server-thread entity-visibility changes (a pumped
+        // chunk promotion or demotion) are held back and replayed at the barrier.
+        if (parallel > 0) RegionPhase.beginWorkers();
+        try {
+            submitAndAwaitWorkers(batch, states, placement, remaining, finishedAt, waited, failures, waiter, pump);
+        } finally {
+            if (parallel > 0) RegionPhase.endWorkers();
         }
         // Server-thread regions run now, one after another, with no worker
         // running: the caller is the serial lane and the chunk source's thread,
@@ -436,6 +415,97 @@ public final class TickRegionScheduler implements AutoCloseable, RegionListener 
         if (first instanceof Error err) throw err;
         if (first != null) throw new IllegalStateException("region tick failed", first);
         return new TickAllResult(n, overrun);
+    }
+
+    /**
+     * The indexes of the worker-placed regions, longest last tick first (ties
+     * keep batch order). The pool runs them in that order, so the longest region
+     * starts first and the barrier waits least for a straggler started last.
+     */
+    private static int[] longestFirst(RegionState_[] states, TickPlacement[] placement) {
+        int count = 0;
+        for (TickPlacement p : placement) if (p == TickPlacement.WORKER) count++;
+        int[] out = new int[count];
+        long[] cost = new long[count];
+        int k = 0;
+        for (int i = 0; i < placement.length; i++) {
+            if (placement[i] != TickPlacement.WORKER) continue;
+            out[k] = i;
+            cost[k++] = states[i].lastTickNanos;
+        }
+        sortDescending(out, cost);
+        return out;
+    }
+
+    /** Stable sort of {@code idx} by descending {@code cost} (parallel arrays). */
+    static void sortDescending(int[] idx, long[] cost) {
+        int n = idx.length;
+        if (n < 2) return;
+        if (n <= 64) {
+            for (int j = 1; j < n; j++) {
+                int i = idx[j];
+                long c = cost[j];
+                int m = j - 1;
+                while (m >= 0 && cost[m] < c) {
+                    idx[m + 1] = idx[m];
+                    cost[m + 1] = cost[m];
+                    m--;
+                }
+                idx[m + 1] = i;
+                cost[m + 1] = c;
+            }
+            return;
+        }
+        Integer[] order = new Integer[n];
+        for (int j = 0; j < n; j++) order[j] = j;
+        long[] c = cost.clone();
+        int[] ix = idx.clone();
+        java.util.Arrays.sort(order, (a, b) -> Long.compare(c[b], c[a]));
+        for (int j = 0; j < n; j++) {
+            idx[j] = ix[order[j]];
+            cost[j] = c[order[j]];
+        }
+    }
+
+    /** Submit the worker-placed regions of a {@link #driveTick} batch and pump until all finished. */
+    private void submitAndAwaitWorkers(
+            List<Region> batch,
+            RegionState_[] states,
+            TickPlacement[] placement,
+            AtomicInteger remaining,
+            long[] finishedAt,
+            long[] waited,
+            Throwable[] failures,
+            Thread waiter,
+            BooleanSupplier pump) {
+        for (int i : longestFirst(states, placement)) {
+            final int idx = i;
+            Region region = batch.get(i);
+            RegionState_ s = states[i];
+            pool.execute(() -> {
+                try {
+                    if (region.tryMarkTicking()) {
+                        s.placement = TickPlacement.WORKER;
+                        failures[idx] = tickClaimed(s, region, false);
+                        waited[idx] = RegionTickWatchdog.lastTickWaitNanos();
+                    }
+                } finally {
+                    finishedAt[idx] = System.nanoTime();
+                    if (remaining.decrementAndGet() == 0) LockSupport.unpark(waiter);
+                }
+            });
+        }
+        while (remaining.get() > 0) {
+            boolean didWork;
+            try {
+                didWork = pump.getAsBoolean();
+            } catch (RuntimeException e) {
+                // A failing main-thread task must not wedge the barrier; the
+                // pump's own owner reports it. Keep waiting on the regions.
+                didWork = true;
+            }
+            if (!didWork && remaining.get() > 0) LockSupport.parkNanos(100_000L);
+        }
     }
 
     /**
@@ -533,6 +603,16 @@ public final class TickRegionScheduler implements AutoCloseable, RegionListener 
     public long lastTickSerialOverheadNanos(Region region) {
         RegionState_ s = perRegion.get(region.id());
         return s == null ? 0L : s.lastSerialOverheadNanos;
+    }
+
+    /**
+     * {@code region}'s own time in its last tick (designed waits left out), in
+     * nanoseconds; 0 if it has not ticked. One map lookup, for per-tick decisions
+     * such as entity activation's load shedding.
+     */
+    public long lastTickNanos(Region region) {
+        RegionState_ s = perRegion.get(region.id());
+        return s == null ? 0L : s.lastTickNanos;
     }
 
     /** Name of the thread that last ticked {@code region}, or null if it has not ticked. */
@@ -663,7 +743,9 @@ public final class TickRegionScheduler implements AutoCloseable, RegionListener 
             // leaves them out. The listeners the lane ran for it count, wherever
             // the region ticked, so moving it between a worker and the server
             // thread does not change its time.
-            s.mspt.recordNanos(Math.max(1L, System.nanoTime() - start - RegionTickWatchdog.lastTickWaitNanos()));
+            long own = Math.max(1L, System.nanoTime() - start - RegionTickWatchdog.lastTickWaitNanos());
+            s.mspt.recordNanos(own);
+            s.lastTickNanos = own;
             s.lastSerialPosts = RegionTickWatchdog.lastTickSerialPosts();
             s.lastSerialOverheadNanos = RegionTickWatchdog.lastTickSerialOverheadNanos();
             region.markNotTicking();
@@ -692,6 +774,7 @@ public final class TickRegionScheduler implements AutoCloseable, RegionListener 
         final Region region;
         final RegionMspt mspt = new RegionMspt(100); // ~5s at 20 TPS
         volatile String lastThread;
+        volatile long lastTickNanos;
         volatile long lastSerialPosts;
         volatile long lastSerialOverheadNanos;
         volatile TickPlacement placement;
