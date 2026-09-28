@@ -64,6 +64,39 @@ class ChunkHolderManagerTest {
     }
 
     @Test
+    void ownedSnapshotsAreReusedUntilTheRegionsChunksChange() {
+        ChunkHolderManager m = new ChunkHolderManager(WORLD);
+        RegionId a = RegionId.next();
+        RegionId b = RegionId.next();
+        NewChunkHolder h0 = m.createHolder(new ChunkPos(0, 0), a);
+        NewChunkHolder h1 = m.createHolder(new ChunkPos(1, 0), a);
+        java.util.List<NewChunkHolder> first = m.holdersOwnedBy(a);
+        assertThat(first).containsExactlyInAnyOrder(h0, h1);
+        assertThat(m.holdersOwnedBy(a)).isSameAs(first);
+        java.util.List<ChunkPos> positions = m.ownedPositions(a);
+        assertThat(positions).containsExactlyInAnyOrder(new ChunkPos(0, 0), new ChunkPos(1, 0));
+        assertThat(m.ownedPositions(a)).isSameAs(positions);
+        // Changes to another region leave a's snapshot alone.
+        m.createHolder(new ChunkPos(9, 9), b);
+        assertThat(m.holdersOwnedBy(a)).isSameAs(first);
+        // Re-owning, adding, dropping, merging and splitting each invalidate it.
+        m.createHolder(new ChunkPos(1, 0), b);
+        assertThat(m.holdersOwnedBy(a)).containsExactly(h0);
+        assertThat(m.holdersOwnedBy(b)).hasSize(2);
+        NewChunkHolder h2 = m.createHolder(new ChunkPos(2, 0), a);
+        assertThat(m.holdersOwnedBy(a)).containsExactlyInAnyOrder(h0, h2);
+        m.dropHolder(new ChunkPos(2, 0));
+        assertThat(m.holdersOwnedBy(a)).containsExactly(h0);
+        assertThat(m.ownedPositions(a)).containsExactly(new ChunkPos(0, 0));
+        m.onRegionMerged(a, b);
+        assertThat(m.holdersOwnedBy(a)).hasSize(3);
+        assertThat(m.holdersOwnedBy(b)).isEmpty();
+        m.onRegionSplit(a, b, pos -> pos.x() >= 1);
+        assertThat(m.ownedPositions(a)).containsExactly(new ChunkPos(0, 0));
+        assertThat(m.ownedPositions(b)).containsExactlyInAnyOrder(new ChunkPos(1, 0), new ChunkPos(9, 9));
+    }
+
+    @Test
     void dropHolderForgetsTheChunk() {
         ChunkHolderManager m = new ChunkHolderManager(WORLD);
         RegionId r = RegionId.next();

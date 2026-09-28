@@ -12,7 +12,6 @@
  */
 package net.multiforge.runtime.region;
 
-import java.util.List;
 import java.util.function.Function;
 import net.multiforge.api.world.WorldRef;
 import net.multiforge.runtime.chunk.ChunkHolderManager;
@@ -29,7 +28,7 @@ import net.multiforge.runtime.diagnostics.ChunkCost;
  * can wire a test double in unit tests without depending on the real
  * {@link ChunkHolderManager} plumbing. {@link #standard} supplies the
  * production implementation: it walks the ticking region's {@link
- * HolderManagerRegionData#snapshotBlockEntityTickers()} slice
+ * HolderManagerRegionData} ticker slice ({@link HolderManagerRegionData#tickTickers})
  * (populated by B3.1, folded/peeled across region split/merge — see
  * that method's javadoc) and ticks every live, ready ticker.
  *
@@ -68,8 +67,8 @@ public interface BlockEntityTickRunner {
 
     /**
      * Production implementation. Resolves {@code region}'s {@link
-     * HolderManagerRegionData} via the supplied lookups, snapshots its
-     * {@link TickingBlockEntityRef} slice, drops any ticker that
+     * HolderManagerRegionData} via the supplied lookups, walks its
+     * {@link TickingBlockEntityRef} slice in place, drops any ticker that
      * reports {@link TickingBlockEntityRef#isRemoved()} (mirroring
      * Vanilla's own {@code iterator.remove()} in {@code
      * tickBlockEntities()}), and ticks every remaining entry that wants
@@ -91,18 +90,15 @@ public interface BlockEntityTickRunner {
             if (world == null) return; // region died, or not yet claimed by any world
             ChunkHolderManager manager = chunkManagerForOrNull.apply(world);
             if (manager == null) return; // no chunk manager materialised for this world yet
-            HolderManagerRegionData data = manager.regionData(region.id());
-            List<TickingBlockEntityRef> tickers = data.snapshotBlockEntityTickers();
-            for (TickingBlockEntityRef ticker : tickers) {
-                if (ticker.isRemoved()) {
-                    data.removeBlockEntityTicker(ticker);
-                    continue;
-                }
-                if (!ticker.shouldTick()) continue;
-                long t = ChunkCost.start();
-                ticker.tick();
-                if (t != 0L) ChunkCost.end(ticker.pos().x() >> 4, ticker.pos().z() >> 4, t);
-            }
+            // In list order; removed tickers are dropped in place (see tickTickers).
+            manager.regionData(region.id()).tickTickers(BlockEntityTickRunner::tickOne);
         };
+    }
+
+    private static void tickOne(TickingBlockEntityRef ticker) {
+        if (!ticker.shouldTick()) return;
+        long t = ChunkCost.start();
+        ticker.tick();
+        if (t != 0L) ChunkCost.end(ticker.pos().x() >> 4, ticker.pos().z() >> 4, t);
     }
 }

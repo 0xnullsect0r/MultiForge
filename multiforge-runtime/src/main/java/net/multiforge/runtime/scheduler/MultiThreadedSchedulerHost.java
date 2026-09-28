@@ -552,6 +552,7 @@ public final class MultiThreadedSchedulerHost implements SchedulerHost, AutoClos
             }
             old.clear();
             regionizers.remove(world.dimensionId(), old);
+            regionizerGeneration.incrementAndGet();
             ThreadedRegionizer fresh = regionizerFor(world);
             for (ChunkPos pos : loaded) {
                 Region region = fresh.addChunk(pos);
@@ -593,7 +594,9 @@ public final class MultiThreadedSchedulerHost implements SchedulerHost, AutoClos
     }
 
     public ThreadedRegionizer regionizerFor(WorldRef world) {
-        return regionizers.computeIfAbsent(world.dimensionId(), id -> {
+        ThreadedRegionizer existing = regionizers.get(world.dimensionId());
+        if (existing != null) return existing;
+        ThreadedRegionizer created = regionizers.computeIfAbsent(world.dimensionId(), id -> {
             ThreadedRegionizer r = regionizerFactory.apply(world);
             // M8: auto-wire the shared scheduler and task queue as
             // RegionListeners on every world's regionizer so region death
@@ -613,7 +616,22 @@ public final class MultiThreadedSchedulerHost implements SchedulerHost, AutoClos
             if (boundPins != null) r.setPins(boundPins::all);
             return r;
         });
+        // After the map changed, so a lookup cached before it is refreshed.
+        regionizerGeneration.incrementAndGet();
+        return created;
     }
+
+    /**
+     * Bumped after the set of regionizers changes (one is created, or replaced
+     * by {@code repartition}). A caller caching {@link #regionizerForOrNull}'s
+     * answer (including {@code null}) keeps it while this is unchanged.
+     */
+    public long regionizerGeneration() {
+        return regionizerGeneration.get();
+    }
+
+    private final java.util.concurrent.atomic.AtomicLong regionizerGeneration =
+            new java.util.concurrent.atomic.AtomicLong();
 
     /**
      * Build a {@link RegionListener} that keeps {@link #regionToWorld}
@@ -632,10 +650,8 @@ public final class MultiThreadedSchedulerHost implements SchedulerHost, AutoClos
         RegionChunkSource chunkSource = regionId -> {
             ChunkHolderManager mgr = chunkManagerForOrNull(world);
             if (mgr == null) return List.of();
-            List<NewChunkHolder> holders = mgr.holdersOwnedBy(regionId);
-            List<ChunkPos> out = new ArrayList<>(holders.size());
-            for (NewChunkHolder h : holders) out.add(h.position());
-            return List.copyOf(out);
+            // Cached by the manager until the region's chunks change.
+            return mgr.ownedPositions(regionId);
         };
         return new RegionListener() {
             @Override

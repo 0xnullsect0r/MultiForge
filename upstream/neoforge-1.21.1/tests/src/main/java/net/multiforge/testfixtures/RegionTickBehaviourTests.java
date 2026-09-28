@@ -91,6 +91,83 @@ public class RegionTickBehaviourTests {
 
     @GameTest(template = TestsMod.TEMPLATE_3x3)
     @TestHolder(description = {
+            "A block tick scheduled for the current tick from a region's mailbox, before the",
+            "region's scheduled ticks run, fires in that same tick (LevelTicks' late-due path:",
+            "the region's due chunks were bucketed before its mailbox ran)."
+    })
+    static void tickScheduledFromTheMailboxForNowRunsThisTick(final DynamicTest test) {
+        test.onGameTest(helper -> {
+            MultiThreadedSchedulerHost host = MultiForgeRegionizedRuntime.current();
+            if (host == null) {
+                helper.succeed(); // mode = "off": no mailbox
+                return;
+            }
+            BlockPos lamp = new BlockPos(1, 1, 1);
+            BlockPos abs = helper.absolutePos(lamp);
+            helper.startSequence()
+                    // Lit and unpowered, with no neighbour update: nothing schedules its tick yet.
+                    .thenExecute(() -> helper.getLevel().setBlock(
+                            abs, Blocks.REDSTONE_LAMP.defaultBlockState().setValue(RedstoneLampBlock.LIT, true), 2))
+                    .thenExecute(() -> host.taskQueue().queueChunkTask(
+                            helper.getLevel().mfWorldRef(), abs.getX() >> 4, abs.getZ() >> 4,
+                            () -> helper.getLevel().scheduleTick(abs, Blocks.REDSTONE_LAMP, 0)))
+                    .thenExecuteAfter(1, () -> helper.assertTrue(
+                            !helper.getBlockState(lamp).getValue(RedstoneLampBlock.LIT),
+                            "a tick scheduled for now from the mailbox did not run in the same tick " + describe(helper, lamp)))
+                    .thenSucceed();
+        });
+    }
+
+    @GameTest(template = TestsMod.TEMPLATE_3x3)
+    @TestHolder(description = {
+            "sendBlockUpdated on a region worker re-paths the region's navigating mobs: one",
+            "indexed before the region ticked and one that started navigating mid-tick."
+    })
+    static void blockChangeOnAWorkerRepathsOldAndNewMobs(final DynamicTest test) {
+        test.onGameTest(helper -> {
+            MultiThreadedSchedulerHost host = MultiForgeRegionizedRuntime.current();
+            if (host == null) {
+                helper.succeed(); // mode = "off": no mailbox
+                return;
+            }
+            BlockPos start = new BlockPos(0, 1, 0);
+            BlockPos target = helper.absolutePos(new BlockPos(2, 1, 2));
+            // Bees: flying navigation paths from mid-air, where a fresh ground mob could not.
+            net.minecraft.world.entity.animal.Bee early = helper.spawn(EntityType.BEE, start);
+            early.setNoAi(true);
+            java.util.concurrent.atomic.AtomicReference<String> result = new java.util.concurrent.atomic.AtomicReference<>();
+            BlockPos abs = helper.absolutePos(start);
+            helper.startSequence()
+                    .thenExecuteAfter(1, () -> host.taskQueue().queueChunkTask(
+                            helper.getLevel().mfWorldRef(), abs.getX() >> 4, abs.getZ() >> 4, () -> {
+                                net.minecraft.world.entity.animal.Bee late = EntityType.BEE.create(helper.getLevel());
+                                late.moveTo(early.getX(), early.getY(), early.getZ());
+                                late.setNoAi(true);
+                                helper.getLevel().addFreshEntity(late);
+                                early.getNavigation().moveTo(target.getX() + 0.5, target.getY(), target.getZ() + 0.5, 1.0);
+                                late.getNavigation().moveTo(target.getX() + 0.5, target.getY(), target.getZ() + 0.5, 1.0);
+                                net.minecraft.world.level.pathfinder.Path earlyPath = early.getNavigation().getPath();
+                                net.minecraft.world.level.pathfinder.Path latePath = late.getNavigation().getPath();
+                                if (earlyPath == null || latePath == null || earlyPath.getNodeCount() < 2) {
+                                    result.set("no path to test with: " + earlyPath + " / " + latePath);
+                                    return;
+                                }
+                                BlockPos node = earlyPath.getNodePos(1);
+                                helper.getLevel().setBlock(node, Blocks.STONE.defaultBlockState(), 3);
+                                boolean earlyRepathed = early.getNavigation().getPath() != earlyPath;
+                                boolean lateRepathed = late.getNavigation().getPath() != latePath;
+                                result.set(earlyRepathed && lateRepathed
+                                        ? "ok"
+                                        : "re-pathed: indexed mob " + earlyRepathed + ", mid-tick mob " + lateRepathed);
+                            }))
+                    .thenExecuteAfter(2, () -> helper.assertTrue(
+                            "ok".equals(result.get()), String.valueOf(result.get()) + " " + describe(helper, start)))
+                    .thenSucceed();
+        });
+    }
+
+    @GameTest(template = TestsMod.TEMPLATE_3x3)
+    @TestHolder(description = {
             "Entities tick in region mode: a pig spawned in mid-air falls under gravity."
     })
     static void entityTicks(final DynamicTest test) {

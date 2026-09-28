@@ -63,6 +63,23 @@ public final class ThreadedRegionizer {
     private final ConcurrentMap<SectionPos, Region> sectionToRegion = new ConcurrentHashMap<>();
 
     /**
+     * {@link #sectionToRegion} keyed by packed section coordinates, for {@link
+     * #regionAtChunk(int, int)}: lock-free and allocation-free. Written in step
+     * with {@code sectionToRegion} (see {@link #mapPut}), under the write lock.
+     */
+    private final PackedSectionIndex packed = new PackedSectionIndex();
+
+    /**
+     * Bumped after every change to the section → region map, so {@link
+     * #regions()} can hand out one cached snapshot until the topology changes.
+     */
+    private volatile long topologyVersion;
+
+    private record RegionsSnapshot(long version, List<Region> regions) {}
+
+    private volatile RegionsSnapshot regionsSnapshot;
+
+    /**
      * The loaded chunks of each occupied section (packed {@code x, z}). A
      * section stays in its region until its last chunk is removed; removing
      * one chunk of a section that still has others loaded changes nothing.
@@ -148,7 +165,7 @@ public final class ThreadedRegionizer {
 
     /** @return the region currently owning {@code (chunkX, chunkZ)}, or null if unoccupied. */
     public Region regionAtChunk(int chunkX, int chunkZ) {
-        return sectionToRegion.get(SectionPos.ofChunk(chunkX, chunkZ, sectionChunkShift));
+        return packed.get(PackedSectionIndex.pack(chunkX >> sectionChunkShift, chunkZ >> sectionChunkShift));
     }
 
     public Region regionAtChunk(ChunkPos pos) {
@@ -156,13 +173,36 @@ public final class ThreadedRegionizer {
     }
 
     /**
-     * Snapshot of all currently-live regions. Order is unspecified.
+     * Snapshot of all currently-live regions (immutable). Order is unspecified.
+     * The same snapshot is returned until the section → region map changes.
      */
     public Collection<Region> regions() {
+        long version = topologyVersion;
+        RegionsSnapshot cached = regionsSnapshot;
+        if (cached != null && cached.version() == version) return cached.regions();
         // Deduplicate: a merged region can transiently appear under multiple keys.
         Set<Region> seen = new HashSet<>(sectionToRegion.size());
         seen.addAll(sectionToRegion.values());
-        return List.copyOf(seen);
+        List<Region> out = List.copyOf(seen);
+        // Tagged with the version read before the copy: a change during the copy
+        // bumps the version after it, so this snapshot is never served past it.
+        regionsSnapshot = new RegionsSnapshot(version, out);
+        return out;
+    }
+
+    /** Map {@code section} to {@code region} in both indexes. Caller holds the write lock. */
+    private void mapPut(SectionPos section, Region region) {
+        sectionToRegion.put(section, region);
+        packed.put(PackedSectionIndex.pack(section.x(), section.z()), region);
+        topologyVersion++;
+    }
+
+    /** Unmap {@code section} from both indexes. Caller holds the write lock. */
+    private Region mapRemove(SectionPos section) {
+        Region removed = sectionToRegion.remove(section);
+        packed.remove(PackedSectionIndex.pack(section.x(), section.z()));
+        topologyVersion++;
+        return removed;
     }
 
     /**
@@ -195,7 +235,7 @@ public final class ThreadedRegionizer {
                 }
             }
             target.addSection(section);
-            sectionToRegion.put(section, target);
+            mapPut(section, target);
             if (freshRegion) {
                 target.markReady(); // safe: transient → ready
                 fireRegionCreated(target);
@@ -221,7 +261,7 @@ public final class ThreadedRegionizer {
             if (loaded == null || !loaded.remove(packChunk(pos))) return;
             if (!loaded.isEmpty()) return;
             sectionChunks.remove(section);
-            Region region = sectionToRegion.remove(section);
+            Region region = mapRemove(section);
             if (region == null) return;
             region.removeSection(section);
             if (region.sectionCount() == 0) {
@@ -246,6 +286,8 @@ public final class ThreadedRegionizer {
         try {
             Collection<Region> live = regions();
             sectionToRegion.clear();
+            packed.clear();
+            topologyVersion++;
             sectionChunks.clear();
             for (Region region : live) {
                 region.drainSections();
@@ -319,7 +361,7 @@ public final class ThreadedRegionizer {
             Set<SectionPos> drained = other.drainSections();
             for (SectionPos s : drained) {
                 target.addSection(s);
-                sectionToRegion.put(s, target);
+                mapPut(s, target);
             }
             other.markDead();
             fireRegionDied(other);
@@ -498,7 +540,7 @@ public final class ThreadedRegionizer {
         // sectionToRegion map's atomicity for readers.
         for (Map.Entry<SectionPos, Region> e : reassignments.entrySet()) {
             region.removeSection(e.getKey());
-            sectionToRegion.put(e.getKey(), e.getValue());
+            mapPut(e.getKey(), e.getValue());
         }
 
         // Fire listeners AFTER all reassignments so any callback that reads

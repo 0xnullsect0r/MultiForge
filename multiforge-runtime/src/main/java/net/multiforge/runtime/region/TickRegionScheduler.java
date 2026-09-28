@@ -417,6 +417,56 @@ public final class TickRegionScheduler implements AutoCloseable, RegionListener 
         return new TickAllResult(n, overrun);
     }
 
+    /**
+     * The indexes of the worker-placed regions, longest last tick first (ties
+     * keep batch order). The pool runs them in that order, so the longest region
+     * starts first and the barrier waits least for a straggler started last.
+     */
+    private static int[] longestFirst(RegionState_[] states, TickPlacement[] placement) {
+        int count = 0;
+        for (TickPlacement p : placement) if (p == TickPlacement.WORKER) count++;
+        int[] out = new int[count];
+        long[] cost = new long[count];
+        int k = 0;
+        for (int i = 0; i < placement.length; i++) {
+            if (placement[i] != TickPlacement.WORKER) continue;
+            out[k] = i;
+            cost[k++] = states[i].lastTickNanos;
+        }
+        sortDescending(out, cost);
+        return out;
+    }
+
+    /** Stable sort of {@code idx} by descending {@code cost} (parallel arrays). */
+    static void sortDescending(int[] idx, long[] cost) {
+        int n = idx.length;
+        if (n < 2) return;
+        if (n <= 64) {
+            for (int j = 1; j < n; j++) {
+                int i = idx[j];
+                long c = cost[j];
+                int m = j - 1;
+                while (m >= 0 && cost[m] < c) {
+                    idx[m + 1] = idx[m];
+                    cost[m + 1] = cost[m];
+                    m--;
+                }
+                idx[m + 1] = i;
+                cost[m + 1] = c;
+            }
+            return;
+        }
+        Integer[] order = new Integer[n];
+        for (int j = 0; j < n; j++) order[j] = j;
+        long[] c = cost.clone();
+        int[] ix = idx.clone();
+        java.util.Arrays.sort(order, (a, b) -> Long.compare(c[b], c[a]));
+        for (int j = 0; j < n; j++) {
+            idx[j] = ix[order[j]];
+            cost[j] = c[order[j]];
+        }
+    }
+
     /** Submit the worker-placed regions of a {@link #driveTick} batch and pump until all finished. */
     private void submitAndAwaitWorkers(
             List<Region> batch,
@@ -428,9 +478,7 @@ public final class TickRegionScheduler implements AutoCloseable, RegionListener 
             Throwable[] failures,
             Thread waiter,
             BooleanSupplier pump) {
-        int n = batch.size();
-        for (int i = 0; i < n; i++) {
-            if (placement[i] != TickPlacement.WORKER) continue;
+        for (int i : longestFirst(states, placement)) {
             final int idx = i;
             Region region = batch.get(i);
             RegionState_ s = states[i];
