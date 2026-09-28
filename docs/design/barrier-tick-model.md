@@ -81,9 +81,16 @@ Vanilla computes one `NaturalSpawner.SpawnState` per level per tick: entity
 counts per mob category, and a cap of `category limit × spawnable chunks /
 289`. The spawn state is mutable scratch (the chunk being evaluated, its
 spawn potential), so regions cannot share it. Each region gets its own,
-built on the server thread from the region's own entities and its own
-spawnable chunks. The per-region caps therefore add up to the level-wide
-cap. What changes is only where the headroom is: a crowded region no longer
+built on the server thread from the region's own entities (one entity
+snapshot, shared with the level-wide state) and its share of Vanilla's
+spawnable-chunk count: the 17×17 square around each player chunk the
+`DistanceManager` tracks, loaded or not, deduped level-wide and credited to
+the region owning that player's chunk (`SpawnChunkCredit`). A lone player's
+region therefore gets exactly Vanilla's cap, and the credits add up to
+Vanilla's count; each region's cap is rounded down on its own, so the region
+caps can add up to slightly less than the level cap (probe
+`spawn.chunkcount.mismatch` counts ticks where a player chunk had no region).
+What changes is only where the headroom is: a crowded region no longer
 suppresses spawning in a distant empty one. This is also how Folia spawns.
 The level-wide state is still computed, for `getLastSpawnState()`.
 
