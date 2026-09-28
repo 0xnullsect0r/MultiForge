@@ -424,6 +424,8 @@ public final class MultiThreadedSchedulerHost implements SchedulerHost, AutoClos
         ThreadedRegionizer regionizer = regionizerForOrNull(world);
         if (regionizer == null) return scheduler.driveTick(List.of(), deadlineNanos, pump);
         regionsTicking = true;
+        // Worker chunk caches live for one phase at most (see WorkerChunkCache).
+        net.multiforge.runtime.region.WorkerChunkCache.invalidateAll();
         ChunkCost.beginLevelTick(world.dimensionId());
         try {
             return scheduler.driveTick(regionizer.regions(), deadlineNanos, pump);

@@ -54,6 +54,7 @@ import org.slf4j.LoggerFactory;
  *   [perf]
  *   lockFreeOutsidePhase = true       # server-thread entity queries skip the storage lock
  *                                     # while no region worker runs
+ *   workerChunkCache = true           # region workers cache their last 4 full-chunk reads
  * </pre>
  * A file written by an older version lacks the newer keys; they take their defaults.
  */
@@ -68,12 +69,14 @@ public record MultiForgeConfig(
         int serialLaneHotWaitMs,
         boolean deferVisibility,
         boolean lockFreeOutsidePhase,
+        boolean workerChunkCache,
         ActivationConfig activation) {
 
     public static final boolean DEFAULT_INLINE_SINGLE_REGION = true;
     public static final int DEFAULT_SERIAL_LANE_HOT_WAIT_MS = 5;
     public static final boolean DEFAULT_DEFER_VISIBILITY = true;
     public static final boolean DEFAULT_LOCK_FREE_OUTSIDE_PHASE = true;
+    public static final boolean DEFAULT_WORKER_CHUNK_CACHE = true;
 
     public MultiForgeConfig {
         if (activation == null) activation = ActivationConfig.DEFAULTS;
@@ -102,7 +105,36 @@ public record MultiForgeConfig(
                 serialLaneHotWaitMs,
                 deferVisibility,
                 lockFreeOutsidePhase,
+                DEFAULT_WORKER_CHUNK_CACHE,
                 ActivationConfig.DEFAULTS);
+    }
+
+    /** The layout before {@code perf.workerChunkCache}; it takes its default. */
+    public MultiForgeConfig(
+            int cores,
+            int threadsPerCore,
+            Mode mode,
+            int regionSize,
+            ViolationPolicy violationPolicy,
+            int warnPerMin,
+            boolean inlineSingleRegion,
+            int serialLaneHotWaitMs,
+            boolean deferVisibility,
+            boolean lockFreeOutsidePhase,
+            ActivationConfig activation) {
+        this(
+                cores,
+                threadsPerCore,
+                mode,
+                regionSize,
+                violationPolicy,
+                warnPerMin,
+                inlineSingleRegion,
+                serialLaneHotWaitMs,
+                deferVisibility,
+                lockFreeOutsidePhase,
+                DEFAULT_WORKER_CHUNK_CACHE,
+                activation);
     }
 
     /** The pre-{@code [perf]} layout; the perf knobs take their defaults. */
@@ -280,6 +312,7 @@ public record MultiForgeConfig(
                 serialLaneHotWaitMs,
                 deferVisibility,
                 lockFreeOutsidePhase,
+                workerChunkCache,
                 activation);
     }
 
@@ -295,6 +328,7 @@ public record MultiForgeConfig(
                 serialLaneHotWaitMs,
                 deferVisibility,
                 lockFreeOutsidePhase,
+                workerChunkCache,
                 activation);
     }
 
@@ -310,6 +344,7 @@ public record MultiForgeConfig(
                 serialLaneHotWaitMs,
                 deferVisibility,
                 lockFreeOutsidePhase,
+                workerChunkCache,
                 activation);
     }
 
@@ -325,6 +360,7 @@ public record MultiForgeConfig(
                 serialLaneHotWaitMs,
                 deferVisibility,
                 lockFreeOutsidePhase,
+                workerChunkCache,
                 activation);
     }
 
@@ -340,6 +376,7 @@ public record MultiForgeConfig(
                 serialLaneHotWaitMs,
                 deferVisibility,
                 lockFreeOutsidePhase,
+                workerChunkCache,
                 activation);
     }
 
@@ -355,6 +392,7 @@ public record MultiForgeConfig(
                 serialLaneHotWaitMs,
                 deferVisibility,
                 lockFreeOutsidePhase,
+                workerChunkCache,
                 activation);
     }
 
@@ -370,6 +408,7 @@ public record MultiForgeConfig(
                 serialLaneHotWaitMs,
                 deferVisibility,
                 lockFreeOutsidePhase,
+                workerChunkCache,
                 activation);
     }
 
@@ -385,6 +424,7 @@ public record MultiForgeConfig(
                 v,
                 deferVisibility,
                 lockFreeOutsidePhase,
+                workerChunkCache,
                 activation);
     }
 
@@ -400,6 +440,7 @@ public record MultiForgeConfig(
                 serialLaneHotWaitMs,
                 v,
                 lockFreeOutsidePhase,
+                workerChunkCache,
                 activation);
     }
 
@@ -414,6 +455,23 @@ public record MultiForgeConfig(
                 inlineSingleRegion,
                 serialLaneHotWaitMs,
                 deferVisibility,
+                v,
+                workerChunkCache,
+                activation);
+    }
+
+    public MultiForgeConfig withWorkerChunkCache(boolean v) {
+        return new MultiForgeConfig(
+                cores,
+                threadsPerCore,
+                mode,
+                regionSize,
+                violationPolicy,
+                warnPerMin,
+                inlineSingleRegion,
+                serialLaneHotWaitMs,
+                deferVisibility,
+                lockFreeOutsidePhase,
                 v,
                 activation);
     }
@@ -430,6 +488,7 @@ public record MultiForgeConfig(
                 serialLaneHotWaitMs,
                 deferVisibility,
                 lockFreeOutsidePhase,
+                workerChunkCache,
                 v);
     }
 
@@ -457,6 +516,18 @@ public record MultiForgeConfig(
         String override = System.getProperty("multiforge.perf.lockFreeOutsidePhase");
         if (override != null && !override.isBlank()) return Boolean.parseBoolean(override.trim());
         return lockFreeOutsidePhase;
+    }
+
+    /**
+     * {@code perf.workerChunkCache}, unless {@code
+     * -Dmultiforge.perf.workerChunkCache=true|false} overrides it: each region
+     * worker keeps its last four full-chunk reads ({@code WorkerChunkCache}).
+     * The kill switch for that cache.
+     */
+    public boolean effectiveWorkerChunkCache() {
+        String override = System.getProperty("multiforge.perf.workerChunkCache");
+        if (override != null && !override.isBlank()) return Boolean.parseBoolean(override.trim());
+        return workerChunkCache;
     }
 
     /**

@@ -157,6 +157,24 @@ class ConfigCodecTest {
     }
 
     @Test
+    void workerChunkCacheDefaultsOnAndRoundTrips() {
+        assertThat(MultiForgeConfig.defaults().workerChunkCache()).isTrue();
+        MultiForgeConfig off = ConfigCodec.parse("[perf]\nworkerChunkCache = false\n");
+        assertThat(off.workerChunkCache()).isFalse();
+        assertThat(off.lockFreeOutsidePhase()).isTrue();
+        assertThat(ConfigCodec.parse(ConfigCodec.render(off))).isEqualTo(off);
+        assertThat(MultiForgeConfig.defaults().withWorkerChunkCache(false)).isEqualTo(off);
+        String prev = System.getProperty("multiforge.perf.workerChunkCache");
+        try {
+            System.setProperty("multiforge.perf.workerChunkCache", "true");
+            assertThat(off.effectiveWorkerChunkCache()).isTrue();
+        } finally {
+            if (prev == null) System.clearProperty("multiforge.perf.workerChunkCache");
+            else System.setProperty("multiforge.perf.workerChunkCache", prev);
+        }
+    }
+
+    @Test
     void deferVisibilitySystemPropertyWins() {
         String prev = System.getProperty("multiforge.entities.deferVisibility");
         try {

@@ -1,6 +1,6 @@
 --- a/net/minecraft/server/level/ServerChunkCache.java
 +++ b/net/minecraft/server/level/ServerChunkCache.java
-@@ -135,7 +135,27 @@ public class ServerChunkCache extends ChunkSource implements net.neoforged.neofo
+@@ -135,7 +135,37 @@ public class ServerChunkCache extends ChunkSource implements net.neoforged.neofo
      @Override
      public ChunkAccess getChunk(int p_8360_, int p_8361_, ChunkStatus p_330876_, boolean p_8363_) {
          if (Thread.currentThread() != this.mainThread) {
@@ -12,10 +12,20 @@
 +            // holder (volatile copy-on-write map + atomic futures — safe off
 +            // thread); only a real load still goes through the server thread,
 +            // announced to the barrier via MainThreadHandoff so it is serviced.
-+            ChunkHolder mf$holder = this.getVisibleChunkIfPresent(ChunkPos.asLong(p_8360_, p_8361_));
++            // A worker's last four FULL reads are cached (WorkerChunkCache): the
++            // generation it checks moves in clearCache below, wherever Vanilla drops
++            // its own server-thread cache.
++            long mf$key = ChunkPos.asLong(p_8360_, p_8361_);
++            net.multiforge.runtime.region.WorkerChunkCache mf$cache =
++                    p_330876_ == ChunkStatus.FULL ? net.multiforge.runtime.region.WorkerChunkCache.current() : null;
++            if (mf$cache != null && mf$cache.get(this, mf$key) instanceof ChunkAccess mf$hit) return mf$hit;
++            ChunkHolder mf$holder = this.getVisibleChunkIfPresent(mf$key);
 +            if (mf$holder != null) {
 +                ChunkAccess mf$loaded = mf$holder.getChunkIfPresent(p_330876_);
-+                if (mf$loaded != null) return mf$loaded;
++                if (mf$loaded != null) {
++                    if (mf$cache != null) mf$cache.put(this, mf$key, mf$loaded);
++                    return mf$loaded;
++                }
 +            }
 +            if (!p_8363_) return null;
 +            boolean mf$regionWorker = net.multiforge.runtime.ownership.OwnerToken.current().domain()
@@ -29,7 +39,7 @@
          } else {
              ProfilerFiller profilerfiller = this.level.getProfiler();
              profilerfiller.incrementCounter("getChunk");
-@@ -156,7 +176,14 @@ public class ServerChunkCache extends ChunkSource implements net.neoforged.neofo
+@@ -156,7 +186,14 @@ public class ServerChunkCache extends ChunkSource implements net.neoforged.neofo
  
              profilerfiller.incrementCounter("getChunkCacheMiss");
              CompletableFuture<ChunkResult<ChunkAccess>> completablefuture = this.getChunkFutureMainThread(p_8360_, p_8361_, p_330876_, p_8363_);
@@ -44,7 +54,7 @@
              ChunkResult<ChunkAccess> chunkresult = completablefuture.join();
              ChunkAccess chunkaccess1 = chunkresult.orElse(null);
              if (chunkaccess1 == null && p_8363_) {
-@@ -172,7 +199,13 @@ public class ServerChunkCache extends ChunkSource implements net.neoforged.neofo
+@@ -172,7 +209,18 @@ public class ServerChunkCache extends ChunkSource implements net.neoforged.neofo
      @Override
      public LevelChunk getChunkNow(int p_8357_, int p_8358_) {
          if (Thread.currentThread() != this.mainThread) {
@@ -53,13 +63,28 @@
 +            // null off the server thread, which would make every region worker
 +            // see the world as unloaded. Read the visible holder directly
 +            // instead (see getChunk above for why this is safe).
-+            ChunkHolder mf$holder = this.getVisibleChunkIfPresent(ChunkPos.asLong(p_8357_, p_8358_));
++            long mf$key = ChunkPos.asLong(p_8357_, p_8358_);
++            net.multiforge.runtime.region.WorkerChunkCache mf$cache = net.multiforge.runtime.region.WorkerChunkCache.current();
++            if (mf$cache != null && mf$cache.get(this, mf$key) instanceof LevelChunk mf$hit) return mf$hit;
++            ChunkHolder mf$holder = this.getVisibleChunkIfPresent(mf$key);
 +            if (mf$holder == null) return null;
-+            return mf$holder.getChunkIfPresent(ChunkStatus.FULL) instanceof LevelChunk mf$chunk ? mf$chunk : null;
++            if (!(mf$holder.getChunkIfPresent(ChunkStatus.FULL) instanceof LevelChunk mf$chunk)) return null;
++            if (mf$cache != null) mf$cache.put(this, mf$key, mf$chunk);
++            return mf$chunk;
          } else {
              this.level.getProfiler().incrementCounter("getChunkNow");
              long i = ChunkPos.asLong(p_8357_, p_8358_);
-@@ -213,7 +246,12 @@ public class ServerChunkCache extends ChunkSource implements net.neoforged.neofo
+@@ -203,6 +251,9 @@ public class ServerChunkCache extends ChunkSource implements net.neoforged.neofo
+     }
+ 
+     private void clearCache() {
++        // MultiForge (multiforge-patches/04-chunk-system/): region workers' chunk
++        // caches follow Vanilla's: called after every holder or status change.
++        net.multiforge.runtime.region.WorkerChunkCache.invalidateAll();
+         Arrays.fill(this.lastChunkPos, ChunkPos.INVALID_CHUNK_POS);
+         Arrays.fill(this.lastChunkStatus, null);
+         Arrays.fill(this.lastChunk, null);
+@@ -213,7 +264,12 @@ public class ServerChunkCache extends ChunkSource implements net.neoforged.neofo
          CompletableFuture<ChunkResult<ChunkAccess>> completablefuture;
          if (flag) {
              completablefuture = this.getChunkFutureMainThread(p_8432_, p_8433_, p_330326_, p_8435_);
@@ -72,7 +97,23 @@
          } else {
              completablefuture = CompletableFuture.<CompletableFuture<ChunkResult<ChunkAccess>>>supplyAsync(
                      () -> this.getChunkFutureMainThread(p_8432_, p_8433_, p_330326_, p_8435_), this.mainThreadProcessor
-@@ -502,11 +540,14 @@ public class ServerChunkCache extends ChunkSource implements net.neoforged.neofo
+@@ -319,11 +375,15 @@ public class ServerChunkCache extends ChunkSource implements net.neoforged.neofo
+         this.level.getProfiler().popPush("chunks");
+         if (p_201914_) {
+             this.tickChunks();
++            long mf$tracker = net.multiforge.neoforge.chunk.ChunkMapTickProbe.start(); // MultiForge: timed for the probes
+             this.chunkMap.tick();
++            net.multiforge.neoforge.chunk.ChunkMapTickProbe.endTracker(mf$tracker);
+         }
+ 
+         this.level.getProfiler().popPush("unload");
++        long mf$unload = net.multiforge.neoforge.chunk.ChunkMapTickProbe.start();
+         this.chunkMap.tick(p_201913_);
++        net.multiforge.neoforge.chunk.ChunkMapTickProbe.endUnload(mf$unload);
+         this.level.getProfiler().pop();
+         this.clearCache();
+     }
+@@ -530,11 +590,14 @@ public class ServerChunkCache extends ChunkSource implements net.neoforged.neofo
      }
  
      private void mfRunChunkTick(MfChunkTick entry, NaturalSpawner.SpawnState spawnState) {
@@ -87,7 +128,7 @@
      }
  
      /**
-@@ -586,6 +627,9 @@ public class ServerChunkCache extends ChunkSource implements net.neoforged.neofo
+@@ -614,6 +677,9 @@ public class ServerChunkCache extends ChunkSource implements net.neoforged.neofo
          addRegionTicket(p_8388_, p_8389_, p_8390_, p_8391_, false);
      }
      public <T> void addRegionTicket(TicketType<T> p_8388_, ChunkPos p_8389_, int p_8390_, T p_8391_, boolean forceTicks) {
@@ -97,7 +138,7 @@
          this.distanceManager.addRegionTicket(p_8388_, p_8389_, p_8390_, p_8391_, forceTicks);
      }
  
-@@ -593,6 +637,8 @@ public class ServerChunkCache extends ChunkSource implements net.neoforged.neofo
+@@ -621,6 +687,8 @@ public class ServerChunkCache extends ChunkSource implements net.neoforged.neofo
          removeRegionTicket(p_8439_, p_8440_, p_8441_, p_8442_, false);
      }
      public <T> void removeRegionTicket(TicketType<T> p_8439_, ChunkPos p_8440_, int p_8441_, T p_8442_, boolean forceTicks) {

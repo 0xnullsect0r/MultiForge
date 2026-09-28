@@ -145,6 +145,7 @@ public final class MultiForgeServerState {
                 config.violationPolicy() == MultiForgeConfig.ViolationPolicy.REROUTE_ONLY ? 0L : config.warnPerMin());
         net.multiforge.runtime.region.RegionPhase.setDeferVisibility(config.effectiveDeferVisibility());
         net.multiforge.neoforge.world.LockingEntityGetter.setLockFreeOutsidePhase(config.effectiveLockFreeOutsidePhase());
+        net.multiforge.runtime.region.WorkerChunkCache.setEnabled(config.effectiveWorkerChunkCache());
         net.multiforge.neoforge.world.EntityActivation.configure(config.effectiveActivation());
     }
 

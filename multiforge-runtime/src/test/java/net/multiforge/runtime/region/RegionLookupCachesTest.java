@@ -167,4 +167,44 @@ class RegionLookupCachesTest {
         for (int i = 0; i < n; i++) out.add(i);
         return out;
     }
+
+    @Test
+    void workerChunkCacheHitsUntilTheGenerationMoves() {
+        WorkerChunkCache cache = new WorkerChunkCache();
+        Object level = new Object();
+        Object other = new Object();
+        Object chunk = new Object();
+        assertThat(cache.get(level, 7L)).isNull();
+        cache.put(level, 7L, chunk);
+        assertThat(cache.get(level, 7L)).isSameAs(chunk);
+        assertThat(cache.get(other, 7L)).isNull();
+        assertThat(cache.get(level, 8L)).isNull();
+        WorkerChunkCache.invalidateAll();
+        assertThat(cache.get(level, 7L)).isNull();
+        // Four entries, most recent first; the fifth evicts the oldest.
+        for (long k = 0; k < 5; k++) {
+            assertThat(cache.get(level, k)).isNull();
+            cache.put(level, k, "chunk" + k);
+        }
+        assertThat(cache.get(level, 0L)).isNull();
+        for (long k = 1; k < 5; k++) assertThat(cache.get(level, k)).isEqualTo("chunk" + k);
+    }
+
+    @Test
+    void workerChunkCacheIsOnlyOnWorkersAndHonoursTheKillSwitch() throws Exception {
+        assertThat(WorkerChunkCache.current()).isNull();
+        WorkerChunkCache[] seen = new WorkerChunkCache[2];
+        RegionWorkerThread worker = new RegionWorkerThread(
+                () -> {
+                    seen[0] = WorkerChunkCache.current();
+                    WorkerChunkCache.setEnabled(false);
+                    seen[1] = WorkerChunkCache.current();
+                    WorkerChunkCache.setEnabled(true);
+                },
+                "test-worker");
+        worker.start();
+        worker.join();
+        assertThat(seen[0]).isSameAs(worker.chunkCache());
+        assertThat(seen[1]).isNull();
+    }
 }

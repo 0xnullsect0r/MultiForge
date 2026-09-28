@@ -101,7 +101,7 @@ public final class TickRegionScheduler implements AutoCloseable, RegionListener 
         this.mailboxDrainBatch = mailboxDrainBatch;
         AtomicInteger seq = new AtomicInteger();
         this.pool = (java.util.concurrent.ThreadPoolExecutor) Executors.newFixedThreadPool(workerCount, r -> {
-            Thread t = new Thread(r, "multiforge-tick-" + seq.incrementAndGet());
+            Thread t = new RegionWorkerThread(r, "multiforge-tick-" + seq.incrementAndGet());
             t.setDaemon(true);
             return t;
         });

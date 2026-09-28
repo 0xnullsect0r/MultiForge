@@ -60,6 +60,7 @@ public final class ConfigCodec {
             hotWaitMs = 0;
         boolean deferVisibility = boolOr(r, "entities.deferVisibility", d.deferVisibility());
         boolean lockFree = boolOr(r, "perf.lockFreeOutsidePhase", d.lockFreeOutsidePhase());
+        boolean workerChunkCache = boolOr(r, "perf.workerChunkCache", d.workerChunkCache());
         ActivationConfig a = d.activation();
         ActivationConfig activation = new ActivationConfig(
                 boolOr(r, "entities.activation", a.activation()),
@@ -84,6 +85,7 @@ public final class ConfigCodec {
                 hotWaitMs,
                 deferVisibility,
                 lockFree,
+                workerChunkCache,
                 activation);
     }
 
@@ -159,6 +161,9 @@ public final class ConfigCodec {
         sb.append("# entity storage directly, as Vanilla does, instead of under its lock with a\n");
         sb.append("# copy. false takes the lock everywhere (kill switch).\n");
         sb.append("lockFreeOutsidePhase = ").append(c.lockFreeOutsidePhase()).append("\n");
+        sb.append("# Each region worker keeps its last four full-chunk reads, invalidated whenever\n");
+        sb.append("# a chunk's status or the loaded-chunk map changes. false = no cache (kill switch).\n");
+        sb.append("workerChunkCache = ").append(c.workerChunkCache()).append("\n");
         return sb.toString();
     }
 
