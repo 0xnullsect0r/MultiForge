@@ -59,8 +59,9 @@ public final class ConfigCodec {
         else if (r.get("tick.serialLaneInlineThreshold") != null && intOr(r, "tick.serialLaneInlineThreshold", 1) <= 0)
             hotWaitMs = 0;
         boolean deferVisibility = boolOr(r, "entities.deferVisibility", d.deferVisibility());
+        boolean lockFree = boolOr(r, "perf.lockFreeOutsidePhase", d.lockFreeOutsidePhase());
         return new MultiForgeConfig(
-                cores, tpc, mode, regionSize, vp, warnPerMin, inlineSingle, hotWaitMs, deferVisibility);
+                cores, tpc, mode, regionSize, vp, warnPerMin, inlineSingle, hotWaitMs, deferVisibility, lockFree);
     }
 
     public static String render(MultiForgeConfig c) {
@@ -94,7 +95,12 @@ public final class ConfigCodec {
         sb.append("# While region workers run, entity-visibility changes from chunk loads and\n");
         sb.append("# unloads wait for the tick barrier, so a worker moving an entity cannot race\n");
         sb.append("# them. false restores v1.10's behaviour (kill switch).\n");
-        sb.append("deferVisibility = ").append(c.deferVisibility()).append("\n");
+        sb.append("deferVisibility = ").append(c.deferVisibility()).append("\n\n");
+        sb.append("[perf]\n");
+        sb.append("# Entity queries on the server thread while no region worker runs read the\n");
+        sb.append("# entity storage directly, as Vanilla does, instead of under its lock with a\n");
+        sb.append("# copy. false takes the lock everywhere (kill switch).\n");
+        sb.append("lockFreeOutsidePhase = ").append(c.lockFreeOutsidePhase()).append("\n");
         return sb.toString();
     }
 

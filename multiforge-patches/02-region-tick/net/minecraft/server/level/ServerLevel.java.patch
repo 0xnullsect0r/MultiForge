@@ -12,7 +12,7 @@
      private final ServerChunkCache chunkSource;
      private final MinecraftServer server;
      private final ServerLevelData serverLevelData;
-@@ -190,16 +193,37 @@ public class ServerLevel extends Level implements WorldGenLevel {
+@@ -190,16 +193,39 @@ public class ServerLevel extends Level implements WorldGenLevel {
      private final LevelTicks<Block> blockTicks = new LevelTicks<>(this::isPositionTickingWithEntitiesLoaded, this.getProfilerSupplier());
      private final LevelTicks<Fluid> fluidTicks = new LevelTicks<>(this::isPositionTickingWithEntitiesLoaded, this.getProfilerSupplier());
      private final PathTypeCache pathTypesByPosCache = new PathTypeCache();
@@ -50,10 +50,12 @@
 -    final Int2ObjectMap<net.neoforged.neoforge.entity.PartEntity<?>> dragonParts = new Int2ObjectOpenHashMap<>();
 +    final Int2ObjectMap<net.neoforged.neoforge.entity.PartEntity<?>> dragonParts =
 +            it.unimi.dsi.fastutil.ints.Int2ObjectMaps.synchronize(new Int2ObjectOpenHashMap<>());
++    // MultiForge (multiforge-patches/02-region-tick/): getPartEntities' snapshot, see mfRebuildPartSnapshot.
++    private volatile java.util.List<net.neoforged.neoforge.entity.PartEntity<?>> mfPartSnapshot = List.of();
      private final StructureManager structureManager;
      private final StructureCheck structureCheck;
      private final boolean tickTime;
-@@ -361,12 +385,23 @@ public class ServerLevel extends Level implements WorldGenLevel {
+@@ -361,12 +387,23 @@ public class ServerLevel extends Level implements WorldGenLevel {
          }
  
          profilerfiller.popPush("tickPending");
@@ -81,7 +83,7 @@
              profilerfiller.pop();
          }
  
-@@ -389,7 +424,9 @@ public class ServerLevel extends Level implements WorldGenLevel {
+@@ -389,7 +426,9 @@ public class ServerLevel extends Level implements WorldGenLevel {
              this.resetEmptyTime();
          }
  
@@ -91,7 +93,7 @@
              profilerfiller.push("entities");
              if (this.dragonFight != null && flag) {
                  profilerfiller.push("dragonFight");
-@@ -397,33 +434,20 @@ public class ServerLevel extends Level implements WorldGenLevel {
+@@ -397,33 +436,20 @@ public class ServerLevel extends Level implements WorldGenLevel {
                  profilerfiller.pop();
              }
  
@@ -139,7 +141,7 @@
              profilerfiller.pop();
              this.tickBlockEntities();
          }
-@@ -433,6 +457,127 @@ public class ServerLevel extends Level implements WorldGenLevel {
+@@ -433,6 +459,127 @@ public class ServerLevel extends Level implements WorldGenLevel {
          profilerfiller.pop();
      }
  
@@ -267,7 +269,7 @@
      @Override
      public boolean shouldTickBlocksAt(long p_184059_) {
          return this.chunkSource.chunkMap.getDistanceManager().inBlockTickingRange(p_184059_);
-@@ -1068,7 +1213,7 @@ public class ServerLevel extends Level implements WorldGenLevel {
+@@ -1068,7 +1215,7 @@ public class ServerLevel extends Level implements WorldGenLevel {
  
      @Override
      public void sendBlockUpdated(BlockPos p_8755_, BlockState p_8756_, BlockState p_8757_, int p_8758_) {
@@ -276,7 +278,7 @@
              String s = "recursive call to sendBlockUpdated";
              Util.logAndPauseIfInIde("recursive call to sendBlockUpdated", new IllegalStateException("recursive call to sendBlockUpdated"));
          }
-@@ -1081,6 +1226,13 @@ public class ServerLevel extends Level implements WorldGenLevel {
+@@ -1081,6 +1228,13 @@ public class ServerLevel extends Level implements WorldGenLevel {
              List<PathNavigation> list = new ObjectArrayList<>();
  
              for (Mob mob : this.navigatingMobs) {
@@ -290,7 +292,7 @@
                  PathNavigation pathnavigation = mob.getNavigation();
                  if (pathnavigation.shouldRecomputePath(p_8755_)) {
                      list.add(pathnavigation);
-@@ -1088,13 +1240,13 @@ public class ServerLevel extends Level implements WorldGenLevel {
+@@ -1088,13 +1242,13 @@ public class ServerLevel extends Level implements WorldGenLevel {
              }
  
              try {
@@ -306,7 +308,7 @@
              }
          }
      }
-@@ -1185,11 +1337,63 @@ public class ServerLevel extends Level implements WorldGenLevel {
+@@ -1185,11 +1339,63 @@ public class ServerLevel extends Level implements WorldGenLevel {
  
      @Override
      public void blockEvent(BlockPos p_8746_, Block p_8747_, int p_8748_, int p_8749_) {
@@ -370,7 +372,7 @@
  
          while (!this.blockEvents.isEmpty()) {
              BlockEventData blockeventdata = this.blockEvents.removeFirst();
-@@ -1228,6 +1432,40 @@ public class ServerLevel extends Level implements WorldGenLevel {
+@@ -1228,6 +1434,40 @@ public class ServerLevel extends Level implements WorldGenLevel {
          return this.fluidTicks;
      }
  
@@ -411,7 +413,7 @@
      @Nonnull
      @Override
      public MinecraftServer getServer() {
-@@ -1569,6 +1807,7 @@ public class ServerLevel extends Level implements WorldGenLevel {
+@@ -1569,6 +1809,7 @@ public class ServerLevel extends Level implements WorldGenLevel {
      @VisibleForTesting
      public void clearBlockEvents(BoundingBox p_8723_) {
          this.blockEvents.removeIf(p_207568_ -> p_8723_.isInside(p_207568_.pos()));
@@ -419,7 +421,7 @@
      }
  
      @Override
-@@ -1752,7 +1991,7 @@ public class ServerLevel extends Level implements WorldGenLevel {
+@@ -1752,7 +1993,7 @@ public class ServerLevel extends Level implements WorldGenLevel {
              }
  
              if (p_143371_ instanceof Mob mob) {
@@ -428,7 +430,15 @@
                      String s = "onTrackingStart called during navigation iteration";
                      Util.logAndPauseIfInIde(
                          "onTrackingStart called during navigation iteration", new IllegalStateException("onTrackingStart called during navigation iteration")
-@@ -1779,7 +2018,7 @@ public class ServerLevel extends Level implements WorldGenLevel {
+@@ -1766,6 +2007,7 @@ public class ServerLevel extends Level implements WorldGenLevel {
+                 for(net.neoforged.neoforge.entity.PartEntity<?> enderdragonpart : p_143371_.getParts()) {
+                     ServerLevel.this.dragonParts.put(enderdragonpart.getId(), enderdragonpart);
+                 }
++                ServerLevel.this.mfRebuildPartSnapshot();
+             }
+ 
+             p_143371_.updateDynamicGameEventListener(DynamicGameEventListener::add);
+@@ -1779,7 +2021,7 @@ public class ServerLevel extends Level implements WorldGenLevel {
              }
  
              if (p_143375_ instanceof Mob mob) {
@@ -437,14 +447,33 @@
                      String s = "onTrackingStart called during navigation iteration";
                      Util.logAndPauseIfInIde(
                                "onTrackingStart called during navigation iteration", new IllegalStateException("onTrackingStart called during navigation iteration")
-@@ -1808,7 +2047,10 @@ public class ServerLevel extends Level implements WorldGenLevel {
+@@ -1793,6 +2035,7 @@ public class ServerLevel extends Level implements WorldGenLevel {
+                 for(net.neoforged.neoforge.entity.PartEntity<?> enderdragonpart : p_143375_.getParts()) {
+                     ServerLevel.this.dragonParts.remove(enderdragonpart.getId());
+                 }
++                ServerLevel.this.mfRebuildPartSnapshot();
+             }
+ 
+             p_143375_.updateDynamicGameEventListener(DynamicGameEventListener::remove);
+@@ -1808,7 +2051,21 @@ public class ServerLevel extends Level implements WorldGenLevel {
  
      @Override
      public java.util.Collection<net.neoforged.neoforge.entity.PartEntity<?>> getPartEntities() {
 -        return this.dragonParts.values();
 +        // MultiForge: a snapshot — region workers read this while parts come and go.
++        return this.mfPartSnapshot;
++    }
++
++    /**
++     * MultiForge (multiforge-patches/02-region-tick/): republish {@link #getPartEntities}'s
++     * copy-on-write snapshot after parts were added or removed. Parts change only when a
++     * multipart entity starts or stops being tracked; every query reads the volatile
++     * snapshot without copying. Built and published under the map's monitor, so two
++     * concurrent rebuilds cannot publish out of order.
++     */
++    void mfRebuildPartSnapshot() {
 +        synchronized (this.dragonParts) {
-+            return List.copyOf(this.dragonParts.values());
++            this.mfPartSnapshot = this.dragonParts.isEmpty() ? List.of() : List.copyOf(this.dragonParts.values());
 +        }
      }
  

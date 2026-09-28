@@ -116,7 +116,8 @@ public final class MultiForgeServerState {
      * ownership enforcement (strict for {@code mode = "strict"} or {@code
      * policy = "fail"}), the tick watchdog, and the violation-warning budget
      * ({@code policy = "reroute-only"} silences it), and the entity-visibility
-     * deferral's kill switch ({@code entities.deferVisibility}). {@code mode = "off"} only
+     * deferral's kill switch ({@code entities.deferVisibility}), and the lock-free
+     * entity-query fast path's ({@code perf.lockFreeOutsidePhase}). {@code mode = "off"} only
      * matters at server start, where it skips installing the runtime.
      *
      * <p>An explicitly set {@code -Dmultiforge.ownership.mode=off|reroute|strict}
@@ -142,6 +143,7 @@ public final class MultiForgeServerState {
         net.multiforge.runtime.diagnostics.ViolationLogger.configure(
                 config.violationPolicy() == MultiForgeConfig.ViolationPolicy.REROUTE_ONLY ? 0L : config.warnPerMin());
         net.multiforge.runtime.region.RegionPhase.setDeferVisibility(config.effectiveDeferVisibility());
+        net.multiforge.neoforge.world.LockingEntityGetter.setLockFreeOutsidePhase(config.effectiveLockFreeOutsidePhase());
     }
 
     /** The current config snapshot for {@code server} — see {@link #configStoreFor}. */

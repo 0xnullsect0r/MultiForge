@@ -43,6 +43,10 @@ import org.slf4j.LoggerFactory;
  *
  *   [entities]
  *   deferVisibility = true            # hold entity-visibility changes back while workers run
+ *
+ *   [perf]
+ *   lockFreeOutsidePhase = true       # server-thread entity queries skip the storage lock
+ *                                     # while no region worker runs
  * </pre>
  * A file written by an older version lacks the newer keys; they take their defaults.
  */
@@ -55,11 +59,37 @@ public record MultiForgeConfig(
         int warnPerMin,
         boolean inlineSingleRegion,
         int serialLaneHotWaitMs,
-        boolean deferVisibility) {
+        boolean deferVisibility,
+        boolean lockFreeOutsidePhase) {
 
     public static final boolean DEFAULT_INLINE_SINGLE_REGION = true;
     public static final int DEFAULT_SERIAL_LANE_HOT_WAIT_MS = 5;
     public static final boolean DEFAULT_DEFER_VISIBILITY = true;
+    public static final boolean DEFAULT_LOCK_FREE_OUTSIDE_PHASE = true;
+
+    /** The pre-{@code [perf]} layout; the perf knobs take their defaults. */
+    public MultiForgeConfig(
+            int cores,
+            int threadsPerCore,
+            Mode mode,
+            int regionSize,
+            ViolationPolicy violationPolicy,
+            int warnPerMin,
+            boolean inlineSingleRegion,
+            int serialLaneHotWaitMs,
+            boolean deferVisibility) {
+        this(
+                cores,
+                threadsPerCore,
+                mode,
+                regionSize,
+                violationPolicy,
+                warnPerMin,
+                inlineSingleRegion,
+                serialLaneHotWaitMs,
+                deferVisibility,
+                DEFAULT_LOCK_FREE_OUTSIDE_PHASE);
+    }
 
     /** The pre-{@code [entities]} layout; the entity knobs take their defaults. */
     public MultiForgeConfig(
@@ -210,7 +240,8 @@ public record MultiForgeConfig(
                 warnPerMin,
                 inlineSingleRegion,
                 serialLaneHotWaitMs,
-                deferVisibility);
+                deferVisibility,
+                lockFreeOutsidePhase);
     }
 
     public MultiForgeConfig withThreadsPerCore(int v) {
@@ -223,7 +254,8 @@ public record MultiForgeConfig(
                 warnPerMin,
                 inlineSingleRegion,
                 serialLaneHotWaitMs,
-                deferVisibility);
+                deferVisibility,
+                lockFreeOutsidePhase);
     }
 
     public MultiForgeConfig withMode(Mode v) {
@@ -236,7 +268,8 @@ public record MultiForgeConfig(
                 warnPerMin,
                 inlineSingleRegion,
                 serialLaneHotWaitMs,
-                deferVisibility);
+                deferVisibility,
+                lockFreeOutsidePhase);
     }
 
     public MultiForgeConfig withRegionSize(int v) {
@@ -249,7 +282,8 @@ public record MultiForgeConfig(
                 warnPerMin,
                 inlineSingleRegion,
                 serialLaneHotWaitMs,
-                deferVisibility);
+                deferVisibility,
+                lockFreeOutsidePhase);
     }
 
     public MultiForgeConfig withViolationPolicy(ViolationPolicy v) {
@@ -262,7 +296,8 @@ public record MultiForgeConfig(
                 warnPerMin,
                 inlineSingleRegion,
                 serialLaneHotWaitMs,
-                deferVisibility);
+                deferVisibility,
+                lockFreeOutsidePhase);
     }
 
     public MultiForgeConfig withWarnPerMin(int v) {
@@ -275,7 +310,8 @@ public record MultiForgeConfig(
                 v,
                 inlineSingleRegion,
                 serialLaneHotWaitMs,
-                deferVisibility);
+                deferVisibility,
+                lockFreeOutsidePhase);
     }
 
     public MultiForgeConfig withInlineSingleRegion(boolean v) {
@@ -288,7 +324,8 @@ public record MultiForgeConfig(
                 warnPerMin,
                 v,
                 serialLaneHotWaitMs,
-                deferVisibility);
+                deferVisibility,
+                lockFreeOutsidePhase);
     }
 
     public MultiForgeConfig withSerialLaneHotWaitMs(int v) {
@@ -301,7 +338,8 @@ public record MultiForgeConfig(
                 warnPerMin,
                 inlineSingleRegion,
                 v,
-                deferVisibility);
+                deferVisibility,
+                lockFreeOutsidePhase);
     }
 
     public MultiForgeConfig withDeferVisibility(boolean v) {
@@ -314,6 +352,21 @@ public record MultiForgeConfig(
                 warnPerMin,
                 inlineSingleRegion,
                 serialLaneHotWaitMs,
+                v,
+                lockFreeOutsidePhase);
+    }
+
+    public MultiForgeConfig withLockFreeOutsidePhase(boolean v) {
+        return new MultiForgeConfig(
+                cores,
+                threadsPerCore,
+                mode,
+                regionSize,
+                violationPolicy,
+                warnPerMin,
+                inlineSingleRegion,
+                serialLaneHotWaitMs,
+                deferVisibility,
                 v);
     }
 
@@ -328,5 +381,18 @@ public record MultiForgeConfig(
         String override = System.getProperty("multiforge.entities.deferVisibility");
         if (override != null && !override.isBlank()) return Boolean.parseBoolean(override.trim());
         return deferVisibility;
+    }
+
+    /**
+     * {@code perf.lockFreeOutsidePhase}, unless {@code
+     * -Dmultiforge.perf.lockFreeOutsidePhase=true|false} overrides it: entity
+     * queries on the server thread while no region worker runs read the entity
+     * storage directly, without its lock or a copy ({@code LockingEntityGetter}).
+     * The kill switch for that fast path.
+     */
+    public boolean effectiveLockFreeOutsidePhase() {
+        String override = System.getProperty("multiforge.perf.lockFreeOutsidePhase");
+        if (override != null && !override.isBlank()) return Boolean.parseBoolean(override.trim());
+        return lockFreeOutsidePhase;
     }
 }

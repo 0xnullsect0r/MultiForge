@@ -18,7 +18,17 @@
      // MultiForge (multiforge-patches/02-region-tick/): block events queued by a
      // region worker, one ordered set per region, touched only by that region's
      // worker (and by the server thread while no region runs). See blockEvent.
-@@ -434,19 +436,43 @@ public class ServerLevel extends Level implements WorldGenLevel {
+@@ -274,6 +276,9 @@ public class ServerLevel extends Level implements WorldGenLevel {
+             p_214999_
+         );
+         this.entityManager = new PersistentEntitySectionManager<>(Entity.class, new ServerLevel.EntityCallbacks(), entitypersistentstorage);
++        // MultiForge (multiforge-patches/05-entity-migration/): entity queries from this
++        // thread, while no region worker runs, skip the storage lock (LockingEntityGetter).
++        ((net.multiforge.neoforge.world.LockingEntityGetter<Entity>) this.entityManager.getEntityGetter()).bindServerThread(p_214999_.getRunningThread());
+         this.chunkSource = new ServerChunkCache(
+             this,
+             p_215001_,
+@@ -436,19 +441,43 @@ public class ServerLevel extends Level implements WorldGenLevel {
                  profilerfiller.pop();
              }
  
@@ -73,7 +83,7 @@
              }
              profilerfiller.pop();
              this.tickBlockEntities();
-@@ -457,64 +483,77 @@ public class ServerLevel extends Level implements WorldGenLevel {
+@@ -459,64 +488,77 @@ public class ServerLevel extends Level implements WorldGenLevel {
          profilerfiller.pop();
      }
  
@@ -189,7 +199,7 @@
          }
      }
  
-@@ -525,56 +564,18 @@ public class ServerLevel extends Level implements WorldGenLevel {
+@@ -527,56 +569,18 @@ public class ServerLevel extends Level implements WorldGenLevel {
       * across a region border).
       */
      public void mfTickEntitiesAfterRegions() {
@@ -253,7 +263,7 @@
          }
      }
  
-@@ -1039,7 +1040,7 @@ public class ServerLevel extends Level implements WorldGenLevel {
+@@ -1041,7 +1045,7 @@ public class ServerLevel extends Level implements WorldGenLevel {
          // MultiForge (multiforge-patches/01-ownership/): see Level.setBlock for rationale.
          if (!net.multiforge.neoforge.OwnershipGuard.canMutateAt("ServerLevel.addFreshEntity", this, p_8837_.blockPosition())) {
              // Returns whether the entity will be added, as Vanilla would.
@@ -262,7 +272,7 @@
          }
          return this.addEntity(p_8837_);
      }
-@@ -1078,6 +1079,16 @@ public class ServerLevel extends Level implements WorldGenLevel {
+@@ -1080,6 +1084,16 @@ public class ServerLevel extends Level implements WorldGenLevel {
      }
  
      private boolean addEntity(Entity p_8873_) {
@@ -279,7 +289,7 @@
          if (p_8873_.isRemoved()) {
              LOGGER.warn("Tried to add entity {} but it was marked as removed already", EntityType.getKey(p_8873_.getType()));
              return false;
-@@ -1346,7 +1357,7 @@ public class ServerLevel extends Level implements WorldGenLevel {
+@@ -1348,7 +1362,7 @@ public class ServerLevel extends Level implements WorldGenLevel {
          net.multiforge.runtime.ownership.OwnerToken mf$token = net.multiforge.runtime.ownership.OwnerToken.current();
          if (mf$token.domain() == net.multiforge.runtime.ownership.Domain.REGION) {
              this.mfRegionBlockEvents
@@ -288,7 +298,7 @@
                      .add(new BlockEventData(p_8746_, p_8747_, p_8748_, p_8749_));
              return;
          }
-@@ -1458,14 +1469,31 @@ public class ServerLevel extends Level implements WorldGenLevel {
+@@ -1460,14 +1474,31 @@ public class ServerLevel extends Level implements WorldGenLevel {
      public void mfTickRegionScheduledTicks(long regionId, java.util.List<net.minecraft.world.level.ChunkPos> chunks) {
          if (this.mfRegionRunsBlockTicks) {
              long gameTime = this.getGameTime();
@@ -322,7 +332,7 @@
      @Nonnull
      @Override
      public MinecraftServer getServer() {
-@@ -1812,7 +1840,7 @@ public class ServerLevel extends Level implements WorldGenLevel {
+@@ -1814,7 +1845,7 @@ public class ServerLevel extends Level implements WorldGenLevel {
      @VisibleForTesting
      public void clearBlockEvents(BoundingBox p_8723_) {
          this.blockEvents.removeIf(p_207568_ -> p_8723_.isInside(p_207568_.pos()));
@@ -331,7 +341,7 @@
      }
  
      @Override
-@@ -2136,4 +2164,30 @@ public class ServerLevel extends Level implements WorldGenLevel {
+@@ -2151,4 +2182,30 @@ public class ServerLevel extends Level implements WorldGenLevel {
          }
      }
  

@@ -140,6 +140,23 @@ class ConfigCodecTest {
     }
 
     @Test
+    void lockFreeOutsidePhaseDefaultsOnAndRoundTrips() {
+        assertThat(MultiForgeConfig.defaults().lockFreeOutsidePhase()).isTrue();
+        MultiForgeConfig off = ConfigCodec.parse("[perf]\nlockFreeOutsidePhase = false\n");
+        assertThat(off.lockFreeOutsidePhase()).isFalse();
+        assertThat(ConfigCodec.parse(ConfigCodec.render(off))).isEqualTo(off);
+        assertThat(MultiForgeConfig.defaults().withLockFreeOutsidePhase(false)).isEqualTo(off);
+        String prev = System.getProperty("multiforge.perf.lockFreeOutsidePhase");
+        try {
+            System.setProperty("multiforge.perf.lockFreeOutsidePhase", "true");
+            assertThat(off.effectiveLockFreeOutsidePhase()).isTrue();
+        } finally {
+            if (prev == null) System.clearProperty("multiforge.perf.lockFreeOutsidePhase");
+            else System.setProperty("multiforge.perf.lockFreeOutsidePhase", prev);
+        }
+    }
+
+    @Test
     void deferVisibilitySystemPropertyWins() {
         String prev = System.getProperty("multiforge.entities.deferVisibility");
         try {
