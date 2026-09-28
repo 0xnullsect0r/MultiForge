@@ -364,7 +364,7 @@ public final class SwarmBench {
      * the first bot, forceloaded, filled with that many persistent squid, glow squid
      * and cod. Entity cramming is turned off ({@code maxEntityCramming 0}) so the crowd
      * keeps its size; the pushing between the mobs, the cost that grows with the crowd,
-     * still runs.
+     * still runs. The world is frozen ({@code /tick freeze}) while they are summoned.
      */
     private static void buildWaterCrowd(HeadlessServerRunner runner, String bot, int mobs, Map<String, Object> extra)
             throws IOException {
@@ -405,6 +405,10 @@ public final class SwarmBench {
                         x1 - 1,
                         y1 - 1,
                         z1 - 1));
+        // Frozen, a tick costs next to nothing however big the crowd already is, so each
+        // summon (one tick's command processing) returns at once; unfrozen, 15k summons
+        // into a crowd that already takes 100+ ms a tick would take hours.
+        command(runner, "tick freeze");
         Random rnd = new Random(23);
         for (int i = 0; i < mobs; i++) {
             runner.rcon()
@@ -416,6 +420,7 @@ public final class SwarmBench {
                             y0 + 1 + rnd.nextInt(6),
                             z0 + 1 + rnd.nextInt(48)));
         }
+        command(runner, "tick unfreeze");
         extra.put("water_mobs", mobs);
         extra.put("water_basin", x0 + "," + z0 + ".." + x1 + "," + z1 + " (bot at " + bx + "," + bz + ")");
         extra.put("water_mobs_start", countWaterMobs(runner));
