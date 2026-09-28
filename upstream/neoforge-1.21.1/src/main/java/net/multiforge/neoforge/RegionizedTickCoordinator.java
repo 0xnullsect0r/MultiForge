@@ -132,6 +132,8 @@ public final class RegionizedTickCoordinator {
         // A throwable from a region's tick is rethrown here, after every region
         // finished, so MinecraftServer.tickChildren's "Exception ticking world"
         // crash handling applies exactly as for Vanilla's inline level tick.
+        // Entity activation range: where this level's players are, before any region reads it.
+        net.multiforge.neoforge.world.EntityActivation.snapshotPlayers(level);
         checkOverrun(world, host.driveRegions(world, DISPATCH_DEADLINE_NANOS, pump));
         // Entities no region ticked (outside every region, or moved across a
         // region border mid-tick).

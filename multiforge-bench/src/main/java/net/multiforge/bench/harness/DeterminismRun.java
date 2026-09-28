@@ -48,6 +48,14 @@ import net.multiforge.bench.determinism.TerrainHash;
  * with the stock result. Any difference fails the gate and lists the chunks.
  */
 public final class DeterminismRun {
+    /**
+     * MultiForge's deliberate behaviour changes stay off in the parity gate:
+     * entity activation range (distant mobs tick one tick in twenty) and the
+     * entity push cap. Stock NeoForge ignores the properties.
+     */
+    static final String PARITY_JVM_ARGS =
+            "-Dmultiforge.entities.activation=false -Dmultiforge.entities.maxEntityCollisions=0";
+
     private static final List<String> GAMERULES = List.of(
             "randomTickSpeed 0",
             "doMobSpawning false",
@@ -117,8 +125,8 @@ public final class DeterminismRun {
         System.out.println("DeterminismRun: generating the seed world on stock NeoForge");
         ServerInstall install = BenchSetup.install("stock");
         MetricsCollector metrics = new MetricsCollector();
-        try (HeadlessServerRunner runner =
-                new HeadlessServerRunner(HeadlessServerRunner.Config.of(install, 1, seed), log)) {
+        try (HeadlessServerRunner runner = new HeadlessServerRunner(
+                HeadlessServerRunner.Config.of(install, 1, seed).withExtraJvmArgs(PARITY_JVM_ARGS), log)) {
             if (!runner.boot(metrics)) fail("seed-world server failed to boot — see " + log);
             var rcon = runner.rcon();
             rcon.command("tick freeze");
@@ -155,8 +163,9 @@ public final class DeterminismRun {
         Path log = logDir.resolve("determinism-" + name + ".log");
         ServerInstall install = BenchSetup.install(flavour);
         MetricsCollector metrics = new MetricsCollector();
-        HeadlessServerRunner.Config config =
-                HeadlessServerRunner.Config.of(install, workers, seed).withWorld(seedWorld);
+        HeadlessServerRunner.Config config = HeadlessServerRunner.Config.of(install, workers, seed)
+                .withWorld(seedWorld)
+                .withExtraJvmArgs(PARITY_JVM_ARGS);
         try (HeadlessServerRunner runner = new HeadlessServerRunner(config, log)) {
             if (!runner.boot(metrics)) fail(name + " failed to boot — see " + log);
             runner.rcon().command("tick freeze");

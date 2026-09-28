@@ -557,6 +557,16 @@ public final class TickRegionScheduler implements AutoCloseable, RegionListener 
         return s == null ? 0L : s.lastSerialOverheadNanos;
     }
 
+    /**
+     * {@code region}'s own time in its last tick (designed waits left out), in
+     * nanoseconds; 0 if it has not ticked. One map lookup, for per-tick decisions
+     * such as entity activation's load shedding.
+     */
+    public long lastTickNanos(Region region) {
+        RegionState_ s = perRegion.get(region.id());
+        return s == null ? 0L : s.lastTickNanos;
+    }
+
     /** Name of the thread that last ticked {@code region}, or null if it has not ticked. */
     public String lastTickThread(Region region) {
         RegionState_ s = perRegion.get(region.id());
@@ -685,7 +695,9 @@ public final class TickRegionScheduler implements AutoCloseable, RegionListener 
             // leaves them out. The listeners the lane ran for it count, wherever
             // the region ticked, so moving it between a worker and the server
             // thread does not change its time.
-            s.mspt.recordNanos(Math.max(1L, System.nanoTime() - start - RegionTickWatchdog.lastTickWaitNanos()));
+            long own = Math.max(1L, System.nanoTime() - start - RegionTickWatchdog.lastTickWaitNanos());
+            s.mspt.recordNanos(own);
+            s.lastTickNanos = own;
             s.lastSerialPosts = RegionTickWatchdog.lastTickSerialPosts();
             s.lastSerialOverheadNanos = RegionTickWatchdog.lastTickSerialOverheadNanos();
             region.markNotTicking();
@@ -714,6 +726,7 @@ public final class TickRegionScheduler implements AutoCloseable, RegionListener 
         final Region region;
         final RegionMspt mspt = new RegionMspt(100); // ~5s at 20 TPS
         volatile String lastThread;
+        volatile long lastTickNanos;
         volatile long lastSerialPosts;
         volatile long lastSerialOverheadNanos;
         volatile TickPlacement placement;

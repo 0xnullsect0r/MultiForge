@@ -269,7 +269,17 @@
      @Override
      public boolean shouldTickBlocksAt(long p_184059_) {
          return this.chunkSource.chunkMap.getDistanceManager().inBlockTickingRange(p_184059_);
-@@ -1068,7 +1215,7 @@ public class ServerLevel extends Level implements WorldGenLevel {
+@@ -764,6 +911,9 @@ public class ServerLevel extends Level implements WorldGenLevel {
+     }
+ 
+     public void tickNonPassenger(Entity p_8648_) {
++        // MultiForge (multiforge-patches/02-region-tick/): entity activation range — a
++        // mob far from every player runs an inactive tick instead (EntityActivation).
++        if (net.multiforge.neoforge.world.EntityActivation.skipTick(this, p_8648_)) return;
+         p_8648_.setOldPosAndRot();
+         ProfilerFiller profilerfiller = this.getProfiler();
+         p_8648_.tickCount++;
+@@ -1068,7 +1218,7 @@ public class ServerLevel extends Level implements WorldGenLevel {
  
      @Override
      public void sendBlockUpdated(BlockPos p_8755_, BlockState p_8756_, BlockState p_8757_, int p_8758_) {
@@ -278,7 +288,7 @@
              String s = "recursive call to sendBlockUpdated";
              Util.logAndPauseIfInIde("recursive call to sendBlockUpdated", new IllegalStateException("recursive call to sendBlockUpdated"));
          }
-@@ -1081,6 +1228,13 @@ public class ServerLevel extends Level implements WorldGenLevel {
+@@ -1081,6 +1231,13 @@ public class ServerLevel extends Level implements WorldGenLevel {
              List<PathNavigation> list = new ObjectArrayList<>();
  
              for (Mob mob : this.navigatingMobs) {
@@ -292,7 +302,7 @@
                  PathNavigation pathnavigation = mob.getNavigation();
                  if (pathnavigation.shouldRecomputePath(p_8755_)) {
                      list.add(pathnavigation);
-@@ -1088,13 +1242,13 @@ public class ServerLevel extends Level implements WorldGenLevel {
+@@ -1088,13 +1245,13 @@ public class ServerLevel extends Level implements WorldGenLevel {
              }
  
              try {
@@ -308,7 +318,7 @@
              }
          }
      }
-@@ -1185,11 +1339,63 @@ public class ServerLevel extends Level implements WorldGenLevel {
+@@ -1185,11 +1342,63 @@ public class ServerLevel extends Level implements WorldGenLevel {
  
      @Override
      public void blockEvent(BlockPos p_8746_, Block p_8747_, int p_8748_, int p_8749_) {
@@ -372,7 +382,7 @@
  
          while (!this.blockEvents.isEmpty()) {
              BlockEventData blockeventdata = this.blockEvents.removeFirst();
-@@ -1228,6 +1434,40 @@ public class ServerLevel extends Level implements WorldGenLevel {
+@@ -1228,6 +1437,40 @@ public class ServerLevel extends Level implements WorldGenLevel {
          return this.fluidTicks;
      }
  
@@ -413,7 +423,7 @@
      @Nonnull
      @Override
      public MinecraftServer getServer() {
-@@ -1569,6 +1809,7 @@ public class ServerLevel extends Level implements WorldGenLevel {
+@@ -1569,6 +1812,7 @@ public class ServerLevel extends Level implements WorldGenLevel {
      @VisibleForTesting
      public void clearBlockEvents(BoundingBox p_8723_) {
          this.blockEvents.removeIf(p_207568_ -> p_8723_.isInside(p_207568_.pos()));
@@ -421,7 +431,7 @@
      }
  
      @Override
-@@ -1752,7 +1993,7 @@ public class ServerLevel extends Level implements WorldGenLevel {
+@@ -1752,7 +1996,7 @@ public class ServerLevel extends Level implements WorldGenLevel {
              }
  
              if (p_143371_ instanceof Mob mob) {
@@ -430,7 +440,7 @@
                      String s = "onTrackingStart called during navigation iteration";
                      Util.logAndPauseIfInIde(
                          "onTrackingStart called during navigation iteration", new IllegalStateException("onTrackingStart called during navigation iteration")
-@@ -1766,6 +2007,7 @@ public class ServerLevel extends Level implements WorldGenLevel {
+@@ -1766,6 +2010,7 @@ public class ServerLevel extends Level implements WorldGenLevel {
                  for(net.neoforged.neoforge.entity.PartEntity<?> enderdragonpart : p_143371_.getParts()) {
                      ServerLevel.this.dragonParts.put(enderdragonpart.getId(), enderdragonpart);
                  }
@@ -438,7 +448,7 @@
              }
  
              p_143371_.updateDynamicGameEventListener(DynamicGameEventListener::add);
-@@ -1779,7 +2021,7 @@ public class ServerLevel extends Level implements WorldGenLevel {
+@@ -1779,7 +2024,7 @@ public class ServerLevel extends Level implements WorldGenLevel {
              }
  
              if (p_143375_ instanceof Mob mob) {
@@ -447,7 +457,7 @@
                      String s = "onTrackingStart called during navigation iteration";
                      Util.logAndPauseIfInIde(
                                "onTrackingStart called during navigation iteration", new IllegalStateException("onTrackingStart called during navigation iteration")
-@@ -1793,6 +2035,7 @@ public class ServerLevel extends Level implements WorldGenLevel {
+@@ -1793,6 +2038,7 @@ public class ServerLevel extends Level implements WorldGenLevel {
                  for(net.neoforged.neoforge.entity.PartEntity<?> enderdragonpart : p_143375_.getParts()) {
                      ServerLevel.this.dragonParts.remove(enderdragonpart.getId());
                  }
@@ -455,7 +465,7 @@
              }
  
              p_143375_.updateDynamicGameEventListener(DynamicGameEventListener::remove);
-@@ -1808,7 +2051,21 @@ public class ServerLevel extends Level implements WorldGenLevel {
+@@ -1808,7 +2054,21 @@ public class ServerLevel extends Level implements WorldGenLevel {
  
      @Override
      public java.util.Collection<net.neoforged.neoforge.entity.PartEntity<?>> getPartEntities() {

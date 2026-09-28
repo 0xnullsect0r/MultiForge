@@ -44,6 +44,13 @@ import org.slf4j.LoggerFactory;
  *   [entities]
  *   deferVisibility = true            # hold entity-visibility changes back while workers run
  *
+ *   activation = true                 # distant mobs tick 1 tick in wakeInterval (see ActivationConfig)
+ *   monsterRange = 32                 # ... animalRange, villagerRange, flyingRange = 32,
+ *                                     # raiderRange = 48, waterRange, ambientRange = 16
+ *   wakeInterval = 20
+ *   maxEntityCollisions = 8           # entities pushed per living entity per tick; 0 = no cap
+ *   activationExempt = []             # entity ids / #tags that always tick
+ *
  *   [perf]
  *   lockFreeOutsidePhase = true       # server-thread entity queries skip the storage lock
  *                                     # while no region worker runs
@@ -60,12 +67,43 @@ public record MultiForgeConfig(
         boolean inlineSingleRegion,
         int serialLaneHotWaitMs,
         boolean deferVisibility,
-        boolean lockFreeOutsidePhase) {
+        boolean lockFreeOutsidePhase,
+        ActivationConfig activation) {
 
     public static final boolean DEFAULT_INLINE_SINGLE_REGION = true;
     public static final int DEFAULT_SERIAL_LANE_HOT_WAIT_MS = 5;
     public static final boolean DEFAULT_DEFER_VISIBILITY = true;
     public static final boolean DEFAULT_LOCK_FREE_OUTSIDE_PHASE = true;
+
+    public MultiForgeConfig {
+        if (activation == null) activation = ActivationConfig.DEFAULTS;
+    }
+
+    /** The layout before the activation-range keys of {@code [entities]}; they take their defaults. */
+    public MultiForgeConfig(
+            int cores,
+            int threadsPerCore,
+            Mode mode,
+            int regionSize,
+            ViolationPolicy violationPolicy,
+            int warnPerMin,
+            boolean inlineSingleRegion,
+            int serialLaneHotWaitMs,
+            boolean deferVisibility,
+            boolean lockFreeOutsidePhase) {
+        this(
+                cores,
+                threadsPerCore,
+                mode,
+                regionSize,
+                violationPolicy,
+                warnPerMin,
+                inlineSingleRegion,
+                serialLaneHotWaitMs,
+                deferVisibility,
+                lockFreeOutsidePhase,
+                ActivationConfig.DEFAULTS);
+    }
 
     /** The pre-{@code [perf]} layout; the perf knobs take their defaults. */
     public MultiForgeConfig(
@@ -241,7 +279,8 @@ public record MultiForgeConfig(
                 inlineSingleRegion,
                 serialLaneHotWaitMs,
                 deferVisibility,
-                lockFreeOutsidePhase);
+                lockFreeOutsidePhase,
+                activation);
     }
 
     public MultiForgeConfig withThreadsPerCore(int v) {
@@ -255,7 +294,8 @@ public record MultiForgeConfig(
                 inlineSingleRegion,
                 serialLaneHotWaitMs,
                 deferVisibility,
-                lockFreeOutsidePhase);
+                lockFreeOutsidePhase,
+                activation);
     }
 
     public MultiForgeConfig withMode(Mode v) {
@@ -269,7 +309,8 @@ public record MultiForgeConfig(
                 inlineSingleRegion,
                 serialLaneHotWaitMs,
                 deferVisibility,
-                lockFreeOutsidePhase);
+                lockFreeOutsidePhase,
+                activation);
     }
 
     public MultiForgeConfig withRegionSize(int v) {
@@ -283,7 +324,8 @@ public record MultiForgeConfig(
                 inlineSingleRegion,
                 serialLaneHotWaitMs,
                 deferVisibility,
-                lockFreeOutsidePhase);
+                lockFreeOutsidePhase,
+                activation);
     }
 
     public MultiForgeConfig withViolationPolicy(ViolationPolicy v) {
@@ -297,7 +339,8 @@ public record MultiForgeConfig(
                 inlineSingleRegion,
                 serialLaneHotWaitMs,
                 deferVisibility,
-                lockFreeOutsidePhase);
+                lockFreeOutsidePhase,
+                activation);
     }
 
     public MultiForgeConfig withWarnPerMin(int v) {
@@ -311,7 +354,8 @@ public record MultiForgeConfig(
                 inlineSingleRegion,
                 serialLaneHotWaitMs,
                 deferVisibility,
-                lockFreeOutsidePhase);
+                lockFreeOutsidePhase,
+                activation);
     }
 
     public MultiForgeConfig withInlineSingleRegion(boolean v) {
@@ -325,7 +369,8 @@ public record MultiForgeConfig(
                 v,
                 serialLaneHotWaitMs,
                 deferVisibility,
-                lockFreeOutsidePhase);
+                lockFreeOutsidePhase,
+                activation);
     }
 
     public MultiForgeConfig withSerialLaneHotWaitMs(int v) {
@@ -339,7 +384,8 @@ public record MultiForgeConfig(
                 inlineSingleRegion,
                 v,
                 deferVisibility,
-                lockFreeOutsidePhase);
+                lockFreeOutsidePhase,
+                activation);
     }
 
     public MultiForgeConfig withDeferVisibility(boolean v) {
@@ -353,7 +399,8 @@ public record MultiForgeConfig(
                 inlineSingleRegion,
                 serialLaneHotWaitMs,
                 v,
-                lockFreeOutsidePhase);
+                lockFreeOutsidePhase,
+                activation);
     }
 
     public MultiForgeConfig withLockFreeOutsidePhase(boolean v) {
@@ -367,6 +414,22 @@ public record MultiForgeConfig(
                 inlineSingleRegion,
                 serialLaneHotWaitMs,
                 deferVisibility,
+                v,
+                activation);
+    }
+
+    public MultiForgeConfig withActivation(ActivationConfig v) {
+        return new MultiForgeConfig(
+                cores,
+                threadsPerCore,
+                mode,
+                regionSize,
+                violationPolicy,
+                warnPerMin,
+                inlineSingleRegion,
+                serialLaneHotWaitMs,
+                deferVisibility,
+                lockFreeOutsidePhase,
                 v);
     }
 
@@ -394,5 +457,16 @@ public record MultiForgeConfig(
         String override = System.getProperty("multiforge.perf.lockFreeOutsidePhase");
         if (override != null && !override.isBlank()) return Boolean.parseBoolean(override.trim());
         return lockFreeOutsidePhase;
+    }
+
+    /**
+     * The activation-range and push-cap settings the server runs with: {@link
+     * #activation()} with its {@code -Dmultiforge.entities.*} overrides, and
+     * both off in mode {@code off}, which runs Vanilla exactly.
+     */
+    public ActivationConfig effectiveActivation() {
+        ActivationConfig a = activation.effective();
+        if (effectiveMode() == Mode.OFF) a = a.withActivation(false).withMaxEntityCollisions(0);
+        return a;
     }
 }
