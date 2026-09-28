@@ -247,6 +247,9 @@ public class ServerLifecycleHooks {
     }
 
     public static void handleServerStarted(final MinecraftServer server) {
+        // MultiForge: early warning (stacks of the server thread and busy region
+        // workers) for a tick stalled 10 s, well before the watchdog's limit.
+        net.multiforge.neoforge.ServerHangReporting.start(server);
         NeoForge.EVENT_BUS.post(new ServerStartedEvent(server));
     }
 

@@ -1,0 +1,13 @@
+--- a/net/minecraft/server/dedicated/ServerWatchdog.java
++++ b/net/minecraft/server/dedicated/ServerWatchdog.java
+@@ -37,6 +37,10 @@ public class ServerWatchdog implements Runnable {
+         while (this.server.isRunning()) {
+             long i = this.server.getNextTickTime();
+             long j = Util.getNanos();
++            // MultiForge (multiforge-patches/02-region-tick/): measure from the later of
++            // the scheduled tick time and the start of the tick in progress, so lag that
++            // accumulates while ticks keep completing is not read as one hung tick.
++            i = net.multiforge.runtime.diagnostics.TickHangDetector.referenceNanos(i, this.server.mfTickStartNanos);
+             long k = j - i;
+             if (k > this.maxTickTimeNanos) {
+                 LOGGER.error(

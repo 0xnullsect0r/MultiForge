@@ -1,6 +1,24 @@
 --- a/net/minecraft/server/MinecraftServer.java
 +++ b/net/minecraft/server/MinecraftServer.java
-@@ -1034,7 +1034,13 @@
+@@ -241,6 +241,9 @@ public abstract class MinecraftServer extends ReentrantBlockableEventLoop<TickTa
+     private long taskExecutionStartNanos = Util.getNanos();
+     private long idleTimeNanos;
+     protected long nextTickTimeNanos = Util.getNanos();
++    // MultiForge (multiforge-patches/02-region-tick/): the watchdog's heartbeat,
++    // set at the head of every tickServer (TickHangDetector, HangReporter).
++    public volatile long mfTickStartNanos = Util.getNanos();
+     private long delayedTasksMaxNextTickTimeNanos;
+     private boolean mayHaveDelayedTasks;
+     private final PackRepository packRepository;
+@@ -911,6 +914,7 @@ public abstract class MinecraftServer extends ReentrantBlockableEventLoop<TickTa
+ 
+     public void tickServer(BooleanSupplier p_129871_) {
+         long i = Util.getNanos();
++        this.mfTickStartNanos = i;
+         this.tickCount++;
+         net.neoforged.neoforge.event.EventHooks.fireServerTickPre(p_129871_, this);
+         this.tickRateManager.tick();
+@@ -1034,7 +1038,12 @@ public abstract class MinecraftServer extends ReentrantBlockableEventLoop<TickTa
              net.neoforged.neoforge.event.EventHooks.fireLevelTickPre(serverlevel, p_129954_);
  
              try {

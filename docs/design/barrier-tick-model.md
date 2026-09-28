@@ -163,6 +163,20 @@ ticking world" crash handling, and NeoForge's `removeErroringBlockEntities`/
 `removeErroringEntities` options (applied inside Vanilla's own tick wrappers),
 behave exactly as they do for an inline level tick.
 
+## Watchdog
+
+Vanilla's `ServerWatchdog` measures from `nextTickTime`, which advances 50 ms
+per tick and catches up at most once per 15 s of scheduled time, so a server
+running steady slow ticks reads its accumulated lag as one hung tick. The
+patched watchdog measures from the later of `nextTickTime` and the start of
+the tick in progress (`MinecraftServer.mfTickStartNanos`,
+`TickHangDetector`): identical to Vanilla while the server keeps up, and a
+tick or a stall between ticks longer than `max-tick-time` still stops the
+server. `HangReporter` (its own daemon thread) logs the stacks of the server
+thread and of every thread ticking a region, tagged with region and phase,
+from 10 s into a stalled tick and every 5 s after (`-Dmultiforge.hangReport=false`
+turns it off).
+
 ## Chunks
 
 Chunk loading, tickets, load levels, generation, lighting and saving are
