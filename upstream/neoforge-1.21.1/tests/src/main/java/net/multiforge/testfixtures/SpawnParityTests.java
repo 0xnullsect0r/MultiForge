@@ -67,10 +67,10 @@ public class SpawnParityTests {
         level.addNewPlayer(player);
         // Keep the player's chunk loaded (so in a region) whatever the test server's view distance.
         ChunkPos chunk = new ChunkPos(at);
-        level.setChunkForced(chunk.x, chunk.z, true);
+        Runnable releaseChunk = TestForcedChunks.force(level, chunk);
         helper.addEndListener(passed -> {
             if (!player.isRemoved()) level.removePlayerImmediately(player, Entity.RemovalReason.DISCARDED);
-            level.setChunkForced(chunk.x, chunk.z, false);
+            releaseChunk.run();
         });
         return player;
     }

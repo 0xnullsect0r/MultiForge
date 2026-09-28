@@ -62,7 +62,7 @@ public class EntityLimboTests {
         return pig;
     }
 
-    /** The chunk east of the test's own, force-loaded so it ticks entities. */
+    /** The chunk east of the test's own, force-loaded so it ticks entities (it may be a batch neighbour's). */
     private static ChunkPos eastChunk(GameTestHelper helper) {
         ChunkPos home = new ChunkPos(helper.absolutePos(new BlockPos(1, 2, 1)));
         return new ChunkPos(home.x + 1, home.z);
@@ -161,7 +161,7 @@ public class EntityLimboTests {
             PersistentEntitySectionManager<Entity> manager = level.mfEntityManager();
             ChunkPos home = new ChunkPos(helper.absolutePos(new BlockPos(1, 2, 1)));
             ChunkPos east = eastChunk(helper);
-            level.setChunkForced(east.x, east.z, true);
+            Runnable releaseEast = TestForcedChunks.force(level, east);
             Pig unguarded = floatingPig(helper, new BlockPos(1, 2, 1));
             Pig guarded = floatingPig(helper, new BlockPos(1, 2, 1));
             boolean killSwitch = RegionPhase.deferVisibility();
@@ -212,7 +212,7 @@ public class EntityLimboTests {
                     .thenExecute(() -> {
                         unguarded.discard();
                         guarded.discard();
-                        level.setChunkForced(east.x, east.z, false);
+                        releaseEast.run();
                     })
                     .thenSucceed();
         });

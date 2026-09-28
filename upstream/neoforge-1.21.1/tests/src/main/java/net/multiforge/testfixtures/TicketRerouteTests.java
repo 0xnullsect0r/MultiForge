@@ -122,4 +122,26 @@ public class TicketRerouteTests {
             helper.succeed();
         });
     }
+
+    @GameTest(template = TestsMod.TEMPLATE_3x3, timeoutTicks = 100)
+    @TestHolder(description = {
+            "A test's forced chunk is released only if the test added the force: the test's own",
+            "chunk, forced by the GameTest runner and shared with batch neighbours, stays forced."
+    })
+    static void releasingASharedForceKeepsTheChunkForced(final DynamicTest test) {
+        test.onGameTest(helper -> {
+            ServerLevel level = helper.getLevel();
+            ChunkPos own = new ChunkPos(helper.absolutePos(new BlockPos(1, 1, 1)));
+            helper.assertTrue(level.getForcedChunks().contains(own.toLong()), "the runner did not force the test's chunk");
+            TestForcedChunks.force(level, own).run();
+            helper.assertTrue(level.getForcedChunks().contains(own.toLong()), "releasing a shared force un-forced the test's chunk");
+            ChunkPos fresh = new ChunkPos(helper.absolutePos(new BlockPos(1, 1, 1)).offset(160, 0, 160));
+            helper.assertFalse(level.getForcedChunks().contains(fresh.toLong()), "fresh chunk already forced");
+            Runnable release = TestForcedChunks.force(level, fresh);
+            helper.assertTrue(level.getForcedChunks().contains(fresh.toLong()), "force did not force a fresh chunk");
+            release.run();
+            helper.assertFalse(level.getForcedChunks().contains(fresh.toLong()), "release kept a force it added");
+            helper.succeed();
+        });
+    }
 }
