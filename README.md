@@ -79,8 +79,11 @@ Panel hosts (Pelican Panel, Pterodactyl, forks) import `pelican-egg.json` from t
 /multiforge region list                  # live regions per world
 /multiforge tickstats                    # mean/p50/p95/p99/max MSPT, 10-minute TPS
 /multiforge probes event.dispatch        # event-routing counters
+/multiforge entities audit [heal]        # entity census; find (and heal) limbo entities
 /multiforge help                         # everything else
 ```
+
+Settings live in `config/multiforge-server.toml`; every key, including the entity activation range and the kill switches added in v1.11.0, is listed in [docs/perf-tuning.md](docs/perf-tuning.md#knobs). Upgrading from v1.10: see [docs/install.md § Upgrading to v1.11.0](docs/install.md#upgrading-to-v1110).
 
 ---
 

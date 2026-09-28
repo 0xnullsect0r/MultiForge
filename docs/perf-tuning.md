@@ -37,12 +37,30 @@ warnPerMin = 5
 [tick]
 inlineSingleRegion = true         # see "Tick placement"
 serialLaneHotWaitMs = 5            # see "Tick placement"
+
+[entities]
+deferVisibility = true            # see "Kill switches"
+activation = true                 # see "Entity activation range"
+monsterRange = 32                 # blocks; 0 = never throttle this category
+animalRange = 32
+villagerRange = 32
+flyingRange = 32
+raiderRange = 48
+waterRange = 16
+ambientRange = 16
+wakeInterval = 20                 # an inactive mob runs a full tick once per this many ticks
+maxEntityCollisions = 8           # entities a living entity pushes per tick; 0 = Vanilla (no cap)
+activationExempt = []             # entity ids ("mymod:golem") or tags ("#mymod:machines")
+
+[perf]
+lockFreeOutsidePhase = true       # see "Kill switches"
+workerChunkCache = true           # see "Kill switches"
 ```
 
 There are no other performance keys: no tick budget, no split/merge
 thresholds, no autosave settings. Saving is Vanilla's
-([`persistence.md`](persistence.md)). A file written by an older version has
-no `[tick]` section; the defaults apply and the file is not rewritten.
+([`persistence.md`](persistence.md)). A file written by an older version
+lacks the newer sections; the defaults apply and the file is not rewritten.
 
 `/multiforge config cores|threads <n>` and `/multiforge region size <chunks>`
 apply live. `-Dmultiforge.workers=N` on the JVM command line replaces
@@ -124,6 +142,43 @@ does not change when the region moves between a worker and the server thread.
 region which thread last ticked it and how many serial-lane events it posted.
 `-Dmultiforge.inlineSingleRegion=false` and
 `-Dmultiforge.serialLaneHotWaitMs=0` override the file for one run.
+
+### Entity activation range
+
+On by default since v1.11.0. A mob further than its category's range from
+every player runs its full tick once every `wakeInterval` ticks and otherwise
+only ages, so it still despawns and grows up on time. A region whose last tick
+took over 40 ms stretches that interval (up to 80 ticks) for its inactive mobs
+only. `maxEntityCollisions` caps how many overlapping entities a living
+entity pushes per tick; cramming damage is unchanged. On the water-crowd bench
+(15,000 squid, glow squid and cod next to one player) this took server MSPT
+from 915 ms to 49.9 ms.
+
+It changes how distant mob farms, villagers and breeding behave. What always
+ticks, and what changes, is in
+[`compatibility.md` §3.1](compatibility.md#31-entity-activation-range-and-the-push-cap-behaviour-change).
+To exempt a farm's mobs, add their type to `activationExempt` or to the
+`#multiforge:activation_exempt` tag; to switch it off, `activation = false`.
+
+### Kill switches
+
+Each v1.11.0 change to the tick has its own switch, in the file or as a JVM
+flag for one run (the flag overrides the file). Switch one off only to rule it
+out while chasing a problem, and report what you found.
+
+| Key | JVM flag | Default | What turning it off does |
+|---|---|---|---|
+| `entities.activation` | `-Dmultiforge.entities.activation=false` | `true` | Every mob ticks every tick, as in Vanilla. |
+| `entities.maxEntityCollisions` | `-Dmultiforge.entities.maxEntityCollisions=0` | `8` | Vanilla's uncapped pushing. |
+| `entities.deferVisibility` | `-Dmultiforge.entities.deferVisibility=false` | `true` | Entity-visibility changes run while region workers run, as in v1.10. This can leave entities in limbo; counted as `entity.visibility.unguarded`. |
+| — | `-Dmultiforge.entities.autoHeal=false` | on | The audit every 1200 ticks still runs and warns, but no longer heals. |
+| `perf.lockFreeOutsidePhase` | `-Dmultiforge.perf.lockFreeOutsidePhase=false` | `true` | Server-thread entity queries take the storage lock and copy, as in v1.10. |
+| `perf.workerChunkCache` | `-Dmultiforge.perf.workerChunkCache=false` | `true` | Region workers look up every chunk read in the chunk map. |
+| — | `-Dmultiforge.hangReport=false` | on | No thread dumps from 10 s into a stalled tick. The watchdog still stops a hung server. |
+
+Every `[entities]` key takes a `-Dmultiforge.entities.<key>=<value>`
+override; `activationExempt` takes a comma-separated list. Mode `off` ignores
+all of them.
 
 ### Heap and garbage collector
 

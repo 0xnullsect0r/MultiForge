@@ -61,6 +61,20 @@ curl -fsSL .../multiforge-update.sh | MF_VERSION=v1.8.0 sh          # a specific
 
 The same command does a fresh install into an empty directory, and converts an existing stock NeoForge 1.21.1 server (the stock version becomes the rollback point). Accept the EULA with `echo eula=true > eula.txt` before the first start.
 
+### Upgrading to v1.11.0
+
+v1.11.0 fixes entities left in limbo by v1.10 (known to the world but never ticked, never despawned, saved and reloaded like normal mobs). A world that ran v1.10 in `hybrid` mode may hold thousands of them, often water mobs around force-loaded bases. On a live server:
+
+1. **Back up the world** (and `config/`) before updating. The updater never touches them, but the first boot re-activates any limbo entities.
+2. Update and start the server as above.
+3. Run `/multiforge entities audit` in each busy dimension (or with no world, for all). The three gaps (`known-visible`, `accessible-visible`, `ticking-ticklist`) should be 0; anything else is limbo left from v1.10.
+4. Run `/multiforge entities audit heal`. The server also heals on its own every minute, but running it once by hand shows what it fixed. Revived mobs tick again, count toward mob caps and despawn normally, so expect a short burst of despawns and some extra load while a large backlog clears.
+5. Watch `/multiforge entities` and `/multiforge region list` for a while. The gaps should stay at 0 and `/multiforge probes entity.limbo.healed` should not grow.
+
+**Entity activation range is on by default.** A mob more than 32 blocks from every player (16 for water and ambient mobs, 48 for raiders) runs its full tick only once a second and otherwise just ages. Items, projectiles, minecarts, Create contraptions, bosses, and busy mobs (targeting, leashed, ridden, hurt, in love, falling or in water) always tick. Mob farms that run with nobody nearby (breeders, villager trading halls and iron farms far from any player, and AI-driven farms) will run slower. Add their mobs to `activationExempt` in `config/multiforge-server.toml`, raise the range, or set `activation = false`. See [compatibility.md §3.1](compatibility.md#31-entity-activation-range-and-the-push-cap-behaviour-change). Entity pushing is also capped at 8 entities per tick; cramming damage is unchanged.
+
+**Kill switches.** Every new behaviour has a switch in `config/multiforge-server.toml`, and a JVM flag for one run: `entities.activation`, `entities.maxEntityCollisions` (`0` = Vanilla), `entities.deferVisibility`, `perf.lockFreeOutsidePhase`, `perf.workerChunkCache`, plus `-Dmultiforge.entities.autoHeal=false` and `-Dmultiforge.hangReport=false`. The table is in [perf-tuning.md § Kill switches](perf-tuning.md#kill-switches). An existing config file gets no new keys written; they take their defaults until you add them.
+
 ---
 
 ## Method 1 — Fresh installer JAR

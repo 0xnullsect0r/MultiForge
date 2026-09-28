@@ -140,7 +140,10 @@ Everything region workers touch that is not per-chunk:
 | `LevelTicks` | Level-wide maps under a leaf lock; each chunk's container is touched only by its region. Regions drain with `mfTickRegion` — Vanilla's collect-then-run, so `willTickThisTick` holds. |
 | Block events | Queued per region by a region worker and run by that region right after its scheduled ticks; leftovers are absorbed by the next server-thread `runBlockEvents`. |
 | Fresh block entities, ticker lists | Guarded; NeoForge's `onLoad` pass always runs on the server thread before regions tick. A ticker whose chunk is not regionized yet stays on the level and is routed on a later tick. |
-| Entity storage (`PersistentEntitySectionManager`) | Every structure under a leaf lock. Callbacks (tracking/ticking transitions, NeoForge events, mod hooks) and getter consumers always run outside it, so no foreign code runs while it is held on a worker. `LockingEntityGetter` copies matches under the lock. |
+| Entity storage (`PersistentEntitySectionManager`) | Every structure under a leaf lock. Callbacks (tracking/ticking transitions, NeoForge events, mod hooks) and getter consumers always run outside it, so no foreign code runs while it is held on a worker. Chunk-visibility transitions are held back while workers run (see [Entity visibility](#entity-visibility-during-the-region-phase)). |
+| Entity queries (`LockingEntityGetter`) | **Fast path:** on the level's server thread while no region worker is in flight (`RegionPhase.workersInFlight()`), a query goes straight to Vanilla's getter: no lock, no copy, and an aborting consumer stops Vanilla's iteration early. The server thread is then the only writer — mode `off`, a region ticked inline, and everything between ticks. Any other thread (a region worker, the Vanilla watchdog's `getAll()`, a diagnostics thread) takes the **locked path**: matches are collected under the leaf lock into a per-thread buffer indexed by call depth (re-entrant, allocation-free once grown), and the consumer runs outside the lock, in Vanilla's order. Kill switch `perf.lockFreeOutsidePhase`. |
+| `ServerLevel.getPartEntities` (dragon parts, mod multipart entities) | A volatile copy-on-write list, republished under the map's monitor when a part is added or removed. |
+| Chunk tickets (`DistanceManager`) | The server thread's alone. A ticket change on a region worker is deferred to it (see [Chunk tickets](#chunk-tickets-from-region-workers)). |
 | `EntityTickList`, `ChunkMap` tracker map, player list, navigating mobs, dragon parts | Synchronized / concurrent collections; `sendBlockUpdated` re-paths only the calling region's mobs and tracks its re-entrancy per thread. |
 | `PathTypeCache` | One immutable entry per slot, replaced with a single reference write. |
 | `Scoreboard` | Synchronized on the scoreboard; `getPlayersTeam` reads a concurrent mirror lock-free. |
@@ -151,6 +154,83 @@ no foreign code, runs while it is held. That is the exception to CLAUDE.md
 rule 4 ("no `synchronized` block that could contend with a foreign region"):
 these are microsecond critical sections around a single structure update, and
 the alternative — unsynchronised writes to shared hash maps — corrupts them.
+
+## Entity visibility during the region phase
+
+`PersistentEntitySectionManager.updateChunkStatus` changes whether a chunk's
+entities are tracked and ticking. It records the transitions under the leaf
+lock and applies them after unlocking. The server thread calls it from chunk
+promotions and demotions, and while it waits at the barrier it runs chunk
+tasks for workers waiting on a load (`MainThreadHandoff`), for every level. A
+demotion applied then races a worker moving an entity between sections: a
+stale "stop ticking" lands after the worker's "start ticking" and leaves the
+entity in **limbo**: known and in a ticking section, but never ticked,
+never counted toward mob caps, never despawned, and saved and reloaded as a
+normal mob (v1.10 on a busy server piled up thousands of them).
+
+`RegionPhase` is a global flag that `TickRegionScheduler.driveTick` sets, on
+the server thread, for exactly the window in which a region ticks on a worker
+(the global region included). While it is set, `updateChunkStatus` appends
+its call to one FIFO and returns; at the barrier, after the last worker
+finished, the calls replay in order on the server thread with the flag clear,
+so Vanilla's body runs unchanged. The flag is global because the pump polls
+every level and a non-player entity changing dimension moves into another
+level. A worker waiting for a chunk load does not need that chunk's entities
+visible (Vanilla's promotion is asynchronous too), and the new chunk is not
+owned until the barrier, so a worker's write there is rerouted anyway. A
+server-thread-only batch and mode `off` never set the flag.
+
+Kill switch: `entities.deferVisibility` (or
+`-Dmultiforge.entities.deferVisibility=false`). With it off a transition in
+the window runs at once and is counted (`entity.visibility.unguarded`);
+strict mode fails the barrier on it.
+
+`/multiforge entities` reads the entity storage (`mfCensus`) and compares it
+with the visible lookup and the tick list: known vs visible, accessible vs
+visible, and ticking sections vs the tick list. `audit heal` re-applies the
+missing transitions in Vanilla's order. The barrier audits every level every
+1200 ticks, heals what it finds (probe `entity.limbo.healed`) and warns while
+a gap is open; `-Dmultiforge.entities.autoHeal=false` keeps the audit without
+healing. It runs only on the server thread, while no worker is in flight.
+
+## Chunk tickets from region workers
+
+`ServerChunkCache.addRegionTicket`/`removeRegionTicket` (the 5-argument
+overloads, which the 4-argument ones and NeoForge's `ForcedChunkManager`
+call) and `ServerLevel.setChunkForced` write `DistanceManager`'s ticket maps.
+On a region worker those writes raced the barrier pump's distance-manager
+updates and fed promotions and demotions into the middle of the phase. A
+worker's call is now deferred whole to the server thread
+(`OwnershipGuard.deferToServerThread`, probe
+`<site>:deferred-to-server-thread`, rate-limited warning) and takes effect
+after the barrier, one tick later than Vanilla. `setChunkForced` returns what
+Vanilla would have: whether the forced set changes, predicted from the set as
+it is. A region ticked inline on the server thread changes tickets inline, as
+Vanilla does.
+
+## Entity activation range and push cap
+
+Two `[entities]` settings change Vanilla behaviour on purpose, so a large mob
+crowd far from players cannot dominate its region's tick. Both are on by
+default, both are ignored in mode `off`, and the parity gate
+(`:multiforge-bench:determinism`) and the scenario runs switch both off
+(`-Dmultiforge.entities.activation=false`,
+`-Dmultiforge.entities.maxEntityCollisions=0`).
+
+- **Activation range.** Before `driveRegions`, `dispatchLevelTick` snapshots
+  the level's player positions. At the head of `ServerLevel.tickNonPassenger`,
+  in the region entity pass, `EntityActivation.skipTick` makes a `Mob` further
+  than its category's range from every player *inactive*: it runs its full
+  tick once per `wakeInterval` ticks (staggered by entity id), and on the other
+  ticks only ages (`setOldPosAndRot`, `tickCount`, `noActionTime`, a baby's
+  growth). `checkDespawn` runs earlier in the entity lambda, every tick, so
+  despawning is unchanged. Non-mobs and busy or special mobs always tick. A
+  region whose last tick took over 40 ms doubles its inactive mobs' wake
+  interval (again over 80 ms), up to 80 ticks. The full list of immunities,
+  ranges and what changes for farms is in `docs/compatibility.md` §3.1.
+- **Push cap.** `LivingEntity.pushEntities` stops its `doPush` loop after
+  `maxEntityCollisions` entities. The cramming check before the loop is
+  untouched, so cramming damage and its random roll are exact.
 
 ## Gates
 
@@ -187,7 +267,11 @@ turns it off).
 ## Chunks
 
 Chunk loading, tickets, load levels, generation, lighting and saving are
-Vanilla's and run on the server thread, unchanged. The runtime only tracks
+Vanilla's and run on the server thread, unchanged (a region worker's ticket
+change is deferred there, see [Chunk tickets](#chunk-tickets-from-region-workers);
+each worker keeps its last four full-chunk reads in `WorkerChunkCache`,
+invalidated wherever Vanilla clears its own chunk cache, kill switch
+`perf.workerChunkCache`). The runtime only tracks
 which region owns each loaded chunk: `RegionizedChunkLifecycle` adds a
 chunk to the regionizer and to the world's `ChunkHolderManager` index on
 `ChunkEvent.Load` and removes it on `ChunkEvent.Unload`. A region worker

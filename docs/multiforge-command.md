@@ -208,6 +208,45 @@ world=minecraft:overworld loaded chunks=1024 regions=3
 
 ---
 
+## `entities` — entity census and limbo audit
+
+```
+/multiforge entities [world] [top N]
+/multiforge entities [world] region <id>
+/multiforge entities [world] audit [heal]
+```
+
+Counts each world's entities (every world when `world` is left out): how
+many the entity storage knows, how many are visible, in accessible sections
+and hidden, how many are in ticking sections and on the tick list, the
+`N` most numerous types (default 10) and entities per region. `region <id>`
+lists one region's entities by type.
+
+An entity in **limbo** is known and in a loaded section but not visible or
+not ticking: it never moves, never counts toward mob caps and never
+despawns, and it is saved and reloaded like a normal mob. v1.10 could leave
+entities in limbo on a busy server; v1.11 fixes the cause. Three gaps show it,
+and all three are 0 on a healthy world:
+
+```
+/multiforge entities minecraft:overworld audit
+minecraft:overworld: known=3120 visible=3120 accessible=3120 hidden=0 ticking-sections=2988 tick-list=2988 | gaps known-visible=0 accessible-visible=0 ticking-ticklist=0
+  accessible-not-visible=0 visible-not-accessible=0 ticking-not-listed=0 listed-not-ticking=0
+  no limbo entities
+```
+
+`audit` lists up to five limbo entities with type, name, position and region. `audit heal`
+re-applies their missing visibility and ticking changes, in Vanilla's order,
+and prints how many it fixed. The server also audits every world every 1200
+ticks (one minute), heals what it finds (probe `entity.limbo.healed`), and
+logs a warning while a gap is open. `-Dmultiforge.entities.autoHeal=false`
+keeps the audit and the warning without healing.
+
+The command runs on the server thread between ticks. It is read-only unless
+`heal` is given.
+
+---
+
 ## `warn` — violation log
 
 Live view of the `ViolationLogger` ring buffer — rerouted calls, blocking-on-worker warnings, and any other guard fires.
