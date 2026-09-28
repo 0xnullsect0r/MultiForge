@@ -42,4 +42,31 @@ class ProbeRegistryTest {
         var snap = ProbeRegistry.snapshot();
         assertThat(snap.keySet()).containsExactly("alpha", "charlie", "delta");
     }
+
+    @Test
+    void counterHandlesShareTheNamedCounterAndSurviveAReset() {
+        ProbeRegistry.Counter handle = ProbeRegistry.counter("hot");
+        handle.increment();
+        handle.add(4);
+        ProbeRegistry.bump("hot");
+        assertThat(ProbeRegistry.get("hot")).isEqualTo(6L);
+        assertThat(ProbeRegistry.snapshot()).containsEntry("hot", 6L);
+        ProbeRegistry.resetForTesting();
+        assertThat(ProbeRegistry.get("hot")).isZero();
+        handle.increment();
+        assertThat(ProbeRegistry.get("hot")).isEqualTo(1L);
+    }
+
+    @Test
+    void aCounterHandleDoesNotAllocatePerIncrement() {
+        ProbeRegistry.Counter handle = ProbeRegistry.counter("alloc");
+        com.sun.management.ThreadMXBean mx =
+                (com.sun.management.ThreadMXBean) java.lang.management.ManagementFactory.getThreadMXBean();
+        for (int i = 0; i < 100_000; i++) handle.increment();
+        long before = mx.getCurrentThreadAllocatedBytes();
+        for (int i = 0; i < 1_000_000; i++) handle.increment();
+        long allocated = mx.getCurrentThreadAllocatedBytes() - before;
+        assertThat(ProbeRegistry.get("alloc")).isEqualTo(1_100_000L);
+        assertThat(allocated).isLessThan(64 * 1024);
+    }
 }

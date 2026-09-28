@@ -135,6 +135,23 @@ class EventTypeDomainMapTest {
     }
 
     @Test
+    void theCachedDeferralAnswerFollowsEveryRegistrationAndReset() {
+        // Asked (and cached) before any change.
+        assertThat(EventTypeDomainMap.isDeferred(FakeSubEvent.class)).isFalse();
+        assertThat(EventTypeDomainMap.isDeferred(FakeSubEvent.class)).isFalse();
+        // Deferring the base class defers the subclass: the cached "no" is dropped.
+        EventTypeDomainMap.registerDeferred(FakeBaseEvent.class.getName());
+        assertThat(EventTypeDomainMap.isDeferred(FakeSubEvent.class)).isTrue();
+        assertThat(EventTypeDomainMap.isDeferred(FakeSubEvent.class)).isTrue();
+        EventTypeDomainMap.register(FakeBaseEvent.class.getName(), DispatchDomainKind.REGION);
+        assertThat(EventTypeDomainMap.isDeferred(FakeSubEvent.class)).isFalse();
+        EventTypeDomainMap.registerDeferred(FakeSubEvent.class.getName());
+        assertThat(EventTypeDomainMap.isDeferred(FakeSubEvent.class)).isTrue();
+        EventTypeDomainMap.resetForTesting();
+        assertThat(EventTypeDomainMap.isDeferred(FakeSubEvent.class)).isFalse();
+    }
+
+    @Test
     void lookupUnknownEventReturnsEmpty() {
         assertThat(EventTypeDomainMap.lookup(UnknownEvent.class)).isEmpty();
     }
