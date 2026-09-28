@@ -251,6 +251,8 @@ public final class SwarmBench {
             if (spread > 0) {
                 extra.put("bots_placed", placeBots(runner, swarm.names(), spread, renderDistance, extra));
             }
+            int waterMobs = Integer.getInteger("bench.waterMobs", 0);
+            if (waterMobs > 0) buildWaterCrowd(runner, swarm.names().get(0), waterMobs, extra);
             // Let the spread's chunk generation and sends settle before measuring.
             Thread.sleep(15_000);
             swarm.setWalking(true);
@@ -260,12 +262,16 @@ public final class SwarmBench {
             long pollMs = Math.max(1000, Math.min(10_000, duration.toMillis() / 20));
             long deadline = System.currentTimeMillis() + duration.toMillis();
             int minConnected = players;
+            RegionMsptSamples regionMspt = new RegionMsptSamples();
             while (System.currentTimeMillis() < deadline && runner.isAlive()) {
                 Thread.sleep(pollMs);
                 minConnected = Math.min(minConnected, swarm.connectedCount());
                 runner.safeQuery();
+                if (runner.hasTickStats()) regionMspt.sample(command(runner, "multiforge region list"));
             }
             runner.endMeasurement();
+            regionMspt.report(extra);
+            if (waterMobs > 0) extra.put("water_mobs_end", countWaterMobs(runner));
 
             extra.put("bots_connected_min", minConnected);
             extra.put("bots_connected_end", swarm.connectedCount());
@@ -346,6 +352,129 @@ public final class SwarmBench {
             while (!runner.rcon().command(cmd).contains("passed") && System.currentTimeMillis() < deadline) {
                 Thread.sleep(250);
             }
+        }
+    }
+
+    /** The water crowd's mobs, in rotation. */
+    private static final String[] WATER_MOBS = {"squid", "glow_squid", "cod"};
+
+    /**
+     * {@code bench.waterMobs}: the v1.11 incident's crowd. A glass basin of water
+     * (48x48, 6 deep, at y 150) {@code bench.waterOffset} blocks (default 24) east of
+     * the first bot, forceloaded, filled with that many persistent squid, glow squid
+     * and cod. Entity cramming is turned off ({@code maxEntityCramming 0}) so the crowd
+     * keeps its size; the pushing between the mobs, the cost that grows with the crowd,
+     * still runs.
+     */
+    private static void buildWaterCrowd(HeadlessServerRunner runner, String bot, int mobs, Map<String, Object> extra)
+            throws IOException {
+        java.util.regex.Matcher m = java.util.regex.Pattern.compile("\\[(-?[0-9.]+)d, (-?[0-9.]+)d, (-?[0-9.]+)d\\]")
+                .matcher(runner.rcon().command("data get entity " + bot + " Pos"));
+        int bx = 0, bz = 0;
+        if (m.find()) {
+            bx = (int) Math.floor(Double.parseDouble(m.group(1)));
+            bz = (int) Math.floor(Double.parseDouble(m.group(3)));
+        }
+        int offset = Integer.getInteger("bench.waterOffset", 24);
+        int x0 = bx + offset, x1 = x0 + 49, z0 = bz - 25, z1 = z0 + 49, y0 = 150, y1 = 157;
+        command(runner, "gamerule maxEntityCramming 0");
+        command(runner, "gamerule doMobSpawning false");
+        command(runner, String.format(Locale.ROOT, "forceload add %d %d %d %d", x0, z0, x1, z1));
+        long deadline = System.currentTimeMillis() + 60_000;
+        String probe = String.format(Locale.ROOT, "execute if block %d -64 %d minecraft:bedrock", x1, z1);
+        while (System.currentTimeMillis() < deadline
+                && !runner.rcon().command(probe).contains("passed")) {
+            try {
+                Thread.sleep(250);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return;
+            }
+        }
+        command(
+                runner,
+                String.format(Locale.ROOT, "fill %d %d %d %d %d %d minecraft:glass hollow", x0, y0, z0, x1, y1, z1));
+        command(
+                runner,
+                String.format(
+                        Locale.ROOT,
+                        "fill %d %d %d %d %d %d minecraft:water",
+                        x0 + 1,
+                        y0 + 1,
+                        z0 + 1,
+                        x1 - 1,
+                        y1 - 1,
+                        z1 - 1));
+        Random rnd = new Random(23);
+        for (int i = 0; i < mobs; i++) {
+            runner.rcon()
+                    .command(String.format(
+                            Locale.ROOT,
+                            "summon minecraft:%s %d.5 %d.5 %d.5 {PersistenceRequired:1b}",
+                            WATER_MOBS[i % WATER_MOBS.length],
+                            x0 + 1 + rnd.nextInt(48),
+                            y0 + 1 + rnd.nextInt(6),
+                            z0 + 1 + rnd.nextInt(48)));
+        }
+        extra.put("water_mobs", mobs);
+        extra.put("water_basin", x0 + "," + z0 + ".." + x1 + "," + z1 + " (bot at " + bx + "," + bz + ")");
+        extra.put("water_mobs_start", countWaterMobs(runner));
+        System.out.println("SwarmBench: water crowd of " + mobs + " in the basin at " + extra.get("water_basin"));
+    }
+
+    private static int countWaterMobs(HeadlessServerRunner runner) {
+        int n = 0;
+        for (String t : WATER_MOBS) {
+            java.util.regex.Matcher m = java.util.regex.Pattern.compile("count: (\\d+)")
+                    .matcher(command(runner, "execute if entity @e[type=minecraft:" + t + "]"));
+            if (m.find()) n += Integer.parseInt(m.group(1));
+        }
+        return n;
+    }
+
+    /**
+     * The busiest region's tick time, from {@code /multiforge region list} (each
+     * region's p50/p95/p99 over the last 5 s) sampled through the window: the
+     * median of the samples' p50s and p99s, and the largest p99.
+     */
+    static final class RegionMsptSamples {
+        private static final java.util.regex.Pattern COST =
+                java.util.regex.Pattern.compile("tick ([0-9.]+)/([0-9.]+)/([0-9.]+) ms \\(p50/p95/p99");
+        private final List<Double> p50 = new java.util.ArrayList<>();
+        private final List<Double> p99 = new java.util.ArrayList<>();
+
+        void sample(String regionList) {
+            double best50 = -1, best99 = -1;
+            java.util.regex.Matcher m = COST.matcher(regionList);
+            while (m.find()) {
+                double a = Double.parseDouble(m.group(1));
+                double c = Double.parseDouble(m.group(3));
+                if (a > best50) {
+                    best50 = a;
+                    best99 = c;
+                }
+            }
+            if (best50 >= 0) {
+                p50.add(best50);
+                p99.add(best99);
+            }
+        }
+
+        void report(Map<String, Object> extra) {
+            if (p50.isEmpty()) return;
+            extra.put("region_mspt_samples", p50.size());
+            extra.put("region_mspt_p50", median(p50));
+            extra.put("region_mspt_p99", median(p99));
+            extra.put(
+                    "region_mspt_p99_max",
+                    p99.stream().mapToDouble(Double::doubleValue).max().orElse(0));
+        }
+
+        static double median(List<Double> values) {
+            List<Double> sorted = new java.util.ArrayList<>(values);
+            java.util.Collections.sort(sorted);
+            int n = sorted.size();
+            return n % 2 == 1 ? sorted.get(n / 2) : (sorted.get(n / 2 - 1) + sorted.get(n / 2)) / 2;
         }
     }
 

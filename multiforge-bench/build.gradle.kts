@@ -135,6 +135,28 @@ tasks.register<JavaExec>("scenario") {
     (project.findProperty("seed") as String?)?.let { systemProperty("bench.seed", it) }
 }
 
+// MultiForge-only stress checks with the stress fixture mods (StressRun): the
+// entity-limbo race under worker ticket toggles and worker chunk loads, and the
+// watchdog under slow ticks. Each has its own pass condition.
+tasks.register<JavaExec>("stress") {
+    description = "MultiForge stress checks: -Pstress=limbo|slowtick|limbo,slowtick (default both) " +
+            "[-PlimboSeconds=180] [-PlimboMobs=150] [-Pworkers=4]."
+    benchCommon("stress")
+    val testmodJars = listOf(":multiforge-testmods:limbo", ":multiforge-testmods:slowtick")
+            .map { project(it).tasks.named<Jar>("jar") }
+    dependsOn(testmodJars)
+    doFirst {
+        systemProperty(
+                "bench.testmods",
+                testmodJars.joinToString(",") { it.get().archiveFile.get().asFile.absolutePath })
+    }
+    mainClass.set("net.multiforge.bench.harness.StressRun")
+    // gradleProperty, not findProperty: the latter would find this task for "stress".
+    listOf("stress", "limboSeconds", "limboMobs", "seed").forEach { prop ->
+        providers.gradleProperty(prop).orNull?.let { systemProperty("bench.$prop", it) }
+    }
+}
+
 // Relay stdin lines to a booted server over RCON (see ServerConsole).
 tasks.register<JavaExec>("console") {
     description = "Boot an installed server and relay stdin commands over RCON. [-Pserver] [-Pworkers] [-PworldSource=<dir>]."
@@ -160,7 +182,7 @@ tasks.register<JavaExec>("vanilla") {
 tasks.register<JavaExec>("swarm") {
     description = "Real-time player swarm: -Pplayers protocol bots walk, place and break for ticks/20 s. " +
             "[-Pplayers=20] [-Pticks=12000] [-Pworkers] [-Pspread=512] [-PrenderDistance=8] " +
-            "[-PswarmMode=bots|armor-stand] [-Pmobs=0] [-PregionSize=<chunks>] [-PfarArea=x,z] [-PmodpackDir=<dir>] [-Pserver=stock]."
+            "[-PswarmMode=bots|armor-stand] [-Pmobs=0] [-PwaterMobs=0] [-PwaterOffset=24] [-PregionSize=<chunks>] [-PfarArea=x,z] [-PmodpackDir=<dir>] [-Pserver=stock]."
     val players = (project.findProperty("players") as String?) ?: "20"
     benchCommon("swarm-$players")
     mainClass.set("net.multiforge.bench.harness.SwarmBench")
@@ -169,7 +191,7 @@ tasks.register<JavaExec>("swarm") {
         val server = (project.findProperty("server") as String?) ?: "multiforge"
         systemProperty("bench.outputFile", benchResultsDir.resolve("swarm-$players-$server.json").absolutePath)
     }
-    listOf("spread", "renderDistance", "swarmMode", "mobs", "regionSize", "farArea").forEach { prop ->
+    listOf("spread", "renderDistance", "swarmMode", "mobs", "regionSize", "farArea", "waterMobs", "waterOffset").forEach { prop ->
         (project.findProperty(prop) as String?)?.let { systemProperty("bench.$prop", it) }
     }
 }

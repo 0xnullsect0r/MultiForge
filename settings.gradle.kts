@@ -62,6 +62,8 @@ include(
     // Fixture mods for the bench scenarios (see multiforge-testmods/README.md).
     "multiforge-testmods:writer",
     "multiforge-testmods:legacy",
+    "multiforge-testmods:slowtick",
+    "multiforge-testmods:limbo",
 )
 
 // MultiForge patches under `multiforge-patches/<NN-group>/` are applied

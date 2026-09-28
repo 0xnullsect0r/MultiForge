@@ -195,7 +195,10 @@ public final class ScenarioRun {
     private static Map<String, String> runOn(
             String flavour, int workers, String seed, String name, Scenario scenario, Path logDir) throws Exception {
         HeadlessServerRunner.Config config = HeadlessServerRunner.Config.of(BenchSetup.install(flavour), workers, seed)
-                .withProperties(Map.of("allow-flight", "true", "difficulty", "easy"));
+                .withProperties(Map.of("allow-flight", "true", "difficulty", "easy"))
+                // Like the parity gate: activation range and the push cap change behaviour on
+                // purpose, so the comparison with stock runs without them.
+                .withExtraJvmArgs(DeterminismRun.PARITY_JVM_ARGS);
         if (MOD_SCENARIOS.contains(name)) config = config.withMods(testModsDir(logDir), null);
         Ctx ctx = new Ctx(flavour, name, config, logDir);
         try {
