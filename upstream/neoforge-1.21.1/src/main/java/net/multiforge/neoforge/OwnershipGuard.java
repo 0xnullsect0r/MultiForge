@@ -190,6 +190,64 @@ public final class OwnershipGuard {
     }
 
     /**
+     * Defer a chunk-ticket change ({@code ServerChunkCache.addRegionTicket} /
+     * {@code removeRegionTicket}) made on a region worker — or on the global
+     * region while it ticks on a worker — to the server thread. The ticket
+     * maps of {@code DistanceManager} are the server thread's; a change made
+     * while the barrier pumps chunk tasks corrupts them, and feeds promotions
+     * and demotions into the middle of the region phase. The ticket takes
+     * effect after the barrier, one tick later than inline. A rate-limited
+     * warning names the site.
+     *
+     * @return {@code true} if deferred and the caller must return
+     */
+    public static <T> boolean deferRegionTicket(
+            String site,
+            net.minecraft.server.level.ServerChunkCache cache,
+            boolean add,
+            net.minecraft.server.level.TicketType<T> type,
+            net.minecraft.world.level.ChunkPos pos,
+            int distance,
+            T value,
+            boolean forceTicks) {
+        if (!onTickWorker()) return false;
+        deferTicket(site, pos, add ? () -> cache.addRegionTicket(type, pos, distance, value, forceTicks)
+                : () -> cache.removeRegionTicket(type, pos, distance, value, forceTicks));
+        return true;
+    }
+
+    /**
+     * {@code ServerLevel.setChunkForced} on a region worker: deferred like
+     * {@link #deferRegionTicket} (it adds or removes a forced ticket and may
+     * load the chunk). Returns what Vanilla would have — whether the forced
+     * set changes — predicted from the set as it is now; {@code null} when the
+     * call runs inline.
+     */
+    public static Boolean deferSetChunkForced(net.minecraft.server.level.ServerLevel level, int chunkX, int chunkZ, boolean add) {
+        if (!onTickWorker()) return null;
+        boolean forced = level.getForcedChunks().contains(net.minecraft.world.level.ChunkPos.asLong(chunkX, chunkZ));
+        deferTicket("ServerLevel.setChunkForced", new net.minecraft.world.level.ChunkPos(chunkX, chunkZ),
+                () -> level.setChunkForced(chunkX, chunkZ, add));
+        return forced != add;
+    }
+
+    private static boolean onTickWorker() {
+        net.multiforge.runtime.ownership.Domain domain = net.multiforge.runtime.ownership.OwnerToken.current().domain();
+        return domain == net.multiforge.runtime.ownership.Domain.REGION
+                || (domain == net.multiforge.runtime.ownership.Domain.GLOBAL
+                        && net.multiforge.runtime.region.RegionPhase.workersInFlight());
+    }
+
+    private static void deferTicket(String site, net.minecraft.world.level.ChunkPos pos, Runnable work) {
+        net.multiforge.runtime.diagnostics.ProbeRegistry.bump(site + ":deferred-to-server-thread");
+        net.multiforge.runtime.diagnostics.ViolationLogger.warn(
+                site,
+                "chunk ticket change at " + pos + " from " + Thread.currentThread().getName()
+                        + " deferred to the server thread (applies after this tick's barrier)");
+        OwnershipEnforcer.reroute(site, work);
+    }
+
+    /**
      * @return whether the calling thread is ticking the world on MultiForge's
      *         behalf right now — a region worker or the global region. Vanilla
      *         code that only serves "the level's own thread" (e.g. {@code
