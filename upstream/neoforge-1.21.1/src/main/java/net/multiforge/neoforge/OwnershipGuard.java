@@ -210,7 +210,7 @@ public final class OwnershipGuard {
             int distance,
             T value,
             boolean forceTicks) {
-        if (!onTickWorker()) return false;
+        if (!onTickWorker(cache.level.getServer())) return false;
         deferTicket(site, pos, add ? () -> cache.addRegionTicket(type, pos, distance, value, forceTicks)
                 : () -> cache.removeRegionTicket(type, pos, distance, value, forceTicks));
         return true;
@@ -224,14 +224,24 @@ public final class OwnershipGuard {
      * call runs inline.
      */
     public static Boolean deferSetChunkForced(net.minecraft.server.level.ServerLevel level, int chunkX, int chunkZ, boolean add) {
-        if (!onTickWorker()) return null;
+        if (!onTickWorker(level.getServer())) return null;
         boolean forced = level.getForcedChunks().contains(net.minecraft.world.level.ChunkPos.asLong(chunkX, chunkZ));
         deferTicket("ServerLevel.setChunkForced", new net.minecraft.world.level.ChunkPos(chunkX, chunkZ),
                 () -> level.setChunkForced(chunkX, chunkZ, add));
         return forced != add;
     }
 
-    private static boolean onTickWorker() {
+    /**
+     * Whether a ticket change here must be deferred: the caller ticks a region (or the
+     * global region while workers run) on a thread other than the server thread. A
+     * region the server thread ticks inline (a level with one region, or a hot region)
+     * changes tickets inline, as Vanilla does: the ticket maps are the server thread's
+     * own, and a deferral from the server thread would run inline anyway ({@code
+     * server.execute} runs tasks on its own thread at once), re-entering this check
+     * until the stack overflows.
+     */
+    private static boolean onTickWorker(net.minecraft.server.MinecraftServer server) {
+        if (server != null && server.isSameThread()) return false;
         net.multiforge.runtime.ownership.Domain domain = net.multiforge.runtime.ownership.OwnerToken.current().domain();
         return domain == net.multiforge.runtime.ownership.Domain.REGION
                 || (domain == net.multiforge.runtime.ownership.Domain.GLOBAL

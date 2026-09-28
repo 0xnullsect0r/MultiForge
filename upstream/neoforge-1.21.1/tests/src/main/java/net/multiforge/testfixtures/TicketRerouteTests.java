@@ -22,6 +22,7 @@ import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.TicketType;
 import net.minecraft.world.level.ChunkPos;
 import net.multiforge.runtime.diagnostics.ProbeRegistry;
+import net.multiforge.runtime.ownership.OwnerToken;
 import net.multiforge.runtime.scheduler.MultiForgeRegionizedRuntime;
 import net.multiforge.runtime.scheduler.MultiThreadedSchedulerHost;
 import net.neoforged.neoforge.eventtest.internal.TestsMod;
@@ -91,6 +92,34 @@ public class TicketRerouteTests {
                 helper.assertFalse(level.getForcedChunks().contains(target.toLong()), "the target chunk is still forced");
             })
                     .thenSucceed();
+        });
+    }
+
+    @GameTest(template = TestsMod.TEMPLATE_3x3, timeoutTicks = 100)
+    @TestHolder(description = {
+            "A region the server thread ticks inline (one region in the level, or a hot region) changes",
+            "tickets inline, as Vanilla does; a deferral there would run at once and re-enter itself."
+    })
+    static void serverThreadRegionTicketChangesApplyInline(final DynamicTest test) {
+        test.onGameTest(helper -> {
+            ServerLevel level = helper.getLevel();
+            ChunkPos target = new ChunkPos(helper.absolutePos(new BlockPos(1, 1, 1)).offset(96, 0, 96));
+            helper.assertTrue(level.getServer().isSameThread(), "GameTest body not on the server thread");
+            helper.assertFalse(level.getForcedChunks().contains(target.toLong()), "target already forced");
+            boolean[] changed = new boolean[2];
+            OwnerToken.runAs(OwnerToken.forRegion(Long.MAX_VALUE - 7), () -> {
+                changed[0] = level.setChunkForced(target.x, target.z, true);
+                level.getChunkSource().addRegionTicket(TicketType.FORCED, target, 1, target);
+            });
+            helper.assertTrue(changed[0], "setChunkForced(true) did not report a change");
+            helper.assertTrue(level.getForcedChunks().contains(target.toLong()), "setChunkForced(true) was not applied inline");
+            OwnerToken.runAs(OwnerToken.forRegion(Long.MAX_VALUE - 7), () -> {
+                level.getChunkSource().removeRegionTicket(TicketType.FORCED, target, 1, target);
+                changed[1] = level.setChunkForced(target.x, target.z, false);
+            });
+            helper.assertTrue(changed[1], "setChunkForced(false) did not report a change");
+            helper.assertFalse(level.getForcedChunks().contains(target.toLong()), "setChunkForced(false) was not applied inline");
+            helper.succeed();
         });
     }
 }
