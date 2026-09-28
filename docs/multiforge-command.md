@@ -51,17 +51,17 @@ Set cores = 8 (worker pool 8 threads)
 ### `region list`
 
 Every world's live regions (largest first) with their size, their tick time
-over the last 5 seconds (p50/p95), where they tick, which thread last ticked
+over the last 5 seconds (p50/p95/p99), where they tick, which thread last ticked
 each one and how many serial-lane events it posted, then the pins.
 
 ```
 /multiforge region list
 minecraft:overworld: 3 region(s), ticking on worker threads
-  region region#7 — 41 section(s), up to 10496 chunks, READY, tick 3.1/6.8 ms (p50/p95, last 5 s), last ticked on multiforge-tick-3, 12 serial-lane post(s) last tick
-  region region#9 — 2 section(s), up to 512 chunks, READY, tick 0.4/0.9 ms (p50/p95, last 5 s), last ticked on multiforge-tick-5, 0 serial-lane post(s) last tick
+  region region#7 — 41 section(s), up to 10496 chunks, READY, tick 3.1/6.8/7.4 ms (p50/p95/p99, last 5 s), last ticked on multiforge-tick-3, 12 serial-lane post(s) last tick
+  region region#9 — 2 section(s), up to 512 chunks, READY, tick 0.4/0.9/1.1 ms (p50/p95/p99, last 5 s), last ticked on multiforge-tick-5, 0 serial-lane post(s) last tick
   ...
 minecraft:the_nether: 1 region(s), ticking on the server thread (one region)
-  region region#12 — 1 section(s), up to 256 chunks, READY, tick 1.2/2.0 ms (p50/p95, last 5 s), last ticked on Server thread, 40 serial-lane post(s) last tick
+  region region#12 — 1 section(s), up to 256 chunks, READY, tick 1.2/2.0/2.3 ms (p50/p95/p99, last 5 s), last ticked on Server thread, 40 serial-lane post(s) last tick
 No pinned regions.
 ```
 

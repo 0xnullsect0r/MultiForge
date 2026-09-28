@@ -136,11 +136,12 @@ class MultiForgeCommandDispatcherTest {
     }
 
     @Test
-    void regionCostIsShownAsP50AndP95() {
+    void regionCostIsShownAsP50P95AndP99() {
         net.multiforge.runtime.region.RegionMspt mspt = new net.multiforge.runtime.region.RegionMspt(100);
         assertThat(MultiForgeCommandDispatcher.describeCost(mspt)).isEmpty();
         for (int i = 1; i <= 100; i++) mspt.recordNanos(i * 100_000L); // 0.1 .. 10 ms
-        assertThat(MultiForgeCommandDispatcher.describeCost(mspt)).isEqualTo(", tick 5.1/9.6 ms (p50/p95, last 5 s)");
+        assertThat(MultiForgeCommandDispatcher.describeCost(mspt))
+                .isEqualTo(", tick 5.1/9.6/10.0 ms (p50/p95/p99, last 5 s)");
         assertThat(MultiForgeCommandDispatcher.describeCost(null)).isEmpty();
     }
 

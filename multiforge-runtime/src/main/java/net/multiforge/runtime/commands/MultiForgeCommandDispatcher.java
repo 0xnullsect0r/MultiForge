@@ -803,14 +803,15 @@ public final class MultiForgeCommandDispatcher {
         return true;
     }
 
-    /** {@code ", tick 3.2/7.9 ms (p50/p95, last 5 s)"}, or nothing before the region's first tick. */
+    /** {@code ", tick 3.2/7.9/9.4 ms (p50/p95/p99, last 5 s)"}, or nothing before the region's first tick. */
     static String describeCost(net.multiforge.runtime.region.RegionMspt mspt) {
         if (mspt == null || mspt.averageMillis() == 0.0) return "";
         return String.format(
                 Locale.ROOT,
-                ", tick %.1f/%.1f ms (p50/p95, last 5 s)",
+                ", tick %.1f/%.1f/%.1f ms (p50/p95/p99, last 5 s)",
                 mspt.percentileMillis(0.5),
-                mspt.percentileMillis(0.95));
+                mspt.percentileMillis(0.95),
+                mspt.percentileMillis(0.99));
     }
 
     private static String describe(MultiThreadedSchedulerHost.WorldTickMode mode) {
