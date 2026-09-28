@@ -421,6 +421,18 @@ public final class SwarmBench {
                             z0 + 1 + rnd.nextInt(48)));
         }
         command(runner, "tick unfreeze");
+        // Let every new mob pass its first 20 ticks (activation keeps a mob under 20 ticks
+        // old always active) before the measured window starts.
+        long start = runner.gameTime();
+        long settle = System.currentTimeMillis() + 300_000;
+        while (runner.gameTime() < start + 40 && System.currentTimeMillis() < settle) {
+            try {
+                Thread.sleep(500);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return;
+            }
+        }
         extra.put("water_mobs", mobs);
         extra.put("water_basin", x0 + "," + z0 + ".." + x1 + "," + z1 + " (bot at " + bx + "," + bz + ")");
         extra.put("water_mobs_start", countWaterMobs(runner));
