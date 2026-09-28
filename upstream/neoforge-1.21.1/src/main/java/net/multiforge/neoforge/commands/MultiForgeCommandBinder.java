@@ -33,6 +33,7 @@ import net.multiforge.runtime.commands.MultiForgeCommandDispatcher;
 import net.multiforge.runtime.config.MultiForgeConfigStore;
 import net.multiforge.runtime.diagnostics.EntityCensus;
 import net.multiforge.runtime.diagnostics.ViolationLogger;
+import net.multiforge.runtime.region.RegionPhase;
 import net.multiforge.runtime.region.pin.RegionPinManager;
 import net.multiforge.runtime.scheduler.MultiForgeRegionizedRuntime;
 import net.multiforge.runtime.scheduler.MultiThreadedSchedulerHost;
@@ -226,7 +227,7 @@ public final class MultiForgeCommandBinder {
      * full id or its path ({@code overworld}).
      */
     private static List<EntityCensus> entityCensus(MinecraftServer server, String level, boolean heal) {
-        if (!server.isSameThread()) {
+        if (!server.isSameThread() || RegionPhase.workersInFlight()) {
             throw new IllegalStateException("The entity census runs on the server thread between ticks; try again.");
         }
         List<EntityCensus> out = new ArrayList<>();

@@ -115,7 +115,8 @@ public final class MultiForgeServerState {
      * Apply the parts of {@code config} that live in process-wide state:
      * ownership enforcement (strict for {@code mode = "strict"} or {@code
      * policy = "fail"}), the tick watchdog, and the violation-warning budget
-     * ({@code policy = "reroute-only"} silences it). {@code mode = "off"} only
+     * ({@code policy = "reroute-only"} silences it), and the entity-visibility
+     * deferral's kill switch ({@code entities.deferVisibility}). {@code mode = "off"} only
      * matters at server start, where it skips installing the runtime.
      *
      * <p>An explicitly set {@code -Dmultiforge.ownership.mode=off|reroute|strict}
@@ -140,6 +141,7 @@ public final class MultiForgeServerState {
                 : net.multiforge.runtime.region.RegionTickWatchdog.Mode.WARN);
         net.multiforge.runtime.diagnostics.ViolationLogger.configure(
                 config.violationPolicy() == MultiForgeConfig.ViolationPolicy.REROUTE_ONLY ? 0L : config.warnPerMin());
+        net.multiforge.runtime.region.RegionPhase.setDeferVisibility(config.effectiveDeferVisibility());
     }
 
     /** The current config snapshot for {@code server} — see {@link #configStoreFor}. */

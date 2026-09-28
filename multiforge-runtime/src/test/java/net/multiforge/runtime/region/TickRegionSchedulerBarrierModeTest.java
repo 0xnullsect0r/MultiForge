@@ -418,6 +418,55 @@ class TickRegionSchedulerBarrierModeTest {
         }
     }
 
+    @Test
+    void workersInFlightWindowDefersAndReplaysAtTheBarrier() {
+        ThreadedRegionizer regionizer = new ThreadedRegionizer(WORLD, 0);
+        RegionizedTaskQueue queue = RegionizedTaskQueue.of(regionizer);
+        java.util.List<String> order = new java.util.concurrent.CopyOnWriteArrayList<>();
+        AtomicBoolean seenInFlight = new AtomicBoolean();
+        CountDownLatch pumped = new CountDownLatch(1);
+        RegionTickBody body = r -> {
+            seenInFlight.set(RegionPhase.workersInFlight());
+            try {
+                // Wait for the caller's pump to run a "chunk promotion" while this worker runs.
+                assertThat(pumped.await(5, TimeUnit.SECONDS)).isTrue();
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+            order.add("worker-done");
+        };
+        AtomicBoolean once = new AtomicBoolean();
+        try (TickRegionScheduler scheduler =
+                new TickRegionScheduler(2, body, queue, 32, TickRegionScheduler.Mode.BARRIER)) {
+            regionizer.addListener(scheduler);
+            Region a = regionizer.addChunk(new ChunkPos(0, 0));
+            Region b = regionizer.addChunk(new ChunkPos(500, 500));
+            scheduler.driveTick(List.of(a, b), 5_000_000_000L, () -> {
+                if (!once.compareAndSet(false, true)) return false;
+                boolean deferred = RegionPhase.defer(() -> order.add("replayed"));
+                order.add("deferred=" + deferred);
+                pumped.countDown();
+                return true;
+            });
+            assertThat(seenInFlight.get()).isTrue();
+            assertThat(RegionPhase.workersInFlight()).isFalse();
+            assertThat(order).containsExactly("deferred=true", "worker-done", "worker-done", "replayed");
+            // A lone region ticks on the caller: no worker in flight, nothing is held back.
+            AtomicBoolean inlineSaw = new AtomicBoolean(true);
+            try (TickRegionScheduler single = new TickRegionScheduler(
+                    2,
+                    r -> inlineSaw.set(RegionPhase.workersInFlight()),
+                    queue,
+                    32,
+                    TickRegionScheduler.Mode.BARRIER)) {
+                single.driveTick(List.of(a), 5_000_000_000L, () -> false);
+            }
+            assertThat(inlineSaw.get()).isFalse();
+        } finally {
+            RegionPhase.resetForTesting();
+        }
+    }
+
     private static void spin(long nanos) {
         long end = System.nanoTime() + nanos;
         while (System.nanoTime() < end) Thread.onSpinWait();

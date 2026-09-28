@@ -58,7 +58,9 @@ public final class ConfigCodec {
         if (r.get("tick.serialLaneHotWaitMs") != null) hotWaitMs = intOr(r, "tick.serialLaneHotWaitMs", hotWaitMs);
         else if (r.get("tick.serialLaneInlineThreshold") != null && intOr(r, "tick.serialLaneInlineThreshold", 1) <= 0)
             hotWaitMs = 0;
-        return new MultiForgeConfig(cores, tpc, mode, regionSize, vp, warnPerMin, inlineSingle, hotWaitMs);
+        boolean deferVisibility = boolOr(r, "entities.deferVisibility", d.deferVisibility());
+        return new MultiForgeConfig(
+                cores, tpc, mode, regionSize, vp, warnPerMin, inlineSingle, hotWaitMs, deferVisibility);
     }
 
     public static String render(MultiForgeConfig c) {
@@ -87,7 +89,12 @@ public final class ConfigCodec {
         sb.append("# A region whose serial-lane hand-offs cost it more than this many\n");
         sb.append("# milliseconds per tick ticks on the server thread after the others,\n");
         sb.append("# until it quiets down. 0 disables.\n");
-        sb.append("serialLaneHotWaitMs = ").append(c.serialLaneHotWaitMs()).append("\n");
+        sb.append("serialLaneHotWaitMs = ").append(c.serialLaneHotWaitMs()).append("\n\n");
+        sb.append("[entities]\n");
+        sb.append("# While region workers run, entity-visibility changes from chunk loads and\n");
+        sb.append("# unloads wait for the tick barrier, so a worker moving an entity cannot race\n");
+        sb.append("# them. false restores v1.10's behaviour (kill switch).\n");
+        sb.append("deferVisibility = ").append(c.deferVisibility()).append("\n");
         return sb.toString();
     }
 

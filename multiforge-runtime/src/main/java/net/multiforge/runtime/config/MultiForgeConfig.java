@@ -40,6 +40,9 @@ import org.slf4j.LoggerFactory;
  *   inlineSingleRegion = true         # a level with one region ticks it on the server thread
  *   serialLaneHotWaitMs = 5           # serial-lane hand-off time per tick (ms) that moves a
  *                                     # region to the server thread; 0 = never
+ *
+ *   [entities]
+ *   deferVisibility = true            # hold entity-visibility changes back while workers run
  * </pre>
  * A file written by an older version lacks the newer keys; they take their defaults.
  */
@@ -51,10 +54,34 @@ public record MultiForgeConfig(
         ViolationPolicy violationPolicy,
         int warnPerMin,
         boolean inlineSingleRegion,
-        int serialLaneHotWaitMs) {
+        int serialLaneHotWaitMs,
+        boolean deferVisibility) {
 
     public static final boolean DEFAULT_INLINE_SINGLE_REGION = true;
     public static final int DEFAULT_SERIAL_LANE_HOT_WAIT_MS = 5;
+    public static final boolean DEFAULT_DEFER_VISIBILITY = true;
+
+    /** The pre-{@code [entities]} layout; the entity knobs take their defaults. */
+    public MultiForgeConfig(
+            int cores,
+            int threadsPerCore,
+            Mode mode,
+            int regionSize,
+            ViolationPolicy violationPolicy,
+            int warnPerMin,
+            boolean inlineSingleRegion,
+            int serialLaneHotWaitMs) {
+        this(
+                cores,
+                threadsPerCore,
+                mode,
+                regionSize,
+                violationPolicy,
+                warnPerMin,
+                inlineSingleRegion,
+                serialLaneHotWaitMs,
+                DEFAULT_DEFER_VISIBILITY);
+    }
 
     /** The pre-{@code [tick]} layout; the tick placement knobs take their defaults. */
     public MultiForgeConfig(
@@ -182,12 +209,21 @@ public record MultiForgeConfig(
                 violationPolicy,
                 warnPerMin,
                 inlineSingleRegion,
-                serialLaneHotWaitMs);
+                serialLaneHotWaitMs,
+                deferVisibility);
     }
 
     public MultiForgeConfig withThreadsPerCore(int v) {
         return new MultiForgeConfig(
-                cores, v, mode, regionSize, violationPolicy, warnPerMin, inlineSingleRegion, serialLaneHotWaitMs);
+                cores,
+                v,
+                mode,
+                regionSize,
+                violationPolicy,
+                warnPerMin,
+                inlineSingleRegion,
+                serialLaneHotWaitMs,
+                deferVisibility);
     }
 
     public MultiForgeConfig withMode(Mode v) {
@@ -199,31 +235,98 @@ public record MultiForgeConfig(
                 violationPolicy,
                 warnPerMin,
                 inlineSingleRegion,
-                serialLaneHotWaitMs);
+                serialLaneHotWaitMs,
+                deferVisibility);
     }
 
     public MultiForgeConfig withRegionSize(int v) {
         return new MultiForgeConfig(
-                cores, threadsPerCore, mode, v, violationPolicy, warnPerMin, inlineSingleRegion, serialLaneHotWaitMs);
+                cores,
+                threadsPerCore,
+                mode,
+                v,
+                violationPolicy,
+                warnPerMin,
+                inlineSingleRegion,
+                serialLaneHotWaitMs,
+                deferVisibility);
     }
 
     public MultiForgeConfig withViolationPolicy(ViolationPolicy v) {
         return new MultiForgeConfig(
-                cores, threadsPerCore, mode, regionSize, v, warnPerMin, inlineSingleRegion, serialLaneHotWaitMs);
+                cores,
+                threadsPerCore,
+                mode,
+                regionSize,
+                v,
+                warnPerMin,
+                inlineSingleRegion,
+                serialLaneHotWaitMs,
+                deferVisibility);
     }
 
     public MultiForgeConfig withWarnPerMin(int v) {
         return new MultiForgeConfig(
-                cores, threadsPerCore, mode, regionSize, violationPolicy, v, inlineSingleRegion, serialLaneHotWaitMs);
+                cores,
+                threadsPerCore,
+                mode,
+                regionSize,
+                violationPolicy,
+                v,
+                inlineSingleRegion,
+                serialLaneHotWaitMs,
+                deferVisibility);
     }
 
     public MultiForgeConfig withInlineSingleRegion(boolean v) {
         return new MultiForgeConfig(
-                cores, threadsPerCore, mode, regionSize, violationPolicy, warnPerMin, v, serialLaneHotWaitMs);
+                cores,
+                threadsPerCore,
+                mode,
+                regionSize,
+                violationPolicy,
+                warnPerMin,
+                v,
+                serialLaneHotWaitMs,
+                deferVisibility);
     }
 
     public MultiForgeConfig withSerialLaneHotWaitMs(int v) {
         return new MultiForgeConfig(
-                cores, threadsPerCore, mode, regionSize, violationPolicy, warnPerMin, inlineSingleRegion, v);
+                cores,
+                threadsPerCore,
+                mode,
+                regionSize,
+                violationPolicy,
+                warnPerMin,
+                inlineSingleRegion,
+                v,
+                deferVisibility);
+    }
+
+    public MultiForgeConfig withDeferVisibility(boolean v) {
+        return new MultiForgeConfig(
+                cores,
+                threadsPerCore,
+                mode,
+                regionSize,
+                violationPolicy,
+                warnPerMin,
+                inlineSingleRegion,
+                serialLaneHotWaitMs,
+                v);
+    }
+
+    /**
+     * {@code entities.deferVisibility}, unless {@code
+     * -Dmultiforge.entities.deferVisibility=true|false} overrides it: while
+     * region workers run, entity-visibility changes from chunk promotions and
+     * demotions are held back and replayed at the barrier ({@code
+     * RegionPhase}). The kill switch for that deferral.
+     */
+    public boolean effectiveDeferVisibility() {
+        String override = System.getProperty("multiforge.entities.deferVisibility");
+        if (override != null && !override.isBlank()) return Boolean.parseBoolean(override.trim());
+        return deferVisibility;
     }
 }

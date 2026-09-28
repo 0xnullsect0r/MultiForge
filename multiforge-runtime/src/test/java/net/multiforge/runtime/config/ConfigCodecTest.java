@@ -127,4 +127,30 @@ class ConfigCodecTest {
                         .serialLaneHotWaitMs())
                 .isEqualTo(7);
     }
+
+    @Test
+    void deferVisibilityDefaultsOnAndRoundTrips() {
+        assertThat(MultiForgeConfig.defaults().deferVisibility()).isTrue();
+        assertThat(ConfigCodec.parse("[mtserver]\ncores = 2\n").deferVisibility())
+                .isTrue();
+        MultiForgeConfig off = ConfigCodec.parse("[entities]\ndeferVisibility = false\n");
+        assertThat(off.deferVisibility()).isFalse();
+        assertThat(ConfigCodec.parse(ConfigCodec.render(off))).isEqualTo(off);
+        assertThat(MultiForgeConfig.defaults().withDeferVisibility(false)).isEqualTo(off);
+    }
+
+    @Test
+    void deferVisibilitySystemPropertyWins() {
+        String prev = System.getProperty("multiforge.entities.deferVisibility");
+        try {
+            System.setProperty("multiforge.entities.deferVisibility", "false");
+            assertThat(MultiForgeConfig.defaults().effectiveDeferVisibility()).isFalse();
+            System.setProperty("multiforge.entities.deferVisibility", "true");
+            assertThat(MultiForgeConfig.defaults().withDeferVisibility(false).effectiveDeferVisibility())
+                    .isTrue();
+        } finally {
+            if (prev == null) System.clearProperty("multiforge.entities.deferVisibility");
+            else System.setProperty("multiforge.entities.deferVisibility", prev);
+        }
+    }
 }

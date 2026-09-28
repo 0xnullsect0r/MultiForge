@@ -371,34 +371,13 @@ public final class TickRegionScheduler implements AutoCloseable, RegionListener 
         long[] waited = new long[n];
         Throwable[] failures = new Throwable[n];
         Thread waiter = Thread.currentThread();
-        for (int i = 0; i < n; i++) {
-            if (placement[i] != TickPlacement.WORKER) continue;
-            final int idx = i;
-            Region region = batch.get(i);
-            RegionState_ s = states[i];
-            pool.execute(() -> {
-                try {
-                    if (region.tryMarkTicking()) {
-                        s.placement = TickPlacement.WORKER;
-                        failures[idx] = tickClaimed(s, region, false);
-                        waited[idx] = RegionTickWatchdog.lastTickWaitNanos();
-                    }
-                } finally {
-                    finishedAt[idx] = System.nanoTime();
-                    if (remaining.decrementAndGet() == 0) LockSupport.unpark(waiter);
-                }
-            });
-        }
-        while (remaining.get() > 0) {
-            boolean didWork;
-            try {
-                didWork = pump.getAsBoolean();
-            } catch (RuntimeException e) {
-                // A failing main-thread task must not wedge the barrier; the
-                // pump's own owner reports it. Keep waiting on the regions.
-                didWork = true;
-            }
-            if (!didWork && remaining.get() > 0) LockSupport.parkNanos(100_000L);
+        // While a worker runs, server-thread entity-visibility changes (a pumped
+        // chunk promotion or demotion) are held back and replayed at the barrier.
+        if (parallel > 0) RegionPhase.beginWorkers();
+        try {
+            submitAndAwaitWorkers(batch, states, placement, remaining, finishedAt, waited, failures, waiter, pump);
+        } finally {
+            if (parallel > 0) RegionPhase.endWorkers();
         }
         // Server-thread regions run now, one after another, with no worker
         // running: the caller is the serial lane and the chunk source's thread,
@@ -436,6 +415,49 @@ public final class TickRegionScheduler implements AutoCloseable, RegionListener 
         if (first instanceof Error err) throw err;
         if (first != null) throw new IllegalStateException("region tick failed", first);
         return new TickAllResult(n, overrun);
+    }
+
+    /** Submit the worker-placed regions of a {@link #driveTick} batch and pump until all finished. */
+    private void submitAndAwaitWorkers(
+            List<Region> batch,
+            RegionState_[] states,
+            TickPlacement[] placement,
+            AtomicInteger remaining,
+            long[] finishedAt,
+            long[] waited,
+            Throwable[] failures,
+            Thread waiter,
+            BooleanSupplier pump) {
+        int n = batch.size();
+        for (int i = 0; i < n; i++) {
+            if (placement[i] != TickPlacement.WORKER) continue;
+            final int idx = i;
+            Region region = batch.get(i);
+            RegionState_ s = states[i];
+            pool.execute(() -> {
+                try {
+                    if (region.tryMarkTicking()) {
+                        s.placement = TickPlacement.WORKER;
+                        failures[idx] = tickClaimed(s, region, false);
+                        waited[idx] = RegionTickWatchdog.lastTickWaitNanos();
+                    }
+                } finally {
+                    finishedAt[idx] = System.nanoTime();
+                    if (remaining.decrementAndGet() == 0) LockSupport.unpark(waiter);
+                }
+            });
+        }
+        while (remaining.get() > 0) {
+            boolean didWork;
+            try {
+                didWork = pump.getAsBoolean();
+            } catch (RuntimeException e) {
+                // A failing main-thread task must not wedge the barrier; the
+                // pump's own owner reports it. Keep waiting on the regions.
+                didWork = true;
+            }
+            if (!didWork && remaining.get() > 0) LockSupport.parkNanos(100_000L);
+        }
     }
 
     /**
