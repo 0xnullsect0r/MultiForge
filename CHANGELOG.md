@@ -18,7 +18,7 @@
   - the slowest regions are submitted first.
 - `/multiforge region list` shows p99 tick time; `chunkmap.tick.*` probes time the entity tracker and chunk unloading.
 - Immersive Engineering's `ServerLevel.sendBlockUpdated` mixin applies again (a development build broke it; no release shipped with it).
-- **Verification.** The vanilla-parity gate is byte-identical to stock NeoForge at 1 and 4 workers (196 chunks). Scenarios x1–x4 pass. The GameTests pass in `hybrid` and `strict`: 190/190 required, where `testFeatureGating` is an upstream failure in every mode. New keys and kill switches: `docs/perf-tuning.md#kill-switches`.
+- **Verification.** The vanilla-parity gate is byte-identical to stock NeoForge at 1 and 4 workers (196 chunks). Scenarios x1–x4 pass. The GameTests pass in `hybrid` and `strict`: 191/191 required, where `testFeatureGating` is an upstream failure in every mode. New keys and kill switches: `docs/perf-tuning.md#kill-switches`.
 
 ## v1.10.0 — a busy modded base runs on a worker again
 
