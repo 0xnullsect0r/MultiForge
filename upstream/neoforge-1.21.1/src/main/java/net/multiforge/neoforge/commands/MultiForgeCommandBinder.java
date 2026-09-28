@@ -16,16 +16,22 @@ import com.mojang.brigadier.arguments.IntegerArgumentType;
 import com.mojang.brigadier.arguments.StringArgumentType;
 import com.mojang.brigadier.builder.LiteralArgumentBuilder;
 import com.mojang.brigadier.context.CommandContext;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.stream.Stream;
 import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.commands.Commands;
 import net.minecraft.commands.SharedSuggestionProvider;
 import net.minecraft.commands.arguments.ResourceLocationArgument;
 import net.minecraft.network.chat.Component;
+import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.MinecraftServer;
+import net.minecraft.server.level.ServerLevel;
 import net.multiforge.neoforge.MultiForgeServerState;
+import net.multiforge.neoforge.world.EntityAudit;
 import net.multiforge.runtime.commands.MultiForgeCommandDispatcher;
 import net.multiforge.runtime.config.MultiForgeConfigStore;
+import net.multiforge.runtime.diagnostics.EntityCensus;
 import net.multiforge.runtime.diagnostics.ViolationLogger;
 import net.multiforge.runtime.region.pin.RegionPinManager;
 import net.multiforge.runtime.scheduler.MultiForgeRegionizedRuntime;
@@ -67,7 +73,8 @@ public final class MultiForgeCommandBinder {
             MultiThreadedSchedulerHost host = MultiForgeRegionizedRuntime.current();
             return host == null ? null : host.chunkManagerForOrNull(world);
         };
-        MultiForgeCommandDispatcher dispatcher = new MultiForgeCommandDispatcher(configStore, pins, chunkManagers);
+        MultiForgeCommandDispatcher dispatcher = new MultiForgeCommandDispatcher(configStore, pins, chunkManagers)
+                .withEntityCensus((level, heal) -> entityCensus(server, level, heal));
 
         try {
             server.getCommands().getDispatcher().register(buildTree(dispatcher));
@@ -93,6 +100,7 @@ public final class MultiForgeCommandBinder {
                         .executes(ctx -> run(dispatcher, ctx, "tickstats"))
                         .then(Commands.literal("reset").executes(ctx -> run(dispatcher, ctx, "tickstats", "reset"))))
                 .then(chunkCostSubtree(dispatcher))
+                .then(entitiesSubtree(dispatcher))
                 .then(certifySubtree(dispatcher));
     }
 
@@ -158,6 +166,77 @@ public final class MultiForgeCommandBinder {
                 .then(Commands.literal("on").executes(ctx -> run(dispatcher, ctx, "chunkcost", "on")))
                 .then(Commands.literal("off").executes(ctx -> run(dispatcher, ctx, "chunkcost", "off")))
                 .then(Commands.literal("report").then(world));
+    }
+
+    /**
+     * {@code /multiforge entities [level] [top N | region <id> | audit [heal]]}:
+     * the views hang both off {@code entities} (every level) and off its {@code
+     * level} argument.
+     */
+    private static LiteralArgumentBuilder<CommandSourceStack> entitiesSubtree(MultiForgeCommandDispatcher dispatcher) {
+        var level = Commands.argument("level", ResourceLocationArgument.id())
+                .suggests((ctx, b) -> SharedSuggestionProvider.suggestResource(
+                        ctx.getSource().levels().stream().map(l -> l.location()), b))
+                .executes(ctx -> run(dispatcher, ctx, "entities", levelArg(ctx)));
+        addEntityViews(dispatcher, level, true);
+        var root = Commands.literal("entities").executes(ctx -> run(dispatcher, ctx, "entities"));
+        addEntityViews(dispatcher, root, false);
+        return root.then(level);
+    }
+
+    private static void addEntityViews(
+            MultiForgeCommandDispatcher dispatcher,
+            com.mojang.brigadier.builder.ArgumentBuilder<CommandSourceStack, ?> parent,
+            boolean withLevel) {
+        parent.then(Commands.literal("top")
+                .executes(ctx -> run(dispatcher, ctx, entityArgs(ctx, withLevel, "top")))
+                .then(Commands.argument("n", IntegerArgumentType.integer(1, 1000))
+                        .executes(ctx -> run(dispatcher, ctx, entityArgs(ctx, withLevel, "top", intArg(ctx, "n"))))))
+                .then(Commands.literal("region")
+                        .then(Commands.argument("id", com.mojang.brigadier.arguments.LongArgumentType.longArg(-1))
+                                .executes(ctx -> run(
+                                        dispatcher,
+                                        ctx,
+                                        entityArgs(
+                                                ctx,
+                                                withLevel,
+                                                "region",
+                                                String.valueOf(com.mojang.brigadier.arguments.LongArgumentType.getLong(ctx, "id")))))))
+                .then(Commands.literal("audit")
+                        .executes(ctx -> run(dispatcher, ctx, entityArgs(ctx, withLevel, "audit")))
+                        .then(Commands.literal("heal")
+                                .executes(ctx -> run(dispatcher, ctx, entityArgs(ctx, withLevel, "audit", "heal")))));
+    }
+
+    private static String[] entityArgs(CommandContext<CommandSourceStack> ctx, boolean withLevel, String... view) {
+        List<String> args = new ArrayList<>();
+        args.add("entities");
+        if (withLevel) args.add(levelArg(ctx));
+        args.addAll(List.of(view));
+        return args.toArray(String[]::new);
+    }
+
+    private static String levelArg(CommandContext<CommandSourceStack> ctx) {
+        return ResourceLocationArgument.getId(ctx, "level").toString();
+    }
+
+    /**
+     * {@code /multiforge entities}: each matching level's census (see {@link
+     * EntityAudit}), taken here on the server thread; a level matches by its
+     * full id or its path ({@code overworld}).
+     */
+    private static List<EntityCensus> entityCensus(MinecraftServer server, String level, boolean heal) {
+        if (!server.isSameThread()) {
+            throw new IllegalStateException("The entity census runs on the server thread between ticks; try again.");
+        }
+        List<EntityCensus> out = new ArrayList<>();
+        for (ServerLevel l : server.getAllLevels()) {
+            ResourceLocation id = l.dimension().location();
+            if (level == null || id.toString().equals(level) || id.getPath().equals(level)) {
+                out.add(EntityAudit.take(l, heal));
+            }
+        }
+        return out;
     }
 
     private static LiteralArgumentBuilder<CommandSourceStack> pinSubtree(MultiForgeCommandDispatcher dispatcher) {

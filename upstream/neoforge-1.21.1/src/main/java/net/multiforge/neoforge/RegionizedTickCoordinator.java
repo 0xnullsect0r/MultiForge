@@ -139,6 +139,8 @@ public final class RegionizedTickCoordinator {
         // Chunk work a region could not take this tick, then the block-change
         // broadcast Vanilla sends right after its chunk loop.
         level.getChunkSource().mfAfterRegions();
+        // Every minute: census the level's entities and heal any left in limbo.
+        net.multiforge.neoforge.world.EntityAudit.autoAudit(level);
     }
 
     /**

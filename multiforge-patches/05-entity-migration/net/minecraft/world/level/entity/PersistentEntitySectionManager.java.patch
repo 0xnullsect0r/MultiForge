@@ -229,7 +229,7 @@
      }
  
      @Override
-@@ -303,84 +348,125 @@ public class PersistentEntitySectionManager<T extends EntityAccess> implements A
+@@ -303,84 +348,180 @@ public class PersistentEntitySectionManager<T extends EntityAccess> implements A
      }
  
      public boolean isLoaded(UUID p_157551_) {
@@ -404,10 +404,65 @@
 +        synchronized (this.mfLock) {
 +            return this.visibleEntityStorage.count();
 +        }
++    }
++
++    /**
++     * MultiForge (multiforge-patches/05-entity-migration/): a raw census of this
++     * manager, read under {@link #mfLock} (no foreign code runs; the lists are
++     * returned after it is released). Every sectioned entity is listed once, by
++     * its section's effective status; see net.multiforge.neoforge.world.EntityAudit.
++     */
++    public net.multiforge.neoforge.world.EntityAudit.Raw<T> mfCensus() {
++        synchronized (this.mfLock) {
++            List<T> hidden = new java.util.ArrayList<>();
++            List<T> accessible = new java.util.ArrayList<>();
++            List<T> ticking = new java.util.ArrayList<>();
++            for (it.unimi.dsi.fastutil.longs.LongIterator chunks = this.sectionStorage.getAllChunksWithExistingSections().iterator(); chunks.hasNext(); ) {
++                java.util.Iterator<EntitySection<T>> sections = this.sectionStorage.getExistingSectionsInChunk(chunks.nextLong()).iterator();
++                while (sections.hasNext()) {
++                    EntitySection<T> section = sections.next();
++                    Visibility status = section.getStatus();
++                    java.util.Iterator<T> entities = section.getEntities().iterator();
++                    while (entities.hasNext()) {
++                        T entity = entities.next();
++                        Visibility effective = getEffectiveStatus(entity, status);
++                        if (!effective.isAccessible()) {
++                            hidden.add(entity);
++                            continue;
++                        }
++                        accessible.add(entity);
++                        if (effective.isTicking()) ticking.add(entity);
++                    }
++                }
++            }
++            List<T> visible = new java.util.ArrayList<>(this.visibleEntityStorage.count());
++            this.visibleEntityStorage.getAllEntities().forEach(visible::add);
++            return new net.multiforge.neoforge.world.EntityAudit.Raw<>(this.knownUuids.size(), hidden, accessible, ticking, visible);
++        }
++    }
++
++    /** MultiForge: re-apply a missing tracking start (EntityAudit's heal); calls out, so never under mfLock. */
++    public void mfStartTracking(T entity) {
++        this.startTracking(entity);
++    }
++
++    /** MultiForge: re-apply a missing tracking end (EntityAudit's heal). */
++    public void mfStopTracking(T entity) {
++        this.stopTracking(entity);
++    }
++
++    /** MultiForge: re-apply a missing ticking start (EntityAudit's heal). */
++    public void mfStartTicking(T entity) {
++        this.startTicking(entity);
++    }
++
++    /** MultiForge: re-apply a missing ticking end (EntityAudit's heal). */
++    public void mfStopTicking(T entity) {
++        this.stopTicking(entity);
      }
  
      class Callback implements EntityInLevelCallback {
-@@ -401,19 +487,27 @@ public class PersistentEntitySectionManager<T extends EntityAccess> implements A
+@@ -401,19 +542,27 @@ public class PersistentEntitySectionManager<T extends EntityAccess> implements A
              BlockPos blockpos = this.entity.blockPosition();
              long i = SectionPos.asLong(blockpos);
              if (i != this.currentSectionKey) {
@@ -441,7 +496,7 @@
                  if (this.realEntity != null) net.neoforged.neoforge.common.CommonHooks.onEntityEnterSection(this.realEntity, oldSectionKey, i);
              }
          }
-@@ -450,12 +544,18 @@ public class PersistentEntitySectionManager<T extends EntityAccess> implements A
+@@ -450,12 +599,18 @@ public class PersistentEntitySectionManager<T extends EntityAccess> implements A
  
          @Override
          public void onRemove(Entity.RemovalReason p_157619_) {
@@ -462,7 +517,7 @@
              if (visibility.isTicking()) {
                  PersistentEntitySectionManager.this.stopTicking(this.entity);
              }
-@@ -468,9 +568,13 @@ public class PersistentEntitySectionManager<T extends EntityAccess> implements A
+@@ -468,9 +623,13 @@ public class PersistentEntitySectionManager<T extends EntityAccess> implements A
                  PersistentEntitySectionManager.this.callbacks.onDestroyed(this.entity);
              }
  
@@ -478,7 +533,7 @@
          }
      }
  
-@@ -479,4 +583,19 @@ public class PersistentEntitySectionManager<T extends EntityAccess> implements A
+@@ -479,4 +638,19 @@ public class PersistentEntitySectionManager<T extends EntityAccess> implements A
          PENDING,
          LOADED;
      }
