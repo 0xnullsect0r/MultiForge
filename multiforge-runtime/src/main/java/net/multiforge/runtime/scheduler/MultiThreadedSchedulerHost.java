@@ -526,6 +526,12 @@ public final class MultiThreadedSchedulerHost implements SchedulerHost, AutoClos
     public void applyConfig(MultiForgeConfig next) {
         Objects.requireNonNull(next, "next");
         MultiForgeConfig prev = this.config;
+        if (next.regionSize() < 0 || next.regionSize() > MultiForgeConfig.MAX_REGION_SIZE_SHIFT) {
+            // Re-partitioning dissolves every region before building the new ones;
+            // a size the regionizer rejects would leave each world with none.
+            throw new IllegalArgumentException("region size shift " + next.regionSize() + " is outside 0.."
+                    + MultiForgeConfig.MAX_REGION_SIZE_SHIFT + "; regions left as they are");
+        }
         this.config = next;
         applyInlinePolicy(next);
         if (next.tickWorkerCount() != scheduler.workerCount()) scheduler.resize(next.tickWorkerCount());
@@ -912,7 +918,17 @@ public final class MultiThreadedSchedulerHost implements SchedulerHost, AutoClos
         for (int pass = 0; pass < 16; pass++) {
             int ran = 0;
             for (ThreadedRegionizer regionizer : regionizers.values()) {
-                for (Region region : regionizer.regions()) ran += taskQueue.drain(region, Integer.MAX_VALUE);
+                for (Region region : regionizer.regions()) {
+                    int before = taskQueue.inboxSize(region);
+                    try {
+                        ran += taskQueue.drain(region, Integer.MAX_VALUE);
+                    } catch (RuntimeException | Error e) {
+                        // Stopping or re-partitioning: report it and keep draining the rest.
+                        ran += Math.max(1, before - taskQueue.inboxSize(region));
+                        org.slf4j.LoggerFactory.getLogger("multiforge.scheduler")
+                                .error("a rerouted task failed while draining region {}", region.id(), e);
+                    }
+                }
             }
             total += ran;
             if (ran == 0) return total;
@@ -1018,6 +1034,23 @@ public final class MultiThreadedSchedulerHost implements SchedulerHost, AutoClos
                 0L,
                 periodMillis,
                 TimeUnit.MILLISECONDS);
+    }
+
+    /**
+     * Run {@code task} once on the shared {@code mf-diag-emitters} thread — for
+     * event-driven diagnostics (a violation frame) raised on a region worker, so
+     * the worker never encodes or sends debug traffic. Failures are contained as
+     * in {@link #scheduleGlobal}.
+     */
+    public void runDiagnostics(Runnable task) {
+        Objects.requireNonNull(task, "task");
+        DiagExecutorHolder.EXEC.execute(() -> {
+            try {
+                task.run();
+            } catch (RuntimeException e) {
+                ProbeRegistry.bump("diag-emitter.failure");
+            }
+        });
     }
 
     @Override

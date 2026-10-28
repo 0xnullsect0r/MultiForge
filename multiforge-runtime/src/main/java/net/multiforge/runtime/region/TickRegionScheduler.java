@@ -26,6 +26,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.locks.LockSupport;
 import java.util.function.BooleanSupplier;
 import net.multiforge.runtime.diagnostics.ProbeRegistry;
+import net.multiforge.runtime.diagnostics.ViolationLogger;
 import net.multiforge.runtime.ownership.OwnerToken;
 
 /**
@@ -495,17 +496,30 @@ public final class TickRegionScheduler implements AutoCloseable, RegionListener 
                 }
             });
         }
+        // The pump runs main-thread tasks (chunk promotions, serial-lane listeners).
+        // Whatever one of them throws — an Error included — this loop must not leave
+        // while a worker still runs: everything after the barrier (visibility replay,
+        // deferred chunk changes, and on a crash the world save) assumes no worker
+        // does. The first failure is rethrown once every worker finished.
+        Throwable pumpFailure = null;
         while (remaining.get() > 0) {
             boolean didWork;
             try {
                 didWork = pump.getAsBoolean();
-            } catch (RuntimeException e) {
-                // A failing main-thread task must not wedge the barrier; the
-                // pump's own owner reports it. Keep waiting on the regions.
-                didWork = true;
+            } catch (Throwable t) {
+                if (pumpFailure == null) pumpFailure = t;
+                else if (pumpFailure != t) pumpFailure.addSuppressed(t);
+                ProbeRegistry.bump("region-tick.pump.failure");
+                ViolationLogger.warn(
+                        "TickRegionScheduler.pump", "a main-thread task run at the tick barrier threw: " + t);
+                didWork = false; // park instead of spinning on a task that keeps failing
             }
             if (!didWork && remaining.get() > 0) LockSupport.parkNanos(100_000L);
         }
+        if (pumpFailure instanceof RuntimeException re) throw re;
+        if (pumpFailure instanceof Error err) throw err;
+        if (pumpFailure != null)
+            throw new IllegalStateException("main-thread task at the tick barrier failed", pumpFailure);
     }
 
     /**

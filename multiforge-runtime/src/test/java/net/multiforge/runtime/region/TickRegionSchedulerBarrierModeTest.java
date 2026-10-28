@@ -134,6 +134,43 @@ class TickRegionSchedulerBarrierModeTest {
     }
 
     @Test
+    void aPumpErrorWaitsForEveryWorkerThenRethrows() {
+        // An Error from a main-thread task used to leave the barrier at once, while the
+        // worker still ran: the visibility replay, the deferred chunk changes and, on
+        // the crash that follows, the world save then ran concurrently with it.
+        ThreadedRegionizer regionizer = new ThreadedRegionizer(WORLD, 0);
+        RegionizedTaskQueue queue = RegionizedTaskQueue.of(regionizer);
+        CountDownLatch release = new CountDownLatch(1);
+        AtomicBoolean workerFinished = new AtomicBoolean();
+        RegionTickBody body = r -> {
+            try {
+                assertThat(release.await(5, TimeUnit.SECONDS)).isTrue();
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+            workerFinished.set(true);
+        };
+        java.util.concurrent.atomic.AtomicInteger calls = new java.util.concurrent.atomic.AtomicInteger();
+        try (TickRegionScheduler scheduler =
+                new TickRegionScheduler(1, body, queue, 32, TickRegionScheduler.Mode.BARRIER)) {
+            scheduler.setInlinePolicy(false, 0);
+            regionizer.addListener(scheduler);
+            Region a = regionizer.addChunk(new ChunkPos(0, 0));
+            org.assertj.core.api.Assertions.assertThatThrownBy(
+                            () -> scheduler.driveTick(List.of(a), 5_000_000_000L, () -> {
+                                if (calls.incrementAndGet() == 1) throw new StackOverflowError("from a chunk task");
+                                release.countDown();
+                                return false;
+                            }))
+                    .isInstanceOf(StackOverflowError.class);
+            assertThat(workerFinished.get())
+                    .as("the barrier waited for the worker")
+                    .isTrue();
+            assertThat(RegionPhase.workersInFlight()).isFalse();
+        }
+    }
+
+    @Test
     void designedWaitsDoNotCountAgainstTheDeadline() {
         // The region waits 300ms for main-thread work (a chunk generation), bracketed
         // as a designed wait the way MainThreadHandoff does; it does nothing slow itself.

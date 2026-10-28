@@ -224,18 +224,41 @@ class LightEngineRoutingTest {
         });
         q.queueChunkTask(WORLD, 0, 0, post::incrementAndGet);
 
-        // Swap the current thread's uncaught handler so the intentional
-        // exception does not spam test output.
-        Thread self = Thread.currentThread();
-        var prev = self.getUncaughtExceptionHandler();
-        self.setUncaughtExceptionHandler((t, e) -> {});
-        try {
-            int drained = q.drain(region, 10);
-            assertThat(drained).isEqualTo(2);
-        } finally {
-            self.setUncaughtExceptionHandler(prev);
-        }
+        // The failing task does not stop the batch, and its exception is
+        // reported to the caller (the region tick rethrows it at the barrier)
+        // instead of vanishing into the thread's uncaught handler.
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> q.drain(region, 10))
+                .isInstanceOf(RuntimeException.class)
+                .hasMessage("simulated mod failure");
         assertThat(post.get()).isEqualTo(1);
+        assertThat(q.inboxSize(region)).isZero();
+    }
+
+    @Test
+    void tasksOfARegionThatDiesAreRedirectedNotDropped() {
+        StubOwnerMap owners = new StubOwnerMap();
+        Region region = newRegion();
+        owners.put(0, 0, region);
+        RegionizedTaskQueue q = new RegionizedTaskQueue(owners.lookup());
+        List<Runnable> redirected = new ArrayList<>();
+        q.setDeadRegionSink(redirected::add);
+        AtomicInteger ran = new AtomicInteger();
+        q.queueChunkTask(WORLD, 0, 0, ran::incrementAndGet);
+        q.onRegionDied(region);
+        assertThat(redirected).hasSize(1);
+        redirected.get(0).run();
+        assertThat(ran).hasValue(1);
+    }
+
+    @Test
+    void withoutASinkTasksOfADeadRegionWaitForTheirChunk() {
+        StubOwnerMap owners = new StubOwnerMap();
+        Region region = newRegion();
+        owners.put(0, 0, region);
+        RegionizedTaskQueue q = new RegionizedTaskQueue(owners.lookup());
+        q.queueChunkTask(WORLD, 0, 0, () -> {});
+        q.onRegionDied(region);
+        assertThat(q.orphanedSize()).isEqualTo(1);
     }
 
     // ----- Case 9 ---------------------------------------------------------
