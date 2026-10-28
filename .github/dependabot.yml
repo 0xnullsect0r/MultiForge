@@ -2,6 +2,8 @@ version: 2
 updates:
   - package-ecosystem: "gradle"
     directory: "/"
+    # Day-to-day work lands on develop; main only receives release merges.
+    target-branch: "develop"
     schedule:
       interval: "weekly"
       day: "monday"
@@ -10,9 +12,19 @@ updates:
       - "0xnullsect0r"
     commit-message:
       prefix: "chore(deps)"
+    ignore:
+      # Pinned to the versions NeoForge 21.1.251 / Minecraft 1.21.1 put on the
+      # server's classpath (see multiforge-runtime/build.gradle.kts). The runtime
+      # is jar-in-jar'd without its dependencies, so a newer API would compile
+      # and then fail at runtime with NoSuchMethodError.
+      - dependency-name: "net.neoforged:bus"
+      - dependency-name: "org.slf4j:slf4j-api"
+      - dependency-name: "com.electronwill.night-config:*"
+      - dependency-name: "net.jodah:typetools"
 
   - package-ecosystem: "github-actions"
     directory: "/"
+    target-branch: "develop"
     schedule:
       interval: "weekly"
       day: "monday"

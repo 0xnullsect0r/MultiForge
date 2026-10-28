@@ -15,9 +15,9 @@ Security fixes land on the latest tagged release and its immediate predecessor. 
 
 | Version | Supported |
 |---|---|
-| 1.3.x | ✅ |
-| 1.2.x | ✅ |
-| < 1.2 | ❌ |
+| 1.11.x | ✅ |
+| 1.10.x | ✅ |
+| < 1.10 | ❌ |
 
 ## Scope
 
@@ -28,7 +28,7 @@ Any of these are in-scope, and we appreciate reports on them:
 - Deadlocks, unbounded memory allocation, or CPU exhaustion triggered by a low-privilege in-game user.
 - Any way to bypass the `OwnershipEnforcer` STRICT-mode gate that would otherwise catch a race.
 - Any code path where a malicious mod jar can escape the mod-safety scanner's rules and cause the above.
-- Buffer bugs or authentication bypasses in the RCON handling MultiForge patches into `net.minecraft.server.rcon.*`.
+- Data a player can read through the `multiforge:debug/v1` channel that the server owner did not grant (`multiforge.debug.view`).
 
 ## Out of scope
 
