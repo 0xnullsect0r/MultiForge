@@ -12,7 +12,7 @@
  */
 package net.multiforge.client;
 
-import net.multiforge.runtime.diagnostics.wire.DebugPayload;
+import net.multiforge.client.wire.DebugPayload;
 import net.neoforged.neoforge.common.ModConfigSpec;
 
 /**

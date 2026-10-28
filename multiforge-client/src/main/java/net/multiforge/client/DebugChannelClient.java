@@ -14,9 +14,9 @@ package net.multiforge.client;
 
 import java.io.IOException;
 import java.util.Objects;
-import net.multiforge.runtime.diagnostics.wire.DebugPacketCodec;
-import net.multiforge.runtime.diagnostics.wire.DebugPacketKind;
-import net.multiforge.runtime.diagnostics.wire.DebugPayload;
+import net.multiforge.client.wire.DebugPacketCodec;
+import net.multiforge.client.wire.DebugPacketKind;
+import net.multiforge.client.wire.DebugPayload;
 
 /**
  * Client-side glue that turns raw {@code multiforge:debug/v1} frame

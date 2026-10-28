@@ -15,8 +15,8 @@ package net.multiforge.client;
 import java.util.Objects;
 import java.util.function.Consumer;
 import java.util.function.IntSupplier;
-import net.multiforge.runtime.diagnostics.wire.DebugPacketCodec;
-import net.multiforge.runtime.diagnostics.wire.DebugPayload;
+import net.multiforge.client.wire.DebugPacketCodec;
+import net.multiforge.client.wire.DebugPayload;
 
 /**
  * Owns the client's {@code SUBSCRIBE} mask for one connection

@@ -24,7 +24,7 @@ import net.minecraft.resources.ResourceLocation;
  * multiforge:debug/v1} frame.
  *
  * <p>The wire format inside {@link #data()} is entirely owned by {@link
- * net.multiforge.runtime.diagnostics.wire.DebugPacketCodec} -- kind byte
+ * net.multiforge.client.wire.DebugPacketCodec} -- kind byte
  * + length-prefixed body, see {@code docs/design/client-debug-protocol.md}
  * §4. This record exists only to satisfy NeoForge's payload-channel
  * registration API ({@link DebugPayloadRegistration}); it does not
