@@ -17,8 +17,7 @@ import org.jetbrains.annotations.ApiStatus;
 /**
  * Callbacks invoked by {@link ThreadedRegionizer} at structural changes
  * to the region graph. Subsystems that maintain per-region state — the
- * chunk holder manager, the task queue, per-world data slots
- * ({@link RegionizedData}), the tick scheduler — register a listener
+ * chunk holder manager, the task queue, the tick scheduler — register a listener
  * so they can fold, peel, or discard their side state atomically with
  * the regionizer's own mutation.
  *

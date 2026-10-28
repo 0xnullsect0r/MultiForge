@@ -226,16 +226,6 @@ these were "deferred to the server thread" — the thread they were already
 on, which ran them at once and deferred them again until the stack
 overflowed (a command block in a single-region world crashed the server).
 
-## DomainAssertions
-
-`DomainAssertions` is a passive checker, gated by `-Dmultiforge.assert=on`
-(default off). It never throws. `assertGlobal(site)`,
-`assertRegion(site, regionId)` and `assertTickThread(site)` bump
-`<site>:not-global` / `:wrong-region` / `:not-tick-thread` and log a
-warning. No patched site calls these methods today; only
-`DomainAssertions.enabled()` is read, by `RegionizedData` (a runtime
-utility the server does not currently use).
-
 ## Who may write what
 
 | Thread | May mutate | Notes |
@@ -283,5 +273,3 @@ The policy, per CLAUDE.md rules 4 and 5:
 - `RegionTickBehaviourTests` (fork GameTests under
   `upstream/neoforge-1.21.1/tests/`) — cross-region reroute on a live
   server.
-
-There is no dedicated `DomainAssertionsTest`.

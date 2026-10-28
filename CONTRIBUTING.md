@@ -76,7 +76,7 @@ Before making non-trivial changes:
 
 - **[docs/design/barrier-tick-model.md](docs/design/barrier-tick-model.md)** — how the server actually ticks regions today. Start here.
 - **[docs/blueprint.md](docs/blueprint.md)** — the original design document and milestone history (M0–M14).
-- **[docs/concurrency-contract.md](docs/concurrency-contract.md)** — Domain enum, OwnerToken semantics, DomainAssertions, OwnershipEnforcer modes.
+- **[docs/concurrency-contract.md](docs/concurrency-contract.md)** — Domain enum, OwnerToken semantics, OwnershipEnforcer modes.
 - **[docs/scheduler-api.md](docs/scheduler-api.md)** — MultiForgeRegionizedRuntime, RegionizedTaskQueue, ChunkHolderManager.
 - **[docs/design/](docs/design/)** — per-milestone deep-dive specs. Read the relevant one before patching that milestone's surface.
 
