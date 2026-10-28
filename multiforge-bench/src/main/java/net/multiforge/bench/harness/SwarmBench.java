@@ -208,7 +208,31 @@ public final class SwarmBench {
                         probes.counters().getOrDefault("region-tick.wait-ms.main-thread-chunk-load", 0L));
                 if (violations > 0)
                     extra.put("violation_counters", probes.violationCounters().toString());
-                if (Boolean.getBoolean("bench.failOnViolations") && (violations > 0 || overruns > 0)) ok = false;
+                long workerTicks = probes.counters().getOrDefault("region-tick.worker", 0L);
+                extra.put("region_ticks_on_workers", workerTicks);
+                if (Boolean.getBoolean("bench.failOnViolations")) {
+                    if (violations > 0 || overruns > 0) ok = false;
+                    // A gate that read nothing, or watched regions that never left the
+                    // server thread, proves nothing about parallel ticking.
+                    if (probes.counters().isEmpty()) {
+                        System.err.println("SwarmBench: /multiforge probes returned nothing; failing the strict run");
+                        ok = false;
+                    }
+                    if (workerTicks == 0) {
+                        System.err.println("SwarmBench: no region ever ticked on a worker (spread the bots further,"
+                                + " -Pspread); failing the strict run");
+                        ok = false;
+                    }
+                    String mode = command(runner, "multiforge config show");
+                    if (!mode.contains("mode = \"strict\"") && !String.valueOf(System.getProperty("bench.extraJvmArgs"))
+                            .contains("-Dmultiforge.mode=strict")) {
+                        System.err.println("SwarmBench: the server is not in strict mode; failing the strict run");
+                        ok = false;
+                    }
+                }
+            } else if (Boolean.getBoolean("bench.failOnViolations")) {
+                System.err.println("SwarmBench: could not read /multiforge tickstats or probes; failing the strict run");
+                ok = false;
             }
             boolean cleanStop = runner.shutdown(Duration.ofSeconds(2));
             if (Boolean.getBoolean("bench.failOnViolations") && !cleanStop) ok = false;

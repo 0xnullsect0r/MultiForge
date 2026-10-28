@@ -56,7 +56,13 @@ tasks.jar {
 tasks.register<JavaExec>("scanCorpus") {
     group = "verification"
     description = "Scan the mod-jar corpus and compare with corpus/expected.txt (-PupdateCorpus rewrites it)."
-    val corpusJars = listOf(":multiforge-testmods:writer", ":multiforge-testmods:legacy", ":multiforge-client")
+    val corpusJars = listOf(
+        ":multiforge-testmods:writer",
+        ":multiforge-testmods:legacy",
+        ":multiforge-testmods:slowtick",
+        ":multiforge-testmods:limbo",
+        ":multiforge-client",
+    )
             .map { project(it).tasks.named<Jar>("jar") }
     dependsOn(corpusJars)
     classpath = sourceSets["test"].runtimeClasspath

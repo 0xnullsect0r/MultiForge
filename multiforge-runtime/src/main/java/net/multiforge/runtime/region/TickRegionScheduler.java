@@ -58,6 +58,8 @@ import net.multiforge.runtime.ownership.OwnerToken;
  * </ul>
  */
 public final class TickRegionScheduler implements AutoCloseable, RegionListener {
+    /** Region ticks run on a worker thread (probe {@code region-tick.worker}); the inline ones count as {@code region-tick.inline.*}. */
+    private static final ProbeRegistry.Counter WORKER_TICKS = ProbeRegistry.counter("region-tick.worker");
 
     /** Execution model — see the class javadoc. */
     public enum Mode {
@@ -487,6 +489,7 @@ public final class TickRegionScheduler implements AutoCloseable, RegionListener 
                 try {
                     if (region.tryMarkTicking()) {
                         s.placement = TickPlacement.WORKER;
+                        WORKER_TICKS.increment();
                         failures[idx] = tickClaimed(s, region, false);
                         waited[idx] = RegionTickWatchdog.lastTickWaitNanos();
                     }
