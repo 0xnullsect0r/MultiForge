@@ -169,13 +169,46 @@ class MainTest {
     }
 
     @Test
-    void theGeneratedLauncherCarriesItsOwnPreflight() {
-        // The stock NeoForge run.sh the installer writes calls bare
-        // `java` with no version check, so a correct install still dies
-        // at mod-scan on the wrong JDK. The converter rewrites it.
-        String sh = Main.installShScript();
-        assertThat(sh).contains("@user_jvm_args.txt @ARGS_FILE");
-        assertThat(sh).contains("@libraries/");
+    void theInstallersOwnLauncherRefusesTheWrongJdk() throws Exception {
+        // Stock NeoForge's run.sh calls bare `java`, so a correct install still died at
+        // mod-scan on the wrong JDK, and every update (which rewrites run.sh) removed the
+        // check the converter had added. The fork installer's template now carries it.
+        java.nio.file.Path template = java.nio.file.Path.of("../upstream/neoforge-1.21.1/server_files/run.sh");
+        org.junit.jupiter.api.Assumptions.assumeTrue(java.nio.file.Files.exists(template), "fork tree not present");
+        String runSh = java.nio.file.Files.readString(template);
+        assertThat(runSh)
+                .contains("java\\.specification\\.version")
+                .contains("!= \"21\"")
+                .contains("exit 1");
+        assertThat(runSh).contains("\"$JAVA_BIN\" @user_jvm_args.txt @libraries/@MAVEN_PATH@/unix_args.txt");
+        String runBat = java.nio.file.Files.readString(template.resolveSibling("run.bat"));
+        assertThat(runBat).contains("java.specification.version").contains("exit /b 1");
+        // The converter no longer re-wraps run.sh (it would drift from the template).
+        assertThat(Main.installShScript()).doesNotContain("@ARGS_FILE");
+    }
+
+    @Test
+    void theConverterBacksUpOnlyOnce() {
+        // A second run would back up the MultiForge launcher over the original.
+        assertThat(Main.installShScript()).contains("! ls \"$f\".pre-multiforge-*.bak");
+        assertThat(Main.installBatScript()).contains("if not exist run.bat.pre-multiforge.bak");
+    }
+
+    @Test
+    void theConverterIsValidShell(@org.junit.jupiter.api.io.TempDir java.nio.file.Path tmp) throws Exception {
+        java.nio.file.Path script = tmp.resolve("install-multiforge.sh");
+        java.nio.file.Files.writeString(script, Main.installShScript());
+        Process bash;
+        try {
+            bash = new ProcessBuilder("bash", "-n", script.toString())
+                    .redirectErrorStream(true)
+                    .start();
+        } catch (java.io.IOException noBash) {
+            org.junit.jupiter.api.Assumptions.abort("no bash on this machine");
+            return;
+        }
+        String out = new String(bash.getInputStream().readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
+        assertThat(bash.waitFor()).as(out).isZero();
     }
 
     @Test
