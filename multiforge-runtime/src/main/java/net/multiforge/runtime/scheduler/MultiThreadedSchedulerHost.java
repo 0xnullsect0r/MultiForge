@@ -149,7 +149,7 @@ public final class MultiThreadedSchedulerHost implements SchedulerHost, AutoClos
             BlockEntityTickRunner.standard(this::worldForRegion, this::chunkManagerForOrNull);
 
     public MultiThreadedSchedulerHost(MultiForgeConfig config) {
-        this(config, region -> {}); // no-op tick body until M2 patch supplies the vanilla body
+        this(config, region -> {}); // no tick body: tests and tools; the server installs one (installRegionTickBody)
     }
 
     public MultiThreadedSchedulerHost(MultiForgeConfig config, RegionTickBody body) {
@@ -335,6 +335,11 @@ public final class MultiThreadedSchedulerHost implements SchedulerHost, AutoClos
             return ticking == null || ticking.equals(world);
         }
     };
+
+    /** Test-only: the router {@link #install()} binds into {@link OwnershipEnforcer}. */
+    OwnershipEnforcer.PositionRouter positionRouterForTesting() {
+        return positionRouter;
+    }
 
     /**
      * The level whose regions {@link #driveRegions} is ticking, or {@code null}
@@ -849,10 +854,7 @@ public final class MultiThreadedSchedulerHost implements SchedulerHost, AutoClos
      * m13-b3-region-tick.md §5.3). Ticks {@code region}'s own slice of {@code HolderManagerRegionData
      * .blockEntityTickers} via {@link #blockEntityTickRunner}.
      *
-     * <p>OwnerToken correctness guard: mirrors {@code
-     * RegionizedData.assertOwnedOrIgnore}'s shape (same file's package,
-     * {@code net.multiforge.runtime.region.RegionizedData}) — {@link
-     * Domain#UNKNOWN} and {@link Domain#GLOBAL} pass through untouched
+     * <p>OwnerToken correctness guard: {@link Domain#UNKNOWN} and {@link Domain#GLOBAL} pass through untouched
      * (tests driving {@code tickOnce} by hand off any worker thread, and
      * the global region's own worker, both need to reach this body
      * normally); a {@link Domain#REGION} token whose {@code regionId}
