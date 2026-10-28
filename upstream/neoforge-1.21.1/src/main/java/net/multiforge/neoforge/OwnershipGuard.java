@@ -80,6 +80,26 @@ public final class OwnershipGuard {
     }
 
     /**
+     * {@code ServerLevel.blockEvent} from a region worker for a position its region
+     * does not own (a piston or a note block in another region, or a chunk loaded this
+     * tick): queue the event on the owner, or on the server thread when nobody owns
+     * the chunk. Region block-event queues are touched only by their own region, so
+     * queueing it on the caller's region would run it on the wrong thread.
+     *
+     * @return {@code true} if rerouted and the caller must return
+     */
+    public static boolean rerouteBlockEvent(
+            net.minecraft.server.level.ServerLevel level,
+            BlockPos pos,
+            net.minecraft.world.level.block.Block block,
+            int paramA,
+            int paramB) {
+        if (canMutateAt("ServerLevel.blockEvent", level, pos)) return false;
+        rerouteAt("ServerLevel.blockEvent", level, pos, () -> level.blockEvent(pos, block, paramA, paramB));
+        return true;
+    }
+
+    /**
      * Reroute a {@code Level.setBlock} the caller may not run here, and return
      * what Vanilla's {@code setBlock} would have returned: whether the block
      * changes. Callers use that value (to consume an item, play a sound, count
@@ -154,7 +174,8 @@ public final class OwnershipGuard {
         if (target.isClientSide()) return false;
         if (target != entity.level()) {
             if (!(entity instanceof net.minecraft.server.level.ServerPlayer)
-                    || net.multiforge.runtime.ownership.OwnerToken.current().domain() != net.multiforge.runtime.ownership.Domain.REGION) {
+                    || net.multiforge.runtime.ownership.OwnerToken.current().domain() != net.multiforge.runtime.ownership.Domain.REGION
+                    || OwnershipEnforcer.soleWriter()) {
                 return false;
             }
             net.multiforge.runtime.diagnostics.ProbeRegistry.bump(site + ":deferred-player-dimension-change");
@@ -184,6 +205,11 @@ public final class OwnershipGuard {
         if (net.multiforge.runtime.ownership.OwnerToken.current().domain() != net.multiforge.runtime.ownership.Domain.REGION) {
             return false;
         }
+        // A region the server thread ticks itself (one region in the level, a hot
+        // region, the global region) runs while nothing else does: run inline, as
+        // Vanilla. Deferring would hand the work back to this thread, which runs it
+        // at once and re-enters here until the stack overflows.
+        if (OwnershipEnforcer.soleWriter()) return false;
         net.multiforge.runtime.diagnostics.ProbeRegistry.bump(site + ":deferred-to-server-thread");
         OwnershipEnforcer.reroute(site, work);
         return true;
@@ -233,15 +259,17 @@ public final class OwnershipGuard {
 
     /**
      * Whether a ticket change here must be deferred: the caller ticks a region (or the
-     * global region while workers run) on a thread other than the server thread. A
-     * region the server thread ticks inline (a level with one region, or a hot region)
-     * changes tickets inline, as Vanilla does: the ticket maps are the server thread's
-     * own, and a deferral from the server thread would run inline anyway ({@code
-     * server.execute} runs tasks on its own thread at once), re-entering this check
-     * until the stack overflows.
+     * global region) while region workers may be running. A region the server thread
+     * ticks inline (a level with one region, or a hot region) changes tickets inline,
+     * as Vanilla does: nothing else runs then ({@link OwnershipEnforcer#soleWriter}).
+     * A serial-lane job runs on the server thread while workers run, and is deferred
+     * like a worker: the barrier pump would otherwise feed its change into the
+     * distance manager while workers read it. Its deferral is queued for after the
+     * tick (the reroute target never runs a server-thread task inline).
      */
     private static boolean onTickWorker(net.minecraft.server.MinecraftServer server) {
-        if (server != null && server.isSameThread()) return false;
+        if (OwnershipEnforcer.soleWriter()) return false;
+        if (server != null && server.isSameThread() && !net.multiforge.runtime.region.RegionPhase.workersInFlight()) return false;
         net.multiforge.runtime.ownership.Domain domain = net.multiforge.runtime.ownership.OwnerToken.current().domain();
         return domain == net.multiforge.runtime.ownership.Domain.REGION
                 || (domain == net.multiforge.runtime.ownership.Domain.GLOBAL

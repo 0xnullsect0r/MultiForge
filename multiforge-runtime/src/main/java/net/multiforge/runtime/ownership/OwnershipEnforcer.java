@@ -17,6 +17,7 @@ import java.util.Objects;
 import net.multiforge.api.world.WorldRef;
 import net.multiforge.runtime.diagnostics.ProbeRegistry;
 import net.multiforge.runtime.diagnostics.ViolationLogger;
+import net.multiforge.runtime.region.RegionPhase;
 
 /**
  * Default-on behavioural guard for real {@code net.minecraft.*} mutation
@@ -187,6 +188,31 @@ public final class OwnershipEnforcer {
     }
 
     /**
+     * Whether the caller is the bound tick (server) thread and no region is
+     * ticking on a worker: the server thread is then the only thread that can
+     * touch the world, so every mutation and every move may run inline, as in
+     * Vanilla — whatever owner token the caller holds.
+     *
+     * <p>This is the case for a region the server thread ticks itself (a level
+     * with one region, a hot region, the global region), which runs under its
+     * region's token after the workers finished, and for the serial lane's
+     * deferred events. Treating such a caller like a worker would reroute its
+     * work to the server thread, i.e. back to itself: {@code
+     * MinecraftServer.execute} runs a task at once on its own thread, the task
+     * re-enters the same guard with the same token, and the stack overflows
+     * (a command block in a single-region world crashed the server that way).
+     *
+     * <p>Serial-lane jobs run on the server thread <em>while</em> workers are in
+     * flight; for them this is {@code false}, and their reroutes are queued for
+     * after the tick (see the reroute target bound in {@code
+     * ServerLifecycleHooks}).
+     */
+    public static boolean soleWriter() {
+        Thread t = tickThread;
+        return t != null && Thread.currentThread() == t && !RegionPhase.workersInFlight();
+    }
+
+    /**
      * @param site short symbolic id of the call site, e.g. {@code "Level.setBlock"}.
      * @return {@code true} if the caller may run {@code site}'s mutation body inline right now.
      *         {@code false} means the caller must instead hand its mutation to {@link #reroute}.
@@ -243,7 +269,8 @@ public final class OwnershipEnforcer {
      * <ul>
      * <li>Mode {@link Mode#OFF}, the global region, and the server tick
      *     thread: allowed. In the barrier tick model these never run
-     *     concurrently with region workers.</li>
+     *     concurrently with region workers. That includes a region the server
+     *     thread ticks itself, whatever its token ({@link #soleWriter}).</li>
      * <li>A region worker: allowed iff its region owns the chunk. A chunk
      *     that loaded during this tick and has no owner yet ({@link
      *     PositionRouter#isPendingRegistration}) is refused quietly: the probe
@@ -260,6 +287,7 @@ public final class OwnershipEnforcer {
         if (mode == Mode.OFF) return true;
         OwnerToken tok = OwnerToken.current();
         if (tok.domain() != Domain.REGION) return canMutate(site);
+        if (soleWriter()) return true; // a region the server thread ticks itself
         PositionRouter router = positionRouter;
         if (router == null || world == null) return true;
         if (tok.regionId() == router.globalRegionId()) return true; // global region: allowed
@@ -286,7 +314,8 @@ public final class OwnershipEnforcer {
     /**
      * @return {@code true} iff the caller is a region worker and chunk
      *     ({@code chunkX}, {@code chunkZ}) of {@code world} is owned by a
-     *     different region (or by none). Unlike {@link #canMutateAt} this is a
+     *     different region (or by none), and is not the {@link #soleWriter}
+     *     ticking a region itself. Unlike {@link #canMutateAt} this is a
      *     plain query — no probe, no warning — for call sites that treat a
      *     cross-region target as a normal event to be deferred (an entity
      *     teleporting into another region), not a violation.
@@ -295,6 +324,7 @@ public final class OwnershipEnforcer {
         if (mode == Mode.OFF) return false;
         OwnerToken tok = OwnerToken.current();
         if (tok.domain() != Domain.REGION) return false;
+        if (soleWriter()) return false;
         PositionRouter router = positionRouter;
         if (router == null || world == null) return false;
         return router.ownerOf(world, chunkX, chunkZ) != tok.regionId();
