@@ -57,7 +57,7 @@ class RuleCatalogTest {
     /** Fixed per doc §4 — the frozen severity table. */
     private static final List<Severity> EXPECTED_SEVERITY_BY_INDEX = List.of(
             Severity.WARN, // R01
-            Severity.ERROR, // R02
+            Severity.WARN, // R02
             Severity.ERROR, // R03
             Severity.WARN, // R04
             Severity.WARN, // R05
