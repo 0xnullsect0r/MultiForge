@@ -54,7 +54,12 @@ that run commands (KubeJS, quest rewards).**
 - Chunks becoming ready to send to players are held to the barrier.
 - **Events:** registering the same object twice no longer fires its listeners
   twice (NeoForge ignores the repeat; MultiForge did not), and
-  `-Dmultiforge.event-dispatch=off` is a real rollback to NeoForge's bus.
+  `-Dmultiforge.event-dispatch=off` is a real rollback to NeoForge's bus. A
+  deferred listener that throws is logged with where it threw.
+- A rerouted `addWithUUID` (and the other paths into `ServerLevel.addEntity`)
+  returns what Vanilla would have, like `addFreshEntity`; it returned `false`.
+- Global-region work (`ServerDomains.global()`) is no longer treated as a
+  cross-region move, so its teleports run at once instead of after the barrier.
 
 ### Config and commands
 
@@ -93,6 +98,8 @@ that run commands (KubeJS, quest rewards).**
   Minecraft 1.21.1 and NeoForge 21.1.251+.
 - Overlays follow a player after death or leaving the End; a client newer than
   the server is served instead of refused.
+- The region list's `owned=` shows how many entities the region's last tick
+  ran; it was always 0.
 - **Debug clients older than v1.9.0 receive nothing from a v1.9+ server**
   (they refuse its protocol 4). Update the client with the server; the
   v1.8.0 note that "clients from v1.4.0 on keep working" was wrong.
@@ -110,10 +117,28 @@ that run commands (KubeJS, quest rewards).**
 - The release job checks the tag matches the version, boots a server
   installed from the built installer, and checks the installer embeds the
   runtime.
-- **What the parity gate compares** is now stated plainly: block states and
-  biomes of 196 full chunks, with entities removed, random ticks, spawning,
-  activation range and the push cap off. It is not a byte-identical world
-  save.
+- **What the parity gate compares** is now stated plainly, and it compares
+  more: block states, biomes, heightmaps, pending block and fluid ticks, and
+  the id and position of every block entity, in 196 full chunks, with entities
+  removed and random ticks, spawning, activation range and the push cap off.
+  It is not a byte-identical world save.
+- Unit tests cover the host's real chunk-ownership lookups (before, only a
+  stub), including chunks loaded mid-tick and unloads, and the regionizer
+  property test now runs at the region sizes servers use, anywhere up to the
+  world border.
+
+### Housekeeping
+
+- Removed dead code: `RegionizedData` and `DomainAssertions` (no production
+  callers; `-Dmultiforge.assert` did nothing) and `scripts/install.sh`, which
+  accepted the Minecraft EULA for you; `multiforge-update.sh` does fresh
+  installs.
+- The OTLP exporter (`-Dmultiforge.otel.endpoint`, off unless set) logs a
+  failing collector once, and its recovery, instead of a stderr line every
+  10 seconds.
+- The fork's `licenseCheck` holds `net/multiforge/**` to MultiForge's GPL-3.0
+  header; build scripts carry it too. Both Gradle wrappers pin their
+  distribution's SHA-256.
 
 ## v1.11.0 — no more limbo mobs, and a mob crowd no longer stops the server
 
