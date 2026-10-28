@@ -668,6 +668,9 @@ public final class MultiForgeCommandDispatcher {
 
     private static final org.slf4j.Logger CONFIG_LOG = org.slf4j.LoggerFactory.getLogger("multiforge.config");
 
+    /** Vanilla's world border, in chunks from the centre. */
+    static final long MAX_PIN_CHUNK = 1_875_000L;
+
     private boolean handleRegionSize(String[] args, Consumer<String> output) {
         if (args.length == 2) {
             int shift = configStore.get().regionSize();
@@ -740,6 +743,13 @@ public final class MultiForgeCommandDispatcher {
             return false;
         }
         try {
+            // A pin wider than the world (Vanilla's border is 30 million blocks, 1,875,000
+            // chunks from the centre) is a typo; refuse it rather than pin billions of sections.
+            if (Math.max(Math.abs((long) fx), Math.abs((long) tx)) > MAX_PIN_CHUNK
+                    || Math.max(Math.abs((long) fz), Math.abs((long) tz)) > MAX_PIN_CHUNK) {
+                output.accept("Pin coordinates must lie within the world border (|chunk| <= " + MAX_PIN_CHUNK + ")");
+                return false;
+            }
             RegionPin pin = pins.add(new RegionPin(id, world, fx, fz, tx, tz));
             pins.save();
             output.accept("Pinned " + pin.chunkCount() + " chunks as '" + pin.id() + "' in " + world.dimensionId());

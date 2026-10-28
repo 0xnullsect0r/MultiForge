@@ -436,7 +436,9 @@ public final class ThreadedRegionizer {
         int toX = pin.toChunkX() >> sectionChunkShift;
         int fromZ = pin.fromChunkZ() >> sectionChunkShift;
         int toZ = pin.toChunkZ() >> sectionChunkShift;
-        long span = (long) (toX - fromX + 1) * (toZ - fromZ + 1);
+        // In long: a pin spanning most of the int range overflowed int and took the
+        // nested loop below over billions of sections, on the server thread.
+        long span = ((long) toX - fromX + 1) * ((long) toZ - fromZ + 1);
         if (span > candidates.size()) {
             for (SectionPos s : List.copyOf(candidates)) {
                 if (s.x() >= fromX && s.x() <= toX && s.z() >= fromZ && s.z() <= toZ) visitor.accept(s);

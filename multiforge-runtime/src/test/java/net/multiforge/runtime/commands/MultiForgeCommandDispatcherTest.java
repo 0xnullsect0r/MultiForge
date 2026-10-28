@@ -151,8 +151,21 @@ class MultiForgeCommandDispatcherTest {
         assertThat(MultiForgeCommandDispatcher.describeCost(mspt)).isEmpty();
         for (int i = 1; i <= 100; i++) mspt.recordNanos(i * 100_000L); // 0.1 .. 10 ms
         assertThat(MultiForgeCommandDispatcher.describeCost(mspt))
-                .isEqualTo(", tick 5.1/9.6/10.0 ms (p50/p95/p99, last 5 s)");
+                .isEqualTo(", tick 5.0/9.5/9.9 ms (p50/p95/p99, last 5 s)"); // nearest rank
         assertThat(MultiForgeCommandDispatcher.describeCost(null)).isEmpty();
+    }
+
+    @Test
+    void aPinBeyondTheWorldBorderIsRefused(@TempDir Path tmp) throws IOException {
+        MultiForgeCommandDispatcher d = make(tmp);
+        List<String> out = new ArrayList<>();
+        assertThat(d.dispatch(
+                        new String[] {
+                            "region", "pin", "huge", "minecraft:overworld", "-2000000000", "0", "2000000000", "0"
+                        },
+                        out::add))
+                .isFalse();
+        assertThat(String.join("\n", out)).contains("world border");
     }
 
     @Test

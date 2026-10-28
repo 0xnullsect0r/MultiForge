@@ -56,7 +56,7 @@ public record RegionPin(String id, WorldRef world, int fromChunkX, int fromChunk
         return pos.x() >= fromChunkX && pos.x() <= toChunkX && pos.z() >= fromChunkZ && pos.z() <= toChunkZ;
     }
 
-    public int chunkCount() {
-        return (toChunkX - fromChunkX + 1) * (toChunkZ - fromChunkZ + 1);
+    public long chunkCount() {
+        return ((long) toChunkX - fromChunkX + 1) * ((long) toChunkZ - fromChunkZ + 1);
     }
 }
