@@ -676,7 +676,9 @@ public final class MultiForgeCommandDispatcher {
             return true;
         }
         if (args.length != 3) {
-            output.accept("Usage: /multiforge region size [chunks] (a power of 2 from 1..256; no argument shows it)");
+            output.accept("Usage: /multiforge region size [chunks] (a power of 2 from "
+                    + MultiForgeConfig.MIN_REGION_SIZE_CHUNKS + ".." + MultiForgeConfig.MAX_REGION_SIZE_CHUNKS
+                    + "; no argument shows it)");
             return false;
         }
         int chunks;
@@ -686,8 +688,13 @@ public final class MultiForgeCommandDispatcher {
             output.accept("Not a number: " + args[2]);
             return false;
         }
-        if (chunks < 1 || chunks > 256 || Integer.bitCount(chunks) != 1) {
-            output.accept("Size must be a power of 2 between 1 and 256");
+        if (chunks < MultiForgeConfig.MIN_REGION_SIZE_CHUNKS
+                || chunks > MultiForgeConfig.MAX_REGION_SIZE_CHUNKS
+                || Integer.bitCount(chunks) != 1) {
+            output.accept("Size must be a power of 2 between " + MultiForgeConfig.MIN_REGION_SIZE_CHUNKS + " and "
+                    + MultiForgeConfig.MAX_REGION_SIZE_CHUNKS + " chunks. Regions are kept at least one section apart,"
+                    + " and below " + MultiForgeConfig.MIN_REGION_SIZE_CHUNKS
+                    + " chunks that gap is shorter than mob follow ranges, villager searches and explosions.");
             return false;
         }
         int shift = Integer.numberOfTrailingZeros(chunks);

@@ -106,6 +106,11 @@ public final class MultiForgeServerState {
         } catch (IOException e) {
             LOGGER.warn("failed to load {} — using defaults: {}", configFile, e.getMessage());
             loaded = new MultiForgeConfigStore(configFile, MultiForgeConfig.defaults());
+        } catch (RuntimeException e) {
+            // A value of the wrong type (or a TOML syntax error). Starting with defaults
+            // could silently flip a kill switch the operator set, so stop with one line
+            // that names the file and the key instead of a stack trace.
+            throw new IllegalStateException("Invalid " + configFile + ": " + e.getMessage(), e);
         }
         CONFIGS.register(server, loaded);
         return loaded;

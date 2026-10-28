@@ -99,7 +99,9 @@ public final class MultiForgeCommandBinder {
                 .then(warnSubtree(dispatcher))
                 .then(Commands.literal("tickstats")
                         .executes(ctx -> run(dispatcher, ctx, "tickstats"))
-                        .then(Commands.literal("reset").executes(ctx -> run(dispatcher, ctx, "tickstats", "reset"))))
+                        .then(Commands.literal("reset")
+                                .requires(MultiForgeCommandBinder::isAdmin)
+                                .executes(ctx -> run(dispatcher, ctx, "tickstats", "reset"))))
                 .then(chunkCostSubtree(dispatcher))
                 .then(entitiesSubtree(dispatcher))
                 .then(certifySubtree(dispatcher));
@@ -108,22 +110,29 @@ public final class MultiForgeCommandBinder {
     private static LiteralArgumentBuilder<CommandSourceStack> configSubtree(MultiForgeCommandDispatcher dispatcher) {
         return Commands.literal("config")
                 .then(Commands.literal("show").executes(ctx -> run(dispatcher, ctx, "config", "show")))
-                .then(Commands.literal("reload").executes(ctx -> run(dispatcher, ctx, "config", "reload")))
+                .then(Commands.literal("reload")
+                        .requires(MultiForgeCommandBinder::isAdmin)
+                        .executes(ctx -> runTopology(dispatcher, ctx, "config", "reload")))
                 .then(Commands.literal("cores")
+                        .requires(MultiForgeCommandBinder::isAdmin)
                         .then(Commands.argument("n", IntegerArgumentType.integer(1, 4096))
-                                .executes(ctx -> run(dispatcher, ctx, "config", "cores", intArg(ctx, "n")))))
+                                .executes(ctx -> runTopology(dispatcher, ctx, "config", "cores", intArg(ctx, "n")))))
                 .then(Commands.literal("threads")
+                        .requires(MultiForgeCommandBinder::isAdmin)
                         .then(Commands.argument("n", IntegerArgumentType.integer(1, 64))
-                                .executes(ctx -> run(dispatcher, ctx, "config", "threads", intArg(ctx, "n")))))
+                                .executes(ctx -> runTopology(dispatcher, ctx, "config", "threads", intArg(ctx, "n")))))
                 .then(Commands.literal("mode")
+                        .requires(MultiForgeCommandBinder::isAdmin)
                         .then(Commands.argument("mode", StringArgumentType.word())
                                 .suggests((ctx, b) -> SharedSuggestionProvider.suggest(Stream.of("hybrid", "strict", "off"), b))
                                 .executes(ctx -> run(dispatcher, ctx, "config", "mode", strArg(ctx, "mode")))))
                 .then(Commands.literal("policy")
+                        .requires(MultiForgeCommandBinder::isAdmin)
                         .then(Commands.argument("policy", StringArgumentType.word())
                                 .suggests((ctx, b) -> SharedSuggestionProvider.suggest(Stream.of("warn", "reroute-only", "fail"), b))
                                 .executes(ctx -> run(dispatcher, ctx, "config", "policy", strArg(ctx, "policy")))))
                 .then(Commands.literal("warnPerMin")
+                        .requires(MultiForgeCommandBinder::isAdmin)
                         .then(Commands.argument("n", IntegerArgumentType.integer(0, 100000))
                                 .executes(ctx -> run(dispatcher, ctx, "config", "warnPerMin", intArg(ctx, "n")))));
     }
@@ -133,12 +142,17 @@ public final class MultiForgeCommandBinder {
                 .then(Commands.literal("list").executes(ctx -> run(dispatcher, ctx, "region", "list")))
                 .then(Commands.literal("size")
                         .executes(ctx -> run(dispatcher, ctx, "region", "size"))
-                        .then(Commands.argument("chunks", IntegerArgumentType.integer(1, 256))
-                                .executes(ctx -> run(dispatcher, ctx, "region", "size", intArg(ctx, "chunks")))))
-                .then(pinSubtree(dispatcher))
+                        .then(Commands.argument(
+                                        "chunks",
+                                        IntegerArgumentType.integer(
+                                                net.multiforge.runtime.config.MultiForgeConfig.MIN_REGION_SIZE_CHUNKS, 256))
+                                .requires(MultiForgeCommandBinder::isAdmin)
+                                .executes(ctx -> runTopology(dispatcher, ctx, "region", "size", intArg(ctx, "chunks")))))
+                .then(pinSubtree(dispatcher).requires(MultiForgeCommandBinder::isAdmin))
                 .then(Commands.literal("unpin")
+                        .requires(MultiForgeCommandBinder::isAdmin)
                         .then(Commands.argument("id", StringArgumentType.word())
-                                .executes(ctx -> run(dispatcher, ctx, "region", "unpin", strArg(ctx, "id")))));
+                                .executes(ctx -> runTopology(dispatcher, ctx, "region", "unpin", strArg(ctx, "id")))));
     }
 
     /**
@@ -164,8 +178,12 @@ public final class MultiForgeCommandBinder {
                         ctx.getSource().levels().stream().map(level -> level.location()), b))
                 .then(cx);
         return Commands.literal("chunkcost")
-                .then(Commands.literal("on").executes(ctx -> run(dispatcher, ctx, "chunkcost", "on")))
-                .then(Commands.literal("off").executes(ctx -> run(dispatcher, ctx, "chunkcost", "off")))
+                .then(Commands.literal("on")
+                        .requires(MultiForgeCommandBinder::isAdmin)
+                        .executes(ctx -> run(dispatcher, ctx, "chunkcost", "on")))
+                .then(Commands.literal("off")
+                        .requires(MultiForgeCommandBinder::isAdmin)
+                        .executes(ctx -> run(dispatcher, ctx, "chunkcost", "off")))
                 .then(Commands.literal("report").then(world));
     }
 
@@ -206,6 +224,7 @@ public final class MultiForgeCommandBinder {
                 .then(Commands.literal("audit")
                         .executes(ctx -> run(dispatcher, ctx, entityArgs(ctx, withLevel, "audit")))
                         .then(Commands.literal("heal")
+                                .requires(MultiForgeCommandBinder::isAdmin)
                                 .executes(ctx -> run(dispatcher, ctx, entityArgs(ctx, withLevel, "audit", "heal")))));
     }
 
@@ -243,7 +262,7 @@ public final class MultiForgeCommandBinder {
     private static LiteralArgumentBuilder<CommandSourceStack> pinSubtree(MultiForgeCommandDispatcher dispatcher) {
         // Build inside-out so we avoid Java 21 parser limits and keep it readable.
         var toCZ = Commands.argument("toCZ", IntegerArgumentType.integer())
-                .executes(ctx -> run(
+                .executes(ctx -> runTopology(
                         dispatcher,
                         ctx,
                         "region",
@@ -285,14 +304,48 @@ public final class MultiForgeCommandBinder {
     private static LiteralArgumentBuilder<CommandSourceStack> warnSubtree(MultiForgeCommandDispatcher dispatcher) {
         return Commands.literal("warn")
                 .then(Commands.literal("list").executes(ctx -> run(dispatcher, ctx, "warn", "list")))
-                .then(Commands.literal("clear").executes(ctx -> run(dispatcher, ctx, "warn", "clear")));
+                .then(Commands.literal("clear")
+                        .requires(MultiForgeCommandBinder::isAdmin)
+                        .executes(ctx -> run(dispatcher, ctx, "warn", "clear")));
     }
 
     private static LiteralArgumentBuilder<CommandSourceStack> certifySubtree(MultiForgeCommandDispatcher dispatcher) {
         return Commands.literal("certify")
+                .requires(MultiForgeCommandBinder::isAdmin)
                 .then(Commands.literal("all").executes(ctx -> runOffThread(dispatcher, ctx, "certify", "all")))
                 .then(Commands.argument("modId", StringArgumentType.word())
                         .executes(ctx -> runOffThread(dispatcher, ctx, "certify", strArg(ctx, "modId"))));
+    }
+
+    /**
+     * Permission level for subcommands that change state (config, region topology,
+     * heals, certify, clearing counters). Level 2 — what command blocks and datapack
+     * functions run at — may only read; changing a running server's threads or
+     * regions is a server-management action, Vanilla's level 3.
+     */
+    static final int ADMIN_PERMISSION = 3;
+
+    private static boolean isAdmin(CommandSourceStack src) {
+        return src.hasPermission(ADMIN_PERMISSION);
+    }
+
+    /**
+     * Run a subcommand that changes region topology or the worker pool. Refused
+     * from inside a region's tick (a command block or a mod running a command on a
+     * region the server thread ticks itself): it would split, merge or rebuild the
+     * very region that is ticking.
+     */
+    private static int runTopology(
+            MultiForgeCommandDispatcher dispatcher, CommandContext<CommandSourceStack> ctx, String... args) {
+        if (net.multiforge.runtime.ownership.OwnerToken.current().domain() == net.multiforge.runtime.ownership.Domain.REGION) {
+            ctx.getSource()
+                    .sendFailure(Component.literal(
+                            "/multiforge " + String.join(" ", args)
+                                    + " cannot run from inside a region's tick (command block or mod code);"
+                                    + " run it from the console or chat."));
+            return 0;
+        }
+        return run(dispatcher, ctx, args);
     }
 
     private static int run(MultiForgeCommandDispatcher dispatcher, CommandContext<CommandSourceStack> ctx, String... args) {
@@ -309,15 +362,28 @@ public final class MultiForgeCommandBinder {
             MultiForgeCommandDispatcher dispatcher, CommandContext<CommandSourceStack> ctx, String... args) {
         CommandSourceStack source = ctx.getSource();
         MinecraftServer server = source.getServer();
+        // One background run at a time: each certify starts a scanner JVM per mod jar.
+        if (!BACKGROUND_RUNNING.compareAndSet(false, true)) {
+            source.sendFailure(Component.literal("/multiforge " + args[0] + " is already running; wait for it to finish."));
+            return 0;
+        }
         source.sendSuccess(() -> Component.literal("Running in the background..."), false);
         Thread worker = new Thread(
-                () -> dispatcher.dispatch(
-                        args, msg -> server.execute(() -> source.sendSuccess(() -> Component.literal(msg), false))),
+                () -> {
+                    try {
+                        dispatcher.dispatch(
+                                args, msg -> server.execute(() -> source.sendSuccess(() -> Component.literal(msg), false)));
+                    } finally {
+                        BACKGROUND_RUNNING.set(false);
+                    }
+                },
                 "multiforge-" + args[0]);
         worker.setDaemon(true);
         worker.start();
         return 1;
     }
+
+    private static final java.util.concurrent.atomic.AtomicBoolean BACKGROUND_RUNNING = new java.util.concurrent.atomic.AtomicBoolean();
 
     private static String strArg(CommandContext<CommandSourceStack> ctx, String name) {
         return StringArgumentType.getString(ctx, name);

@@ -38,24 +38,78 @@ public final class ConfigCodec {
         return parse(contents);
     }
 
+    private static final org.slf4j.Logger LOG = org.slf4j.LoggerFactory.getLogger("multiforge.config");
+
+    /** Every key {@link #parse} reads, by dotted path; anything else in the file is reported. */
+    static final java.util.Set<String> KNOWN_KEYS = java.util.Set.of(
+            "mtserver.cores",
+            "mtserver.threadsPerCore",
+            "mtserver.mode",
+            "region.size",
+            "violations.policy",
+            "violations.warnPerMin",
+            "tick.inlineSingleRegion",
+            "tick.serialLaneHotWaitMs",
+            "tick.serialLaneInlineThreshold",
+            "entities.deferVisibility",
+            "entities.activation",
+            "entities.monsterRange",
+            "entities.animalRange",
+            "entities.villagerRange",
+            "entities.flyingRange",
+            "entities.raiderRange",
+            "entities.waterRange",
+            "entities.ambientRange",
+            "entities.wakeInterval",
+            "entities.maxEntityCollisions",
+            "entities.activationExempt",
+            "perf.lockFreeOutsidePhase",
+            "perf.workerChunkCache");
+
+    /**
+     * Parse a {@code multiforge-server.toml}. Unknown keys are logged (a typo in a
+     * kill switch would otherwise silently leave the behaviour on). Out-of-range
+     * values are clamped with a warning. A value of the wrong type throws {@link
+     * IllegalArgumentException} naming the key.
+     */
     public static MultiForgeConfig parse(String toml) {
         UnmodifiableConfig r = parseToml(toml, "multiforge-server.toml");
+        for (String key : unknownKeys(r)) {
+            LOG.warn("multiforge-server.toml: unknown key '{}' is ignored (check its spelling and its [table])", key);
+        }
         MultiForgeConfig d = MultiForgeConfig.defaults();
-        int cores = intOr(r, "mtserver.cores", d.cores());
-        int tpc = intOr(r, "mtserver.threadsPerCore", d.threadsPerCore());
+        int maxWorkers = Runtime.getRuntime().availableProcessors() * MultiForgeConfig.MAX_WORKERS_PER_PROCESSOR;
+        int cores = clamp("mtserver.cores", intOr(r, "mtserver.cores", d.cores()), 1, maxWorkers);
+        int tpc = clamp("mtserver.threadsPerCore", intOr(r, "mtserver.threadsPerCore", d.threadsPerCore()), 1, 64);
+        if ((long) cores * tpc > maxWorkers) {
+            LOG.warn(
+                    "multiforge-server.toml: cores × threadsPerCore = {} worker threads exceeds {} ({} per processor);"
+                            + " using threadsPerCore = 1",
+                    (long) cores * tpc,
+                    maxWorkers,
+                    MultiForgeConfig.MAX_WORKERS_PER_PROCESSOR);
+            tpc = 1;
+        }
         MultiForgeConfig.Mode mode = enumOr(r, "mtserver.mode", MultiForgeConfig.Mode.class, d.mode());
-        int regionSize = intOr(r, "region.size", d.regionSize());
+        int regionSize = clamp(
+                "region.size",
+                intOr(r, "region.size", d.regionSize()),
+                MultiForgeConfig.MIN_REGION_SIZE_SHIFT,
+                MultiForgeConfig.MAX_REGION_SIZE_SHIFT);
         MultiForgeConfig.ViolationPolicy vp = enumOr(
                 r, "violations.policy", MultiForgeConfig.ViolationPolicy.class, d.violationPolicy(), s -> s.replace(
                                 '-', '_')
                         .toUpperCase(Locale.ROOT));
-        int warnPerMin = intOr(r, "violations.warnPerMin", d.warnPerMin());
+        int warnPerMin =
+                clamp("violations.warnPerMin", intOr(r, "violations.warnPerMin", d.warnPerMin()), 0, Integer.MAX_VALUE);
         boolean inlineSingle = boolOr(r, "tick.inlineSingleRegion", d.inlineSingleRegion());
         // v1.8 counted serial-lane posts (`serialLaneInlineThreshold`); the knob is now
         // the time the hand-offs cost. An old file's 0 ("never") still means never;
         // any other old count is not a time and gives way to the default.
         int hotWaitMs = d.serialLaneHotWaitMs();
-        if (r.get("tick.serialLaneHotWaitMs") != null) hotWaitMs = intOr(r, "tick.serialLaneHotWaitMs", hotWaitMs);
+        if (r.get("tick.serialLaneHotWaitMs") != null)
+            hotWaitMs = clamp(
+                    "tick.serialLaneHotWaitMs", intOr(r, "tick.serialLaneHotWaitMs", hotWaitMs), 0, Integer.MAX_VALUE);
         else if (r.get("tick.serialLaneInlineThreshold") != null && intOr(r, "tick.serialLaneInlineThreshold", 1) <= 0)
             hotWaitMs = 0;
         boolean deferVisibility = boolOr(r, "entities.deferVisibility", d.deferVisibility());
@@ -215,7 +269,36 @@ public final class ConfigCodec {
 
     private static int intOr(UnmodifiableConfig r, String key, int fallback) {
         Number v = number(r, key);
-        return v == null ? fallback : Math.toIntExact(v.longValue());
+        if (v == null) return fallback;
+        long l = v.longValue();
+        if (l < Integer.MIN_VALUE || l > Integer.MAX_VALUE) {
+            throw new IllegalArgumentException("Key '" + key + "' is out of range: " + v);
+        }
+        return (int) l;
+    }
+
+    /** {@code value} limited to [{@code min}, {@code max}], with a warning naming the key when it was outside. */
+    private static int clamp(String key, int value, int min, int max) {
+        if (value >= min && value <= max) return value;
+        int clamped = Math.max(min, Math.min(max, value));
+        LOG.warn("multiforge-server.toml: {} = {} is outside {}..{}; using {}", key, value, min, max, clamped);
+        return clamped;
+    }
+
+    /** Dotted paths of every leaf value in {@code r} that {@link #parse} does not read. */
+    static java.util.List<String> unknownKeys(UnmodifiableConfig r) {
+        java.util.List<String> out = new java.util.ArrayList<>();
+        collectUnknown(r, "", out);
+        return out;
+    }
+
+    private static void collectUnknown(UnmodifiableConfig r, String prefix, java.util.List<String> out) {
+        for (UnmodifiableConfig.Entry e : r.entrySet()) {
+            String path = prefix.isEmpty() ? e.getKey() : prefix + "." + e.getKey();
+            Object v = e.getValue();
+            if (v instanceof UnmodifiableConfig table) collectUnknown(table, path, out);
+            else if (!KNOWN_KEYS.contains(path)) out.add(path);
+        }
     }
 
     private static <E extends Enum<E>> E enumOr(UnmodifiableConfig r, String key, Class<E> type, E fallback) {

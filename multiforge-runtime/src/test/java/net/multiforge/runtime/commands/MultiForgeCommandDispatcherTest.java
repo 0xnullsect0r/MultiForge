@@ -111,6 +111,16 @@ class MultiForgeCommandDispatcherTest {
     }
 
     @Test
+    void regionSizeBelowEightChunksIsRefused(@TempDir Path tmp) throws IOException {
+        MultiForgeCommandDispatcher d = make(tmp);
+        List<String> out = new ArrayList<>();
+        assertThat(d.dispatch(new String[] {"region", "size", "4"}, out::add)).isFalse();
+        assertThat(String.join("\n", out)).contains("between 8 and 256");
+        out.clear();
+        assertThat(d.dispatch(new String[] {"region", "size", "8"}, out::add)).isTrue();
+    }
+
+    @Test
     void regionSizeWithoutArgumentShowsTheCurrentSize(@TempDir Path tmp) throws IOException {
         MultiForgeCommandDispatcher d = make(tmp);
         List<String> out = new ArrayList<>();

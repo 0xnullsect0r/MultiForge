@@ -72,6 +72,23 @@ public record MultiForgeConfig(
         boolean workerChunkCache,
         ActivationConfig activation) {
 
+    /**
+     * Smallest region section an operator may configure: 8 chunks (shift 3). Two
+     * regions are always at least one unloaded section apart, and region safety
+     * relies on nothing a block or an entity does in one tick reaching that far
+     * (mob follow range, POI searches, beacons, explosions). Smaller sections are
+     * only for tests that build a host directly.
+     */
+    public static final int MIN_REGION_SIZE_SHIFT = 3;
+
+    public static final int MIN_REGION_SIZE_CHUNKS = 1 << MIN_REGION_SIZE_SHIFT;
+    /** Largest region section: 256 chunks (shift 8), the regionizer's limit. */
+    public static final int MAX_REGION_SIZE_SHIFT = 8;
+
+    public static final int MAX_REGION_SIZE_CHUNKS = 1 << MAX_REGION_SIZE_SHIFT;
+    /** Worker threads allowed per available processor; more only adds context switches. */
+    public static final int MAX_WORKERS_PER_PROCESSOR = 4;
+
     public static final boolean DEFAULT_INLINE_SINGLE_REGION = true;
     public static final int DEFAULT_SERIAL_LANE_HOT_WAIT_MS = 5;
     public static final boolean DEFAULT_DEFER_VISIBILITY = true;
