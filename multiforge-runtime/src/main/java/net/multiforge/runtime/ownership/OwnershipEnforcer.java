@@ -22,11 +22,9 @@ import org.jetbrains.annotations.ApiStatus;
 
 /**
  * Default-on behavioural guard for real {@code net.minecraft.*} mutation
- * sites patched by {@code multiforge-patches/01-ownership/}. Unlike {@link
- * DomainAssertions} (a passive, opt-in dev/CI probe that never changes
- * control flow), this class is the thing patched call sites actually call
- * to decide whether to run inline or hand off elsewhere — see CLAUDE.md
- * rule 5 ("auto-reroute + warn is the default").
+ * sites patched by {@code multiforge-patches/01-ownership/}: patched call
+ * sites call it to decide whether to run inline or hand off elsewhere — see
+ * CLAUDE.md rule 5 ("auto-reroute + warn is the default").
  *
  * <p>Two checks exist:
  *
@@ -339,8 +337,8 @@ public final class OwnershipEnforcer {
     /**
      * @return {@code true} iff the caller is a region worker and chunk
      *     ({@code chunkX}, {@code chunkZ}) of {@code world} is owned by a
-     *     different region (or by none), and is not the {@link #soleWriter}
-     *     ticking a region itself. Unlike {@link #canMutateAt} this is a
+     *     different region (or by none), and is neither the global region
+     *     nor the {@link #soleWriter} ticking a region itself. Unlike {@link #canMutateAt} this is a
      *     plain query — no probe, no warning — for call sites that treat a
      *     cross-region target as a normal event to be deferred (an entity
      *     teleporting into another region), not a violation.
@@ -352,6 +350,8 @@ public final class OwnershipEnforcer {
         if (soleWriter()) return false;
         PositionRouter router = positionRouter;
         if (router == null || world == null) return false;
+        // The global region ticks while no other region runs, as canMutateAt allows.
+        if (tok.regionId() == router.globalRegionId()) return false;
         return router.ownerOf(world, chunkX, chunkZ) != tok.regionId();
     }
 

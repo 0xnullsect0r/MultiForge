@@ -80,7 +80,7 @@ public final class EntityTickRunnerBridge implements EntityTickRunner {
         // region's last tick time for load shedding.
         net.multiforge.neoforge.world.EntityActivation.beginRegion(level, host.scheduler().lastTickNanos(region));
         try {
-            level.mfTickEntitiesForRegion(region.id().value());
+            region.recordEntitiesTicked(level.mfTickEntitiesForRegion(region.id().value()));
         } finally {
             net.multiforge.neoforge.world.EntityActivation.endRegion();
         }

@@ -38,12 +38,9 @@ import org.jetbrains.annotations.ApiStatus;
  * world (including the synthetic {@code multiforge:global} world) into
  * one payload per tick.
  *
- * <p>{@code ownedEntities} has no MC-free runtime source as of Track
- * C1 (entity-region ownership indexing lands with the M4 entity
- * migration in the fork module) — callers supply an {@code
- * ownedEntityCounter}; the default always returns {@code 0} and a
- * future fork-side counter can be substituted without touching this
- * class.
+ * <p>{@code ownedEntities} is the number of entities the region's last
+ * entity pass ticked ({@link Region#entitiesTicked()}, recorded by the
+ * fork's entity tick runner); tests may supply their own counter.
  */
 @ApiStatus.Internal
 public final class RegionMapEmitter {
@@ -51,7 +48,7 @@ public final class RegionMapEmitter {
     public static final long PERIOD_MILLIS = 250L;
 
     private final MultiThreadedSchedulerHost host;
-    private final ToIntFunction<RegionId> ownedEntityCounter;
+    private final java.util.function.Function<Region, Integer> ownedEntityCounter;
     private final Consumer<DebugPayload> sink;
     private final PermissionFilter permissionFilter;
 
@@ -60,10 +57,23 @@ public final class RegionMapEmitter {
             ToIntFunction<RegionId> ownedEntityCounter,
             Consumer<DebugPayload> sink,
             PermissionFilter permissionFilter) {
+        this(host, perRegion(ownedEntityCounter), sink, permissionFilter);
+    }
+
+    private RegionMapEmitter(
+            MultiThreadedSchedulerHost host,
+            java.util.function.Function<Region, Integer> ownedEntityCounter,
+            Consumer<DebugPayload> sink,
+            PermissionFilter permissionFilter) {
         this.host = Objects.requireNonNull(host, "host");
-        this.ownedEntityCounter = Objects.requireNonNull(ownedEntityCounter, "ownedEntityCounter");
+        this.ownedEntityCounter = ownedEntityCounter;
         this.sink = Objects.requireNonNull(sink, "sink");
         this.permissionFilter = Objects.requireNonNull(permissionFilter, "permissionFilter");
+    }
+
+    private static java.util.function.Function<Region, Integer> perRegion(ToIntFunction<RegionId> byId) {
+        Objects.requireNonNull(byId, "ownedEntityCounter");
+        return region -> byId.applyAsInt(region.id());
     }
 
     /** Packages every live region across every world into one payload and sinks it. */
@@ -75,7 +85,7 @@ public final class RegionMapEmitter {
                 RegionMspt mspt = host.scheduler().mspt(region);
                 double p50 = mspt == null ? 0.0 : mspt.percentileMillis(0.5);
                 double p95 = mspt == null ? 0.0 : mspt.percentileMillis(0.95);
-                int owned = ownedEntityCounter.applyAsInt(region.id());
+                int owned = ownedEntityCounter.apply(region);
                 stats.add(new DebugPayload.RegionStat(region.id().value(), region.sectionCount(), p50, p95, owned));
                 tick = Math.max(tick, region.currentTick());
             }
@@ -89,7 +99,7 @@ public final class RegionMapEmitter {
     /** Wire a {@link RegionMapEmitter} into {@code host}'s shared diagnostics scheduler at 4Hz. */
     public static AutoCloseable install(
             MultiThreadedSchedulerHost host, Consumer<DebugPayload> sink, PermissionFilter permissionFilter) {
-        return install(host, id -> 0, sink, permissionFilter);
+        return schedule(host, new RegionMapEmitter(host, Region::entitiesTicked, sink, permissionFilter));
     }
 
     /** As {@link #install(MultiThreadedSchedulerHost, Consumer, PermissionFilter)}, with an explicit entity counter. */
@@ -98,7 +108,10 @@ public final class RegionMapEmitter {
             ToIntFunction<RegionId> ownedEntityCounter,
             Consumer<DebugPayload> sink,
             PermissionFilter permissionFilter) {
-        RegionMapEmitter emitter = new RegionMapEmitter(host, ownedEntityCounter, sink, permissionFilter);
+        return schedule(host, new RegionMapEmitter(host, ownedEntityCounter, sink, permissionFilter));
+    }
+
+    private static AutoCloseable schedule(MultiThreadedSchedulerHost host, RegionMapEmitter emitter) {
         ScheduledFuture<?> future = host.scheduleGlobal(emitter::emit, PERIOD_MILLIS);
         return () -> future.cancel(false);
     }

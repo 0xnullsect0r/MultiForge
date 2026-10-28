@@ -122,13 +122,22 @@ public final class SerialLane {
                     OwnerToken.runAs(job.token(), job.task());
                 } catch (Throwable t) {
                     net.multiforge.runtime.diagnostics.ViolationLogger.warn(
-                            "SerialLane", "a deferred job threw " + t + " (the rest still run)");
+                            "SerialLane", "a deferred job threw " + t + topFrames(t) + " (the rest still run)");
                 }
             }
         } finally {
             if (outer) drainingDeferred = false;
         }
         return ran;
+    }
+
+    /** The first few frames of {@code t}, so a rate-limited one-line warning still names the listener. */
+    static String topFrames(Throwable t) {
+        StringBuilder sb = new StringBuilder();
+        StackTraceElement[] frames = t.getStackTrace();
+        for (int i = 0; i < Math.min(5, frames.length); i++)
+            sb.append("\n    at ").append(frames[i]);
+        return sb.toString();
     }
 
     /** Whether the calling thread would hand {@link #run} jobs to the lane. */

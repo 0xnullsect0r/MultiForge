@@ -211,11 +211,7 @@ public final class DebugChannelServer {
         }
         INSTALLED.clear();
         for (AutoCloseable c : HEATMAPS_BY_WORLD.values()) {
-            try {
-                c.close();
-            } catch (Throwable t) {
-                // ignore
-            }
+            closeQuietly(c);
         }
         HEATMAPS_BY_WORLD.clear();
         for (AutoCloseable c : OWNERSHIP_BY_WORLD.values()) {
@@ -260,7 +256,8 @@ public final class DebugChannelServer {
         try {
             c.close();
         } catch (Throwable t) {
-            // ignore
+            // Emitter handles cancel a scheduled future; a failure here leaves nothing to clean up.
+            LOGGER.debug("multiforge:debug/v1 — closing {} threw {}", c, t.toString());
         }
     }
 

@@ -129,7 +129,7 @@ region-1 [tick-6] mspt=8.1/12.4 owned=132 sections=6
 region-2 [server] mspt=2.0/3.1 owned=18 sections=2
 ```
 
-That's the region id, where its last tick ran (v1.8.0 servers: `tick-N` is worker thread `multiforge-tick-N`, `server` is the server thread, `server, busy lane` means it was moved there for posting too many serial-lane events), its p50/p95 tick cost in milliseconds, how many entities it owns, and how many sections it spans. Capped at 8 rows by default (`hud.regionListMaxRows`), with a `… N more region(s)` line when there are more.
+That's the region id, where its last tick ran (v1.8.0 servers: `tick-N` is worker thread `multiforge-tick-N`, `server` is the server thread, `server, busy lane` means it was moved there for posting too many serial-lane events), its p50/p95 tick cost in milliseconds, how many entities its last tick ran (servers before v1.11.1 always send 0), and how many sections it spans. Capped at 8 rows by default (`hud.regionListMaxRows`), with a `… N more region(s)` line when there are more.
 
 **New in v1.4.0**, in the same sense as the violation panel: the data and its exact format have existed since M6 and were documented, but nothing drew them.
 

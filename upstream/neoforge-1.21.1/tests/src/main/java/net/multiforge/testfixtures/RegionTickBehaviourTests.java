@@ -270,7 +270,7 @@ public class RegionTickBehaviourTests {
 
     @GameTest(template = TestsMod.TEMPLATE_3x3, timeoutTicks = 300)
     @TestHolder(description = {
-            "A rerouted setBlock / addFreshEntity returns what Vanilla would have:",
+            "A rerouted setBlock / addFreshEntity / addWithUUID returns what Vanilla would have:",
             "true when the block changes or the entity is added, false otherwise."
     })
     static void reroutedCallsReturnVanillaResults(final DynamicTest test) {
@@ -294,8 +294,14 @@ public class RegionTickBehaviourTests {
             pig.moveTo(far.getX() + 0.5, far.getY(), far.getZ() + 0.5, 0, 0);
             pig.setNoAi(true);
             pig.setNoGravity(true);
+            Pig pig2 = EntityType.PIG.create(level);
+            helper.assertTrue(pig2 != null, "pig2");
+            pig2.moveTo(far.getX() + 0.5, far.getY(), far.getZ() + 1.5, 0, 0);
+            pig2.setNoAi(true);
+            pig2.setNoGravity(true);
             helper.addEndListener(passed -> {
                 pig.discard();
+                pig2.discard();
                 level.setBlock(far, Blocks.AIR.defaultBlockState(), 3);
                 releaseFar.run();
             });
@@ -305,6 +311,8 @@ public class RegionTickBehaviourTests {
                 results.put("sameState", level.setBlock(farSky, Blocks.AIR.defaultBlockState(), 3));
                 results.put("outside", level.setBlock(farOutside, Blocks.STONE.defaultBlockState(), 3));
                 results.put("pig", level.addFreshEntity(pig));
+                // addWithUUID reaches the private addEntity, guarded on its own.
+                results.put("pig2", level.addWithUUID(pig2));
             });
             helper.startSequence()
                     .thenWaitUntil(() -> helper.assertTrue(
@@ -315,13 +323,16 @@ public class RegionTickBehaviourTests {
                     .thenExecute(onNearWorker)
                     .thenWaitUntil(() -> helper.assertTrue(results.containsKey("pig"), "worker task has not run yet"))
                     .thenWaitUntil(() -> helper.assertTrue(
-                            level.getBlockState(far).is(Blocks.GOLD_BLOCK) && level.getEntity(pig.getUUID()) != null,
+                            level.getBlockState(far).is(Blocks.GOLD_BLOCK)
+                                    && level.getEntity(pig.getUUID()) != null
+                                    && level.getEntity(pig2.getUUID()) != null,
                             "rerouted block and entity have not landed yet"))
                     .thenExecute(() -> {
                         helper.assertTrue(results.get("gold"), "rerouted setBlock that changes a block returned false");
                         helper.assertFalse(results.get("sameState"), "rerouted setBlock of the existing state returned true");
                         helper.assertFalse(results.get("outside"), "rerouted setBlock outside the build height returned true");
                         helper.assertTrue(results.get("pig"), "rerouted addFreshEntity of a new entity returned false");
+                        helper.assertTrue(results.get("pig2"), "rerouted addWithUUID of a new entity returned false");
                         results.clear();
                     })
                     // Adding the same entity again: Vanilla refuses a UUID the level already holds.

@@ -38,6 +38,7 @@ public final class Region {
     private final AtomicReference<RegionState> state = new AtomicReference<>(RegionState.TRANSIENT);
     private final AtomicReference<RegionChunkSource> chunkSource = new AtomicReference<>();
     private volatile long currentTick;
+    private volatile int entitiesTicked;
 
     Region(RegionId id, int sectionChunkShift) {
         this.id = id;
@@ -54,6 +55,16 @@ public final class Region {
 
     public long currentTick() {
         return currentTick;
+    }
+
+    /** Entities this region's last entity pass ticked (the debug overlay's {@code owned=}). */
+    public int entitiesTicked() {
+        return entitiesTicked;
+    }
+
+    /** Recorded by the region's own entity pass. */
+    public void recordEntitiesTicked(int count) {
+        this.entitiesTicked = count;
     }
 
     /** Sections currently owned by this region (unmodifiable snapshot). */

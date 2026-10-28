@@ -138,8 +138,21 @@ public final class OwnershipGuard {
      */
     public static boolean rerouteAddFreshEntity(
             net.minecraft.server.level.ServerLevel level, net.minecraft.world.entity.Entity entity, java.util.function.BooleanSupplier apply) {
+        return rerouteAddEntity("ServerLevel.addFreshEntity", level, entity, apply);
+    }
+
+    /**
+     * As {@link #rerouteAddFreshEntity}, for the other ways into the level's
+     * entity storage ({@code ServerLevel.addEntity}: {@code addWithUUID},
+     * {@code addDuringTeleport}), named by {@code site}.
+     */
+    public static boolean rerouteAddEntity(
+            String site,
+            net.minecraft.server.level.ServerLevel level,
+            net.minecraft.world.entity.Entity entity,
+            java.util.function.BooleanSupplier apply) {
         boolean predicted = !entity.isRemoved() && level.getEntity(entity.getUUID()) == null;
-        rerouteChecked("ServerLevel.addFreshEntity", level, entity.blockPosition(), predicted, apply);
+        rerouteChecked(site, level, entity.blockPosition(), predicted, apply);
         return predicted;
     }
 
