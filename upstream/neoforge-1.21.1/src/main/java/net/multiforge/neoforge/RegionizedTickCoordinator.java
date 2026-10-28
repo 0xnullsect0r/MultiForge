@@ -282,7 +282,11 @@ public final class RegionizedTickCoordinator {
      */
     public static boolean regionsHandleBlockEntities(Level level) {
         if (!(level instanceof ServerLevel serverLevel)) return false;
-        if (MultiForgeRegionizedRuntime.current() == null) return false;
+        MultiThreadedSchedulerHost host = MultiForgeRegionizedRuntime.current();
+        if (host == null) return false;
+        // As for the other passes: with no regionizer, dispatchLevelTick drives no
+        // region, so skipping the inline pass would tick these block entities nowhere.
+        if (regionizerOf(host, serverLevel) == null) return false;
         return net.multiforge.neoforge.tick.BlockEntityTickerBridge.isInstalled(serverLevel);
     }
 

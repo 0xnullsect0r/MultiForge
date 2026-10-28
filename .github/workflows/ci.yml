@@ -194,6 +194,17 @@ jobs:
         env:
           MIN_REQUIRED_GAMETESTS: "197"
 
+      - name: GameTest server in strict mode
+        # The same suite with ownership violations and region overruns thrown
+        # instead of rerouted and logged.
+        working-directory: upstream/neoforge-1.21.1
+        run: |
+          set -o pipefail
+          ./gradlew --no-configuration-cache --stacktrace :tests:runGameTestServer -PmultiforgeMode=strict 2>&1 | tee gametest-strict.log
+          ../../.github/scripts/check-gametest-log.sh gametest-strict.log "$MIN_REQUIRED_GAMETESTS"
+        env:
+          MIN_REQUIRED_GAMETESTS: "197"
+
       - name: Upload fork reports on failure
         if: failure()
         uses: actions/upload-artifact@v4

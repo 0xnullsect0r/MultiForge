@@ -188,19 +188,40 @@
                  ? null
                  : this.getChunkAt(p_46716_).getBlockEntity(p_46716_, LevelChunk.EntityCreationType.IMMEDIATE);
          }
-@@ -1185,6 +1276,11 @@ public abstract class Level extends net.neoforged.neoforge.attachment.Attachment
+@@ -1185,9 +1276,31 @@ public abstract class Level extends net.neoforged.neoforge.attachment.Attachment
      }
  
      public ProfilerFiller getProfiler() {
+-        return this.profiler.get();
 +        // MultiForge (multiforge-patches/02-region-tick/): the server profiler is
 +        // single-threaded; region workers must not push into it concurrently.
 +        if (net.multiforge.runtime.ownership.OwnerToken.current().domain() == net.multiforge.runtime.ownership.Domain.REGION) {
 +            return net.minecraft.util.profiling.InactiveProfiler.INSTANCE;
 +        }
-         return this.profiler.get();
++        ProfilerFiller mf$profiler = this.profiler.get();
++        // Code that took the profiler on the server thread may run it on a region
++        // worker (ServerLevel.tick's per-entity lambda captures it, and every region
++        // runs that lambda): hand out a copy that ignores calls from other threads.
++        if (this.isClientSide
++                || Thread.currentThread() != this.thread
++                || net.multiforge.runtime.scheduler.MultiForgeRegionizedRuntime.current() == null) {
++            return mf$profiler;
++        }
++        net.multiforge.neoforge.world.ThreadConfinedProfiler mf$confined = this.mfConfinedProfiler;
++        if (mf$confined == null || mf$confined.delegate() != mf$profiler) {
++            mf$confined = new net.multiforge.neoforge.world.ThreadConfinedProfiler(mf$profiler, this.thread);
++            this.mfConfinedProfiler = mf$confined;
++        }
++        return mf$confined;
      }
  
-@@ -1283,4 +1379,22 @@ public abstract class Level extends net.neoforged.neoforge.attachment.Attachment
++    // MultiForge (multiforge-patches/02-region-tick/): getProfiler's thread-confined copy, cached.
++    private volatile net.multiforge.neoforge.world.ThreadConfinedProfiler mfConfinedProfiler;
++
+     public Supplier<ProfilerFiller> getProfilerSupplier() {
+         return this.profiler;
+     }
+@@ -1283,4 +1396,22 @@ public abstract class Level extends net.neoforged.neoforge.attachment.Attachment
          setDayTimeFraction(dayTimeStep - result);
          return result;
      }

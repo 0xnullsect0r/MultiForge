@@ -103,6 +103,16 @@ public final class OwnershipEnforcer {
         default boolean isPendingRegistration(WorldRef world, int chunkX, int chunkZ) {
             return false;
         }
+
+        /**
+         * Whether {@code world}'s regions are ticking right now. Levels tick one
+         * after another, so while one level's regions run every other level is
+         * idle, and a write into it (a mob going through a portal) has nobody to
+         * race. Conservatively {@code true} when unknown.
+         */
+        default boolean regionsTicking(WorldRef world) {
+            return true;
+        }
     }
 
     private static final String MODE_PROP = "multiforge.ownership.mode";
@@ -291,6 +301,7 @@ public final class OwnershipEnforcer {
         PositionRouter router = positionRouter;
         if (router == null || world == null) return true;
         if (tok.regionId() == router.globalRegionId()) return true; // global region: allowed
+        if (!router.regionsTicking(world)) return true; // another, idle level (a portal crossing)
         long owner = router.ownerOf(world, chunkX, chunkZ);
         if (owner == tok.regionId()) return true;
         if (owner == PositionRouter.UNOWNED && router.isPendingRegistration(world, chunkX, chunkZ)) {

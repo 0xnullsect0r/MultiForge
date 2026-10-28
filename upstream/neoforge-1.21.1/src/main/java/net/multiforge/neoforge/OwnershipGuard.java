@@ -258,6 +258,38 @@ public final class OwnershipGuard {
     }
 
     /**
+     * {@code MinecraftServer.executeBlocking} called on a region worker (Vanilla's
+     * {@code disconnect} does, so does a mod kicking a player from entity code): it
+     * queued the task for the server thread and joined it, but the server thread is
+     * waiting at the tick barrier and never runs its own queue there, so the region,
+     * and the server, hung until the watchdog stopped it. The task runs on the serial
+     * lane instead, which the barrier does service — a designed wait.
+     *
+     * @return {@code true} if it ran and the caller must return
+     */
+    public static boolean executeBlockingOnLane(Runnable task) {
+        if (!net.multiforge.runtime.event.SerialLane.handsOff()) return false;
+        net.multiforge.runtime.diagnostics.ProbeRegistry.bump("server.executeBlocking.serial-lane");
+        net.multiforge.runtime.event.SerialLane.run(task);
+        return true;
+    }
+
+    /**
+     * NeoForge's {@code ForcedChunkManager.forceChunk} on a region worker: deferred
+     * whole to the server thread, like {@link #deferSetChunkForced}. Deferring only
+     * its ticket left it writing the level's saved forced-chunk records (plain hash
+     * maps) on the worker, where two regions' chunk loaders could corrupt them or
+     * lose a record (the chunk is then not re-forced after a restart).
+     *
+     * @return {@code true} if deferred and the caller must return its prediction
+     */
+    public static boolean deferForcedChunk(net.minecraft.server.level.ServerLevel level, int chunkX, int chunkZ, Runnable redo) {
+        if (!onTickWorker(level.getServer())) return false;
+        deferTicket("ForcedChunkManager.forceChunk", new net.minecraft.world.level.ChunkPos(chunkX, chunkZ), redo);
+        return true;
+    }
+
+    /**
      * Whether a ticket change here must be deferred: the caller ticks a region (or the
      * global region) while region workers may be running. A region the server thread
      * ticks inline (a level with one region, or a hot region) changes tickets inline,

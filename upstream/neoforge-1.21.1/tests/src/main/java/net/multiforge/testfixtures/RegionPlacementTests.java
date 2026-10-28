@@ -33,7 +33,6 @@ import net.neoforged.testframework.annotation.TestHolder;
  */
 @ForEachTest(groups = "multiforge.placement")
 public class RegionPlacementTests {
-
     @GameTest(template = TestsMod.TEMPLATE_3x3, timeoutTicks = 100)
     @TestHolder(description = {
             "The test's own region ticks on a region worker thread, not on the server thread:",

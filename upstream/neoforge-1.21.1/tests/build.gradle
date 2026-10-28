@@ -101,6 +101,10 @@ runs {
             // region ever running on a worker. RegionPlacementTests asserts this took effect.
             systemProperty("multiforge.inlineSingleRegion", "false")
             systemProperty("multiforge.serialLaneHotWaitMs", "0")
+            // `-PmultiforgeMode=strict` (CI's second run) or `=off` (the control).
+            if (project.hasProperty("multiforgeMode")) {
+                systemProperty("multiforge.mode", project.property("multiforgeMode").toString())
+            }
     }
     data {
             data()

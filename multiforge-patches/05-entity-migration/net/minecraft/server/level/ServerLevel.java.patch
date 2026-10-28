@@ -209,14 +209,9 @@
 +        this.mfNavigatingIndexed = false;
 +        this.mfRegionNavigatingMobs = it.unimi.dsi.fastutil.longs.Long2ObjectMaps.emptyMap();
 +        this.mfNavigatingMobsAdded.clear();
-     }
- 
-     /**
--     * MultiForge (multiforge-patches/02-region-tick/): region worker: tick the
--     * entities {@link #mfQueueRegionEntityTicks} assigned to {@code regionId},
--     * through the same {@link #mfTickOneEntity} Vanilla's inline pass uses. An
--     * entity moved into another region since (by something else ticking) is
--     * left for the server thread instead of being ticked from here.
++    }
++
++    /**
 +     * MultiForge (multiforge-patches/02-region-tick/): the mobs {@link
 +     * #sendBlockUpdated} checks. On a region worker while the index is up, the
 +     * calling region's indexed mobs still navigating and the mobs that started
@@ -251,9 +246,14 @@
 +        // Each mob is in out once (added ones are skipped in the indexed pass), so the
 +        // array set can take the array as it is, in order.
 +        return new it.unimi.dsi.fastutil.objects.ObjectArraySet<>(out.toArray(new Mob[0]), out.size());
-+    }
-+
-+    /**
+     }
+ 
+     /**
+-     * MultiForge (multiforge-patches/02-region-tick/): region worker: tick the
+-     * entities {@link #mfQueueRegionEntityTicks} assigned to {@code regionId},
+-     * through the same {@link #mfTickOneEntity} Vanilla's inline pass uses. An
+-     * entity moved into another region since (by something else ticking) is
+-     * left for the server thread instead of being ticked from here.
 +     * MultiForge (multiforge-patches/02-region-tick/): region worker: run this
 +     * tick's per-entity lambda over the entities {@link #mfQueueRegionEntityTicks}
 +     * assigned to {@code regionId}. An entity moved into another region since (by
@@ -406,7 +406,7 @@
      /**
       * MultiForge (multiforge-patches/02-region-tick/): per-region variant of {@link
       * #mfTickBlockFluidTicksAll()} — runs the due scheduled block ticks, then fluid ticks,
-@@ -1461,17 +1568,41 @@ public class ServerLevel extends Level implements WorldGenLevel {
+@@ -1461,17 +1568,50 @@ public class ServerLevel extends Level implements WorldGenLevel {
       * net.multiforge.neoforge.tick.ScheduledTickRunnerBridge} on the owning region's
       * worker with the region's owned chunks.
       */
@@ -426,6 +426,15 @@
 +                this.fluidTicks.mfTickRegion(gameTime, 65536, chunks.get(), this::mfTickFluidTimed);
 +            }
          }
++    }
++
++    /**
++     * MultiForge (multiforge-patches/02-region-tick/): the region's share of
++     * Vanilla's {@code runBlockEvents}, run after its scheduled ticks and its
++     * random ticks, in Vanilla's order (tickPending, then chunkSource.tick, then
++     * runBlockEvents).
++     */
++    public void mfRegionBlockEvents(long regionId) {
          if (this.mfRegionRunsBlockEvents) {
              this.mfRunRegionBlockEvents(regionId);
          }
@@ -451,7 +460,7 @@
      @Nonnull
      @Override
      public MinecraftServer getServer() {
-@@ -1818,7 +1949,7 @@ public class ServerLevel extends Level implements WorldGenLevel {
+@@ -1818,7 +1958,7 @@ public class ServerLevel extends Level implements WorldGenLevel {
      @VisibleForTesting
      public void clearBlockEvents(BoundingBox p_8723_) {
          this.blockEvents.removeIf(p_207568_ -> p_8723_.isInside(p_207568_.pos()));
@@ -460,7 +469,7 @@
      }
  
      @Override
-@@ -2010,6 +2141,8 @@ public class ServerLevel extends Level implements WorldGenLevel {
+@@ -2010,6 +2150,8 @@ public class ServerLevel extends Level implements WorldGenLevel {
                  }
  
                  ServerLevel.this.navigatingMobs.add(mob);
@@ -469,7 +478,7 @@
              }
  
              if (p_143371_.isMultipartEntity()) {
-@@ -2155,4 +2288,30 @@ public class ServerLevel extends Level implements WorldGenLevel {
+@@ -2155,4 +2297,30 @@ public class ServerLevel extends Level implements WorldGenLevel {
          }
      }
  

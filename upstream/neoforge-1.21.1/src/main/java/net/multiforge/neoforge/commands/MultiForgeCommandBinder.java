@@ -143,9 +143,9 @@ public final class MultiForgeCommandBinder {
                 .then(Commands.literal("size")
                         .executes(ctx -> run(dispatcher, ctx, "region", "size"))
                         .then(Commands.argument(
-                                        "chunks",
-                                        IntegerArgumentType.integer(
-                                                net.multiforge.runtime.config.MultiForgeConfig.MIN_REGION_SIZE_CHUNKS, 256))
+                                "chunks",
+                                IntegerArgumentType.integer(
+                                        net.multiforge.runtime.config.MultiForgeConfig.MIN_REGION_SIZE_CHUNKS, 256))
                                 .requires(MultiForgeCommandBinder::isAdmin)
                                 .executes(ctx -> runTopology(dispatcher, ctx, "region", "size", intArg(ctx, "chunks")))))
                 .then(pinSubtree(dispatcher).requires(MultiForgeCommandBinder::isAdmin))

@@ -133,4 +133,42 @@ class OwnershipEnforcerSoleWriterTest {
         worker.join();
         assertThat(foreign).isFalse();
     }
+
+    @Test
+    void aWorkerMayWriteIntoALevelWhoseRegionsAreNotTicking() throws Exception {
+        // A mob going through a portal on a region worker is added to the destination
+        // level, whose regions are idle (levels tick one after another). That used to
+        // count as a cross-region write: a warning per crossing, and in strict mode an
+        // exception after the mob had already left its level.
+        WorldRef other = WorldRef.of("test:other-level");
+        OwnershipEnforcer.PositionRouter perLevel = new OwnershipEnforcer.PositionRouter() {
+            @Override
+            public long ownerOf(WorldRef world, int chunkX, int chunkZ) {
+                return 7L;
+            }
+
+            @Override
+            public boolean queueOnOwner(WorldRef world, int chunkX, int chunkZ, Runnable mutation) {
+                return true;
+            }
+
+            @Override
+            public boolean regionsTicking(WorldRef world) {
+                return world.equals(WORLD);
+            }
+        };
+        OwnershipEnforcer.bindPositionRouter(perLevel);
+        java.util.concurrent.atomic.AtomicBoolean intoIdle = new java.util.concurrent.atomic.AtomicBoolean();
+        java.util.concurrent.atomic.AtomicBoolean intoTicking = new java.util.concurrent.atomic.AtomicBoolean(true);
+        Thread worker = new Thread(() -> {
+            intoIdle.set(asRegion(1L, () -> OwnershipEnforcer.canMutateAt("site", other, 0, 0)));
+            intoTicking.set(asRegion(1L, () -> OwnershipEnforcer.canMutateAt("site", WORLD, 0, 0)));
+        });
+        worker.start();
+        worker.join();
+        assertThat(intoIdle).isTrue();
+        assertThat(intoTicking)
+                .as("another region of the ticking level is still guarded")
+                .isFalse();
+    }
 }

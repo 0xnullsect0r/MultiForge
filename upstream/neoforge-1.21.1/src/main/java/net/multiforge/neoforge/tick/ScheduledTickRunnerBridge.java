@@ -112,15 +112,17 @@ public final class ScheduledTickRunnerBridge implements ScheduledTickRunner {
         if (world == null) return; // region died since this phase was scheduled
         ServerLevel level = LEVELS.get(world.dimensionId());
         if (level == null) return; // level not (yet) registered — LevelEvent.Load hasn't fired
-        // Random ticks and natural spawning first, as in Vanilla's level tick
-        // (ServerChunkCache.tickChunks queued them for this region).
-        level.getChunkSource().mfTickRegionChunks(region.id().value());
+        // Vanilla's level tick order: scheduled block and fluid ticks (tickPending),
+        // then random ticks and natural spawning (chunkSource.tick, which
+        // ServerChunkCache.tickChunks queued for this region), then block events.
         ChunkHolderManager manager = host.chunkManagerForOrNull(world);
-        if (manager == null) return; // no chunk of this world indexed yet
-
-        // Normally the level bucketed this tick's due ticks by region and the
-        // chunk list is never built; it is the fallback when it did not.
-        level.mfTickRegionScheduledTicks(region.id().value(), new OwnedChunks(region, manager));
+        if (manager != null) {
+            // Normally the level bucketed this tick's due ticks by region and the
+            // chunk list is never built; it is the fallback when it did not.
+            level.mfTickRegionScheduledTicks(region.id().value(), new OwnedChunks(region, manager));
+        }
+        level.getChunkSource().mfTickRegionChunks(region.id().value());
+        level.mfRegionBlockEvents(region.id().value());
     }
 
     /** The region's loaded chunks, built on first use and reused. */

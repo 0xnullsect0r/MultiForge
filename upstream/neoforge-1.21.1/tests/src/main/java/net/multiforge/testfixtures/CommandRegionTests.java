@@ -41,7 +41,6 @@ import net.neoforged.testframework.annotation.TestHolder;
  */
 @ForEachTest(groups = "multiforge.commands")
 public class CommandRegionTests {
-
     private static long regionIdAt(GameTestHelper helper, BlockPos rel) {
         MultiThreadedSchedulerHost host = MultiForgeRegionizedRuntime.current();
         if (host == null) return -1L;

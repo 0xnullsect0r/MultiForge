@@ -326,7 +326,20 @@ public final class MultiThreadedSchedulerHost implements SchedulerHost, AutoClos
         public boolean isPendingRegistration(WorldRef world, int chunkX, int chunkZ) {
             return !pendingLoads.isEmpty() && pendingLoads.contains(pendingKey(world, chunkX, chunkZ));
         }
+
+        @Override
+        public boolean regionsTicking(WorldRef world) {
+            WorldRef ticking = tickingWorld;
+            return ticking == null || ticking.equals(world);
+        }
     };
+
+    /**
+     * The level whose regions {@link #driveRegions} is ticking, or {@code null}
+     * between level ticks (then every level counts as possibly ticking, the safe
+     * answer for {@link OwnershipEnforcer.PositionRouter#regionsTicking}).
+     */
+    private volatile WorldRef tickingWorld;
 
     /** Chunks loaded while regions ticked, awaiting registration (see {@link #chunkLoaded}). */
     private final java.util.Set<String> pendingLoads = ConcurrentHashMap.newKeySet();
@@ -424,6 +437,7 @@ public final class MultiThreadedSchedulerHost implements SchedulerHost, AutoClos
         ThreadedRegionizer regionizer = regionizerForOrNull(world);
         if (regionizer == null) return scheduler.driveTick(List.of(), deadlineNanos, pump);
         regionsTicking = true;
+        tickingWorld = world;
         // Worker chunk caches live for one phase at most (see WorkerChunkCache).
         net.multiforge.runtime.region.WorkerChunkCache.invalidateAll();
         ChunkCost.beginLevelTick(world.dimensionId());
@@ -432,6 +446,7 @@ public final class MultiThreadedSchedulerHost implements SchedulerHost, AutoClos
         } finally {
             ChunkCost.endLevelTick();
             regionsTicking = false;
+            tickingWorld = null;
             applyDeferredChunkChanges();
             // Fire-and-forget event posts the regions left (SerialLane.defer), now that
             // no region worker runs.
@@ -1321,7 +1336,8 @@ public final class MultiThreadedSchedulerHost implements SchedulerHost, AutoClos
         try {
             body.accept(handle);
         } catch (Throwable t) {
-            Thread.currentThread().getUncaughtExceptionHandler().uncaughtException(Thread.currentThread(), t);
+            // A mod's task: logged with its stack, and the region carries on.
+            org.slf4j.LoggerFactory.getLogger("multiforge.scheduler").error("scheduled task {} threw", handle, t);
         } finally {
             handle.markFinished();
         }
@@ -1332,7 +1348,7 @@ public final class MultiThreadedSchedulerHost implements SchedulerHost, AutoClos
         try {
             body.accept(handle);
         } catch (Throwable t) {
-            Thread.currentThread().getUncaughtExceptionHandler().uncaughtException(Thread.currentThread(), t);
+            org.slf4j.LoggerFactory.getLogger("multiforge.scheduler").error("repeating task {} threw", handle, t);
         } finally {
             handle.prepareNextIteration();
         }

@@ -50,7 +50,7 @@ public final class VanillaTickingBlockEntityAdapter implements net.multiforge.ru
 
     /**
      * @param loadPending the block entity was placed during a region's tick, so its
-     *     {@code onLoad} must run right before its first tick (see {@link #tick})
+     *                    {@code onLoad} must run right before its first tick (see {@link #tick})
      */
     public VanillaTickingBlockEntityAdapter(Level level, TickingBlockEntity delegate, boolean loadPending) {
         this.level = level;

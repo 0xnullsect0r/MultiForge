@@ -133,14 +133,49 @@ public final class MainThreadHandoff {
      * @return whether any task ran
      */
     public static BooleanSupplier pumpFor(MinecraftServer server) {
+        // When the barrier has made no progress for this long with no counted
+        // waiter, pump anyway (below).
+        final long stallNanos = STALL_PUMP_NANOS;
+        final long[] idleSince = { 0L };
         return () -> {
             // Event listeners region workers handed to the serial lane.
             boolean ran = net.multiforge.runtime.event.SerialLane.drain();
-            if (WAITING.get() == 0 && REGION_TASKS.get() == 0) return ran;
+            if (WAITING.get() == 0 && REGION_TASKS.get() == 0) {
+                if (ran) {
+                    idleSince[0] = 0L;
+                    return true;
+                }
+                // A worker can wait on chunk work nobody counted: it joined a future
+                // from getChunkFuture, whose creating task ran (and stopped being
+                // counted) while the rest of the load is queued on the main thread by
+                // world-gen threads. Without this the barrier waits until the watchdog
+                // stops the server. A barrier with no progress for stallNanos runs the
+                // chunk tasks the server thread would otherwise never get to.
+                long now = System.nanoTime();
+                if (idleSince[0] == 0L) {
+                    idleSince[0] = now;
+                    return false;
+                }
+                if (now - idleSince[0] < stallNanos) return false;
+                boolean pumped = false;
+                for (ServerLevel level : server.getAllLevels()) {
+                    pumped |= level.getChunkSource().pollTask();
+                }
+                if (pumped) {
+                    ProbeRegistry.bump("region.main-thread-chunk-load.stall-pump");
+                    idleSince[0] = 0L;
+                }
+                return pumped;
+            }
+            idleSince[0] = 0L;
             for (ServerLevel level : server.getAllLevels()) {
                 ran |= level.getChunkSource().pollTask();
             }
             return ran;
         };
     }
+
+    /** {@code -Dmultiforge.stallPumpMs} (default 25): see {@link #pumpFor}. */
+    private static final long STALL_PUMP_NANOS = java.util.concurrent.TimeUnit.MILLISECONDS.toNanos(
+            Math.max(1L, Long.getLong("multiforge.stallPumpMs", 25L)));
 }

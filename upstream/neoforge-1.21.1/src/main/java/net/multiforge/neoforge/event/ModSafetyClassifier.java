@@ -104,7 +104,9 @@ public final class ModSafetyClassifier {
         try {
             if (!Files.isRegularFile(file)) {
                 Files.createDirectories(file.getParent());
-                Files.writeString(file, """
+                // Atomic, like the server config: a crash mid-write must not leave a
+                // truncated file that the next start parses.
+                net.multiforge.runtime.config.AtomicFiles.writeString(file, """
                         # Per-mod thread-safety classification for MultiForge event listeners.
                         # Applies to listeners without a @DispatchDomain annotation.
                         #   legacy       every listener runs on the serial lane (one at a time)
@@ -123,7 +125,7 @@ public final class ModSafetyClassifier {
                         #             that cannot be cancelled and whose result nobody reads)
                         [events]
                         # "net.neoforged.neoforge.event.entity.living.LivingDrownEvent" = "serial"
-                        """, StandardCharsets.UTF_8);
+                        """);
                 return out;
             }
             UnmodifiableConfig root = new TomlParser().parse(Files.readString(file, StandardCharsets.UTF_8));
