@@ -65,6 +65,13 @@ tasks.register<JavaExec>("worldDiff") {
 
 val benchResultsDir = layout.buildDirectory.dir("bench-results").get().asFile
 
+// The commit the bench runs from, with "-dirty" for uncommitted changes.
+val gitDescribe: Provider<String> = providers.exec {
+    commandLine("git", "describe", "--always", "--dirty", "--abbrev=12")
+    workingDir = rootProject.projectDir
+    isIgnoreExitValue = true
+}.standardOutput.asText.map { it.trim().ifEmpty { "unknown" } }
+
 fun JavaExec.benchCommon(profile: String) {
     group = "verification"
     classpath = sourceSets["main"].runtimeClasspath
@@ -77,6 +84,9 @@ fun JavaExec.benchCommon(profile: String) {
             (project.findProperty("serverRoot") as String?)
                     ?: layout.buildDirectory.dir("server").get().asFile.absolutePath)
     systemProperty("bench.cacheDir", layout.buildDirectory.get().asFile.absolutePath)
+    // Provenance written into every result file: which build was measured.
+    systemProperty("bench.multiforgeVersion", project.version.toString())
+    systemProperty("bench.gitSha", gitDescribe.get())
     systemProperty(
             "bench.forkLibs",
             rootProject.projectDir.resolve("upstream/neoforge-1.21.1/projects/neoforge/build/libs").absolutePath)

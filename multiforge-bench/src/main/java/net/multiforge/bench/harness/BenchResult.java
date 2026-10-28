@@ -70,7 +70,7 @@ public record BenchResult(
             Map<String, Object> extra) {
         double avg = metrics.avgMspt();
         double sustainedTps = metrics.sustainedTps();
-        Map<String, Object> allExtra = new LinkedHashMap<>();
+        Map<String, Object> allExtra = new LinkedHashMap<>(provenance());
         allExtra.put("timing_source", metrics.timingSource());
         if (extra != null && "sprint".equals(extra.get("pacing"))) {
             // An unpaced sprint's tick rate is a throughput figure, not sustained TPS.
@@ -94,6 +94,20 @@ public record BenchResult(
                 bootOk,
                 cleanStop,
                 allExtra);
+    }
+
+    /**
+     * Which build was measured, how, and when: the MultiForge version and git
+     * commit (from the bench task), the server JVM's extra flags, and the time.
+     * Result files are evidence; they say what produced them.
+     */
+    static Map<String, Object> provenance() {
+        Map<String, Object> p = new LinkedHashMap<>();
+        p.put("multiforge_version", System.getProperty("bench.multiforgeVersion", "unknown"));
+        p.put("git_sha", System.getProperty("bench.gitSha", "unknown"));
+        p.put("jvm_args", System.getProperty("bench.extraJvmArgs", ""));
+        p.put("recorded_at", java.time.Instant.now().toString());
+        return p;
     }
 
     public String toJson() {
