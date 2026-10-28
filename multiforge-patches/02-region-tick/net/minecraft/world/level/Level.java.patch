@@ -32,7 +32,7 @@
          }
  
          if (this.isOutsideBuildHeight(p_46605_)) {
-@@ -538,34 +543,85 @@ public abstract class Level extends net.neoforged.neoforge.attachment.Attachment
+@@ -538,34 +543,115 @@ public abstract class Level extends net.neoforged.neoforge.attachment.Attachment
      }
  
      public void addBlockEntityTicker(TickingBlockEntity p_151526_) {
@@ -51,6 +51,36 @@
 +        synchronized (this.freshBlockEntities) {
 +            (this.tickingBlockEntities ? this.pendingBlockEntityTickers : this.blockEntityTickers).add(p_151526_);
 +        }
++    }
++
++    /**
++     * MultiForge (multiforge-patches/02-region-tick/): run NeoForge's {@code onLoad}
++     * for the block entity at {@code pos} if it is still waiting for it, and take it
++     * off the fresh lists so the server thread's pass does not run it again. Called by
++     * a region worker right before the first tick of a block entity it placed this
++     * tick: the region ticks it the same tick (as Vanilla does), and NeoForge promises
++     * {@code onLoad} runs before the first tick.
++     */
++    public void mfLoadFreshBlockEntityAt(BlockPos pos) {
++        BlockEntity found = null;
++        synchronized (this.freshBlockEntities) {
++            found = mfTakeFresh(this.freshBlockEntities, pos);
++            if (found == null) found = mfTakeFresh(this.pendingFreshBlockEntities, pos);
++        }
++        if (found != null && !found.isRemoved() && found.hasLevel()) {
++            found.onLoad();
++        }
++    }
++
++    private static BlockEntity mfTakeFresh(java.util.List<BlockEntity> list, BlockPos pos) {
++        for (java.util.Iterator<BlockEntity> it = list.iterator(); it.hasNext(); ) {
++            BlockEntity be = it.next();
++            if (be.getBlockPos().equals(pos)) {
++                it.remove();
++                return be;
++            }
++        }
++        return null;
      }
  
      public void addFreshBlockEntities(java.util.Collection<BlockEntity> beList) {
@@ -135,7 +165,7 @@
          }
          if (!this.pendingBlockEntityTickers.isEmpty()) {
              this.blockEntityTickers.addAll(this.pendingBlockEntityTickers);
-@@ -584,7 +640,9 @@ public abstract class Level extends net.neoforged.neoforge.attachment.Attachment
+@@ -584,7 +670,9 @@ public abstract class Level extends net.neoforged.neoforge.attachment.Attachment
              }
          }
  
@@ -146,7 +176,7 @@
          profilerfiller.pop();
      }
  
-@@ -790,7 +848,10 @@ public abstract class Level extends net.neoforged.neoforge.attachment.Attachment
+@@ -790,7 +878,10 @@ public abstract class Level extends net.neoforged.neoforge.attachment.Attachment
          if (this.isOutsideBuildHeight(p_46716_)) {
              return null;
          } else {
@@ -158,7 +188,7 @@
                  ? null
                  : this.getChunkAt(p_46716_).getBlockEntity(p_46716_, LevelChunk.EntityCreationType.IMMEDIATE);
          }
-@@ -1185,6 +1246,11 @@ public abstract class Level extends net.neoforged.neoforge.attachment.Attachment
+@@ -1185,6 +1276,11 @@ public abstract class Level extends net.neoforged.neoforge.attachment.Attachment
      }
  
      public ProfilerFiller getProfiler() {
@@ -170,7 +200,7 @@
          return this.profiler.get();
      }
  
-@@ -1283,4 +1349,22 @@ public abstract class Level extends net.neoforged.neoforge.attachment.Attachment
+@@ -1283,4 +1379,22 @@ public abstract class Level extends net.neoforged.neoforge.attachment.Attachment
          setDayTimeFraction(dayTimeStep - result);
          return result;
      }

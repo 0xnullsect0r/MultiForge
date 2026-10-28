@@ -139,10 +139,24 @@ public final class BlockEntityTickerBridge {
             BlockPos pos = ticker.getPos();
             Region region = regionizer.regionAtChunk(pos.getX() >> 4, pos.getZ() >> 4);
             if (region == null) return false;
+            // A region's ticker list is a plain array its own thread compacts while it
+            // ticks. While any worker runs, only that region's own tick may append to
+            // it. Anything else — the server thread running a chunk promotion for a
+            // worker waiting on a load, which registers the new chunk's block entities
+            // here, possibly in a section of a region ticking on another worker — leaves
+            // the ticker on the level's guarded list, and the next server-thread
+            // tickBlockEntities routes it (routePending).
+            net.multiforge.runtime.ownership.OwnerToken tok = net.multiforge.runtime.ownership.OwnerToken.current();
+            boolean duringRegionTick = tok.domain() == net.multiforge.runtime.ownership.Domain.REGION;
+            if (net.multiforge.runtime.region.RegionPhase.workersInFlight()
+                    && !(duringRegionTick && tok.regionId() == region.id().value())) {
+                ProbeRegistry.bump("block-entities.ticker-add.held");
+                return false;
+            }
             ChunkHolderManager manager = host.chunkManagerForOrNull(world);
             if (manager == null) return false;
             manager.regionData(region.id())
-                    .addBlockEntityTicker(new VanillaTickingBlockEntityAdapter(level, ticker));
+                    .addBlockEntityTicker(new VanillaTickingBlockEntityAdapter(level, ticker, duringRegionTick));
             return true;
         } catch (Throwable t) {
             ProbeRegistry.bump("block-entities.ticker-add.failure");
