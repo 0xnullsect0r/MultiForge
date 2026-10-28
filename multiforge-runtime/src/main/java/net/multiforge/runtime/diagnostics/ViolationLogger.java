@@ -64,7 +64,8 @@ public final class ViolationLogger {
 
     /**
      * Set the per-key budget from {@code [violations] warnPerMin} (0 silences
-     * every warning, as {@code policy = "reroute-only"} does). The {@code
+     * every warning; {@code policy = "reroute-only"} silences only ownership
+     * violations, in {@code OwnershipEnforcer}). The {@code
      * -Dmultiforge.violations.warn-per-min} system property, when set, wins.
      * Existing buckets are dropped so the new budget applies immediately.
      */

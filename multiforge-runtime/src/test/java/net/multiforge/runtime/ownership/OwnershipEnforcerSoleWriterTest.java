@@ -171,4 +171,22 @@ class OwnershipEnforcerSoleWriterTest {
                 .as("another region of the ticking level is still guarded")
                 .isFalse();
     }
+
+    @Test
+    void rerouteOnlyStillReroutesButDoesNotLog() throws Exception {
+        net.multiforge.runtime.diagnostics.ViolationLogger.resetForTesting();
+        OwnershipEnforcer.setQuiet(true);
+        try {
+            AtomicBoolean allowed = new AtomicBoolean(true);
+            Thread worker = new Thread(
+                    () -> allowed.set(asRegion(1L, () -> OwnershipEnforcer.canMutateAt("site", WORLD, 50, 0))));
+            worker.start();
+            worker.join();
+            assertThat(allowed).as("still rerouted").isFalse();
+            assertThat(net.multiforge.runtime.diagnostics.ViolationLogger.recent())
+                    .isEmpty();
+        } finally {
+            OwnershipEnforcer.setQuiet(false);
+        }
+    }
 }

@@ -148,8 +148,11 @@ public final class MultiForgeServerState {
         net.multiforge.runtime.region.RegionTickWatchdog.setMode(watchdogStrict
                 ? net.multiforge.runtime.region.RegionTickWatchdog.Mode.STRICT
                 : net.multiforge.runtime.region.RegionTickWatchdog.Mode.WARN);
-        net.multiforge.runtime.diagnostics.ViolationLogger.configure(
-                config.violationPolicy() == MultiForgeConfig.ViolationPolicy.REROUTE_ONLY ? 0L : config.warnPerMin());
+        // reroute-only silences ownership violations only: overruns, deferred tickets and
+        // dropped work are still worth a line in the log.
+        net.multiforge.runtime.ownership.OwnershipEnforcer.setQuiet(
+                config.violationPolicy() == MultiForgeConfig.ViolationPolicy.REROUTE_ONLY);
+        net.multiforge.runtime.diagnostics.ViolationLogger.configure(config.warnPerMin());
         net.multiforge.runtime.region.RegionPhase.setDeferVisibility(config.effectiveDeferVisibility());
         net.multiforge.neoforge.world.LockingEntityGetter.setLockFreeOutsidePhase(config.effectiveLockFreeOutsidePhase());
         net.multiforge.runtime.region.WorkerChunkCache.setEnabled(config.effectiveWorkerChunkCache());

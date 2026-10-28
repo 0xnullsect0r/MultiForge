@@ -121,6 +121,9 @@ public final class OwnershipEnforcer {
     private static volatile PositionRouter positionRouter;
 
     private static volatile Mode mode = parseMode(System.getProperty(MODE_PROP, "reroute"));
+    // [violations] policy = "reroute-only": reroute without logging ownership violations.
+    // Other warnings (overruns, deferred tickets, dropped work) still log.
+    private static volatile boolean quiet;
     private static volatile Thread tickThread;
     private static volatile RerouteTarget rerouteTarget = OwnershipEnforcer::runInlineUnconfigured;
 
@@ -128,6 +131,11 @@ public final class OwnershipEnforcer {
 
     public static Mode mode() {
         return mode;
+    }
+
+    /** {@code policy = "reroute-only"}: ownership violations are rerouted and counted, not logged. */
+    public static void setQuiet(boolean on) {
+        quiet = on;
     }
 
     /**
@@ -244,8 +252,10 @@ public final class OwnershipEnforcer {
 
         // Genuine violation past this point.
         ProbeRegistry.bump(site + ":off-thread");
-        ViolationLogger.warn(
-                site, "off-thread mutation attempt from '" + current.getName() + "' (domain=" + domain + ")");
+        if (!quiet) {
+            ViolationLogger.warn(
+                    site, "off-thread mutation attempt from '" + current.getName() + "' (domain=" + domain + ")");
+        }
 
         if (mode == Mode.STRICT) {
             throw new OwnershipViolationException(site, current, domain);
@@ -314,10 +324,12 @@ public final class OwnershipEnforcer {
             return false;
         }
         ProbeRegistry.bump(site + ":cross-region");
-        String msg = "cross-region mutation of chunk [" + chunkX + ", " + chunkZ + "] in " + world.dimensionId()
-                + " from region " + tok.regionId() + " (owner="
-                + (owner == PositionRouter.UNOWNED ? "none" : Long.toString(owner)) + ") — rerouted to owner";
-        ViolationLogger.warn(site, msg);
+        if (!quiet) {
+            String msg = "cross-region mutation of chunk [" + chunkX + ", " + chunkZ + "] in " + world.dimensionId()
+                    + " from region " + tok.regionId() + " (owner="
+                    + (owner == PositionRouter.UNOWNED ? "none" : Long.toString(owner)) + ") — rerouted to owner";
+            ViolationLogger.warn(site, msg);
+        }
         if (mode == Mode.STRICT) {
             throw new OwnershipViolationException(site, Thread.currentThread(), tok.domain());
         }

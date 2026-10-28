@@ -210,8 +210,17 @@ public final class SwarmBench {
                     extra.put("violation_counters", probes.violationCounters().toString());
                 long workerTicks = probes.counters().getOrDefault("region-tick.worker", 0L);
                 extra.put("region_ticks_on_workers", workerTicks);
+                long limboHealed = probes.counters().getOrDefault("entity.limbo.healed", 0L);
+                extra.put("entity_limbo_healed", limboHealed);
                 if (Boolean.getBoolean("bench.failOnViolations")) {
                     if (violations > 0 || overruns > 0) ok = false;
+                    // The audit's heal is a backstop; in a strict run, any entity it had to
+                    // pull out of limbo means a race that left one there.
+                    if (limboHealed > 0) {
+                        System.err.println(
+                                "SwarmBench: the entity audit healed " + limboHealed + " limbo transition(s)");
+                        ok = false;
+                    }
                     // A gate that read nothing, or watched regions that never left the
                     // server thread, proves nothing about parallel ticking.
                     if (probes.counters().isEmpty()) {

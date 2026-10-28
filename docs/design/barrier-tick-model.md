@@ -84,7 +84,7 @@ The worker pool size is `cores × threadsPerCore` from
 
 | mode | behaviour |
 |---|---|
-| `off` | The regionized runtime is not installed. Every guard falls through and the server runs Vanilla's single-threaded tick. The kill switch, and the control for regression runs. |
+| `off` | The regionized runtime is not installed: no regions, no workers, Vanilla's single-threaded level tick. The kill switch. What stays: writes from threads other than the server thread are still rerouted to it, the leaf locks and per-thread instances stay in place, the indexed entity tracker and the patched watchdog still run, and activation range and the push cap are off. For a byte-for-byte Vanilla control, compare against stock NeoForge (as the parity gate does). |
 | `hybrid` (default) | As above: regions in parallel; an ownership violation is rerouted to its owner with a rate-limited warning. |
 | `strict` | As hybrid, but an ownership violation throws and a region overrunning the barrier deadline throws. For regression runs. |
 

@@ -71,13 +71,15 @@ policy = "warn"         # warn | reroute-only | fail
 warnPerMin = 5          # warnings per minute per violation site
 ```
 
-- `mode = "off"` disables the regionized runtime entirely: Vanilla's
-  single-threaded tick, no rerouting. Use it to check whether a problem is
-  MultiForge's (takes effect at the next start).
+- `mode = "off"` disables the regionized runtime: Vanilla's
+  single-threaded level tick, no regions. Writes made from threads other
+  than the server thread are still rerouted to it. Use it to check whether a
+  problem comes from region ticking (takes effect at the next start); to
+  rule MultiForge out entirely, compare with stock NeoForge.
 - `mode = "strict"` and `policy = "fail"` turn a cross-region write into an
   `OwnershipViolationException` instead of a reroute — for testing a mod,
   never for production.
-- `policy = "reroute-only"` reroutes without logging.
+- `policy = "reroute-only"` reroutes without logging ownership violations.
 
 `-Dmultiforge.mode=…` overrides `mode` for one run.
 
