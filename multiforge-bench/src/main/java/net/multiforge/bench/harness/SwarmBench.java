@@ -223,15 +223,17 @@ public final class SwarmBench {
                                 + " -Pspread); failing the strict run");
                         ok = false;
                     }
-                    String mode = command(runner, "multiforge config show");
-                    if (!mode.contains("mode = \"strict\"") && !String.valueOf(System.getProperty("bench.extraJvmArgs"))
-                            .contains("-Dmultiforge.mode=strict")) {
+                    String shownConfig = command(runner, "multiforge config show");
+                    if (!shownConfig.contains("mode = \"strict\"")
+                            && !String.valueOf(System.getProperty("bench.extraJvmArgs"))
+                                    .contains("-Dmultiforge.mode=strict")) {
                         System.err.println("SwarmBench: the server is not in strict mode; failing the strict run");
                         ok = false;
                     }
                 }
             } else if (Boolean.getBoolean("bench.failOnViolations")) {
-                System.err.println("SwarmBench: could not read /multiforge tickstats or probes; failing the strict run");
+                System.err.println(
+                        "SwarmBench: could not read /multiforge tickstats or probes; failing the strict run");
                 ok = false;
             }
             boolean cleanStop = runner.shutdown(Duration.ofSeconds(2));
