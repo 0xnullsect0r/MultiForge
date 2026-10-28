@@ -21,11 +21,13 @@ own installer; the raw results are the JSON files under
 `DeterminismRun` generates one world on stock NeoForge, freezes it, kills its
 entities, and ticks it 1200 ticks on stock and on MultiForge (1 and 4 workers)
 with random ticks, mob spawning, weather, fire and daylight off, and entity
-activation range and the push cap off. It then hashes the **block states and
-biomes** of every full chunk (196) and requires the digests to match. So it
-proves that scheduled block and fluid ticks, block events and redstone run as
-in Vanilla across regions. It does not compare block-entity data, entities,
-heightmaps, light, POI or pending ticks, and is not a byte-identical world
+activation range and the push cap off. It then hashes, for every full chunk
+(196), the **block states, biomes, heightmaps, pending block and fluid ticks,
+and the id and position of each block entity**, and requires the digests to
+match. So it proves that scheduled block and fluid ticks, block events and
+redstone run as in Vanilla across regions, and that no block entity is lost
+or doubled. It does not compare block-entity contents (they carry per-run
+random state), entities, light or POI, and is not a byte-identical world
 save; the GameTests and scenarios cover entities, block entities and the rest.
 
 ## Live checks

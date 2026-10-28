@@ -25,8 +25,9 @@ License v3.0. Full design in `docs/blueprint.md`.
    runtime just runs. Anyone can build and distribute their own jar.
 3. **Vanilla parity first.** Every patch to `net.minecraft.*` must pass the
    vanilla-parity gate (`:multiforge-bench:determinism -Pworkers=1,4`): one
-   fixed-seed world ticked on stock NeoForge and on MultiForge, block states
-   and biomes of every full chunk equal. The gate removes entities and turns
+   fixed-seed world ticked on stock NeoForge and on MultiForge, block states,
+   biomes, heightmaps, pending ticks and block-entity positions of every full
+   chunk equal. The gate removes entities and turns
    off random ticks, spawning and entity activation, so behaviour outside
    scheduled ticks also needs a GameTest. Break this at your peril.
 4. **No blocking calls on a region worker thread.** Cross-region work
