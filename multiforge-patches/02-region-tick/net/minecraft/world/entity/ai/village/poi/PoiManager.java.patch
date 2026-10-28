@@ -188,7 +188,7 @@
          Util.ifElse(this.getOrLoad(p_281731_.asLong()), p_217898_ -> p_217898_.refresh(p_217967_ -> {
                  if (mayHavePoi(p_281893_)) {
                      this.updateFromSection(p_281893_, p_281731_, p_217967_);
-@@ -258,14 +264,20 @@ public class PoiManager extends SectionStorage<PoiSection> {
+@@ -258,14 +264,25 @@ public class PoiManager extends SectionStorage<PoiSection> {
      }
  
      public void ensureLoadedAndValid(LevelReader p_27057_, BlockPos p_27058_, int p_27059_) {
@@ -200,8 +200,13 @@
 -            .map(p_217891_ -> p_217891_.getFirst().chunk())
 -            .filter(p_217961_ -> this.loadedChunks.add(p_217961_.toLong()))
 -            .forEach(p_330057_ -> p_27057_.getChunk(p_330057_.x, p_330057_.z, ChunkStatus.EMPTY));
-+        // MultiForge: collect under the lock, load outside it — a chunk load
-+        // can wait on the server thread, which may itself need this lock.
++        // MultiForge: read the POI columns from disk first, without the lock
++        // (getOrLoad reads unlocked when the caller does not hold it), so the
++        // pass below never waits on the disk while other regions' queries wait
++        // on this lock. Then collect under the lock, and load chunks outside it
++        // (a chunk load can wait on the server thread, which may need this lock).
++        ChunkPos.rangeClosed(new ChunkPos(p_27058_), Math.floorDiv(p_27059_, 16))
++            .forEach(PoiManager.MfLambdas.prefetch(this));
 +        List<ChunkPos> mf$toLoad;
 +        synchronized (this) {
 +            mf$toLoad = SectionPos.aroundChunk(
@@ -217,3 +222,23 @@
      }
  
      final class DistanceTracker extends SectionTracker {
+@@ -315,4 +332,19 @@ public class PoiManager extends SectionStorage<PoiSection> {
+             return this.test;
+         }
+     }
++
++    /**
++     * MultiForge: the lambdas MultiForge's patches need, kept out of PoiManager itself.
++     * javac numbers a class's synthetic lambda methods in source order, so a lambda
++     * added to PoiManager would renumber Vanilla's, and mixins that target those by name
++     * would fail to apply.
++     */
++    static final class MfLambdas {
++        private MfLambdas() {}
++
++        /** Reads chunk column {@code pos}'s POI data into the manager (from disk, without its lock). */
++        static java.util.function.Consumer<ChunkPos> prefetch(PoiManager manager) {
++            return pos -> manager.getOrLoad(SectionPos.of(pos, manager.levelHeightAccessor.getMinSection()).asLong());
++        }
++    }
+ }

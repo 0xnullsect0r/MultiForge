@@ -229,7 +229,13 @@ public class RegionTickBehaviourTests {
             BlockPos far = here.offset(2000, 0, 0);
             int farChunkX = far.getX() >> 4;
             int farChunkZ = far.getZ() >> 4;
-            level.setChunkForced(farChunkX, farChunkZ, true);
+            // Released when the test ends, pass or fail, and only if this test added the
+            // force (batch neighbours share chunks; see TestForcedChunks).
+            Runnable releaseFar = TestForcedChunks.force(level, new net.minecraft.world.level.ChunkPos(farChunkX, farChunkZ));
+            helper.addEndListener(passed -> {
+                level.setBlock(far, Blocks.AIR.defaultBlockState(), 3);
+                releaseFar.run();
+            });
             long before = net.multiforge.runtime.diagnostics.ProbeRegistry.get("Level.setBlock:cross-region");
             java.util.concurrent.atomic.AtomicReference<String> onWorker = new java.util.concurrent.atomic.AtomicReference<>();
             helper.startSequence()
@@ -257,8 +263,6 @@ public class RegionTickBehaviourTests {
                         helper.assertTrue(
                                 net.multiforge.runtime.diagnostics.ProbeRegistry.get("Level.setBlock:cross-region") > before,
                                 "the cross-region write was applied inline instead of being rerouted");
-                        level.setBlock(far, Blocks.AIR.defaultBlockState(), 3);
-                        level.setChunkForced(farChunkX, farChunkZ, false);
                     })
                     .thenSucceed();
         });
@@ -284,12 +288,17 @@ public class RegionTickBehaviourTests {
             BlockPos farOutside = new BlockPos(far.getX(), level.getMaxBuildHeight() + 10, far.getZ());
             int farChunkX = far.getX() >> 4;
             int farChunkZ = far.getZ() >> 4;
-            level.setChunkForced(farChunkX, farChunkZ, true);
+            Runnable releaseFar = TestForcedChunks.force(level, new net.minecraft.world.level.ChunkPos(farChunkX, farChunkZ));
             Pig pig = EntityType.PIG.create(level);
             helper.assertTrue(pig != null, "pig");
             pig.moveTo(far.getX() + 0.5, far.getY(), far.getZ() + 0.5, 0, 0);
             pig.setNoAi(true);
             pig.setNoGravity(true);
+            helper.addEndListener(passed -> {
+                pig.discard();
+                level.setBlock(far, Blocks.AIR.defaultBlockState(), 3);
+                releaseFar.run();
+            });
             java.util.concurrent.ConcurrentHashMap<String, Boolean> results = new java.util.concurrent.ConcurrentHashMap<>();
             Runnable onNearWorker = () -> host.taskQueue().queueChunkTask(level.mfWorldRef(), here.getX() >> 4, here.getZ() >> 4, () -> {
                 results.put("gold", level.setBlock(far, Blocks.GOLD_BLOCK.defaultBlockState(), 3));
@@ -321,9 +330,6 @@ public class RegionTickBehaviourTests {
                     .thenWaitUntil(() -> helper.assertTrue(results.containsKey("pigAgain"), "worker task has not run yet"))
                     .thenExecute(() -> {
                         helper.assertFalse(results.get("pigAgain"), "rerouted addFreshEntity of a present UUID returned true");
-                        pig.discard();
-                        level.setBlock(far, Blocks.AIR.defaultBlockState(), 3);
-                        level.setChunkForced(farChunkX, farChunkZ, false);
                     })
                     .thenSucceed();
         });
@@ -358,11 +364,13 @@ public class RegionTickBehaviourTests {
                 speed.set(oldSpeed, level.getServer());
                 level.getChunkSource().removeRegionTicket(net.minecraft.server.level.TicketType.FORCED, chunk, 2, chunk, true);
             };
+            // Restored when the test ends, pass or fail: a timed-out run left the game
+            // rule at 1024 and the ticket in place for every later test.
+            helper.addEndListener(passed -> restore.run());
             helper.startSequence()
                     .thenWaitUntil(() -> helper.assertTrue(
                             helper.getBlockState(rel).isAir(), "leaves have not decayed yet " + describe(helper, rel)))
                     .thenExecute(() -> {
-                        restore.run();
                         helper.assertTrue(
                                 net.multiforge.runtime.diagnostics.ProbeRegistry.get("region-tick.chunk-ticks") > before,
                                 "no region ran chunk ticks");

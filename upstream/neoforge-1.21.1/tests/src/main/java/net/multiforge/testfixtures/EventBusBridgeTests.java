@@ -109,6 +109,7 @@ public class EventBusBridgeTests {
                 event.setCanceled(true);
             };
             NeoForge.EVENT_BUS.addListener(listener);
+            helper.addEndListener(passed -> NeoForge.EVENT_BUS.unregister(listener));
             net.minecraft.core.BlockPos pos = helper.absolutePos(net.minecraft.core.BlockPos.ZERO);
             host.taskQueue().queueChunkTask(helper.getLevel().mfWorldRef(), pos.getX() >> 4, pos.getZ() >> 4, () -> {
                 posterThread.set(Thread.currentThread().getName());
@@ -117,7 +118,6 @@ public class EventBusBridgeTests {
             helper.startSequence()
                     .thenWaitUntil(() -> helper.assertTrue(canceledSeenByPoster.get() != null, "region task has not run yet"))
                     .thenExecute(() -> {
-                        NeoForge.EVENT_BUS.unregister(listener);
                         helper.assertTrue(posterThread.get().startsWith("multiforge-tick-"),
                                 "event posted on " + posterThread.get() + ", not a region worker");
                         helper.assertTrue(listenerThread.get() == serverThread,
