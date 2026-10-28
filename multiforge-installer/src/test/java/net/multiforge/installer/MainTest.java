@@ -180,11 +180,27 @@ class MainTest {
                 .contains("java\\.specification\\.version")
                 .contains("!= \"21\"")
                 .contains("exit 1");
-        assertThat(runSh).contains("\"$JAVA_BIN\" @user_jvm_args.txt @libraries/@MAVEN_PATH@/unix_args.txt");
+        // NeoForged's server starter (server.jar) launches the first non-comment line whose
+        // first word ends in "java" (run.sh) or is "java" (run.bat). A preflight line such as
+        // `JVM=java` or `X=$(java ...` matched first and broke `java -jar server.jar`.
         String runBat = java.nio.file.Files.readString(template.resolveSibling("run.bat"));
+        assertThat(starterLines(runSh, "#", w -> w.endsWith("java")))
+                .containsExactly("java @user_jvm_args.txt @libraries/@MAVEN_PATH@/unix_args.txt \"$@\"");
+        assertThat(starterLines(runBat, "REM", w -> w.equals("java") || w.endsWith("java.exe")))
+                .containsExactly("java @user_jvm_args.txt @libraries/@MAVEN_PATH@/win_args.txt %*");
         assertThat(runBat).contains("java.specification.version").contains("exit /b 1");
         // The converter no longer re-wraps run.sh (it would drift from the template).
         assertThat(Main.installShScript()).doesNotContain("@ARGS_FILE");
+    }
+
+    /** The lines the server starter would consider launching, in order. */
+    private static java.util.List<String> starterLines(
+            String script, String comment, java.util.function.Predicate<String> firstWord) {
+        return script.lines()
+                .map(String::strip)
+                .filter(l -> !l.isEmpty() && !l.startsWith(comment) && !l.startsWith("@"))
+                .filter(l -> firstWord.test(l.split("\\s+")[0]))
+                .toList();
     }
 
     @Test

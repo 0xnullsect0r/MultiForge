@@ -74,7 +74,9 @@ that run commands (KubeJS, quest rewards).**
 
 - **Every launcher refuses the wrong JDK.** The installer's own `run.sh` and
   `run.bat` check for Java 21; before, every update replaced the checked
-  launcher with NeoForge's bare `java`.
+  launcher with NeoForge's bare `java`. `java -jar server.jar` (NeoForged's
+  server starter, which reads `run.sh`) keeps working: the release build boots
+  the installed server through it (`:neoforge:testProductionServer`).
 - **Pelican egg:** pinned versions downloaded nothing (the URL never matched a
   release), the install container had no Java, it offered Java 22 and 25, and
   it accepted the EULA for you. Fixed, and it checks the installer against

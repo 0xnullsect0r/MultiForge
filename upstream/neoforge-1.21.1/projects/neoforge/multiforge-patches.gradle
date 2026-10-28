@@ -24,18 +24,21 @@
 // apply against that committed tree, not the freshly-regenerated-by-:setup one — the
 // target file simply does not exist under `neoforgeSrcMainJava` for anything outside
 // `net/minecraft/**`. See `applyTargetDirFor` below.
-def multiforgePatchesRoot = rootProject.layout.projectDirectory.dir('../../multiforge-patches').asFile
-def neoforgeSrcMainJava = project.file('src/main/java')
-def baseSrcMainJava = rootProject.layout.projectDirectory.dir('projects/base/src/main/java').asFile
-def mfCommittedSrcMainJava = rootProject.file('src/main/java')
+// Both tasks are written as task classes with every input declared, and no
+// reference to the build script or the project at execution, so they work with
+// Gradle's configuration cache (which NeoForge's own production test tasks need).
 
-// Picks which of the two real source roots a given patch target lives under. Only
-// `net/minecraft/**` paths are part of the setup-regenerated tree (and thus eligible
-// for the :base seeding fallback below) — everything else (`net/neoforged/**`,
-// `net/multiforge/**`) is hand-maintained source committed directly in this outer repo.
-def applyTargetDirFor = { String targetRel ->
-    targetRel != null && targetRel.startsWith('net/minecraft/') ? neoforgeSrcMainJava : mfCommittedSrcMainJava
-}
+import java.nio.file.Files
+import java.security.MessageDigest
+import javax.inject.Inject
+import org.gradle.api.DefaultTask
+import org.gradle.api.GradleException
+import org.gradle.api.file.ConfigurableFileCollection
+import org.gradle.api.file.DirectoryProperty
+import org.gradle.api.provider.Property
+import org.gradle.api.tasks.Internal
+import org.gradle.api.tasks.TaskAction
+import org.gradle.api.tasks.Classpath
 
 // Idempotence: several groups patch the same file (ServerLevel, Level, ...), so
 // "is this one patch already applied?" cannot be answered per patch once a later
@@ -49,26 +52,48 @@ def applyTargetDirFor = { String targetRel ->
 // safe to run any number of times, alone or as part of compileJava, and
 // picks up edited patches. Targets outside net/minecraft (the committed
 // net/neoforged tree) are applied once and skipped when already applied.
-def pristineRoot = project.layout.buildDirectory.dir('multiforge-pristine').get().asFile
-def appliedHashes = new File(pristineRoot, 'applied-output.sha256')
+abstract class MultiforgeApplyPatches extends DefaultTask {
+    // Only `net/minecraft/**` paths are part of the setup-regenerated tree (and thus
+    // eligible for the :base seeding fallback) — everything else (`net/neoforged/**`,
+    // `net/multiforge/**`) is hand-maintained source committed in this outer repo.
+    @Internal abstract DirectoryProperty getPatchesRoot()
+    @Internal abstract DirectoryProperty getNeoforgeSources()
+    @Internal abstract DirectoryProperty getBaseSources()
+    @Internal abstract DirectoryProperty getCommittedSources()
+    @Internal abstract DirectoryProperty getPristineRoot()
 
-def sha256Of = { File f ->
-    java.security.MessageDigest.getInstance('SHA-256').digest(f.bytes).encodeHex().toString()
-}
+    static String sha256Of(File f) {
+        MessageDigest.getInstance('SHA-256').digest(f.bytes).encodeHex().toString()
+    }
 
-def patchTargetOf = { File patchFile ->
-    def firstLine = patchFile.readLines().find { it.startsWith('--- a/') || it.startsWith('--- ') }
-    if (firstLine == null) return null
-    String targetRel = firstLine.replaceFirst(/^---\s+a?\//, '').replaceFirst(/^---\s+/, '').trim()
-    int tab = targetRel.indexOf('\t')
-    return tab >= 0 ? targetRel.substring(0, tab) : targetRel
-}
+    static String patchTargetOf(File patchFile) {
+        def firstLine = patchFile.readLines().find { it.startsWith('--- a/') || it.startsWith('--- ') }
+        if (firstLine == null) return null
+        String targetRel = firstLine.replaceFirst(/^---\s+a?\//, '').replaceFirst(/^---\s+/, '').trim()
+        int tab = targetRel.indexOf('\t')
+        return tab >= 0 ? targetRel.substring(0, tab) : targetRel
+    }
 
-def applyMultiforgePatches = tasks.register('applyMultiforgePatches') {
-    group = 'multiforge'
-    description = 'Applies multiforge-patches/<NN-group>/**/*.patch on top of the patched vanilla source.'
+    /** Runs `git apply <args> <patch>` in {@code dir}; returns [exit code, stderr]. */
+    static List gitApply(File dir, List<String> args, File patch) {
+        def cmd = ['git', 'apply'] + args + [patch.absolutePath]
+        def proc = new ProcessBuilder(cmd).directory(dir).redirectErrorStream(true).start()
+        String out = proc.inputStream.text
+        return [proc.waitFor(), out]
+    }
 
-    doLast {
+    @TaskAction
+    void apply() {
+        File multiforgePatchesRoot = patchesRoot.get().asFile
+        File neoforgeSrcMainJava = neoforgeSources.get().asFile
+        File baseSrcMainJava = baseSources.get().asFile
+        File mfCommittedSrcMainJava = committedSources.get().asFile
+        File pristineDir = pristineRoot.get().asFile
+        File appliedHashes = new File(pristineDir, 'applied-output.sha256')
+        def applyTargetDirFor = { String targetRel ->
+            targetRel != null && targetRel.startsWith('net/minecraft/') ? neoforgeSrcMainJava : mfCommittedSrcMainJava
+        }
+
         if (!multiforgePatchesRoot.exists()) {
             logger.lifecycle("MultiForge: no multiforge-patches directory at ${multiforgePatchesRoot} — nothing to apply.")
             return
@@ -76,13 +101,17 @@ def applyMultiforgePatches = tasks.register('applyMultiforgePatches') {
         if (!neoforgeSrcMainJava.exists()) {
             throw new GradleException(
                 "MultiForge: ${neoforgeSrcMainJava} does not exist yet — run the NeoForge 'setup' task first " +
-                "(cd upstream/neoforge-1.21.1 && ./gradlew --no-configuration-cache setup).")
+                "(cd upstream/neoforge-1.21.1 && ./gradlew setup).")
         }
 
         def groups = multiforgePatchesRoot.listFiles({ f -> f.isDirectory() } as FileFilter)?.sort { it.name } ?: []
         def ordered = []
         groups.each { group ->
-            fileTree(dir: group, include: '**/*.patch').files.sort { it.path }.each { ordered << [group, it] }
+            def patches = []
+            Files.walk(group.toPath()).withCloseable { stream ->
+                stream.filter { it.toString().endsWith('.patch') && Files.isRegularFile(it) }.forEach { patches << it.toFile() }
+            }
+            patches.sort { it.path }.each { ordered << [group, it] }
         }
 
         // 1. Reset every net/minecraft target to its pristine content.
@@ -94,6 +123,11 @@ def applyMultiforgePatches = tasks.register('applyMultiforgePatches') {
                 if (parts.length >= 2) recorded[parts[1]] = parts[0]
                 if (parts.length >= 3 && parts[2] == 'seeded') recordedSeeded << parts[1]
             }
+        } else if (pristineDir.exists() && new File(pristineDir, 'net').exists()) {
+            // Pristine copies without a record: the build directory was half-cleaned. The
+            // sources under src/main/java may still be patched, so they cannot be trusted
+            // as pristine; `setup` regenerates them.
+            logger.warn("MultiForge: ${appliedHashes} is missing; if a patch then fails to apply, run `./gradlew setup` again.")
         }
         def mcTargets = ordered.collect { patchTargetOf(it[1]) }.findAll { it != null && it.startsWith('net/minecraft/') }.unique()
         int restored = 0
@@ -104,7 +138,7 @@ def applyMultiforgePatches = tasks.register('applyMultiforgePatches') {
         // from its pristine copy otherwise.
         recorded.keySet().findAll { !mcTargets.contains(it) }.each { String stale ->
             def target = new File(neoforgeSrcMainJava, stale)
-            def pristine = new File(pristineRoot, stale)
+            def pristine = new File(pristineDir, stale)
             if (target.exists() && sha256Of(target) == recorded[stale]) {
                 if (recordedSeeded.contains(stale)) target.delete()
                 else if (pristine.exists()) target.bytes = pristine.bytes
@@ -114,7 +148,7 @@ def applyMultiforgePatches = tasks.register('applyMultiforgePatches') {
         }
         mcTargets.each { String targetRel ->
             def target = new File(neoforgeSrcMainJava, targetRel)
-            def pristine = new File(pristineRoot, targetRel)
+            def pristine = new File(pristineDir, targetRel)
             if (target.exists() && recorded[targetRel] != null && sha256Of(target) == recorded[targetRel] && pristine.exists()) {
                 target.bytes = pristine.bytes
                 if (recordedSeeded.contains(targetRel)) seededNow << targetRel
@@ -146,53 +180,33 @@ def applyMultiforgePatches = tasks.register('applyMultiforgePatches') {
             appliedHashes.delete()
             mcTargets.each { String targetRel ->
                 def target = new File(neoforgeSrcMainJava, targetRel)
-                def pristine = new File(pristineRoot, targetRel)
+                def pristine = new File(pristineDir, targetRel)
                 if (seededNow.contains(targetRel)) target.delete()
                 else if (pristine.exists()) target.bytes = pristine.bytes
             }
         }
         ordered.each { group, File patchFile ->
             String targetRel = patchTargetOf(patchFile)
-            def targetDir = applyTargetDirFor(targetRel)
-            def checkResult = exec {
-                workingDir = targetDir
-                commandLine = ['git', 'apply', '--check', '--recount', patchFile.absolutePath]
-                ignoreExitValue = true
-                standardOutput = new ByteArrayOutputStream()
-                errorOutput = new ByteArrayOutputStream()
-            }
-            if (checkResult.exitValue == 0) {
-                exec {
-                    workingDir = targetDir
-                    commandLine = ['git', 'apply', '--recount', patchFile.absolutePath]
+            File targetDir = applyTargetDirFor(targetRel)
+            def check = gitApply(targetDir, ['--check', '--recount'], patchFile)
+            if (check[0] == 0) {
+                def result = gitApply(targetDir, ['--recount'], patchFile)
+                if (result[0] != 0) {
+                    restoreAllTargets()
+                    throw new GradleException("MultiForge: patch ${group.name}/${patchFile.name} failed to apply:\n${result[1]}")
                 }
                 applied++
                 return
             }
-            if (targetDir != neoforgeSrcMainJava) {
-                def reverseCheck = exec {
-                    workingDir = targetDir
-                    commandLine = ['git', 'apply', '--reverse', '--check', '--recount', patchFile.absolutePath]
-                    ignoreExitValue = true
-                    standardOutput = new ByteArrayOutputStream()
-                    errorOutput = new ByteArrayOutputStream()
-                }
-                if (reverseCheck.exitValue == 0) {
-                    skipped++
-                    return
-                }
-            }
-            def err = new ByteArrayOutputStream()
-            exec {
-                workingDir = targetDir
-                commandLine = ['git', 'apply', '--check', '--recount', patchFile.absolutePath]
-                ignoreExitValue = true
-                errorOutput = err
+            if (targetDir != neoforgeSrcMainJava && gitApply(targetDir, ['--reverse', '--check', '--recount'], patchFile)[0] == 0) {
+                skipped++
+                return
             }
             restoreAllTargets()
             throw new GradleException(
-                "MultiForge: patch ${group.name}/${patchFile.name} does not apply to ${targetRel}:\n${err}\n" +
-                "Every net/minecraft target was restored to its pristine copy.")
+                "MultiForge: patch ${group.name}/${patchFile.name} does not apply to ${targetRel}:\n${check[1]}\n" +
+                "Every net/minecraft target was restored to its pristine copy. If src/main/java was cleaned or " +
+                "edited by hand, run `./gradlew setup` again.")
         }
 
         // 3. Record what we produced, so the next run recognises it.
@@ -203,6 +217,98 @@ def applyMultiforgePatches = tasks.register('applyMultiforgePatches') {
         logger.lifecycle("MultiForge: ${applied} patch(es) applied (${restored} target(s) reset to pristine, " +
                 "${seeded} seeded from :base), ${skipped} committed-tree patch(es) already present.")
     }
+}
+
+// Mixin-target parity. Mods' mixins name the Vanilla members they inject into,
+// including synthetic lambda methods (lambda$tick$2), which javac numbers in
+// source order, and the fields they @Shadow or @Accessor. A MultiForge patch that
+// adds a lambda to a Vanilla class, moves a Vanilla body into another method,
+// changes what a Vanilla lambda captures, or removes or retypes a field breaks
+// every mixin aimed at it (Lithium and Ad Astra both failed this way). This
+// compiles the pristine copy of each patched file against the fork and fails if
+// any method or field it declares is missing from MultiForge's class or has a
+// different descriptor, unless multiforge-patches/mixin-target-exceptions.txt
+// lists it with a reason.
+abstract class MultiforgeCheckMixinTargets extends DefaultTask {
+    @Internal abstract DirectoryProperty getPristineRoot()
+    @Internal abstract DirectoryProperty getClassesDir()
+    @Internal abstract DirectoryProperty getOutDir()
+    @Internal abstract Property<File> getAllowedFile()
+    @Classpath abstract ConfigurableFileCollection getCompileClasspath()
+
+    static Set<String> members(File f) {
+        def out = [] as Set
+        new org.objectweb.asm.ClassReader(f.bytes).accept(new org.objectweb.asm.ClassVisitor(org.objectweb.asm.Opcodes.ASM9) {
+            @Override
+            org.objectweb.asm.MethodVisitor visitMethod(int access, String name, String desc, String sig, String[] ex) {
+                out << "${name}${desc}".toString()
+                return null
+            }
+
+            @Override
+            org.objectweb.asm.FieldVisitor visitField(int access, String name, String desc, String sig, Object value) {
+                out << "field ${name} ${desc}".toString()
+                return null
+            }
+        }, org.objectweb.asm.ClassReader.SKIP_CODE)
+        out
+    }
+
+    @TaskAction
+    void check() {
+        File pristineDir = pristineRoot.get().asFile
+        File classes = classesDir.get().asFile
+        File out = outDir.get().asFile
+        File allowed = allowedFile.get()
+        def allowedChanges = (allowed.exists() ? allowed.readLines() : [])
+                .collect { it.trim() }
+                .findAll { it && !it.startsWith('#') } as Set
+        def sources = []
+        if (pristineDir.exists()) {
+            pristineDir.eachFileRecurse(groovy.io.FileType.FILES) { if (it.name.endsWith('.java')) sources << it }
+        }
+        if (sources.isEmpty()) throw new GradleException('MultiForge: no pristine sources — run :neoforge:applyMultiforgePatches first')
+        out.deleteDir()
+        out.mkdirs()
+        def cp = ([classes] + compileClasspath.files).collect { it.absolutePath }.join(File.pathSeparator)
+        def javac = javax.tools.ToolProvider.getSystemJavaCompiler()
+        def args = ['-proc:none', '-nowarn', '-g:none', '--release', '21', '-encoding', 'UTF-8', '-cp', cp, '-d', out.absolutePath] +
+                sources.collect { it.absolutePath }
+        def err = new ByteArrayOutputStream()
+        if (javac.run(null, null, err, args as String[]) != 0) {
+            throw new GradleException("MultiForge: pristine sources did not compile:\n${err.toString().readLines().take(40).join('\n')}")
+        }
+        def problems = []
+        int checked = 0
+        out.eachFileRecurse(groovy.io.FileType.FILES) { pristineClass ->
+            if (!pristineClass.name.endsWith('.class')) return
+            def rel = out.toPath().relativize(pristineClass.toPath()).toString().replace(File.separatorChar, '/' as char)
+            def ours = new File(classes, rel)
+            checked++
+            if (!ours.exists()) { problems << "${rel}: class missing"; return }
+            def lost = members(pristineClass) - members(ours)
+            lost.sort().each { m ->
+                if (!allowedChanges.contains("${rel}: ${m}".toString())) problems << "${rel}: ${m}"
+            }
+        }
+        if (!problems.isEmpty()) {
+            throw new GradleException("MultiForge: ${problems.size()} Vanilla member(s) missing or changed in patched classes " +
+                    "(mixins targeting them will fail to apply):\n  " + problems.join('\n  '))
+        }
+        logger.lifecycle("MultiForge: mixin targets intact in ${checked} patched class(es).")
+    }
+}
+
+def applyMultiforgePatches = tasks.register('applyMultiforgePatches', MultiforgeApplyPatches) {
+    group = 'multiforge'
+    description = 'Applies multiforge-patches/<NN-group>/**/*.patch on top of the patched vanilla source.'
+    patchesRoot.set(rootProject.layout.projectDirectory.dir('../../multiforge-patches'))
+    neoforgeSources.set(project.layout.projectDirectory.dir('src/main/java'))
+    baseSources.set(rootProject.layout.projectDirectory.dir('projects/base/src/main/java'))
+    committedSources.set(rootProject.layout.projectDirectory.dir('src/main/java'))
+    pristineRoot.set(project.layout.buildDirectory.dir('multiforge-pristine'))
+    // Always runs: it decides itself what to restore and re-apply.
+    outputs.upToDateWhen { false }
 }
 
 // NeoDev's `setup` syncs the NeoForge-patched Minecraft sources into
@@ -221,78 +327,14 @@ tasks.named('applyMultiforgePatches').configure {
     }
 }
 
-// Mixin-target parity. Mods' mixins name the Vanilla members they inject into,
-// including synthetic lambda methods (lambda$tick$2), which javac numbers in
-// source order. A MultiForge patch that adds a lambda to a Vanilla class, moves
-// a Vanilla body into another method, or changes what a Vanilla lambda captures
-// renumbers or renames those members, and every mixin aimed at them fails to
-// apply (Lithium and Ad Astra both did). This compiles the pristine copy of each
-// patched file against the fork and fails if any method it declares, lambdas
-// included, is missing from MultiForge's class or has a different descriptor.
-tasks.register('checkMixinTargets') {
+tasks.register('checkMixinTargets', MultiforgeCheckMixinTargets) {
     group = 'verification'
-    description = 'Checks that MultiForge patches keep every method (and lambda) of the Vanilla classes they patch.'
+    description = 'Checks that MultiForge patches keep every method, lambda and field of the Vanilla classes they patch.'
     dependsOn('compileJava')
-    def classesDir = sourceSets.main.java.destinationDirectory
-    def compileClasspath = sourceSets.main.compileClasspath
-    def outDir = project.layout.buildDirectory.dir('multiforge-pristine-classes').get().asFile
-    // Vanilla members a patch changes on purpose, one "<class file>: <member>" per
-    // line, each with the reason in a comment above it. Anything else missing fails.
-    def allowedFile = rootProject.file('../../multiforge-patches/mixin-target-exceptions.txt')
-    inputs.file(allowedFile).optional()
-    doLast {
-        def allowedChanges = (allowedFile.exists() ? allowedFile.readLines() : [])
-                .collect { it.trim() }
-                .findAll { it && !it.startsWith('#') } as Set
-        def sources = []
-        pristineRoot.eachFileRecurse(groovy.io.FileType.FILES) { if (it.name.endsWith('.java')) sources << it }
-        if (sources.isEmpty()) throw new GradleException('MultiForge: no pristine sources — run :neoforge:applyMultiforgePatches first')
-        project.delete(outDir)
-        outDir.mkdirs()
-        def cp = ([classesDir.get().asFile] + compileClasspath.files).collect { it.absolutePath }.join(File.pathSeparator)
-        def javac = javax.tools.ToolProvider.getSystemJavaCompiler()
-        def args = ['-proc:none', '-nowarn', '-g:none', '--release', '21', '-encoding', 'UTF-8', '-cp', cp, '-d', outDir.absolutePath] +
-                sources.collect { it.absolutePath }
-        def err = new ByteArrayOutputStream()
-        if (javac.run(null, null, err, args as String[]) != 0) {
-            throw new GradleException("MultiForge: pristine sources did not compile:\n${err.toString().readLines().take(40).join('\n')}")
-        }
-        def members = { File f ->
-            def out = [] as Set
-            new org.objectweb.asm.ClassReader(f.bytes).accept(new org.objectweb.asm.ClassVisitor(org.objectweb.asm.Opcodes.ASM9) {
-                @Override
-                org.objectweb.asm.MethodVisitor visitMethod(int access, String name, String desc, String sig, String[] ex) {
-                    out << "${name}${desc}"
-                    return null
-                }
-
-                // Fields too: a mod's @Shadow or @Accessor on a Vanilla field fails to
-                // apply if a patch removes the field or changes its type.
-                @Override
-                org.objectweb.asm.FieldVisitor visitField(int access, String name, String desc, String sig, Object value) {
-                    out << "field ${name} ${desc}"
-                    return null
-                }
-            }, org.objectweb.asm.ClassReader.SKIP_CODE)
-            out
-        }
-        def problems = []
-        int checked = 0
-        outDir.eachFileRecurse(groovy.io.FileType.FILES) { pristineClass ->
-            if (!pristineClass.name.endsWith('.class')) return
-            def rel = outDir.toPath().relativize(pristineClass.toPath()).toString()
-            def ours = new File(classesDir.get().asFile, rel)
-            checked++
-            if (!ours.exists()) { problems << "${rel}: class missing"; return }
-            def lost = members(pristineClass) - members(ours)
-            lost.sort().each { m ->
-                if (!allowedChanges.contains("${rel}: ${m}".toString())) problems << "${rel}: ${m}"
-            }
-        }
-        if (!problems.isEmpty()) {
-            throw new GradleException("MultiForge: ${problems.size()} Vanilla member(s) missing or changed in patched classes " +
-                    "(mixins targeting them will fail to apply):\n  " + problems.join('\n  '))
-        }
-        logger.lifecycle("MultiForge: mixin targets intact in ${checked} patched class(es).")
-    }
+    pristineRoot.set(project.layout.buildDirectory.dir('multiforge-pristine'))
+    classesDir.set(sourceSets.main.java.destinationDirectory)
+    outDir.set(project.layout.buildDirectory.dir('multiforge-pristine-classes'))
+    allowedFile.set(rootProject.file('../../multiforge-patches/mixin-target-exceptions.txt'))
+    compileClasspath.from(sourceSets.main.compileClasspath)
+    outputs.upToDateWhen { false }
 }
