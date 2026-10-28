@@ -27,6 +27,7 @@ import net.multiforge.runtime.region.Region;
 import net.multiforge.runtime.region.ThreadedRegionizer;
 import net.multiforge.runtime.scheduler.MultiForgeRegionizedRuntime;
 import net.multiforge.runtime.scheduler.MultiThreadedSchedulerHost;
+import org.jetbrains.annotations.ApiStatus;
 
 /**
  * Fork-local façade the {@code multiforge-patches/02-region-tick/net/
@@ -73,6 +74,7 @@ import net.multiforge.runtime.scheduler.MultiThreadedSchedulerHost;
  * M9 conventions warn against — this bridge only ever assigns a
  * ticker's <em>initial</em> owning region, at add/backfill time.
  */
+@ApiStatus.Internal
 public final class BlockEntityTickerBridge {
     /** Worlds this bridge has installed on — see the class javadoc's readiness note. */
     private static final Set<WorldRef> INSTALLED = ConcurrentHashMap.newKeySet();

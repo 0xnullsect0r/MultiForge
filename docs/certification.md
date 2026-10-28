@@ -48,8 +48,11 @@ java -jar multiforge-scanner.jar [--json|--sarif] [--severity=warn|error] [--ign
 The full specification is [`design/scanner-rules.md`](design/scanner-rules.md).
 R01, R06 and R07 flag direct use of the chunk system (`ChunkMap`,
 `ServerChunkCache` mutations, `DistanceManager` tickets): it is the server
-thread's, so code that can run in a region tick should do it through
-`ServerDomains.global()`. R05 flags raw position writes, since a jump into
+thread's. MultiForge defers ticket changes made on a region worker to the
+server thread (they take effect one tick later), so such code works, but
+code that needs the result at once should run from the server thread: a
+command, a packet handler (`IPayloadContext.enqueueWork`), or a
+server-tick event. R05 flags raw position writes, since a jump into
 another region from a region tick skips the deferral `teleportTo` gets (see
 [`mod-porting.md`](mod-porting.md)).
 

@@ -60,6 +60,7 @@ import net.multiforge.runtime.region.ScheduledTickRunner;
 import net.multiforge.runtime.region.ThreadedRegionizer;
 import net.multiforge.runtime.region.TickRegionScheduler;
 import net.multiforge.runtime.region.pin.RegionPinManager;
+import org.jetbrains.annotations.ApiStatus;
 
 /**
  * Parallel {@link SchedulerHost} that runs region/entity work on the
@@ -73,6 +74,7 @@ import net.multiforge.runtime.region.pin.RegionPinManager;
  * region. This is Folia's guarantee: cross-thread work never runs on
  * the wrong region.
  */
+@ApiStatus.Internal
 public final class MultiThreadedSchedulerHost implements SchedulerHost, AutoCloseable {
 
     private static final long TICK_MS = 50L;

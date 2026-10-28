@@ -31,6 +31,7 @@ import java.util.function.Supplier;
 import net.multiforge.api.world.ChunkPos;
 import net.multiforge.api.world.WorldRef;
 import net.multiforge.runtime.region.pin.RegionPin;
+import org.jetbrains.annotations.ApiStatus;
 
 /**
  * Per-world regionizer: maintains the section→region map and enforces
@@ -52,6 +53,7 @@ import net.multiforge.runtime.region.pin.RegionPin;
  * queueChunkTask}'s resolve-then-enqueue) can acquire {@link #readLock()}
  * to block merge/split for the duration of the read.
  */
+@ApiStatus.Internal
 public final class ThreadedRegionizer {
 
     /** 8 immediate neighbours around a section, radius 1. */

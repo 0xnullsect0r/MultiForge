@@ -20,6 +20,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Locale;
+import org.jetbrains.annotations.ApiStatus;
 
 /**
  * TOML read/write for {@link MultiForgeConfig}. Deliberately minimal —
@@ -28,6 +29,7 @@ import java.util.Locale;
  * silently changes existing operators' settings unless they've
  * customised the affected key.
  */
+@ApiStatus.Internal
 public final class ConfigCodec {
 
     private ConfigCodec() {}

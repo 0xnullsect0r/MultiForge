@@ -12,6 +12,8 @@
  */
 package net.multiforge.runtime.region;
 
+import org.jetbrains.annotations.ApiStatus;
+
 /**
  * Lifecycle state of a {@link Region}. Matches Folia's
  * {@code ThreadedRegionizer.ThreadedRegion.State}.
@@ -27,6 +29,7 @@ package net.multiforge.runtime.region;
  *                          DEAD (terminal, after merge or region drop)
  * </pre>
  */
+@ApiStatus.Internal
 public enum RegionState {
     /** Just constructed; not yet visible to the tick scheduler. */
     TRANSIENT,

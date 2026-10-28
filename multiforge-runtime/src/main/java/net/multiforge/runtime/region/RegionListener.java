@@ -12,6 +12,8 @@
  */
 package net.multiforge.runtime.region;
 
+import org.jetbrains.annotations.ApiStatus;
+
 /**
  * Callbacks invoked by {@link ThreadedRegionizer} at structural changes
  * to the region graph. Subsystems that maintain per-region state — the
@@ -29,6 +31,7 @@ package net.multiforge.runtime.region;
  * <p>All methods default to no-ops so listeners can override only what
  * they care about.
  */
+@ApiStatus.Internal
 public interface RegionListener {
 
     /**

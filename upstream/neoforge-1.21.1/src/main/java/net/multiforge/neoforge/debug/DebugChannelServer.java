@@ -52,6 +52,7 @@ import net.neoforged.neoforge.event.server.ServerStoppingEvent;
 import net.neoforged.neoforge.network.PacketDistributor;
 import net.neoforged.neoforge.network.event.RegisterPayloadHandlersEvent;
 import net.neoforged.neoforge.server.permission.PermissionAPI;
+import org.jetbrains.annotations.ApiStatus;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -82,6 +83,7 @@ import org.slf4j.LoggerFactory;
  * on {@code ServerStopping} so a reused {@code GameTestServer} JVM
  * cycles cleanly.
  */
+@ApiStatus.Internal
 public final class DebugChannelServer {
     private static final Logger LOGGER = LoggerFactory.getLogger("multiforge.debug");
 

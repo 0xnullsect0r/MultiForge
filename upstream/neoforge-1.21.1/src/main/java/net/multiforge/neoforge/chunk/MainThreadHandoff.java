@@ -17,6 +17,7 @@ import java.util.function.BooleanSupplier;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
 import net.multiforge.runtime.diagnostics.ProbeRegistry;
+import org.jetbrains.annotations.ApiStatus;
 
 /**
  * Lets the server thread service Vanilla main-thread chunk requests, and the
@@ -41,6 +42,7 @@ import net.multiforge.runtime.diagnostics.ProbeRegistry;
  * problem worth seeing in {@code /multiforge probes}. The wait is a
  * designed wait: the region tick watchdog does not count it.
  */
+@ApiStatus.Internal
 public final class MainThreadHandoff {
     private static final AtomicInteger WAITING = new AtomicInteger();
     private static final AtomicInteger REGION_TASKS = new AtomicInteger();

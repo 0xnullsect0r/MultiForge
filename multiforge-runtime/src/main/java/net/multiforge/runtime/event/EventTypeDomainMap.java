@@ -18,6 +18,7 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import net.multiforge.api.event.DispatchDomainKind;
+import org.jetbrains.annotations.ApiStatus;
 
 /**
  * Static default-domain registry for real NeoForge event types, keyed by
@@ -46,6 +47,7 @@ import net.multiforge.api.event.DispatchDomainKind;
  * backed by a {@link ConcurrentHashMap} — for downstream code that wants to
  * add or override entries at runtime.
  */
+@ApiStatus.Internal
 public final class EventTypeDomainMap {
 
     private static final ConcurrentMap<String, DispatchDomainKind> MAP = new ConcurrentHashMap<>();

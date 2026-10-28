@@ -42,14 +42,14 @@ onwards.
 - **Vanilla NeoForge** (no MultiForge runtime on the classpath): the first
   `ServerDomains` call throws `IllegalStateException` ("No SchedulerHost is
   installed…").
-- **MultiForge before server start, or with `mode = "off"`**: no host is
-  bound yet, so the first call binds whatever `SchedulerHost` the
-  `ServiceLoader` finds, which is the runtime's
-  `SingleThreadedSchedulerHost` reference implementation. It runs region,
-  entity and global tasks on its own `multiforge-tick-worker` thread, not on
-  the server thread. A binding made before server start also makes the
-  runtime's own install fail. Don't call `ServerDomains` from mod
-  construction or setup events.
+- **MultiForge before server start**: no host is bound yet, so the first
+  call binds the `SchedulerHost` the `ServiceLoader` finds (the runtime's
+  `SingleThreadedSchedulerHost`). When the server starts, its own host
+  replaces that fallback and takes over the work queued on it, so calling
+  `ServerDomains` early is safe, but tasks queued then wait for the server.
+- **MultiForge with `mode = "off"`**: the server installs a
+  `SingleThreadedSchedulerHost` bound to the server: region, entity and
+  global tasks run on the server thread, as on a Vanilla server.
 
 To detect MultiForge without calling the scheduler:
 
@@ -71,7 +71,7 @@ try {
 |---|---|---|
 | Region | `ServerDomains.region(WorldRef, ChunkPos)` | On the region worker owning that chunk, at the region's next mailbox drain. |
 | Entity | `ServerDomains.entity(EntityRef)` | On the region owning the entity's chunk; skipped, with a `retired` callback, if the entity is gone. |
-| Global | `ServerDomains.global()` | On the synthetic global region, ticked once per server tick on the worker pool before any level's regions. |
+| Global | `ServerDomains.global()` | On the synthetic global region, ticked once per server tick before any level's regions, while no other region runs (on the server thread by default). |
 | Async | `ServerDomains.async()` | On a shared pool of `max(2, cores / 2)` threads. Must not touch game state. |
 
 Details that follow from the implementation
@@ -83,21 +83,21 @@ Details that follow from the implementation
   region owns the chunk (it is not loaded), the task waits until that
   chunk loads; if it never loads, the task never runs. A region drains up
   to 128 mailbox tasks at the start of its tick and again at the end.
-  An exception thrown by a task goes to the worker thread's
-  uncaught-exception handler and does not stop the region.
+  An exception thrown by a task is logged (`multiforge.scheduler`) and does
+  not stop the region or the task's later runs.
 - **Entity tasks.** The entity's chunk is read from `EntityRef.chunkPos()`
   when the task is queued; the retirement check (`EntityRef.isRetired()`)
   runs on the region worker immediately before the body. If the entity
   crossed into another region between queueing and running, the body runs
   on the region it was queued for.
-- **Global tasks.** The global region is not the server thread. It owns
-  no chunk of any real level, so a world write from a global task is a cross-region write:
-  rerouted to the owner with a warning, or an exception in strict mode.
-  Use a region task to change the world.
+- **Global tasks.** The global region ticks while no other region runs,
+  so a global task may write anywhere in any level, like the server thread.
+  Prefer a region task for work tied to one place: it runs where the chunk
+  is ticked.
 - **Async tasks.** The body runs under the `ASYNC` owner token; any world
   write from it is an ownership violation and is rerouted. An exception
-  thrown by an async body is not logged, and a repeating async task that
-  throws stops repeating.
+  thrown by an async body is logged, and a repeating async task keeps
+  repeating.
 - **Delays.** `delayTicks`/`periodTicks` are converted to wall-clock time
   at 50 ms per tick on a timer thread; when the timer fires, the task is
   queued and runs at the owning region's next drain. They are not counted

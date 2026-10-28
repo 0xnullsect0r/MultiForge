@@ -15,6 +15,7 @@ package net.multiforge.runtime.event;
 import java.util.Objects;
 import java.util.function.LongFunction;
 import net.multiforge.runtime.diagnostics.ProbeRegistry;
+import org.jetbrains.annotations.ApiStatus;
 
 /**
  * Breaks the {@code event.dispatch.serial} count down by what caused it, so an
@@ -27,6 +28,7 @@ import net.multiforge.runtime.diagnostics.ProbeRegistry;
  * </ul>
  * Probe keys are built once per class and cached.
  */
+@ApiStatus.Internal
 public final class SerialDispatchProbes {
 
     private static final String PREFIX = "event.dispatch.serial.";

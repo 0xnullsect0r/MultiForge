@@ -21,6 +21,7 @@ import net.multiforge.runtime.diagnostics.wire.DebugPayload;
 import net.multiforge.runtime.region.pin.RegionPin;
 import net.multiforge.runtime.region.pin.RegionPinManager;
 import net.multiforge.runtime.scheduler.MultiThreadedSchedulerHost;
+import org.jetbrains.annotations.ApiStatus;
 
 /**
  * Produces {@code PIN_LIST} payloads (Track C1 task 1.10) from {@link
@@ -41,6 +42,7 @@ import net.multiforge.runtime.scheduler.MultiThreadedSchedulerHost;
  * infrequent, always-fresh snapshot is negligible, and this trivially
  * satisfies "one immediate frame within 250ms of subscribe."
  */
+@ApiStatus.Internal
 public final class PinListEmitter {
 
     public static final long PERIOD_MILLIS = 250L;

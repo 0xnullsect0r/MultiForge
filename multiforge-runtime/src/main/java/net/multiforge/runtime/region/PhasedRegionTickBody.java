@@ -14,6 +14,7 @@ package net.multiforge.runtime.region;
 
 import java.util.EnumMap;
 import java.util.Map;
+import org.jetbrains.annotations.ApiStatus;
 
 /**
  * A {@link RegionTickBody} composed of the six ordered phases from
@@ -39,6 +40,7 @@ import java.util.Map;
  * empty in production because {@link TickRegionScheduler}'s own
  * before/after drain covers them.
  */
+@ApiStatus.Internal
 public final class PhasedRegionTickBody implements RegionTickBody {
 
     public enum Phase {

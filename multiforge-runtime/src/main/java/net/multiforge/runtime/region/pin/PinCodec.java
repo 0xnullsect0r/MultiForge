@@ -19,6 +19,7 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
 import net.multiforge.api.world.WorldRef;
+import org.jetbrains.annotations.ApiStatus;
 
 /**
  * TOML codec for {@link RegionPin} — round-trips through
@@ -32,6 +33,7 @@ import net.multiforge.api.world.WorldRef;
  *   to   = [ 128, 128 ]
  * </pre>
  */
+@ApiStatus.Internal
 public final class PinCodec {
 
     private PinCodec() {}

@@ -10,10 +10,23 @@ own installer; the raw results are the JSON files under
 | Check | Where | What it proves |
 |---|---|---|
 | Unit tests, Spotless, GPL header | `ci.yml` → `build`, `client-build` | Runtime, API, scanner, installer and bench logic; jqwik properties for the regionizer's merge/split |
-| Fork build + GameTests | `ci.yml` → `fork-build` | The patches apply to NeoForge 21.1.251, the fork compiles, and the 169 required GameTests pass on a server with regions ticking. That is NeoForge's own suite, which exercises Vanilla and NeoForge behaviour on the patched server, plus MultiForge's: scheduled block ticks, entity, block-entity and random ticks inside regions, rerouted cross-region and off-thread writes and their return values, event dispatch domains and the legacy serial lane, and region indexing |
+| Fork build + GameTests | `ci.yml` → `fork-build` | The patches apply to NeoForge 21.1.251, the fork compiles, and every required GameTest passes (197 in v1.11.1) with every region ticking on a worker, in hybrid and in strict mode. That is NeoForge's own suite, which exercises Vanilla and NeoForge behaviour on the patched server, plus MultiForge's: scheduled block ticks, entity, block-entity and random ticks inside regions, rerouted cross-region and off-thread writes and their return values, event dispatch domains and the legacy serial lane, and region indexing |
 | Mixin-target parity | `ci.yml` → `fork-build` (`:neoforge:checkMixinTargets`) | Every method and lambda of each Vanilla class MultiForge patches still exists with the same descriptor, so mods' mixins find their targets (see `multiforge-patches/README.md`) |
-| Scanner corpus | `scanner.yml` | Every scanner finding on the fixture mods and the client mod matches `multiforge-scanner/corpus/expected.txt` |
-| Vanilla parity, scenarios, strict swarm | `nightly.yml` | The live checks below, each night, on the installer built from that commit |
+| Scanner corpus | `ci.yml` → `client-build`, `scanner.yml` | Every scanner finding on the four fixture mods and the client mod matches `multiforge-scanner/corpus/expected.txt` |
+| Vanilla parity, scenarios, strict swarm, stress, updater | `nightly.yml` (and on the release candidate before tagging, `RELEASING.md`) | The live checks below, each night, on the installer built from that commit |
+| Production boot | `release.yml` | A server installed from the release's own installer starts and ticks |
+
+## What the vanilla-parity gate compares
+
+`DeterminismRun` generates one world on stock NeoForge, freezes it, kills its
+entities, and ticks it 1200 ticks on stock and on MultiForge (1 and 4 workers)
+with random ticks, mob spawning, weather, fire and daylight off, and entity
+activation range and the push cap off. It then hashes the **block states and
+biomes** of every full chunk (196) and requires the digests to match. So it
+proves that scheduled block and fluid ticks, block events and redstone run as
+in Vanilla across regions. It does not compare block-entity data, entities,
+heightmaps, light, POI or pending ticks, and is not a byte-identical world
+save; the GameTests and scenarios cover entities, block entities and the rest.
 
 ## Live checks
 

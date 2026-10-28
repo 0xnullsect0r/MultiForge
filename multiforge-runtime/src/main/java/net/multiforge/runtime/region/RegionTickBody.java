@@ -12,6 +12,8 @@
  */
 package net.multiforge.runtime.region;
 
+import org.jetbrains.annotations.ApiStatus;
+
 /**
  * The unit of work a {@link TickRegionScheduler} runs each tick per
  * region. In production this is bound by the M2 patch to Vanilla's
@@ -20,6 +22,7 @@ package net.multiforge.runtime.region;
  * workload from the bench harness or a no-op.
  */
 @FunctionalInterface
+@ApiStatus.Internal
 public interface RegionTickBody {
     /** Run one tick for {@code region}. Must not block. */
     void tickOnce(Region region);

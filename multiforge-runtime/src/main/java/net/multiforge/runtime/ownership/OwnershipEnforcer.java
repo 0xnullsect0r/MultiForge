@@ -18,6 +18,7 @@ import net.multiforge.api.world.WorldRef;
 import net.multiforge.runtime.diagnostics.ProbeRegistry;
 import net.multiforge.runtime.diagnostics.ViolationLogger;
 import net.multiforge.runtime.region.RegionPhase;
+import org.jetbrains.annotations.ApiStatus;
 
 /**
  * Default-on behavioural guard for real {@code net.minecraft.*} mutation
@@ -46,6 +47,7 @@ import net.multiforge.runtime.region.RegionPhase;
  * {@link #bindPositionRouter}; with none bound, {@link #canMutateAt}
  * degrades to {@link #canMutate}.
  */
+@ApiStatus.Internal
 public final class OwnershipEnforcer {
 
     /** Enforcement mode, selected via {@code -Dmultiforge.ownership.mode} (default {@code reroute}). */

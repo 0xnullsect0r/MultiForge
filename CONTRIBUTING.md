@@ -4,7 +4,7 @@ Thanks for taking a look. MultiForge is GPL-3.0-only free software and welcomes 
 
 ## Ways to contribute
 
-- **File a bug or a feature request** — [github.com/0xnullsect0r/MultiForge/issues](https://github.com/0xnullsect0r/MultiForge/issues). Include the MultiForge version (`java -jar multiforge-installer.jar version`), the boot log (or the last ~100 lines of `logs/multiforge-*.log`), and the shape of the repro (mods installed, config, action taken).
+- **File a bug or a feature request** — [github.com/0xnullsect0r/MultiForge/issues](https://github.com/0xnullsect0r/MultiForge/issues). Include the MultiForge version (the `--fml.neoForgeVersion` value near the top of `logs/latest.log`, e.g. `21.1.251-multiforge-1.11.1`), the boot log (or the last ~100 lines of `logs/latest.log`), and the shape of the repro (mods installed, config, action taken).
 - **Port a mod** — [`docs/mod-porting.md`](docs/mod-porting.md) has before/after recipes for common patterns. If you hit a MultiForge violation the recipes don't cover, that itself is worth an issue.
 - **Publish compatibility results** — running MultiForge against a modpack and reporting whether it survived 24 hours is genuinely useful data. Attach the server log + a description of what did/didn't work.
 - **Improve the docs** — the design docs under `docs/design/` are intentionally verbose so new contributors can build a mental model. Clarifications welcome.
@@ -23,20 +23,21 @@ Thanks for taking a look. MultiForge is GPL-3.0-only free software and welcomes 
 ```
 git clone https://github.com/0xnullsect0r/MultiForge.git
 cd MultiForge
-./gradlew :setup                                        # vendors NeoForge 1.21.1 workspace; ~5-10 min
 ./gradlew :multiforge-api:publishToMavenLocal :multiforge-runtime:publishToMavenLocal
+cd upstream/neoforge-1.21.1
+./gradlew --no-configuration-cache setup                # decompile + NeoForge patches; ~5-10 min
 ```
 
 ### Building
 
 ```
-./gradlew build spotlessCheck                           # pure-Java modules; ~30 sec on a warm cache
+./gradlew build spotlessCheck                           # outer modules (republish api + runtime after changing them)
 cd upstream/neoforge-1.21.1
-./gradlew :neoforge:applyMultiforgePatches              # apply MultiForge patches to vendored source
-./gradlew :neoforge:compileJava                         # compile the fork (SEPARATE invocation — see note below)
+./gradlew --no-configuration-cache :neoforge:compileJava :neoforge:checkMixinTargets   # applies the patches first
+./gradlew --no-configuration-cache :tests:runGameTestServer                             # every GameTest, regions on workers
 ```
 
-**Gradle quirk:** running `applyMultiforgePatches` and `compileJava` in one invocation can wipe patches back to pristine before compile runs. Always run them as two separate `./gradlew` calls.
+Run `setup` as its own invocation, before the others. `applyMultiforgePatches` (run by `compileJava`) resets every patched file to its pristine copy and applies all groups in order, so it can run any number of times. Edit Vanilla patches through `scripts/mf-patches.py` (`multiforge-patches/README.md`).
 
 ### Working on a change
 
@@ -45,7 +46,7 @@ cd upstream/neoforge-1.21.1
 3. **Grouped patches** — new patches to `net.minecraft.*` or `net.neoforged.*` go under `multiforge-patches/NN-name/` (see the existing groups 01-ownership through 09-events). Keep hunks thin — heavy logic in `net.multiforge.neoforge.*` fork bridges or `net.multiforge.runtime.*` pure-Java.
 4. **Tests** — JUnit 5 + AssertJ + jqwik. Live under `src/test/java`. Every new API needs coverage; every bug fix needs a regression test that would have caught the bug.
 5. **spotlessApply** before you commit if you added any files — the outer template lives in `buildSrc/src/main/resources/license-header.txt` and matches the fork's own spotless config (blank-line-free header). Both will fight you if you write your own header shape.
-6. **Push + open a PR** against `develop`. CI runs on push (build+test, secret scan, fork compile, mod-safety scanner). Fork compile + scanner are advisory (`continue-on-error: true`); the other two are required.
+6. **Push + open a PR** against `develop`. CI runs on push: build + test, the client mod and the scanner corpus, the fork build with every GameTest (in hybrid and strict mode), and a secret scan. All of them gate.
 
 ### Commit conventions
 
@@ -57,7 +58,7 @@ cd upstream/neoforge-1.21.1
 ### Testing
 
 - **Unit tests:** `./gradlew test` — pure-Java modules only, ~30 sec.
-- **Determinism regression** (when touching NMS patches): `./gradlew :multiforge-bench:determinism` — fixed seed, single worker, 20 min, world hash asserted vs unpatched-fork baseline.
+- **Vanilla-parity gate** (when touching NMS patches): `./gradlew :multiforge-bench:determinism -Pworkers=1,4` — one fixed-seed world ticked on stock NeoForge and on MultiForge, block states and biomes compared chunk by chunk (`docs/verification/README.md` says exactly what it covers).
 - **Bench harness:** `./gradlew :multiforge-bench:vanilla`, `:swarm`, `:atm10`. See `multiforge-bench/README.md`.
 - **Live smoke** for anything touching the tick pipeline: boot the fork via `cd upstream/neoforge-1.21.1 && ./gradlew :neoforge:runServer`, verify mobs AI-tick, hoppers tick, redstone schedules; watch for `[multiforge.violation/]` warns in the log.
 
@@ -73,7 +74,8 @@ This tree contains fork-side glue that references `net.minecraft.*` and `net.neo
 
 Before making non-trivial changes:
 
-- **[docs/blueprint.md](docs/blueprint.md)** — the original design document. Covers every milestone M0–M12.
+- **[docs/design/barrier-tick-model.md](docs/design/barrier-tick-model.md)** — how the server actually ticks regions today. Start here.
+- **[docs/blueprint.md](docs/blueprint.md)** — the original design document and milestone history (M0–M14).
 - **[docs/concurrency-contract.md](docs/concurrency-contract.md)** — Domain enum, OwnerToken semantics, DomainAssertions, OwnershipEnforcer modes.
 - **[docs/scheduler-api.md](docs/scheduler-api.md)** — MultiForgeRegionizedRuntime, RegionizedTaskQueue, ChunkHolderManager.
 - **[docs/design/](docs/design/)** — per-milestone deep-dive specs. Read the relevant one before patching that milestone's surface.

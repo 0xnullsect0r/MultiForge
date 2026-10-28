@@ -20,6 +20,7 @@ import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.locks.Lock;
 import net.multiforge.api.world.ChunkPos;
 import net.multiforge.api.world.WorldRef;
+import org.jetbrains.annotations.ApiStatus;
 
 /**
  * Per-region mailboxes used to route cross-region work. The primary
@@ -39,6 +40,7 @@ import net.multiforge.api.world.WorldRef;
  * either the {@link ThreadedRegionizer} (production) or a stub map
  * (unit tests).
  */
+@ApiStatus.Internal
 public final class RegionizedTaskQueue implements RegionListener {
 
     /** Look up the owner region for a chunk. May return {@code null} for unloaded chunks. */

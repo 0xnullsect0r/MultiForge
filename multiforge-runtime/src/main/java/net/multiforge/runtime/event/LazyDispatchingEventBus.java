@@ -15,6 +15,7 @@ package net.multiforge.runtime.event;
 import java.util.Objects;
 import java.util.concurrent.atomic.AtomicReference;
 import net.neoforged.bus.api.IEventBus;
+import org.jetbrains.annotations.ApiStatus;
 
 /**
  * {@link DispatchingEventBus} that can be constructed before a {@link
@@ -47,6 +48,7 @@ import net.neoforged.bus.api.IEventBus;
  * the fact retroactively "activates" proactive routing for every
  * already-registered listener with no re-registration needed.
  */
+@ApiStatus.Internal
 public final class LazyDispatchingEventBus extends DispatchingEventBus {
 
     private static final DispatchExecutor INLINE = new InlineDispatchExecutor();

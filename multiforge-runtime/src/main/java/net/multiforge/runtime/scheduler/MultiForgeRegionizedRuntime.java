@@ -19,6 +19,7 @@ import net.multiforge.runtime.ownership.OwnershipEnforcer;
 import net.multiforge.runtime.region.RegionTickBody;
 import net.multiforge.runtime.region.TickRegionScheduler;
 import net.multiforge.runtime.telemetry.OtelExporter;
+import org.jetbrains.annotations.ApiStatus;
 
 /**
  * Process-wide singleton holder for the live {@link
@@ -35,6 +36,7 @@ import net.multiforge.runtime.telemetry.OtelExporter;
  * intended pattern is one call per JVM lifetime from the server's own
  * bootstrap thread before any region worker starts.
  */
+@ApiStatus.Internal
 public final class MultiForgeRegionizedRuntime {
 
     private static final AtomicReference<MultiThreadedSchedulerHost> CURRENT = new AtomicReference<>();

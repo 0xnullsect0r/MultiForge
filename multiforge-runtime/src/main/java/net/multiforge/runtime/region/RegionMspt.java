@@ -14,6 +14,7 @@ package net.multiforge.runtime.region;
 
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLongArray;
+import org.jetbrains.annotations.ApiStatus;
 
 /**
  * Fixed-window MSPT (milliseconds per tick) tracker for a region. Uses
@@ -24,6 +25,7 @@ import java.util.concurrent.atomic.AtomicLongArray;
  * 20 TPS = 5 seconds of history, which matches Folia's
  * {@code getTickReport5s}.
  */
+@ApiStatus.Internal
 public final class RegionMspt {
 
     private final AtomicLongArray samplesNanos;

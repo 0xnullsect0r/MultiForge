@@ -14,6 +14,7 @@ package net.multiforge.runtime.diagnostics.emitters;
 
 import java.util.Objects;
 import java.util.UUID;
+import org.jetbrains.annotations.ApiStatus;
 
 /**
  * MC-free stand-in for a connected viewer of the {@code
@@ -28,6 +29,7 @@ import java.util.UUID;
  * @param id UUID of the connected player.
  * @param name the player's display/login name, for logging.
  */
+@ApiStatus.Internal
 public record PlayerRef(UUID id, String name) {
 
     /**

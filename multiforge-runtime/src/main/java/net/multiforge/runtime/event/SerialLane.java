@@ -18,6 +18,7 @@ import java.util.concurrent.locks.LockSupport;
 import net.multiforge.runtime.diagnostics.ProbeRegistry;
 import net.multiforge.runtime.ownership.Domain;
 import net.multiforge.runtime.ownership.OwnerToken;
+import org.jetbrains.annotations.ApiStatus;
 
 /**
  * The serial lane: one thread (the server thread) on which work that must
@@ -35,6 +36,7 @@ import net.multiforge.runtime.ownership.OwnerToken;
  * <p>Any other caller — the lane thread itself, a thread with no region
  * token, or any caller while no lane thread is bound — runs the job inline.
  */
+@ApiStatus.Internal
 public final class SerialLane {
 
     private static final class Job {

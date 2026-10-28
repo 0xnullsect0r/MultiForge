@@ -19,6 +19,7 @@ import java.util.Objects;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
+import org.jetbrains.annotations.ApiStatus;
 
 /**
  * Thread-safe holder for the current {@link MultiForgeConfig} plus a
@@ -30,6 +31,7 @@ import java.util.function.Consumer;
  * calling thread — if they need to be async, they should hop through
  * {@code ServerDomains.async()}.
  */
+@ApiStatus.Internal
 public final class MultiForgeConfigStore {
 
     private final Path file;

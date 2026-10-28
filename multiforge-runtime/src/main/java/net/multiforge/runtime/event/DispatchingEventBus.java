@@ -29,6 +29,7 @@ import net.neoforged.bus.api.Event;
 import net.neoforged.bus.api.EventPriority;
 import net.neoforged.bus.api.IEventBus;
 import net.neoforged.bus.api.SubscribeEvent;
+import org.jetbrains.annotations.ApiStatus;
 
 /**
  * Wrapper around a real {@link IEventBus} that routes each listener's
@@ -46,6 +47,7 @@ import net.neoforged.bus.api.SubscribeEvent;
  * because the bus cannot resolve it from the wrapper. A registration map
  * lets {@link #unregister} remove the wrappers installed for an object.
  */
+@ApiStatus.Internal
 public class DispatchingEventBus implements IEventBus {
 
     /** {@code -Dmultiforge.event-dispatch=off} disables routing — see {@link #isEnabled()}. */

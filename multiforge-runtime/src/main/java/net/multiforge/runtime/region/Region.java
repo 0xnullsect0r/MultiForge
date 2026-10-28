@@ -18,6 +18,7 @@ import java.util.List;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicReference;
 import net.multiforge.api.world.ChunkPos;
+import org.jetbrains.annotations.ApiStatus;
 
 /**
  * A spatial simulation unit that owns some set of {@link SectionPos
@@ -28,6 +29,7 @@ import net.multiforge.api.world.ChunkPos;
  * <p>Regions are managed by {@link ThreadedRegionizer}. Callers should
  * not construct them directly.
  */
+@ApiStatus.Internal
 public final class Region {
 
     private final RegionId id;

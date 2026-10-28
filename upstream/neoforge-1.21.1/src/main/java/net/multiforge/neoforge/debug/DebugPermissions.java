@@ -15,6 +15,7 @@ package net.multiforge.neoforge.debug;
 import net.neoforged.neoforge.server.permission.events.PermissionGatherEvent;
 import net.neoforged.neoforge.server.permission.nodes.PermissionNode;
 import net.neoforged.neoforge.server.permission.nodes.PermissionTypes;
+import org.jetbrains.annotations.ApiStatus;
 
 /**
  * The {@code multiforge.debug.view} permission node (protocol §6).
@@ -43,6 +44,7 @@ import net.neoforged.neoforge.server.permission.nodes.PermissionTypes;
  * modID + "." + nodeName}, so this registers under exactly the {@code
  * multiforge.debug.view} string the protocol document specifies.
  */
+@ApiStatus.Internal
 public final class DebugPermissions {
     public static final PermissionNode<Boolean> VIEW = new PermissionNode<>(
             "multiforge", "debug.view", PermissionTypes.BOOLEAN, (player, uuid, contexts) -> true);

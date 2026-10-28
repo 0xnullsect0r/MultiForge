@@ -12,6 +12,8 @@
  */
 package net.multiforge.runtime.event;
 
+import org.jetbrains.annotations.ApiStatus;
+
 /**
  * A counter bumped whenever an input to a listener's routing decision
  * changes after registration: the mod classification is bound ({@link
@@ -20,6 +22,7 @@ package net.multiforge.runtime.event;
  * caches its resolved domain and resolves it again only when the epoch has
  * moved, so the per-call cost is one volatile read.
  */
+@ApiStatus.Internal
 public final class RoutingEpoch {
 
     private static volatile int epoch;

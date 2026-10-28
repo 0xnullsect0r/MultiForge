@@ -12,10 +12,13 @@
  */
 package net.multiforge.runtime.ownership;
 
+import org.jetbrains.annotations.ApiStatus;
+
 /**
  * The execution ownership context an operation is authorised to run in.
  * See {@code docs/blueprint.md} §Terminology.
  */
+@ApiStatus.Internal
 public enum Domain {
     /** A region worker thread. Owns some subset of the world's chunks and entities. */
     REGION,

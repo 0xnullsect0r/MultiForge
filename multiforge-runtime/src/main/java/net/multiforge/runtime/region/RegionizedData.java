@@ -23,6 +23,7 @@ import net.multiforge.runtime.diagnostics.ViolationLogger;
 import net.multiforge.runtime.ownership.Domain;
 import net.multiforge.runtime.ownership.DomainAssertions;
 import net.multiforge.runtime.ownership.OwnerToken;
+import org.jetbrains.annotations.ApiStatus;
 
 /**
  * Per-region storage slot for a single value of type {@code T}. Every
@@ -53,6 +54,7 @@ import net.multiforge.runtime.ownership.OwnerToken;
  * {@link ThreadedRegionizer}'s write lock alongside the section move,
  * so the region graph and every slot stay atomically consistent.
  */
+@ApiStatus.Internal
 public final class RegionizedData<T> implements RegionListener {
 
     /** Fold {@code source}'s value into {@code target}'s. Called under the regionizer write lock. */

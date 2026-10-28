@@ -37,6 +37,7 @@ import net.multiforge.runtime.region.RegionPhase;
 import net.multiforge.runtime.region.pin.RegionPinManager;
 import net.multiforge.runtime.scheduler.MultiForgeRegionizedRuntime;
 import net.multiforge.runtime.scheduler.MultiThreadedSchedulerHost;
+import org.jetbrains.annotations.ApiStatus;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -51,6 +52,7 @@ import org.slf4j.LoggerFactory;
  * <p>Op-only ({@code source.hasPermission(2)}), per {@code README.md
  * § In-game commands}.
  */
+@ApiStatus.Internal
 public final class MultiForgeCommandBinder {
     private static final Logger LOGGER = LoggerFactory.getLogger("multiforge.commands");
 

@@ -22,6 +22,7 @@ import java.time.Duration;
 import java.util.Map;
 import java.util.NavigableMap;
 import net.multiforge.runtime.diagnostics.ProbeRegistry;
+import org.jetbrains.annotations.ApiStatus;
 
 /**
  * Hand-rolled OTLP-HTTP metrics exporter. No OpenTelemetry SDK
@@ -44,6 +45,7 @@ import net.multiforge.runtime.diagnostics.ProbeRegistry;
  * daemon thread outside the regionized scheduler, and every export does
  * its own blocking HTTP call on that thread only (CLAUDE.md rule 4).
  */
+@ApiStatus.Internal
 public final class OtelExporter {
 
     /** System property read at {@link #startFromSystemProperty()}. */

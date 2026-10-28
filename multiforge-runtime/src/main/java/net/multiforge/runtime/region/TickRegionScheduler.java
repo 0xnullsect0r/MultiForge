@@ -28,6 +28,7 @@ import java.util.function.BooleanSupplier;
 import net.multiforge.runtime.diagnostics.ProbeRegistry;
 import net.multiforge.runtime.diagnostics.ViolationLogger;
 import net.multiforge.runtime.ownership.OwnerToken;
+import org.jetbrains.annotations.ApiStatus;
 
 /**
  * Fixed-size worker pool that ticks regions in parallel at ~20 TPS
@@ -57,6 +58,7 @@ import net.multiforge.runtime.ownership.OwnerToken;
  *     on region workers sound.</li>
  * </ul>
  */
+@ApiStatus.Internal
 public final class TickRegionScheduler implements AutoCloseable, RegionListener {
     /** Region ticks run on a worker thread (probe {@code region-tick.worker}); the inline ones count as {@code region-tick.inline.*}. */
     private static final ProbeRegistry.Counter WORKER_TICKS = ProbeRegistry.counter("region-tick.worker");

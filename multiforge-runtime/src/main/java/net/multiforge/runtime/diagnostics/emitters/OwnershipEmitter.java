@@ -23,6 +23,7 @@ import net.multiforge.runtime.region.Region;
 import net.multiforge.runtime.region.SectionPos;
 import net.multiforge.runtime.region.ThreadedRegionizer;
 import net.multiforge.runtime.scheduler.MultiThreadedSchedulerHost;
+import org.jetbrains.annotations.ApiStatus;
 
 /**
  * Produces {@code CHUNK_OWNERSHIP} payloads (protocol §7.7, added in
@@ -58,6 +59,7 @@ import net.multiforge.runtime.scheduler.MultiThreadedSchedulerHost;
  * schema's per-world scoping and {@link TpsHistogramEmitter}'s shape;
  * the fork installs one emitter per active world.
  */
+@ApiStatus.Internal
 public final class OwnershipEmitter {
 
     public static final long PERIOD_MILLIS = 250L;

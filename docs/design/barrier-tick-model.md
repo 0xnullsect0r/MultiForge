@@ -25,28 +25,41 @@ loading, commands typed by players, autosave. For each level it ticks,
    region owning it.
 3. **Regions**, in parallel: every live region of the level ticks once on the
    worker pool (`MultiThreadedSchedulerHost.driveRegions` →
-   `TickRegionScheduler.driveTick`). A region's tick body runs, in order:
-   its mailbox, its chunks' random ticks and natural spawning, scheduled
-   block and fluid ticks (with Vanilla's collect-then-run semantics), the
-   block events those ticks queued, its entities, and its block entities.
+   `TickRegionScheduler.driveTick`). A region's tick body runs, in
+   Vanilla's order: its mailbox, scheduled block and fluid ticks (with
+   Vanilla's collect-then-run semantics), its chunks' random ticks and
+   natural spawning, the block events queued so far, its entities, and its
+   block entities.
 4. **Barrier**: once every region finished, the server thread runs any chunk
    work a region could not take (its region merged or split away mid-tick)
    and broadcasts the tick's block changes to clients, as Vanilla does right
    after its chunk loop. Then `dispatchLevelTick` returns.
 
-Region work and server-thread work therefore **never overlap**. The only
-concurrency is between regions of the same level, and regions are, by
+Region work and server-thread work **almost never overlap**: the exception
+is the pump below. Otherwise the only concurrency is between regions of the
+same level, and regions are, by
 construction, far apart: the regionizer merges any two regions whose
 sections (16×16 chunks) touch, so two distinct regions always have at least
 one whole unloaded section between them. Anything a block or a walking entity
 can reach in one tick — a neighbour, a collision box, a path — is in its own
 region or unloaded.
 
-While waiting at the barrier the server thread services exactly one kind of
-request: a region worker that touched a not-yet-loaded chunk. Vanilla hands
-such a load to the server thread and waits; `MainThreadHandoff` counts the
-waiting workers and the barrier's pump runs the chunk source's tasks only
-while one is waiting.
+While waiting at the barrier the server thread services two kinds of
+request. The serial event lane (below) and, for a region worker that touched
+a not-yet-loaded chunk, the chunk source's tasks: Vanilla hands such a load
+to the server thread and waits; `MainThreadHandoff` counts the waiting
+workers and the pump runs the chunk source's tasks only while one is waiting
+(or, if the barrier makes no progress for 25 ms with nobody counted, because
+a worker joined a chunk future some other way). Those tasks are the one
+place server-thread work runs while other regions tick, so everything they
+do that a worker could observe is held back to the barrier: entity
+visibility changes, chunks becoming ready to send to players, and block
+entity tickers registered for a newly loaded chunk (they stay on the level's
+list until the next server-thread `tickBlockEntities`).
+
+`MinecraftServer.executeBlocking` called on a worker (Vanilla's `disconnect`
+does) runs its task on the serial lane, which the pump services, instead of
+the server's own task queue, which it does not.
 
 A region alone in its level's batch, or one whose serial-lane hand-offs cost
 it more than `serialLaneHotWaitMs` per tick for a second, is ticked on the
@@ -121,7 +134,17 @@ while no region runs:
   tracked entity's viewer set);
 - command and function execution (`Commands.performPrefixedCommand`/
   `performCommand`, `ServerFunctionManager.execute`) — a command block's
-  `/fill` or `/tp @e` can reach anywhere.
+  `/fill` or `/tp @e` can reach anywhere. A command block's whole tick is
+  deferred with its command, so its conditional chain and comparator output
+  see the command's own success count.
+
+A region the server thread ticks itself (the only region of its level, a hot
+region, the global region) runs after the workers finished, when nothing
+else runs: its writes, moves and commands all run inline, as in Vanilla
+(`OwnershipEnforcer.soleWriter`). So does code writing into a level whose
+regions are not ticking (a mob going through a portal): levels tick one
+after another. A block event for a position another region owns is queued
+on that region.
 
 A non-player entity changing dimension proceeds inline: only this level's
 regions are running, so the destination level is idle.
@@ -136,10 +159,10 @@ Everything region workers touch that is not per-chunk:
 | `Level.getBlockEntity` | Vanilla answers `null` off the level's thread; region workers and the global region are served. |
 | `Level.neighborUpdater` | One `CollectingNeighborUpdater` per thread (`PerThreadNeighborUpdater`); the server thread keeps Vanilla's instance. |
 | `Level.random` | One `LegacyRandomSource` per thread (`PerThreadRandomSource`); Vanilla's throws when two threads use it. |
-| `Level.getProfiler` | Region workers get the inactive profiler. |
+| `Level.getProfiler` | Region workers get the inactive profiler. On the server thread it returns a copy confined to that thread: `ServerLevel.tick`'s per-entity lambda captures it, and every region runs that lambda. |
 | `LevelTicks` | Level-wide maps under a leaf lock; each chunk's container is touched only by its region. Regions drain with `mfTickRegion` — Vanilla's collect-then-run, so `willTickThisTick` holds. |
 | Block events | Queued per region by a region worker and run by that region right after its scheduled ticks; leftovers are absorbed by the next server-thread `runBlockEvents`. |
-| Fresh block entities, ticker lists | Guarded; NeoForge's `onLoad` pass always runs on the server thread before regions tick. A ticker whose chunk is not regionized yet stays on the level and is routed on a later tick. |
+| Fresh block entities, ticker lists | Guarded. A region's ticker list is appended to only by that region's own tick, or while no worker runs. NeoForge's `onLoad` pass runs on the server thread before regions tick; a block entity a region places during its tick runs `onLoad` right before its first tick. A ticker whose chunk is not regionized yet stays on the level and is routed on a later tick. |
 | Entity storage (`PersistentEntitySectionManager`) | Every structure under a leaf lock. Callbacks (tracking/ticking transitions, NeoForge events, mod hooks) and getter consumers always run outside it, so no foreign code runs while it is held on a worker. Chunk-visibility transitions are held back while workers run (see [Entity visibility](#entity-visibility-during-the-region-phase)). |
 | Entity queries (`LockingEntityGetter`) | **Fast path:** on the level's server thread while no region worker is in flight (`RegionPhase.workersInFlight()`), a query goes straight to Vanilla's getter: no lock, no copy, and an aborting consumer stops Vanilla's iteration early. The server thread is then the only writer — mode `off`, a region ticked inline, and everything between ticks. Any other thread (a region worker, the Vanilla watchdog's `getAll()`, a diagnostics thread) takes the **locked path**: matches are collected under the leaf lock into a per-thread buffer indexed by call depth (re-entrant, allocation-free once grown), and the consumer runs outside the lock, in Vanilla's order. Kill switch `perf.lockFreeOutsidePhase`. |
 | `ServerLevel.getPartEntities` (dragon parts, mod multipart entities) | A volatile copy-on-write list, republished under the map's monitor when a part is added or removed. |
@@ -244,11 +267,16 @@ honour `/tick freeze` and the block-ticking range.
 ## Failures
 
 An exception in a region's tick is not swallowed. The region's remaining
-phases still run (so its journal flushes), then the exception is rethrown on
-the server thread once the barrier completes — where Vanilla's "Exception
-ticking world" crash handling, and NeoForge's `removeErroringBlockEntities`/
-`removeErroringEntities` options (applied inside Vanilla's own tick wrappers),
-behave exactly as they do for an inline level tick.
+phases still run, then the exception is rethrown on the server thread once
+the barrier completes, where Vanilla's "Exception ticking world" crash
+handling, and NeoForge's `removeErroringBlockEntities`/
+`removeErroringEntities` options (applied inside Vanilla's own tick
+wrappers), behave exactly as they do for an inline level tick. The same
+holds for a rerouted write that throws when its owner runs it, and for a
+main-thread task the pump runs. In every case the barrier first waits for
+every worker, so nothing after it, the crash save included, runs alongside
+one. A `ServerDomains` task that throws is logged and does not stop its
+region.
 
 ## Watchdog
 

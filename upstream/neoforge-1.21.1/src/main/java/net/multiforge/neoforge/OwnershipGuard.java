@@ -15,6 +15,7 @@ package net.multiforge.neoforge;
 import net.minecraft.core.BlockPos;
 import net.minecraft.world.level.Level;
 import net.multiforge.runtime.ownership.OwnershipEnforcer;
+import org.jetbrains.annotations.ApiStatus;
 
 /**
  * Thin adapter that patched {@code net.minecraft.*} mutation sites
@@ -28,6 +29,7 @@ import net.multiforge.runtime.ownership.OwnershipEnforcer;
  * own hand-written glue under {@code net.neoforged.neoforge} separate
  * from patched vanilla under {@code net.minecraft}.
  */
+@ApiStatus.Internal
 public final class OwnershipGuard {
     private OwnershipGuard() {}
 

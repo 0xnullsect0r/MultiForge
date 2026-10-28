@@ -13,6 +13,7 @@
 package net.multiforge.runtime.config;
 
 import java.util.concurrent.atomic.AtomicBoolean;
+import org.jetbrains.annotations.ApiStatus;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -58,6 +59,7 @@ import org.slf4j.LoggerFactory;
  * </pre>
  * A file written by an older version lacks the newer keys; they take their defaults.
  */
+@ApiStatus.Internal
 public record MultiForgeConfig(
         int cores,
         int threadsPerCore,

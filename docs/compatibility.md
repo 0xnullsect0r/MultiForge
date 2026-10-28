@@ -19,7 +19,7 @@ MultiForge keeps Vanilla's and NeoForge's methods intact, so mixins into them ap
 | Pack | Status | Detail |
 |---|---|---|
 | **Mod sample** (17 jars, below) | ✅ Boots, ticks at 20 TPS | Same result as stock NeoForge 21.1.251 on the same jars. |
-| **All the Mods 10** | ⏳ Not re-run since the rebase | The v1.5.0 boot failed only on dependency ranges (117 refused). All 192 declared ranges are satisfied by 21.1.251. A full boot needs the pack's server files, which this project's CI cannot download (CurseForge blocks automated access); run it with `./gradlew :multiforge-bench:atm10 -Pmodpack=<zip>`. |
+| **All the Mods 10** | ⏳ Not re-run since the rebase | The v1.5.0 boot failed only on dependency ranges (117 refused). All 192 declared ranges are satisfied by 21.1.251. A full boot needs the pack's server files, which this project's CI cannot download (CurseForge blocks automated access); run it with `./gradlew :multiforge-bench:atm10 -PmodpackDir=<unpacked server files>` (or `-PmodpackUrl=<zip> -PmodpackSha256=<hex>`). |
 | **Create-based packs** | ✅ Create loads | `create` 6.0.10 (needs 21.1.219) is in the sample below. |
 | **Vanilla + NeoForge, no mods** | ✅ Boots | Installer-built server reaches `Done` and ticks at 20 TPS. |
 
@@ -188,7 +188,7 @@ That file is not a valid jar. Usually a truncated download or a placeholder. Not
 `upstream/neoforge-1.21.1` is a flat copy of NeoForge's `1.21.1` branch plus MultiForge's fork-side files. Moving it to a newer NeoForge commit:
 
 1. **Three-way merge the tree.** Clone NeoForge, branch from the current base commit (`6c69a6559`, recorded in `gradle.properties`), replace the tree with `upstream/neoforge-1.21.1`, commit, and `git merge` the newer commit. Only files MultiForge edits can conflict: `gradle.properties`, `build.gradle`, `settings.gradle`, `projects/neoforge/build.gradle`, `tests/build.gradle`, `ServerLifecycleHooks.java`, `NeoForge.java`, `NeoForgeMod.java`. Copy the merged tree back.
-2. **Set `neoforge_base_version`** in `upstream/neoforge-1.21.1/gradle.properties` and `neoForgeVersion` in the root `gradle.properties` to the new release. Check that `src/main/java/net/neoforged` matches the published `neoforge-<V>-sources.jar` apart from the three edited files.
+2. **Set `neoforge_base_version`** in `upstream/neoforge-1.21.1/gradle.properties` and `neoForgeVersion` in the root `gradle.properties` to the new release. Check that `src/main/java/net/neoforged` matches the published `neoforge-<V>-sources.jar` apart from the files MultiForge edits there (`git log -- upstream/neoforge-1.21.1/src/main/java/net/neoforged` lists them).
 3. **Re-fit the MultiForge patches.** Run `./gradlew setup` in the fork. Then, in the `scripts/mf-patches.py` work repo (`build/mf-patches/work`), commit the new pristine sources of every tracked file as a new base. Rebase the group commits onto it with `git rebase --onto <new-base> <old-base> master`, and resolve conflicts group by group. Rename the new base commit to `pristine` and run `scripts/mf-patches.py export`.
 4. **Review what upstream changed in the patched files** for new shared state that region workers can reach. The 21.1.251 rebase found one: `ChunkMap.getPlayersWatching` read `entityMap` without its lock.
 5. **Verify**: `:neoforge:compileJava immaculateCheck licenseCheck`, `:tests:runGameTestServer`, then an installer-built server with the §2.1 mod sample.

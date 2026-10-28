@@ -21,6 +21,7 @@ import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
+import org.jetbrains.annotations.ApiStatus;
 
 /**
  * Length-prefixed big-endian encoder/decoder for the debug payload
@@ -36,6 +37,7 @@ import java.util.List;
  * cannot allocate arbitrary memory. Strings use UTF-8 with an int16
  * length prefix.
  */
+@ApiStatus.Internal
 public final class DebugPacketCodec {
 
     /**

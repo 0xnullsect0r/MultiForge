@@ -13,6 +13,7 @@
 package net.multiforge.runtime.region;
 
 import java.util.concurrent.atomic.AtomicLong;
+import org.jetbrains.annotations.ApiStatus;
 
 /**
  * Opaque unique id assigned to each {@link Region} at creation time. Ids
@@ -20,6 +21,7 @@ import java.util.concurrent.atomic.AtomicLong;
  * lifetime of the region and is reused for logs, metrics, and
  * {@code /multiforge region list}.
  */
+@ApiStatus.Internal
 public record RegionId(long value) {
 
     private static final AtomicLong SEQUENCE = new AtomicLong();

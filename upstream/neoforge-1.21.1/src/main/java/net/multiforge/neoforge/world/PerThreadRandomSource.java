@@ -15,6 +15,7 @@ package net.multiforge.neoforge.world;
 import net.minecraft.util.RandomSource;
 import net.minecraft.world.level.levelgen.PositionalRandomFactory;
 import net.minecraft.world.level.levelgen.RandomSupport;
+import org.jetbrains.annotations.ApiStatus;
 
 /**
  * A {@link RandomSource} with one {@code LegacyRandomSource} per thread.
@@ -28,6 +29,7 @@ import net.minecraft.world.level.levelgen.RandomSupport;
  * Vanilla's; every other thread draws from its own, independently seeded
  * stream.
  */
+@ApiStatus.Internal
 public final class PerThreadRandomSource implements RandomSource {
     private final Thread owner;
     private final RandomSource primary;

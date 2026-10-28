@@ -45,6 +45,7 @@ import net.multiforge.runtime.region.pin.RegionPin;
 import net.multiforge.runtime.region.pin.RegionPinManager;
 import net.multiforge.runtime.scheduler.MultiForgeRegionizedRuntime;
 import net.multiforge.runtime.scheduler.MultiThreadedSchedulerHost;
+import org.jetbrains.annotations.ApiStatus;
 
 /**
  * Pure-Java argument parser + dispatcher for the /multiforge tree.
@@ -79,6 +80,7 @@ import net.multiforge.runtime.scheduler.MultiThreadedSchedulerHost;
  *   /multiforge certify all       — same, for every jar under ./mods
  * </pre>
  */
+@ApiStatus.Internal
 public final class MultiForgeCommandDispatcher {
 
     /** R01..R12 per {@code docs/design/scanner-rules.md} §4 — fixed, frozen rule set. */

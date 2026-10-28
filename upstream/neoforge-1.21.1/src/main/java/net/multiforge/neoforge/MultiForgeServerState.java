@@ -21,6 +21,7 @@ import net.multiforge.runtime.chunk.InstanceRegistry;
 import net.multiforge.runtime.config.MultiForgeConfig;
 import net.multiforge.runtime.config.MultiForgeConfigStore;
 import net.multiforge.runtime.region.pin.RegionPinManager;
+import org.jetbrains.annotations.ApiStatus;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -46,6 +47,7 @@ import org.slf4j.LoggerFactory;
  * on stop for the common case where the server is not yet
  * garbage-collectable.
  */
+@ApiStatus.Internal
 public final class MultiForgeServerState {
     private static final Logger LOGGER = LoggerFactory.getLogger("multiforge.serverstate");
     private static final InstanceRegistry<MinecraftServer, RegionPinManager> PINS = InstanceRegistry.weak();

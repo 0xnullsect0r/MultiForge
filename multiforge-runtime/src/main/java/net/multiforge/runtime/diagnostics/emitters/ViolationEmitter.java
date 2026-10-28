@@ -17,6 +17,7 @@ import java.util.function.Consumer;
 import net.multiforge.runtime.diagnostics.ViolationLogger;
 import net.multiforge.runtime.diagnostics.wire.DebugPayload;
 import net.multiforge.runtime.scheduler.MultiThreadedSchedulerHost;
+import org.jetbrains.annotations.ApiStatus;
 
 /**
  * Produces {@code VIOLATION_EVENT} payloads (Track C1 task 1.9),
@@ -31,6 +32,7 @@ import net.multiforge.runtime.scheduler.MultiThreadedSchedulerHost;
  * ViolationLogger.ViolationEvent} to the wire {@link
  * DebugPayload.ViolationEvent}.
  */
+@ApiStatus.Internal
 public final class ViolationEmitter {
 
     private final Consumer<DebugPayload> sink;

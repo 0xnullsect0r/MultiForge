@@ -12,6 +12,8 @@
  */
 package net.multiforge.runtime.region;
 
+import org.jetbrains.annotations.ApiStatus;
+
 /**
  * MC-free abstraction for the B3.3 {@code ENTITY_AI} phase body
  * (docs/design/m13-b3-region-tick.md §5.2): given a region, tick every
@@ -42,6 +44,7 @@ package net.multiforge.runtime.region;
  * escape a region worker's tick loop).
  */
 @FunctionalInterface
+@ApiStatus.Internal
 public interface EntityTickRunner {
 
     /**

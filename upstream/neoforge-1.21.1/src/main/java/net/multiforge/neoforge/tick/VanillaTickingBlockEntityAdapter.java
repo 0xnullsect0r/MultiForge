@@ -14,6 +14,7 @@ package net.multiforge.neoforge.tick;
 
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.entity.TickingBlockEntity;
+import org.jetbrains.annotations.ApiStatus;
 
 /**
  * Adapts Vanilla's {@link TickingBlockEntity} — the element type of
@@ -35,6 +36,7 @@ import net.minecraft.world.level.block.entity.TickingBlockEntity;
  * ticker, created once at {@link BlockEntityTickerBridge#onTickerAdded}
  * time and held for the life of the ticker.
  */
+@ApiStatus.Internal
 public final class VanillaTickingBlockEntityAdapter implements net.multiforge.runtime.chunk.TickingBlockEntityRef {
     private final Level level;
     private final TickingBlockEntity delegate;

@@ -22,6 +22,7 @@ import net.multiforge.runtime.region.TickRegionScheduler;
 import net.multiforge.runtime.scheduler.LevelTickDispatchProbes;
 import net.multiforge.runtime.scheduler.MultiForgeRegionizedRuntime;
 import net.multiforge.runtime.scheduler.MultiThreadedSchedulerHost;
+import org.jetbrains.annotations.ApiStatus;
 
 /**
  * Fork-local façade patched vanilla call sites in
@@ -70,6 +71,7 @@ import net.multiforge.runtime.scheduler.MultiThreadedSchedulerHost;
  * once the barrier completes, so Vanilla's crash handling applies to it
  * exactly as to an exception from an inline level tick.
  */
+@ApiStatus.Internal
 public final class RegionizedTickCoordinator {
     private static final String DEADLINE_PROP = "multiforge.regiontick.dispatch-ms";
     private static final long DEFAULT_DISPATCH_DEADLINE_MS = 500L;

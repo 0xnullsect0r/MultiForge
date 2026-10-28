@@ -30,6 +30,7 @@ import net.multiforge.runtime.event.ModSafety;
 import net.neoforged.fml.ModList;
 import net.neoforged.neoforgespi.language.IModFileInfo;
 import net.neoforged.neoforgespi.language.IModInfo;
+import org.jetbrains.annotations.ApiStatus;
 
 /**
  * Binds {@link ModClassifier}: a listener's class belongs to the mod whose
@@ -50,6 +51,7 @@ import net.neoforged.neoforgespi.language.IModInfo;
  * multiforge_safety = "strict-safe"
  * </pre>
  */
+@ApiStatus.Internal
 public final class ModSafetyClassifier {
     public static final String FILE = "multiforge-mods.toml";
     public static final String PROPERTY = "multiforge_safety";

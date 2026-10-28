@@ -31,6 +31,7 @@ import net.multiforge.runtime.scheduler.MultiForgeRegionizedRuntime;
 import net.multiforge.runtime.scheduler.MultiThreadedSchedulerHost;
 import net.neoforged.neoforge.common.NeoForge;
 import net.neoforged.neoforge.event.level.LevelEvent;
+import org.jetbrains.annotations.ApiStatus;
 
 /**
  * Vanilla-backed {@link ScheduledTickRunner} implementation (B3.2, docs/
@@ -50,6 +51,7 @@ import net.neoforged.neoforge.event.level.LevelEvent;
  * MultiThreadedSchedulerHost#worldForRegion}), so the fork bridge owns
  * this side table itself.
  */
+@ApiStatus.Internal
 public final class ScheduledTickRunnerBridge implements ScheduledTickRunner {
     private static final AtomicBoolean INSTALLED = new AtomicBoolean(false);
 

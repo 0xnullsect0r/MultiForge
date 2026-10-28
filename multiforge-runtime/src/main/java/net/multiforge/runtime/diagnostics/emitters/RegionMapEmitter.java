@@ -24,6 +24,7 @@ import net.multiforge.runtime.region.RegionId;
 import net.multiforge.runtime.region.RegionMspt;
 import net.multiforge.runtime.region.ThreadedRegionizer;
 import net.multiforge.runtime.scheduler.MultiThreadedSchedulerHost;
+import org.jetbrains.annotations.ApiStatus;
 
 /**
  * Produces {@code REGION_SNAPSHOT} payloads (Track C1 task 1.8) at
@@ -44,6 +45,7 @@ import net.multiforge.runtime.scheduler.MultiThreadedSchedulerHost;
  * future fork-side counter can be substituted without touching this
  * class.
  */
+@ApiStatus.Internal
 public final class RegionMapEmitter {
 
     public static final long PERIOD_MILLIS = 250L;

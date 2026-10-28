@@ -14,6 +14,7 @@ package net.multiforge.runtime.ownership;
 
 import net.multiforge.runtime.diagnostics.ProbeRegistry;
 import net.multiforge.runtime.diagnostics.ViolationLogger;
+import org.jetbrains.annotations.ApiStatus;
 
 /**
  * Assertion sites patched into Vanilla/NeoForge to catch cross-domain
@@ -27,6 +28,7 @@ import net.multiforge.runtime.diagnostics.ViolationLogger;
  * The M2 tick pipeline replaces the "warn only" behaviour with the
  * auto-reroute path.
  */
+@ApiStatus.Internal
 public final class DomainAssertions {
 
     private static final String ENABLED_PROP = "multiforge.assert";

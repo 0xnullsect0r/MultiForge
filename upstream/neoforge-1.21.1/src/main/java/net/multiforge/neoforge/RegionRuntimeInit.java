@@ -21,6 +21,7 @@ import net.multiforge.runtime.diagnostics.ViolationLogger;
 import net.multiforge.runtime.scheduler.MultiThreadedSchedulerHost;
 import net.neoforged.neoforge.common.NeoForge;
 import net.neoforged.neoforge.event.level.LevelEvent;
+import org.jetbrains.annotations.ApiStatus;
 
 /**
  * Binds the Vanilla-backed per-region runners to a freshly installed
@@ -39,6 +40,7 @@ import net.neoforged.neoforge.event.level.LevelEvent;
  * server thread, which never overlaps region work (see {@link
  * RegionizedTickCoordinator}).
  */
+@ApiStatus.Internal
 public final class RegionRuntimeInit {
     private static final java.util.concurrent.atomic.AtomicBoolean LEVEL_LISTENERS_INSTALLED = new java.util.concurrent.atomic.AtomicBoolean();
 
