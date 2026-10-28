@@ -406,8 +406,33 @@ class MultiForgeCommandDispatcherTest {
                 jar -> new MultiForgeCommandDispatcher.ScanResult(2, "", "scanner jar not found or unreadable"));
         List<String> out = new ArrayList<>();
         assertThat(d.dispatch(new String[] {"certify", "brokenmod"}, out::add)).isFalse();
-        assertThat(out).anyMatch(l -> l.contains("scanner internal failure"));
+        assertThat(out).anyMatch(l -> l.contains("the scanner did not complete"));
         assertThat(out).anyMatch(l -> l.contains("NOT CERTIFIED"));
+    }
+
+    @Test
+    void certifyFailsClosedWhenTheScannerDiesWithoutAReport(@TempDir Path tmp) throws IOException {
+        // A scanner JVM that died (corrupt jar, OutOfMemoryError, wrong Java) exits 1
+        // and prints nothing; that used to parse as "no findings" and certify the mod.
+        Path modsDir = tmp.resolve("mods");
+        Files.createDirectories(modsDir);
+        Files.createFile(modsDir.resolve("examplemod-1.0.0.jar"));
+        MultiForgeCommandDispatcher d = makeWithScanner(
+                tmp, modsDir, jar -> new MultiForgeCommandDispatcher.ScanResult(1, "", "Invalid or corrupt jarfile"));
+        List<String> out = new ArrayList<>();
+        assertThat(d.dispatch(new String[] {"certify", "examplemod"}, out::add)).isFalse();
+        assertThat(out).anyMatch(l -> l.contains("NOT CERTIFIED: examplemod-1.0.0.jar"));
+        assertThat(out).noneMatch(l -> l.startsWith("CERTIFIED"));
+    }
+
+    @Test
+    void certifyMatchesAModIdNotAPrefixOfAnotherMod() {
+        assertThat(MultiForgeCommandDispatcher.namesMod("create-1.21.1-6.0.4.jar", "create"))
+                .isTrue();
+        assertThat(MultiForgeCommandDispatcher.namesMod("Create_1.21.1.jar", "create"))
+                .isTrue();
+        assertThat(MultiForgeCommandDispatcher.namesMod("createaddition-1.21.1.jar", "create"))
+                .isFalse();
     }
 
     @Test

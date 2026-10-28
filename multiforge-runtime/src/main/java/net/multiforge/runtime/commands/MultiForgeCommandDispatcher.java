@@ -924,6 +924,12 @@ public final class MultiForgeCommandDispatcher {
         return ProcessHandle.current().info().command().orElse("java");
     }
 
+    /** Heap of the scanner's JVM, in MB ({@code -Dmultiforge.scanner.heapMb}). */
+    private static final long SCANNER_HEAP_MB = Long.getLong("multiforge.scanner.heapMb", 1024L);
+
+    /** Longest a single jar's scan may take before it is stopped and reported as failed. */
+    private static final long SCANNER_TIMEOUT_SECONDS = Long.getLong("multiforge.scanner.timeoutSeconds", 300L);
+
     private static ScanResult runScannerProcess(Path scannerJar, Path modJar) throws IOException, InterruptedException {
         if (!Files.isReadable(scannerJar)) {
             throw new ScannerUnavailableException("scanner jar not found or unreadable: "
@@ -937,6 +943,8 @@ public final class MultiForgeCommandDispatcher {
         try {
             ProcessBuilder pb = new ProcessBuilder(
                             javaExecutable(),
+                            // The scanner runs beside a live server: bound its heap.
+                            "-Xmx" + SCANNER_HEAP_MB + "m",
                             "-jar",
                             scannerJar.toString(),
                             "--json",
@@ -944,9 +952,27 @@ public final class MultiForgeCommandDispatcher {
                             modJar.toString())
                     .redirectError(stderrFile.toFile());
             Process proc = pb.start();
-            String stdout = new String(proc.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
-            int exit = proc.waitFor();
-            return new ScanResult(exit, stdout, Files.readString(stderrFile, StandardCharsets.UTF_8));
+            // Read stdout on another thread so a scanner that hangs cannot hold this
+            // one past the timeout.
+            java.util.concurrent.CompletableFuture<String> out =
+                    java.util.concurrent.CompletableFuture.supplyAsync(() -> {
+                        try {
+                            return new String(proc.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
+                        } catch (IOException e) {
+                            throw new java.io.UncheckedIOException(e);
+                        }
+                    });
+            if (!proc.waitFor(SCANNER_TIMEOUT_SECONDS, java.util.concurrent.TimeUnit.SECONDS)) {
+                proc.destroyForcibly();
+                throw new IOException("the scanner did not finish within " + SCANNER_TIMEOUT_SECONDS + " s");
+            }
+            String stdout;
+            try {
+                stdout = out.get(10, java.util.concurrent.TimeUnit.SECONDS);
+            } catch (java.util.concurrent.ExecutionException | java.util.concurrent.TimeoutException e) {
+                throw new IOException("could not read the scanner's output: " + e.getMessage(), e);
+            }
+            return new ScanResult(proc.exitValue(), stdout, Files.readString(stderrFile, StandardCharsets.UTF_8));
         } finally {
             Files.deleteIfExists(stderrFile);
         }
@@ -998,14 +1024,23 @@ public final class MultiForgeCommandDispatcher {
         try (var stream = Files.list(modsDir)) {
             return stream.filter(p ->
                             p.getFileName().toString().toLowerCase(Locale.ROOT).endsWith(".jar"))
-                    .filter(p -> modIdPrefix == null
-                            || p.getFileName()
-                                    .toString()
-                                    .toLowerCase(Locale.ROOT)
-                                    .startsWith(modIdPrefix.toLowerCase(Locale.ROOT)))
+                    .filter(p -> modIdPrefix == null || namesMod(p.getFileName().toString(), modIdPrefix))
                     .sorted()
                     .toList();
         }
+    }
+
+    /**
+     * Whether jar file {@code name} looks like mod {@code modId}'s: it starts with the
+     * id followed by a separator (or nothing), so {@code create} matches {@code
+     * create-1.21.1-6.0.jar} but not {@code createaddition-…}.
+     */
+    static boolean namesMod(String name, String modId) {
+        String n = name.toLowerCase(Locale.ROOT);
+        String id = modId.toLowerCase(Locale.ROOT);
+        if (!n.startsWith(id)) return false;
+        if (n.length() == id.length()) return true;
+        return !Character.isLetterOrDigit(n.charAt(id.length()));
     }
 
     private boolean certifyOne(Path jar, Consumer<String> output) throws ScannerUnavailableException {
@@ -1027,13 +1062,28 @@ public final class MultiForgeCommandDispatcher {
             output.accept("NOT CERTIFIED: " + jar.getFileName());
             return false;
         }
-        if (result.exitCode() == 2) {
-            output.accept("  scanner internal failure: " + result.stderr().trim());
+        // Fail closed: only a scan that finished (exit 0, or 1 for ERROR findings) and
+        // printed its report counts. A scanner JVM that died (a corrupt jar, an
+        // OutOfMemoryError, a wrong Java) exits 1 with no report, and parsing nothing
+        // as "no findings" used to certify the mod.
+        boolean finished = (result.exitCode() == 0 || result.exitCode() == 1)
+                && result.stdout().contains("\"summary\"");
+        if (!finished) {
+            String why = result.stderr().isBlank()
+                    ? "exit code " + result.exitCode() + ", no report"
+                    : result.stderr().trim();
+            output.accept("  the scanner did not complete: " + why);
             output.accept("NOT CERTIFIED: " + jar.getFileName());
             return false;
         }
         Map<String, String> worstByRule = worstSeverityByRule(result.stdout());
         boolean hasError = worstByRule.containsValue("ERROR");
+        if (result.exitCode() == 1 && !hasError) {
+            output.accept("  the scanner reported a failure but no ERROR finding could be read: "
+                    + result.stderr().trim());
+            output.accept("NOT CERTIFIED: " + jar.getFileName());
+            return false;
+        }
         for (String rule : SCANNER_RULE_IDS) {
             String severity = worstByRule.get(rule);
             output.accept("  " + rule + ": " + (severity == null ? "PASS" : "FAIL (" + severity + ")"));
