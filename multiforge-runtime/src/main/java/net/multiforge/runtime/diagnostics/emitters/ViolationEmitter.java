@@ -60,15 +60,18 @@ public final class ViolationEmitter {
     /**
      * Subscribe a {@link ViolationEmitter} to {@link ViolationLogger}.
      *
-     * @param host accepted for API symmetry with the other emitters'
-     *     {@code install} entry points; unused — this emitter is
-     *     purely event-driven and needs no scheduled tick.
+     * <p>A violation is logged on whatever thread caused it, often a region
+     * worker. The frame is built and sent on the host's diagnostics thread
+     * ({@link MultiThreadedSchedulerHost#runDiagnostics}), so no region worker
+     * encodes or sends debug traffic (protocol §3).
+     *
+     * @param host supplies the diagnostics thread the frames are sent from
      * @return handle that unsubscribes from {@link ViolationLogger}
      */
     public static AutoCloseable install(
             MultiThreadedSchedulerHost host, Consumer<DebugPayload> sink, PermissionFilter permissionFilter) {
         Objects.requireNonNull(host, "host");
         ViolationEmitter emitter = new ViolationEmitter(sink, permissionFilter);
-        return ViolationLogger.subscribe(emitter::emit);
+        return ViolationLogger.subscribe(event -> host.runDiagnostics(() -> emitter.emit(event)));
     }
 }

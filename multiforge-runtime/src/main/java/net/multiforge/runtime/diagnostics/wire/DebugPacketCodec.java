@@ -85,6 +85,17 @@ public final class DebugPacketCodec {
         return version >= MIN_SUPPORTED_PROTOCOL && version <= PROTOCOL_VERSION;
     }
 
+    /**
+     * The protocol to speak with a peer that announced {@code peerVersion}: the
+     * peer's own, or this build's when the peer is newer (a newer peer still speaks
+     * every older version), or {@code -1} when the peer is older than {@link
+     * #MIN_SUPPORTED_PROTOCOL}.
+     */
+    public static int negotiate(int peerVersion) {
+        if (peerVersion < MIN_SUPPORTED_PROTOCOL) return -1;
+        return Math.min(peerVersion, PROTOCOL_VERSION);
+    }
+
     private DebugPacketCodec() {}
 
     public static byte[] encodeHello(DebugPayload.Hello hello) {

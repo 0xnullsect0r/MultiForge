@@ -140,6 +140,7 @@ public final class DebugChannelServer {
         NeoForge.EVENT_BUS.addListener(DebugChannelServer::onServerStopping);
         NeoForge.EVENT_BUS.addListener(DebugChannelServer::onPlayerLoggedIn);
         NeoForge.EVENT_BUS.addListener(DebugChannelServer::onPlayerLoggedOut);
+        NeoForge.EVENT_BUS.addListener(DebugChannelServer::onPlayerRespawn);
         NeoForge.EVENT_BUS.addListener(DebugChannelServer::onLevelLoad);
         NeoForge.EVENT_BUS.addListener(DebugChannelServer::onLevelUnload);
         NeoForge.EVENT_BUS.addListener(DebugPermissions::onGatherNodes);
@@ -288,6 +289,16 @@ public final class DebugChannelServer {
         }
     }
 
+    /**
+     * Respawning (after death, or leaving the End) replaces the {@link ServerPlayer}
+     * object. Per-viewer streams filter by the player's level and position, so they
+     * must follow the new one, not the dead player left where it died.
+     */
+    private static void onPlayerRespawn(PlayerEvent.PlayerRespawnEvent event) {
+        if (!(event.getEntity() instanceof ServerPlayer player)) return;
+        PLAYERS.computeIfPresent(player.getUUID(), (uuid, old) -> player);
+    }
+
     private static void onPlayerLoggedOut(PlayerEvent.PlayerLoggedOutEvent event) {
         if (!(event.getEntity() instanceof ServerPlayer player)) return;
         PLAYERS.remove(player.getUUID());
@@ -309,7 +320,9 @@ public final class DebugChannelServer {
                 break;
             }
         }
-        if (watched != ChunkCost.enabled()) ChunkCost.setEnabled(watched);
+        // Compare with the client flag, not enabled(): `/multiforge chunkcost on` also
+        // turns measurement on, and must not mask a client starting or stopping to watch.
+        if (watched != ChunkCost.watched()) ChunkCost.setEnabled(watched);
     }
 
     // ------------------------------------------------------------------
@@ -528,9 +541,11 @@ public final class DebugChannelServer {
             DebugPacketCodec.Frame frame = DebugPacketCodec.readFrame(raw);
             if (frame.kind() != DebugPacketKind.SUBSCRIBE) return; // ignore unexpected
             DebugPayload.Subscribe sub = DebugPacketCodec.decodeSubscribe(frame.body());
-            if (!DebugPacketCodec.supportsProtocol(sub.clientProtocol())) {
-                // A client we cannot talk to: stream nothing, say why once.
+            int protocol = DebugPacketCodec.negotiate(sub.clientProtocol());
+            if (protocol < 0) {
+                // A client older than any protocol we speak: stream nothing, say why once.
                 Integer prevMask = SUBSCRIPTIONS.put(sp.getUUID(), 0);
+                updateChunkCost();
                 if (prevMask == null || prevMask != 0) {
                     LOGGER.warn(
                             "multiforge:debug/v1 — {} speaks protocol {}; this server supports {}..{}. Not streaming to it.",
@@ -541,8 +556,9 @@ public final class DebugChannelServer {
                 }
                 return;
             }
-            // Strip unknown bits (§5) and streams the client's protocol predates.
-            int mask = sub.flags() & DebugPayload.Subscribe.streamsFor(sub.clientProtocol());
+            // Strip unknown bits (§5) and streams the negotiated protocol predates. A
+            // client newer than this server is served at this server's protocol.
+            int mask = sub.flags() & DebugPayload.Subscribe.streamsFor(protocol);
 
             // Protocol §6: the SUBSCRIBE handler is the sole enforcement
             // point for multiforge.debug.view, re-evaluated on every
@@ -553,16 +569,26 @@ public final class DebugChannelServer {
             // in this protocol — and rate-limited in the log.
             if (!PermissionAPI.getPermission(sp, DebugPermissions.VIEW)) {
                 SUBSCRIPTIONS.put(sp.getUUID(), 0);
+                updateChunkCost();
                 logDeniedRateLimited(sp);
                 return;
             }
 
-            PROTOCOLS.put(sp.getUUID(), sub.clientProtocol());
+            // The sender is the live player object (a SUBSCRIBE after a respawn).
+            PLAYERS.put(sp.getUUID(), sp);
+            PROTOCOLS.put(sp.getUUID(), protocol);
             Integer prev = SUBSCRIPTIONS.put(sp.getUUID(), mask);
             updateChunkCost();
-            if (prev == null || prev.intValue() != mask) {
+            if (prev == null || prev.intValue() == 0 && mask != 0) {
                 LOGGER.info(
-                        "multiforge:debug/v1 — SUBSCRIBE from {} (mask=0x{})",
+                        "multiforge:debug/v1 — SUBSCRIBE from {} (mask=0x{}, protocol {})",
+                        sp.getName().getString(),
+                        Integer.toHexString(mask),
+                        protocol);
+            } else if (prev.intValue() != mask) {
+                // A client toggling overlays: not worth an INFO line each time.
+                LOGGER.debug(
+                        "multiforge:debug/v1 — {} changed its subscription to mask=0x{}",
                         sp.getName().getString(),
                         Integer.toHexString(mask));
             }
