@@ -135,6 +135,21 @@ When regions are active, some per-chunk work that Vanilla runs inside one big le
 
 A mixin that targets the *per-item* method (`tickNonPassenger`, `Entity.tick`, a block entity's `tick`, `Block.tick`) fires as on stock. One that targets an instruction in the *loop itself* applies cleanly but only sees the work still done on the server thread. If a mod depends on that, run with `mode = "off"` to confirm, and report it with the mixin name.
 
+### A mixin that `@Shadow`s or `@Accessor`s a Vanilla field fails to apply
+
+MultiForge keeps every Vanilla method, lambda and field of the classes it
+patches (`:neoforge:checkMixinTargets` enforces it), except three it changes
+on purpose because the original was a data race between regions
+(`multiforge-patches/mixin-target-exceptions.txt`):
+
+| Class | Field | Now |
+|---|---|---|
+| `Block` | `capturedDrops` (NeoForge's) | per thread |
+| `PathTypeCache` | `positions`, `pathTypes` | one immutable entry per slot |
+
+A mod whose mixin targets one of them fails to apply that mixin. Report it
+against MultiForge with the mixin name.
+
 ### `Mod X requires neoforge <n> or above / Currently, neoforge is 21.1.251-multiforge-…`
 
 The mod needs a NeoForge newer than 21.1.251, i.e. newer than any 1.21.1 release at the time of the rebase. Stock NeoForge 21.1.251 refuses it too. Rebase MultiForge onto the newer release (§5).
