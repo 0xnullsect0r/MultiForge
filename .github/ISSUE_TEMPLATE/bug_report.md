@@ -6,7 +6,7 @@ labels: bug
 
 ## Environment
 
-- MultiForge version: `java -jar multiforge-installer.jar version`
+- MultiForge version: the `--fml.neoForgeVersion` value near the top of `logs/latest.log` (e.g. `21.1.251-multiforge-1.11.1`)
 - NeoForge base version:
 - Host OS / kernel:
 - CPU / cores / RAM:

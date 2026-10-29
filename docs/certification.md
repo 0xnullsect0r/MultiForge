@@ -33,7 +33,7 @@ java -jar multiforge-scanner.jar [--json|--sarif] [--severity=warn|error] [--ign
 | Rule | Name | Severity | Flags |
 |---|---|---|---|
 | R01 | `direct-ChunkMap-invoke` | WARN | Calls into `ChunkMap` internals instead of `ChunkSource` |
-| R02 | `off-thread-Level.setBlock` | ERROR | `Level.setBlock` from a method that is not tick-reachable |
+| R02 | `off-thread-Level.setBlock` | WARN | `Level.setBlock` from a method not known to run on a region or the server thread |
 | R03 | `blocking-future` | ERROR | `Future`/`CompletionStage`/`ForkJoinTask` blocking waits in tick-reachable code |
 | R04 | `unsync-static-mutation` | WARN | Non-final static field of a `@Mod` class written from tick-reachable code |
 | R05 | `entity-setpos-off-coord` | WARN | Any direct `Entity.setPos`/`setPosRaw` call (a long jump should use `teleportTo`) |
@@ -48,8 +48,11 @@ java -jar multiforge-scanner.jar [--json|--sarif] [--severity=warn|error] [--ign
 The full specification is [`design/scanner-rules.md`](design/scanner-rules.md).
 R01, R06 and R07 flag direct use of the chunk system (`ChunkMap`,
 `ServerChunkCache` mutations, `DistanceManager` tickets): it is the server
-thread's, so code that can run in a region tick should do it through
-`ServerDomains.global()`. R05 flags raw position writes, since a jump into
+thread's. MultiForge defers ticket changes made on a region worker to the
+server thread (they take effect one tick later), so such code works, but
+code that needs the result at once should run from the server thread: a
+command, a packet handler (`IPayloadContext.enqueueWork`), or a
+server-tick event. R05 flags raw position writes, since a jump into
 another region from a region tick skips the deferral `teleportTo` gets (see
 [`mod-porting.md`](mod-porting.md)).
 
@@ -104,7 +107,7 @@ A mod is MultiForge-certified when all of the following hold:
 
 - [ ] **Zero unsuppressed ERROR findings.**
       `java -jar multiforge-scanner.jar --severity=error <jar>` exits `0`.
-      ERROR rules (R02, R03, R09, R12) flag patterns that are wrong
+      ERROR rules (R03, R09, R12) flag patterns that are wrong
       under parallel region ticks in the general case. An ERROR
       suppression needs a justification the reviewer accepts.
 - [ ] **Every WARN finding is fixed or suppressed with a justification.**

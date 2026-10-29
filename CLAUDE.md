@@ -23,17 +23,22 @@ License v3.0. Full design in `docs/blueprint.md`.
    `.sig` resources, no license-token verification, no
    `multiforge-license*` modules. The installer just installs; the
    runtime just runs. Anyone can build and distribute their own jar.
-3. **Vanilla parity first.** Every patch to `net.minecraft.*` must have a
-   deterministic-mode regression run demonstrating byte-identical world save
-   vs upstream NeoForge on a fixed seed. Break this at your peril.
+3. **Vanilla parity first.** Every patch to `net.minecraft.*` must pass the
+   vanilla-parity gate (`:multiforge-bench:determinism -Pworkers=1,4`): one
+   fixed-seed world ticked on stock NeoForge and on MultiForge, block states,
+   biomes, heightmaps, pending ticks and block-entity positions of every full
+   chunk equal. The gate removes entities and turns
+   off random ticks, spawning and entity activation, so behaviour outside
+   scheduled ticks also needs a GameTest. Break this at your peril.
 4. **No blocking calls on a region worker thread.** Cross-region work
    uses `RegionizedTaskQueue.queueChunkTask(...)`. A `Thread.sleep`, a
    `.get()` on a `CompletableFuture`, or a lock that could be held while
-   foreign code runs — all bugs. Two bounded exceptions exist, both in
+   foreign code runs — all bugs. The bounded exceptions are all in
    `docs/design/barrier-tick-model.md`: leaf locks around single Vanilla
-   structure updates, and a worker waiting for the server thread to load a
-   chunk (`MainThreadHandoff`, serviced while the server thread waits at
-   the barrier).
+   structure updates, and the two designed waits the server thread
+   services while it waits at the barrier — a worker waiting for a chunk
+   load (`MainThreadHandoff`) and for a serial-lane listener (`SerialLane`,
+   which also runs `MinecraftServer.executeBlocking` from a worker).
 5. **Auto-reroute + warn is the default.** Never make MultiForge refuse to
    load a mod, and never throw from a mod's code path just because it did
    something unsafe — reroute the call and log a rate-limited warning.
@@ -69,8 +74,8 @@ parallel between two barriers. New code must respect it.
 4. **Shared Vanilla state touched by region workers** needs a leaf lock or
    a per-thread instance (see the table in the design doc). A leaf lock is
    one under which no foreign code runs and nothing waits on another thread.
-5. **A designed wait on a region worker** (the two bounded exceptions to
-   rule 4: `MainThreadHandoff`, `SerialLane`) is bracketed with
+5. **A designed wait on a region worker** (`MainThreadHandoff`,
+   `SerialLane`; ground rule 4) is bracketed with
    `RegionTickWatchdog.beginWait()/endWait(kind)`, so the watchdog and the
    barrier deadline do not count it as the region's own time. Do not use it
    to hide any other wait.
@@ -94,8 +99,9 @@ See top-level `README.md`. Key directories:
   installer jar.
 - `multiforge-client/` — client-side debug mod, ordinary NeoForge mod.
 - `multiforge-scanner/` — ASM mod-jar safety scanner (`/multiforge certify`).
-- `multiforge-testmods/` — fixture mods (cross-region writer, legacy listener)
-  used by the bench scenarios and the scanner corpus.
+- `multiforge-testmods/` — fixture mods (cross-region writer, legacy
+  listener, entity-limbo and slow-tick stress) used by the bench scenarios,
+  the stress checks and the scanner corpus.
 - `multiforge-bench/` — installed-server harness: parity gate, scenarios,
   protocol-bot swarm (MCProtocolLib), TPS/MSPT benches.
 - `docs/` — design docs.
@@ -124,13 +130,16 @@ See top-level `README.md`. Key directories:
   `buildSrc/src/main/resources/license-header.txt`.
 - Package names: `net.multiforge.api.*` (public), `net.multiforge.runtime.*`
   (internal, subject to change without notice).
-- `@ApiStatus.Internal` on every non-API type until we ship v1.0.
+- `@ApiStatus.Internal` on every public type outside `net.multiforge.api.*`
+  that mods could reach: the runtime and the fork's `net.multiforge.*` glue.
 
 ## Testing
 
 - Unit tests: JUnit 5 + AssertJ + jqwik. Live under `src/test/java`.
 - CI runs `./gradlew spotlessCheck` + the module builds, and the fork job
-  runs every GameTest (NeoForge's suite + `net.multiforge.testfixtures`).
+  runs every GameTest (NeoForge's suite + `net.multiforge.testfixtures`)
+  with every region on a worker, in hybrid and in strict mode, and checks
+  how many required tests passed.
   Spotless enforces the GPL-3 header in the outer modules;
   `immaculateCheck`/`licenseCheck` in the fork.
 - Live-server checks (`multiforge-bench`, need a built installer; see
@@ -155,10 +164,14 @@ See top-level `README.md`. Key directories:
   `fix/<topic>` and rebased into `develop`.
 - Commits: Conventional Commits (`feat:`, `fix:`, `chore:`, `docs:`,
   `refactor:`, `test:`, `ci:`, `perf:`).
-- **Every commit ends with** the Claude co-author trailer required by the
-  Claude Code session (see `.github/PULL_REQUEST_TEMPLATE.md`).
-- Both `main` and `develop` are branch-protected. All merges via PR +
-  green CI + at least one review.
+- **Every commit ends with** the co-author trailer the Claude Code session
+  specifies.
+- All merges to `main` and `develop` go through a PR with green CI. (Set
+  branch protection on GitHub to enforce it: required checks `build + test`,
+  `fork build + GameTests`, `secret scan`, no force-push. A single
+  maintainer cannot approve their own PR, so required reviews stay at 0.)
+- Release from `main` only, after the nightly is green on the release
+  candidate (`RELEASING.md`).
 - Never `git push --force` to `main` or `develop`. Never `--no-verify` a
   hook.
 

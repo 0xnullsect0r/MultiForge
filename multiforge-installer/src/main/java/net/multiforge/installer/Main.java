@@ -223,7 +223,7 @@ public final class Main {
                 fi
                 [ -n "$JAVA_BIN" ] || fail "No java on PATH and JAVA_HOME is unset. Install Temurin 21."
 
-                JAVA_MAJOR=$("$JAVA_BIN" -version 2>&1 | awk -F '"' '/version/ { split($2, a, "."); print a[1]; exit }')
+                JAVA_MAJOR=$("$JAVA_BIN" -XshowSettings:properties -version 2>&1 | sed -n 's/^ *java\\.specification\\.version = //p' | head -n 1)
                 if [ "${JAVA_MAJOR:-0}" != "21" ]; then
                     cat >&2 <<PREFLIGHT_FAIL
                 MultiForge requires JDK 21. Found: ${JAVA_MAJOR:-unknown} at $JAVA_BIN
@@ -248,9 +248,11 @@ public final class Main {
                 fi
 
                 # ---- 3. Back up the existing launcher ------------------------------
+                # Only the first run backs up: a second run would otherwise back up
+                # the MultiForge launcher and bury the original under it.
                 STAMP="$(date +%Y%m%d-%H%M%S)"
                 for f in run.sh run.bat user_jvm_args.txt; do
-                    if [ -f "$f" ]; then
+                    if [ -f "$f" ] && ! ls "$f".pre-multiforge-*.bak >/dev/null 2>&1; then
                         cp -p "$f" "$f.pre-multiforge-$STAMP.bak"
                         say "backed up $f -> $f.pre-multiforge-$STAMP.bak"
                     fi
@@ -260,45 +262,10 @@ public final class Main {
                 say "running the MultiForge installer (downloads Minecraft + libraries on first run)"
                 "$JAVA_BIN" -jar multiforge/multiforge-installer.jar --installServer .
 
-                # ---- 5. Wrap the generated launcher with the same preflight ---------
-                # The installer writes a stock NeoForge run.sh that calls bare `java`
-                # with no version check, so a correct install still dies at mod-scan
-                # if the operator's default JDK is wrong. Wrap it.
-                if [ -f run.sh ]; then
-                    mv run.sh run.multiforge-args.sh
-                    cat > run.sh <<'LAUNCHER'
-                #!/usr/bin/env sh
-                # MultiForge server launcher (JDK 21 preflight + NeoForge args).
-                cd "$(dirname "$0")"
-
-                if [ -n "${JAVA_HOME:-}" ] && [ -x "$JAVA_HOME/bin/java" ]; then
-                    JAVA_BIN="$JAVA_HOME/bin/java"
-                else
-                    JAVA_BIN="$(command -v java || true)"
-                fi
-                if [ -z "$JAVA_BIN" ]; then
-                    echo "MultiForge: no java on PATH and JAVA_HOME is unset. Install Temurin 21." >&2
-                    exit 1
-                fi
-                JAVA_MAJOR=$("$JAVA_BIN" -version 2>&1 | awk -F '"' '/version/ { split($2, a, "."); print a[1]; exit }')
-                if [ "${JAVA_MAJOR:-0}" != "21" ]; then
-                    cat >&2 <<PREFLIGHT
-                MultiForge requires JDK 21. Found: ${JAVA_MAJOR:-unknown} at $JAVA_BIN
-                Point JAVA_HOME at a JDK 21 install (Temurin 21) and retry.
-                PREFLIGHT
-                    exit 1
-                fi
-
-                exec "$JAVA_BIN" @user_jvm_args.txt @ARGS_FILE "$@"
-                LAUNCHER
-                    # Splice in the args file the installer chose for this version.
-                    ARGS_LINE="$(grep -o '@libraries/[^ ]*' run.multiforge-args.sh | head -1)"
-                    [ -n "$ARGS_LINE" ] || fail "could not find the NeoForge args file in the generated run.sh"
-                    sed -i.tmp "s|@ARGS_FILE|$ARGS_LINE|" run.sh && rm -f run.sh.tmp
-                    rm -f run.multiforge-args.sh
-                    chmod +x run.sh
-                    say "wrote run.sh (JDK 21 preflight + $ARGS_LINE)"
-                fi
+                # ---- 5. Launcher -----------------------------------------------------
+                # The installer's run.sh refuses to start on anything but Java 21
+                # (JAVA_HOME first, then java on PATH), so it is used as written.
+                chmod +x run.sh 2>/dev/null || true
 
                 # ---- 6. Config + EULA ----------------------------------------------
                 mkdir -p config
@@ -314,7 +281,8 @@ public final class Main {
                 fi
 
                 say "done. Start the server with:  ./run.sh"
-                say "roll back with:  mv run.sh.pre-multiforge-$STAMP.bak run.sh"
+                ORIGINAL="$(ls run.sh.pre-multiforge-*.bak 2>/dev/null | head -n 1 || true)"
+                [ -z "$ORIGINAL" ] || say "roll back with:  mv $ORIGINAL run.sh   (see docs/install.md, Rolling back)"
                 """;
     }
 
@@ -326,14 +294,13 @@ public final class Main {
                 setlocal
                 cd /d "%~dp0"
 
-                if defined JAVA_HOME (
-                    set "JAVA_BIN=%JAVA_HOME%\\bin\\java.exe"
-                ) else (
-                    set "JAVA_BIN=java"
-                )
+                set "JAVA_BIN=java"
+                if defined JAVA_HOME if exist "%JAVA_HOME%\\bin\\java.exe" set "JAVA_BIN=%JAVA_HOME%\\bin\\java.exe"
 
-                for /f "tokens=3" %%v in ('"%JAVA_BIN%" -version 2^>^&1 ^| findstr /i "version"') do set JAVA_VER=%%~v
-                for /f "delims=. tokens=1" %%m in ("%JAVA_VER%") do set JAVA_MAJOR=%%m
+                REM Two quote characters only: cmd /c strips the outer pair of a longer command.
+                set "JAVA_MAJOR="
+                for /f "tokens=2 delims==" %%v in ('"%JAVA_BIN%" -XshowSettings:properties -version 2^>^&1 ^| findstr java.specification.version') do set "JAVA_MAJOR=%%v"
+                if defined JAVA_MAJOR set "JAVA_MAJOR=%JAVA_MAJOR: =%"
                 if not "%JAVA_MAJOR%"=="21" (
                     echo [multiforge] MultiForge requires JDK 21. Found: %JAVA_MAJOR% at %JAVA_BIN%
                     echo [multiforge] NeoForge 1.21.1 targets JDK 21; SpongeMixin packs crash on 22+
@@ -342,9 +309,10 @@ public final class Main {
                     exit /b 1
                 )
 
-                if exist run.bat copy /y run.bat run.bat.pre-multiforge.bak >nul
-                if exist run.sh copy /y run.sh run.sh.pre-multiforge.bak >nul
-                if exist user_jvm_args.txt copy /y user_jvm_args.txt user_jvm_args.txt.pre-multiforge.bak >nul
+                REM Only the first run backs up, so a second run cannot overwrite the original launcher.
+                if exist run.bat if not exist run.bat.pre-multiforge.bak copy /y run.bat run.bat.pre-multiforge.bak >nul
+                if exist run.sh if not exist run.sh.pre-multiforge.bak copy /y run.sh run.sh.pre-multiforge.bak >nul
+                if exist user_jvm_args.txt if not exist user_jvm_args.txt.pre-multiforge.bak copy /y user_jvm_args.txt user_jvm_args.txt.pre-multiforge.bak >nul
 
                 echo [multiforge] running the MultiForge installer
                 "%JAVA_BIN%" -jar multiforge\\multiforge-installer.jar --installServer .
@@ -354,8 +322,7 @@ public final class Main {
                 if not exist config\\multiforge-server.toml copy config\\multiforge-server.toml.example config\\multiforge-server.toml >nul
                 if not exist eula.txt echo eula=false> eula.txt
 
-                echo [multiforge] done. Start the server with:  run.bat
-                echo [multiforge] NOTE: run.bat calls bare `java` — make sure JAVA_HOME points at JDK 21.
+                echo [multiforge] done. Start the server with:  run.bat   ^(it refuses to start on anything but Java 21^)
                 endlocal
                 """;
     }
@@ -370,7 +337,7 @@ public final class Main {
                 # MultiForge server configuration.
 
                 [mtserver]
-                cores = 8               # worker cores for region ticking (default: all)
+                # cores = 8             # worker cores for region ticking (default: every available processor)
                 threadsPerCore = 1      # workers per core
                 mode = "hybrid"         # off | hybrid | strict
 

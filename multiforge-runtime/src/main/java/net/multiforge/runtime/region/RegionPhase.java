@@ -98,6 +98,23 @@ public final class RegionPhase {
         return true;
     }
 
+    /**
+     * Hold {@code call} back until the workers stop, if they are running — for
+     * server-thread work other than entity visibility that region workers read
+     * concurrently (a chunk becoming ready to send, which writes each player's
+     * pending-chunk set a worker reads when an entity starts being tracked).
+     * Unlike {@link #defer} this has no kill switch: it is replayed at the same
+     * barrier, in order with the visibility changes.
+     *
+     * @return {@code true} if deferred and the caller must return
+     */
+    public static boolean deferUntilWorkersStop(Deferred call, String probe) {
+        if (!workersInFlight) return false;
+        DEFERRED.add(call);
+        ProbeRegistry.bump(probe);
+        return true;
+    }
+
     /** Server thread: workers are about to start. */
     public static void beginWorkers() {
         UNGUARDED_THIS_PHASE.set(0);

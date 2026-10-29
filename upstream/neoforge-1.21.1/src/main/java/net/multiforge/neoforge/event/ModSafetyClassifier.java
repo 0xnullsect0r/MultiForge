@@ -30,6 +30,7 @@ import net.multiforge.runtime.event.ModSafety;
 import net.neoforged.fml.ModList;
 import net.neoforged.neoforgespi.language.IModFileInfo;
 import net.neoforged.neoforgespi.language.IModInfo;
+import org.jetbrains.annotations.ApiStatus;
 
 /**
  * Binds {@link ModClassifier}: a listener's class belongs to the mod whose
@@ -50,6 +51,7 @@ import net.neoforged.neoforgespi.language.IModInfo;
  * multiforge_safety = "strict-safe"
  * </pre>
  */
+@ApiStatus.Internal
 public final class ModSafetyClassifier {
     public static final String FILE = "multiforge-mods.toml";
     public static final String PROPERTY = "multiforge_safety";
@@ -104,7 +106,9 @@ public final class ModSafetyClassifier {
         try {
             if (!Files.isRegularFile(file)) {
                 Files.createDirectories(file.getParent());
-                Files.writeString(file, """
+                // Atomic, like the server config: a crash mid-write must not leave a
+                // truncated file that the next start parses.
+                net.multiforge.runtime.config.AtomicFiles.writeString(file, """
                         # Per-mod thread-safety classification for MultiForge event listeners.
                         # Applies to listeners without a @DispatchDomain annotation.
                         #   legacy       every listener runs on the serial lane (one at a time)
@@ -123,7 +127,7 @@ public final class ModSafetyClassifier {
                         #             that cannot be cancelled and whose result nobody reads)
                         [events]
                         # "net.neoforged.neoforge.event.entity.living.LivingDrownEvent" = "serial"
-                        """, StandardCharsets.UTF_8);
+                        """);
                 return out;
             }
             UnmodifiableConfig root = new TomlParser().parse(Files.readString(file, StandardCharsets.UTF_8));

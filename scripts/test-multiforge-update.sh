@@ -42,6 +42,8 @@ fail() {
     exit 1
 }
 pass() { echo "ok: $*"; }
+# The JDK 21 to run Java with: JAVA_HOME when set (the machine default may be newer).
+JAVA="${JAVA_HOME:+$JAVA_HOME/bin/}java"
 sum() { sha256sum "$1" | awk '{print $1}'; }
 launched() { sed -n 's|.*libraries/net/neoforged/neoforge/\([^/]*\)/unix_args\.txt.*|\1|p' run.sh | head -n 1; }
 count_versions() { find "$LIBS" -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' '; }
@@ -52,7 +54,7 @@ mkdir -p "$WORK/srv/config" "$WORK/srv/mods" "$WORK/srv/world"
 SRV=$(cd "$WORK/srv" && pwd -P)
 
 echo "== installing the old version"
-(cd "$WORK" && java -jar "$OLD_INSTALLER" --installServer "$SRV" >"$WORK/old-install.log" 2>&1) || fail "old installer failed (see $WORK/old-install.log)"
+(cd "$WORK" && "$JAVA" -jar "$OLD_INSTALLER" --installServer "$SRV" >"$WORK/old-install.log" 2>&1) || fail "old installer failed (see $WORK/old-install.log)"
 cd "$SRV"
 OLD=$(launched)
 [ -n "$OLD" ] || fail "old install left no version in run.sh"
@@ -90,7 +92,7 @@ pass "config, JVM args, mods, world and eula untouched"
 
 echo "== booting java -jar server.jar nogui"
 rm -f logs/latest.log
-java -Xmx2G -jar server.jar nogui </dev/null >"$WORK/boot.out" 2>&1 &
+"$JAVA" -Xmx2G -jar server.jar nogui </dev/null >"$WORK/boot.out" 2>&1 &
 PID=$!
 booted=0
 i=0

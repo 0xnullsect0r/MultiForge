@@ -188,4 +188,42 @@ class ConfigCodecTest {
             else System.setProperty("multiforge.entities.deferVisibility", prev);
         }
     }
+
+    @Test
+    void regionSizeBelowTheFloorIsClampedToEightChunks() {
+        assertThat(ConfigCodec.parse("[region]\nsize = 0\n").regionSize())
+                .isEqualTo(MultiForgeConfig.MIN_REGION_SIZE_SHIFT);
+        assertThat(ConfigCodec.parse("[region]\nsize = 1\n").regionSize())
+                .isEqualTo(MultiForgeConfig.MIN_REGION_SIZE_SHIFT);
+    }
+
+    @Test
+    void regionSizeAboveTheRegionizerLimitIsClamped() {
+        // size = 9 used to reach ThreadedRegionizer, which threw on every chunk load.
+        assertThat(ConfigCodec.parse("[region]\nsize = 9\n").regionSize())
+                .isEqualTo(MultiForgeConfig.MAX_REGION_SIZE_SHIFT);
+    }
+
+    @Test
+    void workerCountIsCappedPerProcessor() {
+        int max = Runtime.getRuntime().availableProcessors() * MultiForgeConfig.MAX_WORKERS_PER_PROCESSOR;
+        MultiForgeConfig c = ConfigCodec.parse("[mtserver]\ncores = 4096\nthreadsPerCore = 64\n");
+        assertThat(c.tickWorkerCount()).isLessThanOrEqualTo(max);
+        assertThat(c.cores()).isEqualTo(max);
+        assertThat(c.threadsPerCore()).isEqualTo(1);
+    }
+
+    @Test
+    void anIntegerTooLargeNamesItsKey() {
+        assertThatThrownBy(() -> ConfigCodec.parse("[mtserver]\ncores = 99999999999\n"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("mtserver.cores");
+    }
+
+    @Test
+    void unknownKeysAreReported() {
+        var r = new com.electronwill.nightconfig.toml.TomlParser()
+                .parse("mode = \"on\"\n[entity]\nactivation = false\n[mtserver]\ncores = 2\n");
+        assertThat(ConfigCodec.unknownKeys(r)).containsExactlyInAnyOrder("mode", "entity.activation");
+    }
 }

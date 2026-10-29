@@ -17,6 +17,7 @@ import net.multiforge.runtime.event.AsyncEventPool;
 import net.multiforge.runtime.event.DispatchExecutor;
 import net.multiforge.runtime.event.SerialLane;
 import net.multiforge.runtime.scheduler.MultiThreadedSchedulerHost;
+import org.jetbrains.annotations.ApiStatus;
 
 /**
  * Production {@link DispatchExecutor}: the serial lane is the server thread
@@ -24,6 +25,7 @@ import net.multiforge.runtime.scheduler.MultiThreadedSchedulerHost;
  * host's global region inbox, and async listeners run on the shared {@link
  * AsyncEventPool}.
  */
+@ApiStatus.Internal
 public final class SchedulerBackedDispatchExecutor implements DispatchExecutor {
     private static final AsyncEventPool ASYNC_POOL = new AsyncEventPool();
 

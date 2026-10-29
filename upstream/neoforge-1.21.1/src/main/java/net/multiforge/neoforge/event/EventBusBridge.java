@@ -17,6 +17,7 @@ import net.multiforge.runtime.event.DispatchingEventBus;
 import net.multiforge.runtime.event.LazyDispatchingEventBus;
 import net.multiforge.runtime.scheduler.MultiThreadedSchedulerHost;
 import net.neoforged.bus.api.IEventBus;
+import org.jetbrains.annotations.ApiStatus;
 
 /**
  * Fork-side factory for wiring M12 event routing onto a NeoForge {@link
@@ -46,6 +47,7 @@ import net.neoforged.bus.api.IEventBus;
  * call more than once (a {@code GameTestServer} restart on a reused JVM,
  * for instance).
  */
+@ApiStatus.Internal
 public final class EventBusBridge {
     private EventBusBridge() {}
 

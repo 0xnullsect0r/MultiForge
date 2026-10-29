@@ -1,5 +1,5 @@
-# MultiForge client debug mod. Loads on any vanilla NeoForge 1.21.x
-# client; opens the multiforge:debug/v1 channel when connecting to a
+# MultiForge client debug mod. Client only (do not put it in a server's
+# mods/ folder). Loads on a NeoForge 1.21.1 client; opens the multiforge:debug/v1 channel when connecting to a
 # MultiForge server and shows the F3 overlay + chunk borders + heatmap +
 # pin selection boxes + violation side panel.
 modLoader = "javafml"
@@ -17,21 +17,21 @@ and owned entity counts, a per-region detail list, real region-ownership
 seams between chunks, a tick-cost heatmap, pinned region selection boxes,
 and a live reroute/warn violation panel. Every overlay is individually
 switchable from the config screen, with F6 as a master toggle.
-Load on any vanilla NeoForge 1.21.x client — the panel stays inert if
-the server does not advertise multiforge:debug/v1.
+Install on a NeoForge 1.21.1 client only, not on the server. The panel
+stays inert if the server does not advertise multiforge:debug/v1.
 '''
 authors = "MultiForge authors"
 
 [[dependencies.multiforge_debug]]
 modId = "neoforge"
 type = "required"
-versionRange = "[21.1,)"
+versionRange = "[21.1.251,21.2)"
 ordering = "NONE"
 side = "CLIENT"
 
 [[dependencies.multiforge_debug]]
 modId = "minecraft"
 type = "required"
-versionRange = "[1.21.1,1.22)"
+versionRange = "[1.21.1]"
 ordering = "NONE"
 side = "CLIENT"

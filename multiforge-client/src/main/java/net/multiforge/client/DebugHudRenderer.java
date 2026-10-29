@@ -21,8 +21,8 @@ import java.util.Locale;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.Font;
 import net.minecraft.client.gui.GuiGraphics;
-import net.multiforge.runtime.diagnostics.wire.DebugPacketCodec;
-import net.multiforge.runtime.diagnostics.wire.DebugPayload;
+import net.multiforge.client.wire.DebugPacketCodec;
+import net.multiforge.client.wire.DebugPayload;
 import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.neoforge.client.event.RenderGuiEvent;
 
@@ -135,7 +135,9 @@ public final class DebugHudRenderer {
             // Protocol §8: we refused to subscribe, so no other panel
             // will ever populate. Say why rather than looking broken.
             return List.of(String.format(
-                    "MultiForge debug: server protocol %d unsupported by this client", state.serverProtocol()));
+                    java.util.Locale.ROOT,
+                    "MultiForge debug: server protocol %d unsupported by this client",
+                    state.serverProtocol()));
         }
         DebugPayload.Hello hello = state.hello();
         if (hello == null) {
@@ -143,7 +145,11 @@ public final class DebugHudRenderer {
         }
         List<String> lines = new ArrayList<>(3);
         lines.add(String.format(
-                "MultiForge build=%s proto=%d tickHz=%d", hello.buildLabel(), hello.protocolVersion(), hello.tickHz()));
+                java.util.Locale.ROOT,
+                "MultiForge build=%s proto=%d tickHz=%d",
+                hello.buildLabel(),
+                hello.protocolVersion(),
+                hello.tickHz()));
 
         DebugPayload.RegionSnapshot snapshot = state.latestSnapshot();
         if (snapshot != null) {
@@ -159,12 +165,18 @@ public final class DebugHudRenderer {
             // approximation, not a literal live thread count.
             double tpsEstimate = worstP95 > 0 ? Math.min(hello.tickHz(), 1000.0 / worstP95) : hello.tickHz();
             lines.add(String.format(
-                    "MultiForge regions=%d workers~=%d tps~=%.1f", regionCount, regionCount, tpsEstimate));
+                    java.util.Locale.ROOT,
+                    "MultiForge regions=%d workers~=%d tps~=%.1f",
+                    regionCount,
+                    regionCount,
+                    tpsEstimate));
             // recentViolations() is capped at DebugHudState.VIOLATION_HISTORY
             // (200) -- a rolling window, not a since-connect total.
             lines.add(String.format(
+                    java.util.Locale.ROOT,
                     "MultiForge worstP95=%.1fms warns=%d(last 200)",
-                    worstP95, state.recentViolations().size()));
+                    worstP95,
+                    state.recentViolations().size()));
         }
         DebugPayload.RuntimeStatus status = state.runtimeStatus();
         if (status != null) {
@@ -172,8 +184,10 @@ public final class DebugHudRenderer {
                 lines.add("This dimension: " + worldId + " — " + describe(state.worldStatus(worldId)));
             }
             lines.add(String.format(
+                    java.util.Locale.ROOT,
                     "Serial lane: %s/s handed to server thread, %s/s run in place",
-                    rate(status.laneHandoffsPerSecond()), rate(status.laneInlinePerSecond())));
+                    rate(status.laneHandoffsPerSecond()),
+                    rate(status.laneInlinePerSecond())));
         }
         return lines;
     }
@@ -259,7 +273,7 @@ public final class DebugHudRenderer {
             return all;
         }
         List<String> out = new ArrayList<>(all.subList(0, maxRows));
-        out.add(String.format("… %d more region(s)", all.size() - maxRows));
+        out.add(String.format(java.util.Locale.ROOT, "… %d more region(s)", all.size() - maxRows));
         return out;
     }
 
@@ -278,6 +292,7 @@ public final class DebugHudRenderer {
         for (int i = 0; i < count; i++) {
             DebugPayload.ViolationEvent e = events.get(i);
             out.add(String.format(
+                    java.util.Locale.ROOT,
                     "%s [%s] %s — %s",
                     TIME_FORMAT.format(Instant.ofEpochMilli(e.epochMillis())),
                     e.modId(),

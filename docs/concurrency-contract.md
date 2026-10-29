@@ -26,15 +26,14 @@ the running server actually installs:
 | `REGION`        | `TickRegionScheduler`, around every region tick (including the synthetic global region's) | A region worker. May mutate only chunks its own region owns. |
 | `ASYNC`         | `MultiThreadedSchedulerHost`, around every `ServerDomains.async()` body | A shared async-pool thread. Must not touch game state. |
 | `UNKNOWN`       | Default for any thread without a token | The server thread, world generation, Netty threads, a mod's own threads. The server thread is recognised separately (the bound tick thread, below). |
-| `GLOBAL`        | Only `SingleThreadedSchedulerHost` (the MC-free reference host used in tests) | Not installed on a server. The server thread is Vanilla's single owner of world-wide state. |
+| `GLOBAL`        | Vanilla's `ProcessorMailbox` tasks (the chunk system's world-generation, lighting and storage mailboxes, `01-ownership` patch), and `SingleThreadedSchedulerHost` (the MC-free reference host used in tests) | Exempt from every ownership check, as Vanilla's own chunk-system threads. The server thread is Vanilla's single owner of world-wide state. |
 | `ENTITY`        | Only `SingleThreadedSchedulerHost` | Not installed on a server; entity work runs as `REGION`. |
 | `LEGACY_SERIAL` | Nothing | Declared constant. The serial event lane runs listeners under the *posting worker's* token, not this one (`docs/events.md`). |
 | `NETWORK`       | Nothing | Declared constant. Netty threads carry no token and read as `UNKNOWN`. |
 
-The enum's own javadoc for `GLOBAL` ("the dedicated global-region thread.
-Owns weather, time, …") describes the retired M5 design; in the barrier
-model weather, time, world border, raids and the dragon fight run in
-Vanilla's `ServerLevel.tick` on the server thread.
+In the barrier model weather, time, world border, raids and the dragon
+fight run in Vanilla's `ServerLevel.tick` on the server thread; no thread
+carries a dedicated "global" owner for them.
 
 ## OwnerToken
 
@@ -85,14 +84,15 @@ public enum Mode {
 }
 ```
 
-The initial value comes from `-Dmultiforge.ownership.mode` (default
-`reroute`; an unrecognised value falls back to `REROUTE`). On a server,
-`MultiForgeServerState.applyConfig` then sets it from
+On a server, `MultiForgeServerState.applyConfig` sets it from
 `config/multiforge-server.toml` at startup and on every config change:
 `STRICT` when `[mtserver] mode = "strict"` or `[violations] policy = "fail"`,
-otherwise `REROUTE`. `applyConfig` never selects `OFF`; `mode = "off"`
-instead skips installing the regionized runtime, so no region workers
-exist and every guard falls through.
+otherwise `REROUTE`. An explicitly set `-Dmultiforge.ownership.mode`
+(`off`, `reroute` or `strict`) wins over the file, so a regression run can
+force a mode without editing it; it is the only way to select `OFF`.
+`mode = "off"` in the file instead skips installing the regionized
+runtime, so no region workers exist; the guards still reroute writes from
+threads other than the server thread.
 
 ### Positional check: `canMutateAt` / `rerouteAt`
 
@@ -208,23 +208,23 @@ test and regression runs, never production.
 
 The runtime keeps a synthetic **global region** (world
 `multiforge:global`, chunk 0,0). `RegionizedTickCoordinator` drives it once
-per server tick on the worker pool, before the first level's regions. It
-runs `ServerDomains.global()` tasks and GLOBAL-domain event listeners that
-an async-pool task posted. It runs under a `REGION` token carrying the
-global region's id, so a world write made from it is not owned by that
-region: `canMutateAt` treats it as cross-region, warns, and reroutes it to
-the chunk's owner (or throws in strict mode). World writes belong in
-`ServerDomains.region(...)` tasks.
+per server tick, before the first level's regions, while no other region
+runs. It is a batch of one region, so it ticks on the server thread itself
+(unless `inlineSingleRegion` is off). It runs `ServerDomains.global()` tasks
+and GLOBAL-domain event listeners that an async-pool task posted, under a
+`REGION` token carrying the global region's id. `canMutateAt` lets it write
+anywhere: nothing else runs while it ticks.
 
-## DomainAssertions
+### A region the server thread ticks itself
 
-`DomainAssertions` is a passive checker, gated by `-Dmultiforge.assert=on`
-(default off). It never throws. `assertGlobal(site)`,
-`assertRegion(site, regionId)` and `assertTickThread(site)` bump
-`<site>:not-global` / `:wrong-region` / `:not-tick-thread` and log a
-warning. No patched site calls these methods today; only
-`DomainAssertions.enabled()` is read, by `RegionizedData` (a runtime
-utility the server does not currently use).
+A level with one region, a region whose serial-lane hand-offs are costly
+("hot"), and the global region tick on the server thread, after the
+workers finished, under their region's token. Nothing else runs then, so
+the server thread is the only writer (`OwnershipEnforcer.soleWriter()`):
+every write, move and command runs inline, as in Vanilla. Before v1.11.1
+these were "deferred to the server thread" — the thread they were already
+on, which ran them at once and deferred them again until the stack
+overflowed (a command block in a single-region world crashed the server).
 
 ## Who may write what
 
@@ -232,7 +232,8 @@ utility the server does not currently use).
 |---|---|---|
 | Region worker (`REGION`) | Chunks, entities, block entities and scheduled ticks in chunks its region owns | An entity belongs to the region owning the chunk it is in. Anything else is rerouted, or deferred to the server thread for teleports, dimension changes and commands. |
 | Server thread | Everything, as in Vanilla | Runs only while no region runs. Also runs serial-lane listeners, under the posting worker's token. |
-| Global region | Only through the mailbox of the owning region | See above. |
+| Global region | Everything | It ticks while no other region runs (see above). |
+| Server thread ticking a region itself | Everything, as in Vanilla | The only writer while it runs (see above). |
 | Async pool (`ASYNC`) | Nothing live | A write is an `:off-thread` violation and is rerouted. |
 | Any other thread (`UNKNOWN`, not the server thread) | Nothing directly | Violation → rerouted to the owner, or to the server thread if no region owns the chunk. The read side is not protected. |
 
@@ -272,5 +273,3 @@ The policy, per CLAUDE.md rules 4 and 5:
 - `RegionTickBehaviourTests` (fork GameTests under
   `upstream/neoforge-1.21.1/tests/`) — cross-region reroute on a live
   server.
-
-There is no dedicated `DomainAssertionsTest`.

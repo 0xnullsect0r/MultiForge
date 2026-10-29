@@ -14,8 +14,8 @@ package net.multiforge.client;
 
 import java.io.IOException;
 import java.io.UncheckedIOException;
-import net.multiforge.runtime.diagnostics.wire.DebugPacketCodec;
-import net.multiforge.runtime.diagnostics.wire.DebugPacketKind;
+import net.multiforge.client.wire.DebugPacketCodec;
+import net.multiforge.client.wire.DebugPacketKind;
 import net.neoforged.neoforge.network.event.RegisterPayloadHandlersEvent;
 import net.neoforged.neoforge.network.registration.PayloadRegistrar;
 import org.slf4j.Logger;

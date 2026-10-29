@@ -18,6 +18,7 @@ import net.multiforge.api.event.OrderingContract;
 import net.multiforge.runtime.diagnostics.ProbeRegistry;
 import net.multiforge.runtime.ownership.Domain;
 import net.multiforge.runtime.ownership.OwnerToken;
+import org.jetbrains.annotations.ApiStatus;
 
 /**
  * Decides where one listener invocation runs, given the posting thread and
@@ -42,6 +43,7 @@ import net.multiforge.runtime.ownership.OwnerToken;
  *
  * <p>Outcomes are counted under {@code event.dispatch.*} probes.
  */
+@ApiStatus.Internal
 public final class DomainDispatcher {
 
     // Outcome counters, bound once: dispatch runs for every listener of every event.

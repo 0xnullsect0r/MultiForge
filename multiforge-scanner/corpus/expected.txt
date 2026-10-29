@@ -3,5 +3,7 @@
 mftest-legacy R04 WARN net.multiforge.testmods.legacy.LegacyMod#<field:offServerThread>
 mftest-legacy R04 WARN net.multiforge.testmods.legacy.LegacyMod#<field:total>
 mftest-legacy scanned
+mftest-limbo scanned
+mftest-slowtick scanned
 mftest-writer scanned
 multiforge-client scanned

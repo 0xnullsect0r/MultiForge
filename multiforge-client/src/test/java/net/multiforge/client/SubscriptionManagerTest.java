@@ -17,8 +17,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
-import net.multiforge.runtime.diagnostics.wire.DebugPacketCodec;
-import net.multiforge.runtime.diagnostics.wire.DebugPayload;
+import net.multiforge.client.wire.DebugPacketCodec;
+import net.multiforge.client.wire.DebugPayload;
 import org.junit.jupiter.api.Test;
 
 class SubscriptionManagerTest {

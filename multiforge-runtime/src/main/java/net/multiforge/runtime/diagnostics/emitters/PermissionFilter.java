@@ -13,6 +13,7 @@
 package net.multiforge.runtime.diagnostics.emitters;
 
 import net.multiforge.runtime.diagnostics.wire.DebugPayload;
+import org.jetbrains.annotations.ApiStatus;
 
 /**
  * Per-viewer visibility gate for a {@code multiforge:debug/v1} payload,
@@ -30,6 +31,7 @@ import net.multiforge.runtime.diagnostics.wire.DebugPayload;
  * change at the call site, not a code change in this module.
  */
 @FunctionalInterface
+@ApiStatus.Internal
 public interface PermissionFilter {
 
     /**

@@ -18,6 +18,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.WeakHashMap;
+import org.jetbrains.annotations.ApiStatus;
 
 /**
  * A tiny generic key-to-instance registry backing the Vanilla-adjacent
@@ -43,6 +44,7 @@ import java.util.WeakHashMap;
  * copies the live values, and hands the caller a plain {@link List} it
  * can walk lock-free (round-5 H6).
  */
+@ApiStatus.Internal
 public final class InstanceRegistry<K, V> {
 
     private final Map<K, V> map;

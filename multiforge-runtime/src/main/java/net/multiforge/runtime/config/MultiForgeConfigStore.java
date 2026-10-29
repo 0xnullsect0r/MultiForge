@@ -19,6 +19,7 @@ import java.util.Objects;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
+import org.jetbrains.annotations.ApiStatus;
 
 /**
  * Thread-safe holder for the current {@link MultiForgeConfig} plus a
@@ -30,6 +31,7 @@ import java.util.function.Consumer;
  * calling thread — if they need to be async, they should hop through
  * {@code ServerDomains.async()}.
  */
+@ApiStatus.Internal
 public final class MultiForgeConfigStore {
 
     private final Path file;
@@ -72,9 +74,11 @@ public final class MultiForgeConfigStore {
     public synchronized MultiForgeConfig update(java.util.function.UnaryOperator<MultiForgeConfig> mutator)
             throws IOException {
         MultiForgeConfig next = Objects.requireNonNull(mutator.apply(current.get()), "mutator returned null");
-        current.set(next);
+        // Persist first: if the write fails, nothing changed (the snapshot, the file
+        // and the running server all keep the old values).
         ConfigCodec.save(file, next);
-        for (Consumer<MultiForgeConfig> l : listeners) l.accept(next);
+        current.set(next);
+        notifyAll(next);
         return next;
     }
 
@@ -82,7 +86,25 @@ public final class MultiForgeConfigStore {
     public synchronized MultiForgeConfig reload() throws IOException {
         MultiForgeConfig next = ConfigCodec.load(file);
         current.set(next);
-        for (Consumer<MultiForgeConfig> l : listeners) l.accept(next);
+        notifyAll(next);
         return next;
+    }
+
+    /**
+     * Fire every listener with {@code next}. One that throws does not stop the rest
+     * from applying the snapshot; the first failure is rethrown afterwards, with any
+     * later ones attached, so the command that changed the config reports it.
+     */
+    private void notifyAll(MultiForgeConfig next) {
+        RuntimeException first = null;
+        for (Consumer<MultiForgeConfig> l : listeners) {
+            try {
+                l.accept(next);
+            } catch (RuntimeException e) {
+                if (first == null) first = e;
+                else first.addSuppressed(e);
+            }
+        }
+        if (first != null) throw first;
     }
 }

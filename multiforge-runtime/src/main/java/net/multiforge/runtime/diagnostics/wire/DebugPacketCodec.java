@@ -21,6 +21,7 @@ import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
+import org.jetbrains.annotations.ApiStatus;
 
 /**
  * Length-prefixed big-endian encoder/decoder for the debug payload
@@ -36,6 +37,7 @@ import java.util.List;
  * cannot allocate arbitrary memory. Strings use UTF-8 with an int16
  * length prefix.
  */
+@ApiStatus.Internal
 public final class DebugPacketCodec {
 
     /**
@@ -83,6 +85,17 @@ public final class DebugPacketCodec {
     /** @return whether {@code version} is one this build can speak. */
     public static boolean supportsProtocol(int version) {
         return version >= MIN_SUPPORTED_PROTOCOL && version <= PROTOCOL_VERSION;
+    }
+
+    /**
+     * The protocol to speak with a peer that announced {@code peerVersion}: the
+     * peer's own, or this build's when the peer is newer (a newer peer still speaks
+     * every older version), or {@code -1} when the peer is older than {@link
+     * #MIN_SUPPORTED_PROTOCOL}.
+     */
+    public static int negotiate(int peerVersion) {
+        if (peerVersion < MIN_SUPPORTED_PROTOCOL) return -1;
+        return Math.min(peerVersion, PROTOCOL_VERSION);
     }
 
     private DebugPacketCodec() {}

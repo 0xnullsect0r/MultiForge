@@ -15,7 +15,7 @@ package net.multiforge.client;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import java.util.List;
-import net.multiforge.runtime.diagnostics.wire.DebugPayload;
+import net.multiforge.client.wire.DebugPayload;
 import org.junit.jupiter.api.Test;
 
 class DebugHudStateTest {

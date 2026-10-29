@@ -30,10 +30,11 @@ public static void shutdown();
   `AlreadyInstalledException` (a subclass of `IllegalStateException`); the
   fork's lifecycle hook swallows exactly that case, for a GameTest JVM that
   starts several servers. If a different `SchedulerHost` is already bound
-  to `ServerDomains` (for example the `ServiceLoader`-found
-  `SingleThreadedSchedulerHost`, bound because a mod called
-  `ServerDomains` before server start), `install` rolls back and throws a
-  plain `IllegalStateException`, which the hook logs and rethrows.
+  to `ServerDomains` that is not the `ServiceLoader` fallback, `install`
+  rolls back and throws a plain `IllegalStateException`, which the hook logs
+  and rethrows. The fallback (`SingleThreadedSchedulerHost`, bound because a
+  mod called `ServerDomains` before server start) is replaced, and hands its
+  queued work to the installed host.
 - `install` also starts `OtelExporter` when `-Dmultiforge.otel.endpoint`
   is set (off by default).
 - **`current()`** returns the host, or `null` (not installed, or
@@ -164,9 +165,9 @@ block-entity tickers follow every merge and split.
 `host.chunkManagerFor(world)` or `chunkManagerForOrNull(world)`.
 
 CLAUDE.md names `net.multiforge.runtime.chunk.InstanceRegistry<K, V>`
-(weak-keyed) as the standard per-server/per-level lookup for new code. No
-production code uses it yet; `MultiForgeServerState` still keeps its
-per-server config and pin stores in raw `WeakHashMap`s.
+(weak-keyed) as the standard per-server/per-level lookup for new code;
+`MultiForgeServerState` (config and pin stores) and `EntityActivation`
+use it.
 
 ## The four domains
 
@@ -176,7 +177,7 @@ per-server config and pin stores in raw `WeakHashMap`s.
 |---|---|---|
 | Region | `region(WorldRef, ChunkPos)` | `taskQueue.queueChunkTask(world, x, z, …)`. Delayed and repeating tasks re-queue (and so re-resolve the owner) on every fire. |
 | Entity | `entity(EntityRef)` | As region, at `entity.chunkPos()` read on each queueing; `isRetired()` checked on the worker before the body, which then runs the `retired` callback and cancels the task instead. |
-| Global | `global()` | A private `enqueueOnGlobal` → `queueChunkTask(GLOBAL_WORLD, 0, 0, …)`. The global region is a real `Region` in the synthetic world `multiforge:global`, created with the host and driven once per server tick by `driveGlobalTick`. It runs under a `REGION` token, so world writes from it are cross-region (see `concurrency-contract.md`). |
+| Global | `global()` | A private `enqueueOnGlobal` → `queueChunkTask(GLOBAL_WORLD, 0, 0, …)`. The global region is a real `Region` in the synthetic world `multiforge:global`, created with the host and driven once per server tick by `driveGlobalTick`. It ticks while no other region runs and may write anywhere (see `concurrency-contract.md`). |
 | Async | `async()` | A `ScheduledExecutorService` of `max(2, cores / 2)` threads; bodies run under `OwnerToken.ASYNC`. `cancelTasks(mod)` cancels a mod's async tasks. |
 
 Delays for region, entity and global tasks are timed on a single
@@ -229,7 +230,7 @@ ServerDomains.region(world, new ChunkPos(cx, cz))
 ```java
 ServerDomains.global()
     .runDelayed(MOD, handle -> {
-        // On the global region, about N × 50 ms from now. No world writes here.
+        // On the global region, about N × 50 ms from now, while no other region runs.
     }, /* delayTicks */ N);
 ```
 

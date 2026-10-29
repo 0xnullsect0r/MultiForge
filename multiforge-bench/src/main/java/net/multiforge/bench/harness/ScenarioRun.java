@@ -181,6 +181,9 @@ public final class ScenarioRun {
             for (String key : mf.keySet()) {
                 if (!key.startsWith("info.") && !stock.containsKey(key)) diffs.add(key + ": only on multiforge");
             }
+            // Matching stock is not enough: a scenario that failed the same way on both
+            // servers, or ran with every region on the server thread, would match too.
+            diffs.addAll(requirements(name, stock, mf));
             if (diffs.isEmpty()) {
                 System.out.println("ScenarioRun: " + name + " PASS");
             } else {
@@ -233,6 +236,58 @@ public final class ScenarioRun {
                 .filter(e -> e.getKey().startsWith("info."))
                 .forEach(e -> System.out.println("  [" + flavour + "] " + e.getKey() + " = " + e.getValue()));
         return ctx.observations;
+    }
+
+    /**
+     * What a scenario must show beyond matching stock: it ran (no {@code
+     * scenario_error} on either server), MultiForge logged no error, broke no
+     * ownership rule, mispredicted no reroute, and — where the scenario is about
+     * regions — actually split the world into regions and rerouted across them.
+     */
+    static List<String> requirements(String name, Map<String, String> stock, Map<String, String> mf) {
+        List<String> out = new ArrayList<>();
+        if (stock.containsKey("scenario_error")) out.add("stock: scenario failed: " + stock.get("scenario_error"));
+        if (mf.containsKey("scenario_error")) out.add("multiforge: scenario failed: " + mf.get("scenario_error"));
+        if (!"0".equals(mf.get("errors"))) out.add("multiforge logged " + mf.get("errors") + " error line(s)");
+        long violations = parseLong(mf.get("info.violations"));
+        if (violations != 0) out.add("multiforge: " + violations + " ownership violation(s) (or probes unreadable)");
+        long mismatches = parseLong(mf.get("info.reroute_mismatches"));
+        if (mismatches != 0) out.add("multiforge: " + mismatches + " reroute mismatch(es) (or probes unreadable)");
+        int minRegions =
+                switch (name) {
+                    case "x1" -> 4; // four spots 2000 blocks apart
+                    case "x4" -> 2; // the writer's target is another region
+                    default -> 0;
+                };
+        if (minRegions > 0) {
+            int regions = regionCount(mf.get("info.regions"));
+            if (regions < minRegions) out.add("multiforge: " + regions + " region(s), expected at least " + minRegions);
+        }
+        if (name.equals("x4")) {
+            long writes = parseLong(mf.get("info.writes"));
+            long reroutes = parseLong(mf.get("info.reroutes"));
+            if (writes <= 0 || reroutes < writes) {
+                out.add("multiforge: " + reroutes + " reroute(s) for " + writes + " cross-region write(s)");
+            }
+        }
+        return out;
+    }
+
+    /** {@code -1} for a missing or unreadable value, so a check against 0 fails. */
+    private static long parseLong(String value) {
+        if (value == null) return -1L;
+        try {
+            return Long.parseLong(value.trim());
+        } catch (NumberFormatException e) {
+            return -1L;
+        }
+    }
+
+    /** The count in a {@code /multiforge region list} line such as {@code minecraft:overworld: 4 region(s)}. */
+    static int regionCount(String line) {
+        if (line == null) return -1;
+        Matcher m = Pattern.compile("(\\d+) region\\(s\\)").matcher(line);
+        return m.find() ? Integer.parseInt(m.group(1)) : -1;
     }
 
     /** Scenarios that run with the multiforge-testmods fixture jars in mods/. */

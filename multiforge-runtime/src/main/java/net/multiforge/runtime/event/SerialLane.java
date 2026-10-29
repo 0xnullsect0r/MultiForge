@@ -18,6 +18,7 @@ import java.util.concurrent.locks.LockSupport;
 import net.multiforge.runtime.diagnostics.ProbeRegistry;
 import net.multiforge.runtime.ownership.Domain;
 import net.multiforge.runtime.ownership.OwnerToken;
+import org.jetbrains.annotations.ApiStatus;
 
 /**
  * The serial lane: one thread (the server thread) on which work that must
@@ -35,6 +36,7 @@ import net.multiforge.runtime.ownership.OwnerToken;
  * <p>Any other caller — the lane thread itself, a thread with no region
  * token, or any caller while no lane thread is bound — runs the job inline.
  */
+@ApiStatus.Internal
 public final class SerialLane {
 
     private static final class Job {
@@ -120,13 +122,22 @@ public final class SerialLane {
                     OwnerToken.runAs(job.token(), job.task());
                 } catch (Throwable t) {
                     net.multiforge.runtime.diagnostics.ViolationLogger.warn(
-                            "SerialLane", "a deferred job threw " + t + " (the rest still run)");
+                            "SerialLane", "a deferred job threw " + t + topFrames(t) + " (the rest still run)");
                 }
             }
         } finally {
             if (outer) drainingDeferred = false;
         }
         return ran;
+    }
+
+    /** The first few frames of {@code t}, so a rate-limited one-line warning still names the listener. */
+    static String topFrames(Throwable t) {
+        StringBuilder sb = new StringBuilder();
+        StackTraceElement[] frames = t.getStackTrace();
+        for (int i = 0; i < Math.min(5, frames.length); i++)
+            sb.append("\n    at ").append(frames[i]);
+        return sb.toString();
     }
 
     /** Whether the calling thread would hand {@link #run} jobs to the lane. */

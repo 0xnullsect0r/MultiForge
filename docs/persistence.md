@@ -33,12 +33,15 @@ a mailbox is lost, as is everything since the last save, as in Vanilla.
 
 ## Files MultiForge writes
 
-Both under the server's `config/` directory, not in the world:
+All under the server's `config/` directory, not in the world:
 
 - `multiforge-server.toml`: runtime configuration
   ([`regions.md`](regions.md#configuration)).
 - `multiforge-region-pins.toml`: region pins
   ([`regions.md`](regions.md#region-pins)).
+- `multiforge-mods.toml`: per-mod thread-safety classification and per-event
+  dispatch overrides ([`events.md`](events.md)), written with its defaults on
+  first start.
 
 ## What this replaced
 

@@ -15,6 +15,7 @@ package net.multiforge.runtime.region.pin;
 import java.util.Objects;
 import net.multiforge.api.world.ChunkPos;
 import net.multiforge.api.world.WorldRef;
+import org.jetbrains.annotations.ApiStatus;
 
 /**
  * An operator-created rectangle of chunks whose loaded chunks always tick
@@ -31,6 +32,7 @@ import net.multiforge.api.world.WorldRef;
  * <p>Coordinates are inclusive on both ends. Bounds are normalized in
  * the compact ctor so callers can pass any two opposing corners.
  */
+@ApiStatus.Internal
 public record RegionPin(String id, WorldRef world, int fromChunkX, int fromChunkZ, int toChunkX, int toChunkZ) {
 
     public RegionPin {
@@ -54,7 +56,7 @@ public record RegionPin(String id, WorldRef world, int fromChunkX, int fromChunk
         return pos.x() >= fromChunkX && pos.x() <= toChunkX && pos.z() >= fromChunkZ && pos.z() <= toChunkZ;
     }
 
-    public int chunkCount() {
-        return (toChunkX - fromChunkX + 1) * (toChunkZ - fromChunkZ + 1);
+    public long chunkCount() {
+        return ((long) toChunkX - fromChunkX + 1) * ((long) toChunkZ - fromChunkZ + 1);
     }
 }

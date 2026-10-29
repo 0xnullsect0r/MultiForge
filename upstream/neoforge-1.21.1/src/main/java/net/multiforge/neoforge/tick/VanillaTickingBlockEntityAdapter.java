@@ -14,6 +14,7 @@ package net.multiforge.neoforge.tick;
 
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.entity.TickingBlockEntity;
+import org.jetbrains.annotations.ApiStatus;
 
 /**
  * Adapts Vanilla's {@link TickingBlockEntity} — the element type of
@@ -35,14 +36,28 @@ import net.minecraft.world.level.block.entity.TickingBlockEntity;
  * ticker, created once at {@link BlockEntityTickerBridge#onTickerAdded}
  * time and held for the life of the ticker.
  */
+@ApiStatus.Internal
 public final class VanillaTickingBlockEntityAdapter implements net.multiforge.runtime.chunk.TickingBlockEntityRef {
     private final Level level;
     private final TickingBlockEntity delegate;
     private final net.multiforge.api.world.BlockPos pos;
+    // Set for a ticker a region added during its own tick: NeoForge's onLoad has not
+    // run yet (the server thread's pass is next tick), and the region may tick it this
+    // tick. Read and cleared only by the owning region's thread.
+    private boolean loadPending;
 
     public VanillaTickingBlockEntityAdapter(Level level, TickingBlockEntity delegate) {
+        this(level, delegate, false);
+    }
+
+    /**
+     * @param loadPending the block entity was placed during a region's tick, so its
+     *                    {@code onLoad} must run right before its first tick (see {@link #tick})
+     */
+    public VanillaTickingBlockEntityAdapter(Level level, TickingBlockEntity delegate, boolean loadPending) {
         this.level = level;
         this.delegate = delegate;
+        this.loadPending = loadPending;
         net.minecraft.core.BlockPos p = delegate.getPos();
         this.pos = new net.multiforge.api.world.BlockPos(p.getX(), p.getY(), p.getZ());
     }
@@ -56,6 +71,12 @@ public final class VanillaTickingBlockEntityAdapter implements net.multiforge.ru
 
     @Override
     public void tick() {
+        if (loadPending) {
+            loadPending = false;
+            // NeoForge: onLoad runs right before the first tick. A no-op when the
+            // server thread's pass already ran it.
+            level.mfLoadFreshBlockEntityAt(delegate.getPos());
+        }
         delegate.tick();
     }
 

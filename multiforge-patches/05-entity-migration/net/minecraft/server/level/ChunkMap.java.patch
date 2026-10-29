@@ -26,7 +26,22 @@
      private final Long2ByteMap chunkTypeCache = new Long2ByteOpenHashMap();
      private final Long2LongMap chunkSaveCooldowns = new Long2LongOpenHashMap();
      private final Queue<Runnable> unloadQueue = Queues.newConcurrentLinkedQueue();
-@@ -995,6 +1014,10 @@ public class ChunkMap extends ChunkStorage implements ChunkHolder.PlayerProvider
+@@ -692,6 +711,14 @@ public class ChunkMap extends ChunkStorage implements ChunkHolder.PlayerProvider
+     }
+ 
+     private void onChunkReadyToSend(LevelChunk p_296003_) {
++        // MultiForge (multiforge-patches/05-entity-migration/): the barrier pump runs this
++        // for a chunk a waiting worker asked for while other regions tick; it writes each
++        // player's pending-chunk set, which a worker reads when one of its entities starts
++        // being tracked (isChunkTracked). Run it at the barrier instead.
++        if (net.multiforge.runtime.region.RegionPhase.deferUntilWorkersStop(
++                ChunkMap.MfLambdas.onChunkReadyToSend(this, p_296003_), "chunk.send.deferred")) {
++            return;
++        }
+         ChunkPos chunkpos = p_296003_.getPos();
+ 
+         for (ServerPlayer serverplayer : this.playerMap.getAllPlayers()) {
+@@ -995,6 +1022,10 @@ public class ChunkMap extends ChunkStorage implements ChunkHolder.PlayerProvider
      }
  
      public void move(ServerPlayer p_140185_) {
@@ -37,7 +52,7 @@
          for (ChunkMap.TrackedEntity chunkmap$trackedentity : this.entityMap.values()) {
              if (chunkmap$trackedentity.entity == p_140185_) {
                  chunkmap$trackedentity.updatePlayers(this.level.players());
-@@ -1002,6 +1025,7 @@ public class ChunkMap extends ChunkStorage implements ChunkHolder.PlayerProvider
+@@ -1002,6 +1033,7 @@ public class ChunkMap extends ChunkStorage implements ChunkHolder.PlayerProvider
                  chunkmap$trackedentity.updatePlayer(p_140185_);
              }
          }
@@ -45,7 +60,7 @@
  
          SectionPos sectionpos = p_140185_.getLastSectionPos();
          SectionPos sectionpos1 = SectionPos.of(p_140185_);
-@@ -1083,11 +1107,26 @@ public class ChunkMap extends ChunkStorage implements ChunkHolder.PlayerProvider
+@@ -1083,11 +1115,26 @@ public class ChunkMap extends ChunkStorage implements ChunkHolder.PlayerProvider
              int i = entitytype.clientTrackingRange() * 16;
              if (i != 0) {
                  int j = entitytype.updateInterval();
@@ -75,7 +90,7 @@
                      chunkmap$trackedentity.updatePlayers(this.level.players());
                      if (p_140200_ instanceof ServerPlayer serverplayer) {
                          this.updatePlayerStatus(serverplayer, true);
-@@ -1110,11 +1149,19 @@ public class ChunkMap extends ChunkStorage implements ChunkHolder.PlayerProvider
+@@ -1110,11 +1157,19 @@ public class ChunkMap extends ChunkStorage implements ChunkHolder.PlayerProvider
              for (ChunkMap.TrackedEntity chunkmap$trackedentity : this.entityMap.values()) {
                  chunkmap$trackedentity.removePlayer(serverplayer);
              }
@@ -96,7 +111,7 @@
          }
      }
  
-@@ -1131,6 +1178,8 @@ public class ChunkMap extends ChunkStorage implements ChunkHolder.PlayerProvider
+@@ -1131,6 +1186,8 @@ public class ChunkMap extends ChunkStorage implements ChunkHolder.PlayerProvider
              SectionPos sectionpos1 = SectionPos.of(chunkmap$trackedentity.entity);
              boolean flag = !Objects.equals(sectionpos, sectionpos1);
              if (flag) {
@@ -105,7 +120,7 @@
                  chunkmap$trackedentity.updatePlayers(list1);
                  Entity entity = chunkmap$trackedentity.entity;
                  if (entity instanceof ServerPlayer) {
-@@ -1146,21 +1195,194 @@ public class ChunkMap extends ChunkStorage implements ChunkHolder.PlayerProvider
+@@ -1146,21 +1203,194 @@ public class ChunkMap extends ChunkStorage implements ChunkHolder.PlayerProvider
          }
  
          if (!list.isEmpty()) {
@@ -302,7 +317,7 @@
          if (chunkmap$trackedentity != null) {
              chunkmap$trackedentity.broadcastAndSend(p_140335_);
          }
-@@ -1210,7 +1432,10 @@ public class ChunkMap extends ChunkStorage implements ChunkHolder.PlayerProvider
+@@ -1210,7 +1440,10 @@ public class ChunkMap extends ChunkStorage implements ChunkHolder.PlayerProvider
  
      // Neo: Getter for players watching an entity.
      public List<ServerPlayer> getPlayersWatching(Entity entity) {
@@ -314,7 +329,7 @@
          if (trackedEntity != null) {
              var ret = new java.util.ArrayList<ServerPlayer>(trackedEntity.seenBy.size());
              for (var connection : trackedEntity.seenBy) {
-@@ -1290,6 +1515,7 @@ public class ChunkMap extends ChunkStorage implements ChunkHolder.PlayerProvider
+@@ -1290,6 +1523,7 @@ public class ChunkMap extends ChunkStorage implements ChunkHolder.PlayerProvider
  
          public void removePlayer(ServerPlayer p_140486_) {
              if (this.seenBy.remove(p_140486_.connection)) {
@@ -322,7 +337,7 @@
                  this.serverEntity.removePairing(p_140486_);
              }
          }
-@@ -1306,14 +1532,30 @@ public class ChunkMap extends ChunkStorage implements ChunkHolder.PlayerProvider
+@@ -1306,14 +1540,30 @@ public class ChunkMap extends ChunkStorage implements ChunkHolder.PlayerProvider
                      && ChunkMap.this.isChunkTracked(p_140498_, this.entity.chunkPosition().x, this.entity.chunkPosition().z);
                  if (flag) {
                      if (this.seenBy.add(p_140498_.connection)) {
@@ -353,7 +368,7 @@
          private int scaledRange(int p_140484_) {
              return ChunkMap.this.level.getServer().getScaledTrackingDistance(p_140484_);
          }
-@@ -1352,4 +1594,17 @@ public class ChunkMap extends ChunkStorage implements ChunkHolder.PlayerProvider
+@@ -1352,4 +1602,21 @@ public class ChunkMap extends ChunkStorage implements ChunkHolder.PlayerProvider
      public void scheduleOnMainThreadMailbox(ChunkTaskPriorityQueueSorter.Message<Runnable> msg) {
          mainThreadMailbox.tell(msg);
      }
@@ -369,5 +384,9 @@
 +
 +        static final java.util.function.Function<ServerPlayer, Set<ChunkMap.TrackedEntity>> NEW_TRACKER_SET =
 +                player -> java.util.concurrent.ConcurrentHashMap.newKeySet();
++
++        static net.multiforge.runtime.region.RegionPhase.Deferred onChunkReadyToSend(ChunkMap map, LevelChunk chunk) {
++            return () -> map.onChunkReadyToSend(chunk);
++        }
 +    }
  }

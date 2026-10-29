@@ -20,13 +20,13 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
-import net.multiforge.runtime.diagnostics.wire.DebugPayload;
+import net.multiforge.client.wire.DebugPayload;
 
 /**
  * Pure-Java model backing the HUD panels (summary, region list,
  * violations), chunk-border colouring, heatmap, and pin selection boxes
  * in the client debug mod. Wire packets flow through
- * {@link net.multiforge.runtime.diagnostics.wire.DebugPacketCodec},
+ * {@link net.multiforge.client.wire.DebugPacketCodec},
  * decode into {@link DebugPayload} records, then land here.
  *
  * <p>Instances are single-threaded: the NeoForge network handler
@@ -250,6 +250,7 @@ public final class DebugHudState {
             out.put(
                     r.regionId(),
                     String.format(
+                            java.util.Locale.ROOT,
                             "region-%d%s mspt=%.1f/%.1f owned=%d sections=%d",
                             r.regionId(),
                             tag.isEmpty() ? "" : " [" + tag + "]",

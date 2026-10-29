@@ -89,9 +89,13 @@ server start.
 
 ## Configuration
 
-`config/multiforge-server.toml`. A missing file or key means the default; the
-file is written the first time a `/multiforge config` or `/multiforge region
-size` command changes something. Defaults shown:
+`config/multiforge-server.toml`. The server writes it with every default on
+first start; a missing key means the default. A key the server does not know
+is logged at startup (check the spelling and the `[table]`); an out-of-range
+value is clamped, with a warning. `region.size` is from 3 (8 chunks) to 8
+(256 chunks): two regions are always at least one section apart, and below
+8 chunks that gap is shorter than mob follow ranges, villager searches and
+explosions. Defaults shown:
 
 ```toml
 [mtserver]

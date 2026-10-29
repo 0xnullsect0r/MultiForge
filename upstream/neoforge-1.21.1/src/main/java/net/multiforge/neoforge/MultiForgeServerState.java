@@ -21,6 +21,7 @@ import net.multiforge.runtime.chunk.InstanceRegistry;
 import net.multiforge.runtime.config.MultiForgeConfig;
 import net.multiforge.runtime.config.MultiForgeConfigStore;
 import net.multiforge.runtime.region.pin.RegionPinManager;
+import org.jetbrains.annotations.ApiStatus;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -46,6 +47,7 @@ import org.slf4j.LoggerFactory;
  * on stop for the common case where the server is not yet
  * garbage-collectable.
  */
+@ApiStatus.Internal
 public final class MultiForgeServerState {
     private static final Logger LOGGER = LoggerFactory.getLogger("multiforge.serverstate");
     private static final InstanceRegistry<MinecraftServer, RegionPinManager> PINS = InstanceRegistry.weak();
@@ -106,6 +108,11 @@ public final class MultiForgeServerState {
         } catch (IOException e) {
             LOGGER.warn("failed to load {} — using defaults: {}", configFile, e.getMessage());
             loaded = new MultiForgeConfigStore(configFile, MultiForgeConfig.defaults());
+        } catch (RuntimeException e) {
+            // A value of the wrong type (or a TOML syntax error). Starting with defaults
+            // could silently flip a kill switch the operator set, so stop with one line
+            // that names the file and the key instead of a stack trace.
+            throw new IllegalStateException("Invalid " + configFile + ": " + e.getMessage(), e);
         }
         CONFIGS.register(server, loaded);
         return loaded;
@@ -141,8 +148,11 @@ public final class MultiForgeServerState {
         net.multiforge.runtime.region.RegionTickWatchdog.setMode(watchdogStrict
                 ? net.multiforge.runtime.region.RegionTickWatchdog.Mode.STRICT
                 : net.multiforge.runtime.region.RegionTickWatchdog.Mode.WARN);
-        net.multiforge.runtime.diagnostics.ViolationLogger.configure(
-                config.violationPolicy() == MultiForgeConfig.ViolationPolicy.REROUTE_ONLY ? 0L : config.warnPerMin());
+        // reroute-only silences ownership violations only: overruns, deferred tickets and
+        // dropped work are still worth a line in the log.
+        net.multiforge.runtime.ownership.OwnershipEnforcer.setQuiet(
+                config.violationPolicy() == MultiForgeConfig.ViolationPolicy.REROUTE_ONLY);
+        net.multiforge.runtime.diagnostics.ViolationLogger.configure(config.warnPerMin());
         net.multiforge.runtime.region.RegionPhase.setDeferVisibility(config.effectiveDeferVisibility());
         net.multiforge.neoforge.world.LockingEntityGetter.setLockFreeOutsidePhase(config.effectiveLockFreeOutsidePhase());
         net.multiforge.runtime.region.WorkerChunkCache.setEnabled(config.effectiveWorkerChunkCache());

@@ -1,5 +1,145 @@
 # CHANGELOG
 
+## v1.11.1 — command blocks, block-entity races, and gates that test the parallel path
+
+A full audit of v1.11.0 found two bugs that can take a server down, a set of
+smaller races around the tick barrier, and verification that mostly ran on
+one thread. **Upgrade if you use command blocks, datapack functions, or mods
+that run commands (KubeJS, quest rewards).**
+
+### Crashes and corruption fixed
+
+- **A command block crashed a small server.** A level with one region (the
+  default for a small world), a busy ("hot") region and the global region tick
+  on the server thread, under their region's token. Commands, functions and
+  teleports started there were "deferred to the server thread" — the thread
+  they were on, which ran them at once and deferred them again until the stack
+  overflowed. A repeating command block crash-looped the server on every
+  start. The same applied to a write into a chunk that loaded mid-tick. Such
+  code now runs inline, as in Vanilla: nothing else runs at that moment.
+- **Block entities could stop ticking, tick twice, or crash the server.** While
+  a worker waited for a chunk load, the server thread ran pending chunk
+  promotions for every level and added their block entities to whichever
+  region's list the chunk's section mapped to — a list that region's worker
+  could be compacting at that moment. Only a region's own tick adds to its
+  list now; everything else waits for the next server-thread pass.
+- **The tick barrier no longer ends early.** An error thrown by a main-thread
+  task during the barrier (a chunk promotion) ended the barrier while workers
+  still ran, and the crash save that followed ran concurrently with them. The
+  barrier now waits for every worker first.
+- **`executeBlocking` on a region worker hung the server** (Vanilla's
+  `disconnect` uses it, so does a mod kicking a player from entity code). It
+  runs on the serial lane now. A worker joining a chunk future through a path
+  nobody counted no longer stalls the barrier until the watchdog fires.
+- **The server's profiler** (`/debug start`, `/perf start`) was pushed and
+  popped from every region worker at once; workers now leave it alone.
+
+### Behaviour
+
+- **Command blocks on region workers** defer their whole tick with the command,
+  so conditional chains and comparator output see the command's own result
+  (they used to read 0).
+- A mob going through a portal from a worker is no longer reported as a
+  cross-region write (and no longer lost in strict mode).
+- A block event for a position in another region runs on that region.
+- A block entity placed during a region's tick runs NeoForge's `onLoad`
+  before its first tick.
+- Each region runs scheduled ticks, then random ticks and spawning, then block
+  events — Vanilla's order (random ticks used to run first).
+- A write rerouted to a region whose last chunk then unloaded is applied on
+  the server thread instead of being dropped. A rerouted write that throws is
+  reported like the same write made inline.
+- NeoForge's `ForcedChunkManager` on a worker is deferred whole to the server
+  thread (its saved records were written from the worker).
+- Chunks becoming ready to send to players are held to the barrier.
+- **Events:** registering the same object twice no longer fires its listeners
+  twice (NeoForge ignores the repeat; MultiForge did not), and
+  `-Dmultiforge.event-dispatch=off` is a real rollback to NeoForge's bus. A
+  deferred listener that throws is logged with where it threw.
+- A rerouted `addWithUUID` (and the other paths into `ServerLevel.addEntity`)
+  returns what Vanilla would have, like `addFreshEntity`; it returned `false`.
+- Global-region work (`ServerDomains.global()`) is no longer treated as a
+  cross-region move, so its teleports run at once instead of after the barrier.
+
+### Config and commands
+
+- `multiforge-server.toml` is validated: unknown keys are logged, out-of-range
+  values clamped with a warning, and a value of the wrong type stops the server
+  with one line naming the key. A bad `region.size` used to leave a world with
+  no regions on `config reload`.
+- **Region size is at least 8 chunks.** Below that, the gap between regions is
+  shorter than mob follow ranges, villager searches and explosions.
+- **`/multiforge` subcommands that change state need permission level 3**
+  (config changes, region size/pin/unpin, entity heals, certify, clearing
+  counters); level 2, which command blocks and functions run at, may only
+  read. Topology commands are refused from inside a region tick, and certify
+  runs one at a time.
+
+### Install and update
+
+- **Every launcher refuses the wrong JDK.** The installer's own `run.sh` and
+  `run.bat` check for Java 21; before, every update replaced the checked
+  launcher with NeoForge's bare `java`. `java -jar server.jar` (NeoForged's
+  server starter, which reads `run.sh`) keeps working: the release build boots
+  the installed server through it (`:neoforge:testProductionServer`).
+- **Pelican egg:** pinned versions downloaded nothing (the URL never matched a
+  release), the install container had no Java, it offered Java 22 and 25, and
+  it accepted the EULA for you. Fixed, and it checks the installer against
+  `SHA256SUMS`.
+- **Updater:** a missing `SHA256SUMS` is fatal; `--rollback` works without Java
+  and keeps `server.jar`; the printed start command names the checked JDK.
+  Releases are published as drafts until every asset is attached.
+- The converter backs up the original launcher only once.
+
+### Debug client
+
+- The client mod is client-only (`dist = CLIENT`) and no longer carries
+  MultiForge's runtime classes, which clashed with the server's. It requires
+  Minecraft 1.21.1 and NeoForge 21.1.251+.
+- Overlays follow a player after death or leaving the End; a client newer than
+  the server is served instead of refused.
+- The region list's `owned=` shows how many entities the region's last tick
+  ran; it was always 0.
+- **Debug clients older than v1.9.0 receive nothing from a v1.9+ server**
+  (they refuse its protocol 4). Update the client with the server; the
+  v1.8.0 note that "clients from v1.4.0 on keep working" was wrong.
+
+### Verification
+
+- The GameTest server ticks every region on a worker
+  (`multiforge.inlineSingleRegion=false`), and a placement test fails if it
+  did not; before, most region-tick tests passed with every region on the
+  server thread. New tests cover command blocks, `executeBlocking`, portal
+  crossings and the fixes above. CI also runs the suite in strict mode.
+- The nightly strict swarm spreads its bots so regions tick on workers, and
+  fails if none did, if it could not read the probes, or if strict mode was
+  not on. The nightly also runs the stress checks and the updater test.
+- The release job checks the tag matches the version, boots a server
+  installed from the built installer, and checks the installer embeds the
+  runtime.
+- **What the parity gate compares** is now stated plainly, and it compares
+  more: block states, biomes, heightmaps, pending block and fluid ticks, and
+  the id and position of every block entity, in 196 full chunks, with entities
+  removed and random ticks, spawning, activation range and the push cap off.
+  It is not a byte-identical world save.
+- Unit tests cover the host's real chunk-ownership lookups (before, only a
+  stub), including chunks loaded mid-tick and unloads, and the regionizer
+  property test now runs at the region sizes servers use, anywhere up to the
+  world border.
+
+### Housekeeping
+
+- Removed dead code: `RegionizedData` and `DomainAssertions` (no production
+  callers; `-Dmultiforge.assert` did nothing) and `scripts/install.sh`, which
+  accepted the Minecraft EULA for you; `multiforge-update.sh` does fresh
+  installs.
+- The OTLP exporter (`-Dmultiforge.otel.endpoint`, off unless set) logs a
+  failing collector once, and its recovery, instead of a stderr line every
+  10 seconds.
+- The fork's `licenseCheck` holds `net/multiforge/**` to MultiForge's GPL-3.0
+  header; build scripts carry it too. Both Gradle wrappers pin their
+  distribution's SHA-256.
+
 ## v1.11.0 — no more limbo mobs, and a mob crowd no longer stops the server
 
 - **Upgrading from v1.10: back up the world, then run `/multiforge entities audit` and `/multiforge entities audit heal`.** Entity activation range is new and on by default, and it changes distant mob farms (see below). Steps and kill switches: `docs/install.md#upgrading-to-v1110`.
@@ -18,7 +158,7 @@
   - the slowest regions are submitted first.
 - `/multiforge region list` shows p99 tick time; `chunkmap.tick.*` probes time the entity tracker and chunk unloading.
 - Immersive Engineering's `ServerLevel.sendBlockUpdated` mixin applies again (a development build broke it; no release shipped with it).
-- **Verification.** The vanilla-parity gate is byte-identical to stock NeoForge at 1 and 4 workers (196 chunks). Scenarios x1–x4 pass. The GameTests pass in `hybrid` and `strict`: 191/191 required, where `testFeatureGating` is an upstream failure in every mode. New keys and kill switches: `docs/perf-tuning.md#kill-switches`.
+- **Verification.** The vanilla-parity gate (block states and biomes of 196 full chunks; see v1.11.1) matches stock NeoForge at 1 and 4 workers. Scenarios x1–x4 pass. The GameTests pass in `hybrid` and `strict`: 191/191 required, where `testFeatureGating` is an upstream failure in every mode. New keys and kill switches: `docs/perf-tuning.md#kill-switches`.
 
 ## v1.10.0 — a busy modded base runs on a worker again
 
@@ -49,7 +189,7 @@
   - a level with a single region ticks it on the server thread, where nothing needs handing off, and a region posting more than 2000 lane events in a tick moves there too until it has been quiet for 200 ticks (`[tick]` in `multiforge-server.toml`; an existing file keeps its values and gets the defaults for the new keys);
   - nine NeoForge events fired from one entity's own tick (breathing, despawn, griefing, target change, visibility, fall, jump, entering a section, Vanilla game events) run on the owning region;
   - an `[events]` table in `config/multiforge-mods.toml` overrides how any event is dispatched.
-  - On the ATM10 bench, lane hand-offs went from 99.7k to 0 in two minutes and p95 tick time from 11.6 to 6.6 ms. The parity gate is byte-identical to stock NeoForge, including with a region ticked on the server thread.
+  - On the ATM10 bench, lane hand-offs went from 99.7k to 0 in two minutes and p95 tick time from 11.6 to 6.6 ms. The parity gate (block states and biomes) matches stock NeoForge, including with a region ticked on the server thread.
 - **The stall is visible now.** Region wait time is summed in nanoseconds (it truncated each sub-millisecond wait to 0 ms, so lane waits looked free), serial dispatch is counted per event, mod and dimension (`event.dispatch.serial.*`), `/multiforge probes top <prefix>` lists the largest counters, and `/multiforge region list` shows which thread ticked each region.
 - A write to a chunk loaded during the tick counts under `ownership.pending-registration` instead of logging an `owner=none` violation.
 - **Debug client (protocol 3).** Region rows show the thread that ticked them (`[tick-6]`, `[server]`), the HUD says whether your dimension runs on worker threads or the server thread, and shows the serial-lane rate. Chunk seams and pin boxes run from the bottom of the world to the build limit. Clients from v1.4.0 on keep working.

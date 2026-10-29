@@ -12,10 +12,13 @@
  */
 package net.multiforge.runtime.ownership;
 
+import org.jetbrains.annotations.ApiStatus;
+
 /**
  * The execution ownership context an operation is authorised to run in.
  * See {@code docs/blueprint.md} §Terminology.
  */
+@ApiStatus.Internal
 public enum Domain {
     /** A region worker thread. Owns some subset of the world's chunks and entities. */
     REGION,
@@ -32,7 +35,10 @@ public enum Domain {
      * the server thread; the synthetic global region that runs {@code
      * ServerDomains.global()} tasks ticks under a REGION token for its own
      * id, which {@link OwnershipEnforcer#canMutateAt} allows everywhere.
-     * Only {@code SingleThreadedSchedulerHost} stamps this domain.
+     * Stamped on Vanilla's {@code ProcessorMailbox} tasks (the chunk system's
+     * world-generation, lighting and storage mailboxes; {@code 01-ownership}
+     * patch), which are exempt from ownership checks as Vanilla's own threads,
+     * and by {@code SingleThreadedSchedulerHost}.
      */
     GLOBAL,
 

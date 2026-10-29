@@ -16,6 +16,7 @@ import java.util.Objects;
 import net.multiforge.api.world.ChunkPos;
 import net.multiforge.api.world.WorldRef;
 import net.multiforge.runtime.region.RegionId;
+import org.jetbrains.annotations.ApiStatus;
 
 /**
  * A loaded chunk as the regionized runtime sees it: its position and the
@@ -23,6 +24,7 @@ import net.multiforge.runtime.region.RegionId;
  * ChunkEvent.Load}) and dropped when it unloads; Vanilla's own {@code
  * ChunkHolder} keeps everything else (load level, futures, players).
  */
+@ApiStatus.Internal
 public final class NewChunkHolder {
 
     private final WorldRef world;

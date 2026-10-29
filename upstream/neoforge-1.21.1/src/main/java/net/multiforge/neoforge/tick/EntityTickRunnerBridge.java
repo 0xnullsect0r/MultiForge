@@ -20,6 +20,7 @@ import net.multiforge.neoforge.RegionizedTickCoordinator;
 import net.multiforge.runtime.region.EntityTickRunner;
 import net.multiforge.runtime.region.Region;
 import net.multiforge.runtime.scheduler.MultiThreadedSchedulerHost;
+import org.jetbrains.annotations.ApiStatus;
 
 /**
  * Vanilla-backed {@link EntityTickRunner} — the fork glue B3.3's
@@ -55,6 +56,7 @@ import net.multiforge.runtime.scheduler.MultiThreadedSchedulerHost;
  * a region does not take are ticked by the server thread after the
  * regions ({@code ServerLevel.mfTickEntitiesAfterRegions}).
  */
+@ApiStatus.Internal
 public final class EntityTickRunnerBridge implements EntityTickRunner {
     private final MultiThreadedSchedulerHost host;
     private final MinecraftServer server;
@@ -78,7 +80,7 @@ public final class EntityTickRunnerBridge implements EntityTickRunner {
         // region's last tick time for load shedding.
         net.multiforge.neoforge.world.EntityActivation.beginRegion(level, host.scheduler().lastTickNanos(region));
         try {
-            level.mfTickEntitiesForRegion(region.id().value());
+            region.recordEntitiesTicked(level.mfTickEntitiesForRegion(region.id().value()));
         } finally {
             net.multiforge.neoforge.world.EntityActivation.endRegion();
         }

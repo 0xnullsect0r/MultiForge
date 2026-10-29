@@ -1,6 +1,6 @@
 --- a/net/minecraft/world/level/chunk/storage/SectionStorage.java
 +++ b/net/minecraft/world/level/chunk/storage/SectionStorage.java
-@@ -59,23 +59,26 @@ public class SectionStorage<R> implements AutoCloseable {
+@@ -59,19 +59,22 @@ public class SectionStorage<R> implements AutoCloseable {
          this.levelHeightAccessor = p_223516_;
      }
  
@@ -26,12 +26,30 @@
          return this.storage.get(p_63819_);
      }
  
--    protected Optional<R> getOrLoad(long p_63824_) {
-+    protected synchronized Optional<R> getOrLoad(long p_63824_) {
-         if (this.outsideStoredRange(p_63824_)) {
-             return Optional.empty();
-         } else {
-@@ -99,7 +102,7 @@ public class SectionStorage<R> implements AutoCloseable {
+@@ -83,7 +86,21 @@ public class SectionStorage<R> implements AutoCloseable {
+             if (optional != null) {
+                 return optional;
+             } else {
+-                this.readColumn(SectionPos.of(p_63824_).chunk());
++                // MultiForge (multiforge-patches/02-region-tick/): read the column from
++                // disk without holding this storage's monitor, which every region's
++                // villager queries share; only parsing it into the map takes the lock. A
++                // caller that already holds the monitor reads under it, as before.
++                ChunkPos mf$column = SectionPos.of(p_63824_).chunk();
++                if (Thread.holdsLock(this)) {
++                    this.readColumn(mf$column);
++                } else {
++                    Optional<CompoundTag> mf$tag = this.tryRead(mf$column).join();
++                    synchronized (this) {
++                        if (this.get(p_63824_) == null) {
++                            this.readColumn(mf$column, this.registryAccess.createSerializationContext(NbtOps.INSTANCE), mf$tag.orElse(null));
++                        }
++                    }
++                }
+                 optional = this.get(p_63824_);
+                 if (optional == null) {
+                     throw (IllegalStateException)Util.pauseInIde(new IllegalStateException());
+@@ -99,7 +116,7 @@ public class SectionStorage<R> implements AutoCloseable {
          return this.levelHeightAccessor.isOutsideBuildHeight(i);
      }
  
@@ -40,7 +58,7 @@
          if (this.outsideStoredRange(p_63828_)) {
              throw (IllegalArgumentException)Util.pauseInIde(new IllegalArgumentException("sectionPos out of bounds"));
          } else {
-@@ -209,7 +212,7 @@ public class SectionStorage<R> implements AutoCloseable {
+@@ -209,7 +226,7 @@ public class SectionStorage<R> implements AutoCloseable {
      protected void onSectionLoad(long p_63813_) {
      }
  
@@ -49,7 +67,7 @@
          Optional<R> optional = this.storage.get(p_63788_);
          if (optional != null && !optional.isEmpty()) {
              this.dirty.add(p_63788_);
-@@ -222,7 +225,7 @@ public class SectionStorage<R> implements AutoCloseable {
+@@ -222,7 +239,7 @@ public class SectionStorage<R> implements AutoCloseable {
          return p_63806_.get("DataVersion").asInt(1945);
      }
  
@@ -58,7 +76,7 @@
          if (this.hasWork()) {
              for (int i = this.levelHeightAccessor.getMinSection(); i < this.levelHeightAccessor.getMaxSection(); i++) {
                  long j = getKey(p_63797_, i);
-@@ -243,7 +246,7 @@ public class SectionStorage<R> implements AutoCloseable {
+@@ -243,7 +260,7 @@ public class SectionStorage<R> implements AutoCloseable {
       * Neo: Removes the data for the given chunk position.
       * See PR #937
       */

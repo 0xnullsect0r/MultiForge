@@ -21,6 +21,7 @@ import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Consumer;
+import org.jetbrains.annotations.ApiStatus;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -32,6 +33,7 @@ import org.slf4j.LoggerFactory;
  * <p>Default budget: 5 messages / 60 seconds per key. Configurable via
  * {@code -Dmultiforge.violations.warn-per-min=<n>}.
  */
+@ApiStatus.Internal
 public final class ViolationLogger {
 
     private static final Logger LOG = LoggerFactory.getLogger("multiforge.violation");
@@ -62,7 +64,8 @@ public final class ViolationLogger {
 
     /**
      * Set the per-key budget from {@code [violations] warnPerMin} (0 silences
-     * every warning, as {@code policy = "reroute-only"} does). The {@code
+     * every warning; {@code policy = "reroute-only"} silences only ownership
+     * violations, in {@code OwnershipEnforcer}). The {@code
      * -Dmultiforge.violations.warn-per-min} system property, when set, wins.
      * Existing buckets are dropped so the new budget applies immediately.
      */

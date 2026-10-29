@@ -12,11 +12,14 @@
  */
 package net.multiforge.runtime.event;
 
+import org.jetbrains.annotations.ApiStatus;
+
 /**
  * Where {@link DomainDispatcher} hands off invocations that do not run
  * inline. MC-free so the dispatcher is unit-testable; the fork's {@code
  * SchedulerBackedDispatchExecutor} is the production implementation.
  */
+@ApiStatus.Internal
 public interface DispatchExecutor {
 
     /**

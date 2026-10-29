@@ -18,6 +18,7 @@ import java.util.function.Consumer;
 import net.multiforge.runtime.diagnostics.wire.DebugPacketCodec;
 import net.multiforge.runtime.diagnostics.wire.DebugPayload;
 import net.multiforge.runtime.scheduler.MultiThreadedSchedulerHost;
+import org.jetbrains.annotations.ApiStatus;
 
 /**
  * Produces {@link DebugPacketCodec} {@code HELLO} frames (Track C1
@@ -43,6 +44,7 @@ import net.multiforge.runtime.scheduler.MultiThreadedSchedulerHost;
  * already-{@code HELLO}'d connections if a future protocol revision
  * adds a dedicated heartbeat kind.
  */
+@ApiStatus.Internal
 public final class HeartbeatEmitter {
 
     /** Matches the other 4Hz streams (docs/design/client-debug-protocol.md §3). */

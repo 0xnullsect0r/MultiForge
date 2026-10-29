@@ -70,9 +70,8 @@ replay_pid*.log
 /ops.json
 /eula.txt
 
-# Installer signing keys (never commit private keys)
-# The installer jar is Ed25519-signed for supply-chain integrity even
-# under GPL-3 — the license moved to OSS, the code-signing did not.
+# Private keys of any kind must never be committed. (MultiForge does no
+# signing; CLAUDE.md rule 2.)
 *.private.pem
 *.priv
 private-key.*

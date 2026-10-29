@@ -1,0 +1,16 @@
+--- a/net/minecraft/util/thread/BlockableEventLoop.java
++++ b/net/minecraft/util/thread/BlockableEventLoop.java
+@@ -79,6 +79,13 @@ public abstract class BlockableEventLoop<R extends Runnable> implements Profiler
+ 
+     public void executeBlocking(Runnable p_18710_) {
+         if (!this.isSameThread()) {
++            // MultiForge (multiforge-patches/02-region-tick/): a region worker waiting on the
++            // server's queue would wait forever (the server thread is at the tick barrier,
++            // which does not run that queue); run it on the serial lane, which it does.
++            if (this instanceof net.minecraft.server.MinecraftServer
++                    && net.multiforge.neoforge.OwnershipGuard.executeBlockingOnLane(p_18710_)) {
++                return;
++            }
+             this.submitAsync(p_18710_).join();
+         } else {
+             p_18710_.run();

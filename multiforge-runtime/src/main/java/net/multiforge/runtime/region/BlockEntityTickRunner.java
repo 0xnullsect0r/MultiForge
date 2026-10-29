@@ -18,6 +18,7 @@ import net.multiforge.runtime.chunk.ChunkHolderManager;
 import net.multiforge.runtime.chunk.HolderManagerRegionData;
 import net.multiforge.runtime.chunk.TickingBlockEntityRef;
 import net.multiforge.runtime.diagnostics.ChunkCost;
+import org.jetbrains.annotations.ApiStatus;
 
 /**
  * Runs one region's slice of block-entity tickers for a single tick —
@@ -52,6 +53,7 @@ import net.multiforge.runtime.diagnostics.ChunkCost;
  * as chunks load/unload and block entities are placed/broken.
  */
 @FunctionalInterface
+@ApiStatus.Internal
 public interface BlockEntityTickRunner {
 
     /**

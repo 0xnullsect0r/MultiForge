@@ -103,9 +103,9 @@ stops the server. A violation on some other thread (a Netty handler, a
 mod's executor) throws in that thread. Use strict mode on a test server
 to find the exact call chain; never run production this way.
 
-`-Dmultiforge.ownership.mode` sets `OwnershipEnforcer`'s initial mode, but
-a server overwrites it from the config file at startup, so use the config
-or `-Dmultiforge.mode` instead.
+An explicitly set `-Dmultiforge.ownership.mode` (`off`, `reroute` or
+`strict`) wins over the config file, at startup and on every config
+change, so a test run can force strict ownership without editing the file.
 
 `mode = "off"` (config, or `-Dmultiforge.mode=off`, takes effect at the
 next start) runs Vanilla's single-threaded tick with no regions. If a

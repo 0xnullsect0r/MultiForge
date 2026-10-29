@@ -13,6 +13,7 @@
 package net.multiforge.runtime.chunk;
 
 import net.multiforge.api.world.BlockPos;
+import org.jetbrains.annotations.ApiStatus;
 
 /**
  * MC-free abstraction over a single block entity's per-tick ticker —
@@ -37,6 +38,7 @@ import net.multiforge.api.world.BlockPos;
  * same single-writer contract as the rest of {@link
  * HolderManagerRegionData}.
  */
+@ApiStatus.Internal
 public interface TickingBlockEntityRef {
 
     /** Whether this ticker currently wants to run — Vanilla's per-entity tick gate. */

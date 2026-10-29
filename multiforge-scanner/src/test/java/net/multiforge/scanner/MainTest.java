@@ -22,7 +22,6 @@ import java.nio.file.Path;
 import java.util.List;
 import java.util.jar.JarEntry;
 import java.util.jar.JarOutputStream;
-import net.multiforge.scanner.rules.R02OffThreadLevelSetBlock;
 import net.multiforge.scanner.testsupport.Bytecode;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -39,7 +38,10 @@ class MainTest {
         ByteArrayOutputStream out = new ByteArrayOutputStream();
         ByteArrayOutputStream err = new ByteArrayOutputStream();
         int code = Main.run(
-                new String[0], new PrintStream(out), new PrintStream(err), List.of(new R02OffThreadLevelSetBlock()));
+                new String[0],
+                new PrintStream(out),
+                new PrintStream(err),
+                List.of(new net.multiforge.scanner.rules.R03BlockingFuture()));
         assertThat(code).isEqualTo(2);
     }
 
@@ -53,10 +55,10 @@ class MainTest {
                 new String[] {jar.toString()},
                 new PrintStream(out),
                 new PrintStream(err),
-                List.of(new R02OffThreadLevelSetBlock()));
+                List.of(new net.multiforge.scanner.rules.R03BlockingFuture()));
 
         assertThat(code).isEqualTo(1);
-        assertThat(out.toString()).contains("\"R02\"");
+        assertThat(out.toString()).contains("\"R03\"");
     }
 
     @Test
@@ -69,7 +71,7 @@ class MainTest {
                 new String[] {jar.toString()},
                 new PrintStream(out),
                 new PrintStream(err),
-                List.of(new R02OffThreadLevelSetBlock()));
+                List.of(new net.multiforge.scanner.rules.R03BlockingFuture()));
 
         assertThat(code).isEqualTo(0);
     }
@@ -85,7 +87,7 @@ class MainTest {
                 new String[] {jar.toString()},
                 new PrintStream(discover),
                 new PrintStream(new ByteArrayOutputStream()),
-                List.of(new R02OffThreadLevelSetBlock()));
+                List.of(new net.multiforge.scanner.rules.R03BlockingFuture()));
         String fingerprint = extractFingerprint(discover.toString());
         Files.writeString(ignoreFile, fingerprint + "\n");
 
@@ -95,10 +97,10 @@ class MainTest {
                 new String[] {"--ignore-file", ignoreFile.toString(), jar.toString()},
                 new PrintStream(out),
                 new PrintStream(err),
-                List.of(new R02OffThreadLevelSetBlock()));
+                List.of(new net.multiforge.scanner.rules.R03BlockingFuture()));
 
         assertThat(code).isEqualTo(0);
-        assertThat(out.toString()).doesNotContain("\"ruleId\": \"R02\"");
+        assertThat(out.toString()).doesNotContain("\"ruleId\": \"R03\"");
         assertThat(out.toString()).contains("\"suppressed\": 1");
     }
 
@@ -106,7 +108,7 @@ class MainTest {
     void staleIgnoreEntryStillReportsTheFindingAndKeepsExitCodeNonZero() throws IOException {
         Path jar = writeJarWithBadClass();
         Path ignoreFile = tempDir.resolve("stale.multiforgeignore");
-        Files.writeString(ignoreFile, "R02:com.example.mod.BadR05#teleportToBase(Ljava/lang/Object;)V#000000000000\n");
+        Files.writeString(ignoreFile, "R03:com.example.mod.BadR05#teleportToBase(Ljava/lang/Object;)V#000000000000\n");
 
         ByteArrayOutputStream out = new ByteArrayOutputStream();
         ByteArrayOutputStream err = new ByteArrayOutputStream();
@@ -114,10 +116,10 @@ class MainTest {
                 new String[] {"--ignore-file", ignoreFile.toString(), jar.toString()},
                 new PrintStream(out),
                 new PrintStream(err),
-                List.of(new R02OffThreadLevelSetBlock()));
+                List.of(new net.multiforge.scanner.rules.R03BlockingFuture()));
 
         assertThat(code).isEqualTo(1);
-        assertThat(out.toString()).contains("\"ruleId\": \"R02\"");
+        assertThat(out.toString()).contains("\"ruleId\": \"R03\"");
         assertThat(out.toString()).contains("\"staleSuppressions\": 1");
     }
 
@@ -138,17 +140,17 @@ class MainTest {
                 new String[] {"--sarif", jar.toString()},
                 new PrintStream(out),
                 new PrintStream(err),
-                List.of(new R02OffThreadLevelSetBlock()));
+                List.of(new net.multiforge.scanner.rules.R03BlockingFuture()));
 
         assertThat(code).isEqualTo(1);
         assertThat(out.toString()).contains("\"version\": \"2.1.0\"");
     }
 
     private Path writeJarWithBadClass() throws IOException {
-        // An ERROR-severity finding: Level.setBlock from a method that is not tick-reachable (R02).
+        // An ERROR-severity finding: a blocking CompletableFuture.get() in region-thread code (R03).
         ClassWriter cw = Bytecode.newClass("com/example/mod/BadR05", false);
-        MethodVisitor mv = Bytecode.beginMethod(cw, "teleportToBase", false);
-        Bytecode.invokeVirtual(mv, "net/minecraft/world/level/Level", "setBlock", "()V");
+        MethodVisitor mv = Bytecode.beginMethod(cw, "teleportToBase", true);
+        Bytecode.invokeVirtual(mv, "java/util/concurrent/CompletableFuture", "get", "()Ljava/lang/Object;");
         Bytecode.endVoid(mv);
         byte[] bytes = Bytecode.finish(cw);
 

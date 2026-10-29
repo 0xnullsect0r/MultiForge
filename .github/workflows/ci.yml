@@ -64,7 +64,7 @@ jobs:
           retention-days: 7
 
   client-build:
-    name: client mod build + test (multiforge-client)
+    name: client mod, fixture mods and scanner corpus
     runs-on: ubuntu-latest
     # moddev's NeoForm decompile dominates; the compile + test itself is
     # seconds. Only runs when something that can break the client mod
@@ -79,6 +79,8 @@ jobs:
           filters: |
             client:
               - 'multiforge-client/**'
+              - 'multiforge-testmods/**'
+              - 'multiforge-scanner/**'
               - 'multiforge-api/src/main/**'
               - 'multiforge-runtime/src/main/java/net/multiforge/runtime/diagnostics/**'
               - 'upstream/neoforge-1.21.1/src/main/java/net/multiforge/neoforge/debug/**'
@@ -104,7 +106,14 @@ jobs:
         # largest step and OOMs at the default heap.
         env:
           GRADLE_OPTS: -Xmx6G
-        run: ./gradlew :multiforge-client:build --no-daemon --stacktrace
+        # The fixture mods share the client's moddev setup, so they build here, and
+        # the scanner corpus (every finding on them and on the client jar) is
+        # checked against multiforge-scanner/corpus/expected.txt.
+        run: |
+          ./gradlew :multiforge-client:build \
+            :multiforge-testmods:writer:build :multiforge-testmods:legacy:build \
+            :multiforge-testmods:slowtick:build :multiforge-testmods:limbo:build \
+            :multiforge-scanner:scanCorpus --no-daemon --stacktrace
 
       - name: Upload test reports on failure
         if: failure() && steps.changes.outputs.client == 'true'
@@ -171,11 +180,30 @@ jobs:
         working-directory: upstream/neoforge-1.21.1
         run: ./gradlew --no-configuration-cache --stacktrace :neoforge:checkMixinTargets
 
-      - name: GameTest server (NeoForge suite + MultiForge region-tick tests)
-        # Boots the patched dedicated server with the regionized runtime and
-        # runs every required GameTest; any failure fails the job.
+      - name: GameTest server (NeoForge suite + MultiForge tests, regions on workers)
+        # Boots the patched dedicated server with the regionized runtime (every
+        # region on a worker; tests/build.gradle) and runs every required GameTest.
+        # A failure exits non-zero. The log is also checked for the number of
+        # required tests that passed, so a run in which tests silently stopped
+        # registering (or none ran) cannot pass.
         working-directory: upstream/neoforge-1.21.1
-        run: ./gradlew --no-configuration-cache --stacktrace :tests:runGameTestServer
+        run: |
+          set -o pipefail
+          ./gradlew --no-configuration-cache --stacktrace :tests:runGameTestServer 2>&1 | tee gametest.log
+          ../../.github/scripts/check-gametest-log.sh gametest.log "$MIN_REQUIRED_GAMETESTS"
+        env:
+          MIN_REQUIRED_GAMETESTS: "197"
+
+      - name: GameTest server in strict mode
+        # The same suite with ownership violations and region overruns thrown
+        # instead of rerouted and logged.
+        working-directory: upstream/neoforge-1.21.1
+        run: |
+          set -o pipefail
+          ./gradlew --no-configuration-cache --stacktrace :tests:runGameTestServer -PmultiforgeMode=strict 2>&1 | tee gametest-strict.log
+          ../../.github/scripts/check-gametest-log.sh gametest-strict.log "$MIN_REQUIRED_GAMETESTS"
+        env:
+          MIN_REQUIRED_GAMETESTS: "197"
 
       - name: Upload fork reports on failure
         if: failure()

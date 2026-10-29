@@ -15,6 +15,7 @@ package net.multiforge.neoforge;
 import net.minecraft.core.BlockPos;
 import net.minecraft.world.level.Level;
 import net.multiforge.runtime.ownership.OwnershipEnforcer;
+import org.jetbrains.annotations.ApiStatus;
 
 /**
  * Thin adapter that patched {@code net.minecraft.*} mutation sites
@@ -28,6 +29,7 @@ import net.multiforge.runtime.ownership.OwnershipEnforcer;
  * own hand-written glue under {@code net.neoforged.neoforge} separate
  * from patched vanilla under {@code net.minecraft}.
  */
+@ApiStatus.Internal
 public final class OwnershipGuard {
     private OwnershipGuard() {}
 
@@ -80,6 +82,26 @@ public final class OwnershipGuard {
     }
 
     /**
+     * {@code ServerLevel.blockEvent} from a region worker for a position its region
+     * does not own (a piston or a note block in another region, or a chunk loaded this
+     * tick): queue the event on the owner, or on the server thread when nobody owns
+     * the chunk. Region block-event queues are touched only by their own region, so
+     * queueing it on the caller's region would run it on the wrong thread.
+     *
+     * @return {@code true} if rerouted and the caller must return
+     */
+    public static boolean rerouteBlockEvent(
+            net.minecraft.server.level.ServerLevel level,
+            BlockPos pos,
+            net.minecraft.world.level.block.Block block,
+            int paramA,
+            int paramB) {
+        if (canMutateAt("ServerLevel.blockEvent", level, pos)) return false;
+        rerouteAt("ServerLevel.blockEvent", level, pos, () -> level.blockEvent(pos, block, paramA, paramB));
+        return true;
+    }
+
+    /**
      * Reroute a {@code Level.setBlock} the caller may not run here, and return
      * what Vanilla's {@code setBlock} would have returned: whether the block
      * changes. Callers use that value (to consume an item, play a sound, count
@@ -116,8 +138,21 @@ public final class OwnershipGuard {
      */
     public static boolean rerouteAddFreshEntity(
             net.minecraft.server.level.ServerLevel level, net.minecraft.world.entity.Entity entity, java.util.function.BooleanSupplier apply) {
+        return rerouteAddEntity("ServerLevel.addFreshEntity", level, entity, apply);
+    }
+
+    /**
+     * As {@link #rerouteAddFreshEntity}, for the other ways into the level's
+     * entity storage ({@code ServerLevel.addEntity}: {@code addWithUUID},
+     * {@code addDuringTeleport}), named by {@code site}.
+     */
+    public static boolean rerouteAddEntity(
+            String site,
+            net.minecraft.server.level.ServerLevel level,
+            net.minecraft.world.entity.Entity entity,
+            java.util.function.BooleanSupplier apply) {
         boolean predicted = !entity.isRemoved() && level.getEntity(entity.getUUID()) == null;
-        rerouteChecked("ServerLevel.addFreshEntity", level, entity.blockPosition(), predicted, apply);
+        rerouteChecked(site, level, entity.blockPosition(), predicted, apply);
         return predicted;
     }
 
@@ -154,7 +189,8 @@ public final class OwnershipGuard {
         if (target.isClientSide()) return false;
         if (target != entity.level()) {
             if (!(entity instanceof net.minecraft.server.level.ServerPlayer)
-                    || net.multiforge.runtime.ownership.OwnerToken.current().domain() != net.multiforge.runtime.ownership.Domain.REGION) {
+                    || net.multiforge.runtime.ownership.OwnerToken.current().domain() != net.multiforge.runtime.ownership.Domain.REGION
+                    || OwnershipEnforcer.soleWriter()) {
                 return false;
             }
             net.multiforge.runtime.diagnostics.ProbeRegistry.bump(site + ":deferred-player-dimension-change");
@@ -184,6 +220,11 @@ public final class OwnershipGuard {
         if (net.multiforge.runtime.ownership.OwnerToken.current().domain() != net.multiforge.runtime.ownership.Domain.REGION) {
             return false;
         }
+        // A region the server thread ticks itself (one region in the level, a hot
+        // region, the global region) runs while nothing else does: run inline, as
+        // Vanilla. Deferring would hand the work back to this thread, which runs it
+        // at once and re-enters here until the stack overflows.
+        if (OwnershipEnforcer.soleWriter()) return false;
         net.multiforge.runtime.diagnostics.ProbeRegistry.bump(site + ":deferred-to-server-thread");
         OwnershipEnforcer.reroute(site, work);
         return true;
@@ -232,16 +273,50 @@ public final class OwnershipGuard {
     }
 
     /**
+     * {@code MinecraftServer.executeBlocking} called on a region worker (Vanilla's
+     * {@code disconnect} does, so does a mod kicking a player from entity code): it
+     * queued the task for the server thread and joined it, but the server thread is
+     * waiting at the tick barrier and never runs its own queue there, so the region,
+     * and the server, hung until the watchdog stopped it. The task runs on the serial
+     * lane instead, which the barrier does service — a designed wait.
+     *
+     * @return {@code true} if it ran and the caller must return
+     */
+    public static boolean executeBlockingOnLane(Runnable task) {
+        if (!net.multiforge.runtime.event.SerialLane.handsOff()) return false;
+        net.multiforge.runtime.diagnostics.ProbeRegistry.bump("server.executeBlocking.serial-lane");
+        net.multiforge.runtime.event.SerialLane.run(task);
+        return true;
+    }
+
+    /**
+     * NeoForge's {@code ForcedChunkManager.forceChunk} on a region worker: deferred
+     * whole to the server thread, like {@link #deferSetChunkForced}. Deferring only
+     * its ticket left it writing the level's saved forced-chunk records (plain hash
+     * maps) on the worker, where two regions' chunk loaders could corrupt them or
+     * lose a record (the chunk is then not re-forced after a restart).
+     *
+     * @return {@code true} if deferred and the caller must return its prediction
+     */
+    public static boolean deferForcedChunk(net.minecraft.server.level.ServerLevel level, int chunkX, int chunkZ, Runnable redo) {
+        if (!onTickWorker(level.getServer())) return false;
+        deferTicket("ForcedChunkManager.forceChunk", new net.minecraft.world.level.ChunkPos(chunkX, chunkZ), redo);
+        return true;
+    }
+
+    /**
      * Whether a ticket change here must be deferred: the caller ticks a region (or the
-     * global region while workers run) on a thread other than the server thread. A
-     * region the server thread ticks inline (a level with one region, or a hot region)
-     * changes tickets inline, as Vanilla does: the ticket maps are the server thread's
-     * own, and a deferral from the server thread would run inline anyway ({@code
-     * server.execute} runs tasks on its own thread at once), re-entering this check
-     * until the stack overflows.
+     * global region) while region workers may be running. A region the server thread
+     * ticks inline (a level with one region, or a hot region) changes tickets inline,
+     * as Vanilla does: nothing else runs then ({@link OwnershipEnforcer#soleWriter}).
+     * A serial-lane job runs on the server thread while workers run, and is deferred
+     * like a worker: the barrier pump would otherwise feed its change into the
+     * distance manager while workers read it. Its deferral is queued for after the
+     * tick (the reroute target never runs a server-thread task inline).
      */
     private static boolean onTickWorker(net.minecraft.server.MinecraftServer server) {
-        if (server != null && server.isSameThread()) return false;
+        if (OwnershipEnforcer.soleWriter()) return false;
+        if (server != null && server.isSameThread() && !net.multiforge.runtime.region.RegionPhase.workersInFlight()) return false;
         net.multiforge.runtime.ownership.Domain domain = net.multiforge.runtime.ownership.OwnerToken.current().domain();
         return domain == net.multiforge.runtime.ownership.Domain.REGION
                 || (domain == net.multiforge.runtime.ownership.Domain.GLOBAL

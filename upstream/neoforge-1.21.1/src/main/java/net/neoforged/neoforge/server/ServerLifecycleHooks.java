@@ -118,7 +118,12 @@ public class ServerLifecycleHooks {
         // crashing the caller with RejectedExecutionException.
         net.multiforge.runtime.ownership.OwnershipEnforcer.bindRerouteTarget(runnable -> {
             try {
-                server.execute(runnable);
+                // From the server thread itself (a serial-lane job while region
+                // workers run), queue the task for after this tick: execute() would
+                // run it at once, on this thread, still inside the job that deferred
+                // it, and a guard checked again in there would defer again forever.
+                if (server.isSameThread()) server.tell(new net.minecraft.server.TickTask(server.getTickCount(), runnable));
+                else server.execute(runnable);
             } catch (java.util.concurrent.RejectedExecutionException rejected) {
                 net.multiforge.runtime.diagnostics.ViolationLogger.warn(
                         "OwnershipEnforcer.reroute",
@@ -186,6 +191,10 @@ public class ServerLifecycleHooks {
         // Bind the per-region runners and install the real per-region phase
         // body — once per fresh runtime (see freshInstall above).
         if (mfHost != null && freshInstall) {
+            // A write rerouted to a region whose last chunk then unloaded runs on the
+            // server thread instead of vanishing with the region's mailbox.
+            mfHost.taskQueue().setDeadRegionSink(
+                    task -> net.multiforge.runtime.ownership.OwnershipEnforcer.reroute("RegionizedTaskQueue.region-died", task));
             net.multiforge.neoforge.RegionRuntimeInit.install(mfHost, server);
             // The per-region phase body: block/fluid ticks and the block events
             // they queue, entities, block entities.
@@ -203,6 +212,11 @@ public class ServerLifecycleHooks {
                 net.multiforge.neoforge.MultiForgeServerState.applyConfig(cfg);
                 mfLiveHost.applyConfig(cfg);
             });
+        } else {
+            // No regionized runtime (mode = "off"): the process-wide settings —
+            // violation policy and logging budget — still apply live.
+            net.multiforge.neoforge.MultiForgeServerState.configStoreFor(server)
+                    .subscribe(net.multiforge.neoforge.MultiForgeServerState::applyConfig);
         }
 
         // MultiForge v1.3.5-1.3.9 hook point moved to handleServerStarting

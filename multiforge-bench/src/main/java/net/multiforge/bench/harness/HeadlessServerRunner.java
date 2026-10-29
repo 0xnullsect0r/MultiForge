@@ -407,6 +407,10 @@ public final class HeadlessServerRunner implements AutoCloseable {
         if (config.modsSourceDir() != null && Files.isDirectory(config.modsSourceDir())) {
             copyDirectory(config.modsSourceDir(), runDir.resolve("mods"));
         }
+        // Fresh config every boot: a /multiforge region size, a pin or a modpack's config
+        // left by an earlier run sharing this server directory would change later
+        // results (the parity gate included).
+        deleteRecursively(runDir.resolve("config"));
         if (config.configSourceDir() != null && Files.isDirectory(config.configSourceDir())) {
             copyDirectory(config.configSourceDir(), runDir.resolve("config"));
         }

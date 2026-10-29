@@ -12,6 +12,8 @@
  */
 package net.multiforge.runtime.diagnostics.wire;
 
+import org.jetbrains.annotations.ApiStatus;
+
 /**
  * The message types carried on the {@code multiforge:debug/v1} custom
  * payload channel between the MultiForge server and the client debug
@@ -41,6 +43,7 @@ package net.multiforge.runtime.diagnostics.wire;
  *       client wants pushed to it.</li>
  * </ul>
  */
+@ApiStatus.Internal
 public enum DebugPacketKind {
     HELLO(0x01),
     REGION_SNAPSHOT(0x02),

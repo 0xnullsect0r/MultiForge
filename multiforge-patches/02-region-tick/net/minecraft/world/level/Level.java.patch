@@ -32,7 +32,7 @@
          }
  
          if (this.isOutsideBuildHeight(p_46605_)) {
-@@ -538,34 +543,85 @@ public abstract class Level extends net.neoforged.neoforge.attachment.Attachment
+@@ -538,34 +543,115 @@ public abstract class Level extends net.neoforged.neoforge.attachment.Attachment
      }
  
      public void addBlockEntityTicker(TickingBlockEntity p_151526_) {
@@ -51,6 +51,36 @@
 +        synchronized (this.freshBlockEntities) {
 +            (this.tickingBlockEntities ? this.pendingBlockEntityTickers : this.blockEntityTickers).add(p_151526_);
 +        }
++    }
++
++    /**
++     * MultiForge (multiforge-patches/02-region-tick/): run NeoForge's {@code onLoad}
++     * for the block entity at {@code pos} if it is still waiting for it, and take it
++     * off the fresh lists so the server thread's pass does not run it again. Called by
++     * a region worker right before the first tick of a block entity it placed this
++     * tick: the region ticks it the same tick (as Vanilla does), and NeoForge promises
++     * {@code onLoad} runs before the first tick.
++     */
++    public void mfLoadFreshBlockEntityAt(BlockPos pos) {
++        BlockEntity found = null;
++        synchronized (this.freshBlockEntities) {
++            found = mfTakeFresh(this.freshBlockEntities, pos);
++            if (found == null) found = mfTakeFresh(this.pendingFreshBlockEntities, pos);
++        }
++        if (found != null && !found.isRemoved() && found.hasLevel()) {
++            found.onLoad();
++        }
++    }
++
++    private static BlockEntity mfTakeFresh(java.util.List<BlockEntity> list, BlockPos pos) {
++        for (java.util.Iterator<BlockEntity> it = list.iterator(); it.hasNext(); ) {
++            BlockEntity be = it.next();
++            if (be.getBlockPos().equals(pos)) {
++                it.remove();
++                return be;
++            }
++        }
++        return null;
      }
  
      public void addFreshBlockEntities(java.util.Collection<BlockEntity> beList) {
@@ -135,7 +165,7 @@
          }
          if (!this.pendingBlockEntityTickers.isEmpty()) {
              this.blockEntityTickers.addAll(this.pendingBlockEntityTickers);
-@@ -584,7 +640,9 @@ public abstract class Level extends net.neoforged.neoforge.attachment.Attachment
+@@ -584,7 +670,9 @@ public abstract class Level extends net.neoforged.neoforge.attachment.Attachment
              }
          }
  
@@ -146,7 +176,7 @@
          profilerfiller.pop();
      }
  
-@@ -790,7 +848,10 @@ public abstract class Level extends net.neoforged.neoforge.attachment.Attachment
+@@ -790,7 +878,10 @@ public abstract class Level extends net.neoforged.neoforge.attachment.Attachment
          if (this.isOutsideBuildHeight(p_46716_)) {
              return null;
          } else {
@@ -158,19 +188,40 @@
                  ? null
                  : this.getChunkAt(p_46716_).getBlockEntity(p_46716_, LevelChunk.EntityCreationType.IMMEDIATE);
          }
-@@ -1185,6 +1246,11 @@ public abstract class Level extends net.neoforged.neoforge.attachment.Attachment
+@@ -1185,9 +1276,31 @@ public abstract class Level extends net.neoforged.neoforge.attachment.Attachment
      }
  
      public ProfilerFiller getProfiler() {
+-        return this.profiler.get();
 +        // MultiForge (multiforge-patches/02-region-tick/): the server profiler is
 +        // single-threaded; region workers must not push into it concurrently.
 +        if (net.multiforge.runtime.ownership.OwnerToken.current().domain() == net.multiforge.runtime.ownership.Domain.REGION) {
 +            return net.minecraft.util.profiling.InactiveProfiler.INSTANCE;
 +        }
-         return this.profiler.get();
++        ProfilerFiller mf$profiler = this.profiler.get();
++        // Code that took the profiler on the server thread may run it on a region
++        // worker (ServerLevel.tick's per-entity lambda captures it, and every region
++        // runs that lambda): hand out a copy that ignores calls from other threads.
++        if (this.isClientSide
++                || Thread.currentThread() != this.thread
++                || net.multiforge.runtime.scheduler.MultiForgeRegionizedRuntime.current() == null) {
++            return mf$profiler;
++        }
++        net.multiforge.neoforge.world.ThreadConfinedProfiler mf$confined = this.mfConfinedProfiler;
++        if (mf$confined == null || mf$confined.delegate() != mf$profiler) {
++            mf$confined = new net.multiforge.neoforge.world.ThreadConfinedProfiler(mf$profiler, this.thread);
++            this.mfConfinedProfiler = mf$confined;
++        }
++        return mf$confined;
      }
  
-@@ -1283,4 +1349,22 @@ public abstract class Level extends net.neoforged.neoforge.attachment.Attachment
++    // MultiForge (multiforge-patches/02-region-tick/): getProfiler's thread-confined copy, cached.
++    private volatile net.multiforge.neoforge.world.ThreadConfinedProfiler mfConfinedProfiler;
++
+     public Supplier<ProfilerFiller> getProfilerSupplier() {
+         return this.profiler;
+     }
+@@ -1283,4 +1396,22 @@ public abstract class Level extends net.neoforged.neoforge.attachment.Attachment
          setDayTimeFraction(dayTimeStep - result);
          return result;
      }
