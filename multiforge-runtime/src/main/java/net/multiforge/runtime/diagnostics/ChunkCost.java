@@ -86,6 +86,11 @@ public final class ChunkCost {
         return enabled;
     }
 
+    /** Whether a debug client watching the heatmap asked for measurement ({@link #setEnabled}). */
+    public static boolean watched() {
+        return watched;
+    }
+
     /** Whether {@link #drainReport} totals are being kept. */
     public static boolean reporting() {
         return reporting;

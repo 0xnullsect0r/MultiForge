@@ -33,6 +33,7 @@ import net.multiforge.api.world.ChunkPos;
 import net.multiforge.api.world.WorldRef;
 import net.multiforge.runtime.ownership.Domain;
 import net.multiforge.runtime.ownership.OwnerToken;
+import org.jetbrains.annotations.ApiStatus;
 
 /**
  * M1 reference implementation of {@link SchedulerHost}. Runs every
@@ -43,6 +44,7 @@ import net.multiforge.runtime.ownership.OwnerToken;
  * <p>M2 replaces this with a region-per-worker pool. The API surface
  * stays identical.
  */
+@ApiStatus.Internal
 public final class SingleThreadedSchedulerHost implements SchedulerHost {
 
     /** Milliseconds per Minecraft tick. */

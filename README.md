@@ -29,10 +29,10 @@ From the server directory (stop the server first; needs JDK 21):
 
 ```
 curl -fsSL https://github.com/0xnullsect0r/MultiForge/releases/latest/download/multiforge-update.sh | sh
-java -Xms4G -Xmx20G -jar server.jar nogui
+./run.sh
 ```
 
-Run it again for each new release. `server.jar` is replaced every time and always launches the installed version; `config/` (including `multiforge-server.toml`), `mods/`, the world and `server.properties` are never touched; the previous version is kept for `... | sh -s -- --rollback`. See [docs/install.md § Updating](docs/install.md#updating).
+`./run.sh` refuses to start on anything but Java 21; set `-Xmx` in `user_jvm_args.txt`. (`java -jar server.jar nogui` works too, with a JDK 21's `java`.) Run the updater again for each new release. `server.jar` is replaced every time and always launches the installed version; `config/` (including `multiforge-server.toml`), `mods/`, the world and `server.properties` are never touched; the previous version is kept for `... | sh -s -- --rollback`. See [docs/install.md § Updating](docs/install.md#updating).
 
 The three manual methods:
 

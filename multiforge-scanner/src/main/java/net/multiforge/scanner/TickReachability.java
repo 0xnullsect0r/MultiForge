@@ -20,9 +20,11 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import org.objectweb.asm.Handle;
 import org.objectweb.asm.Type;
 import org.objectweb.asm.tree.AnnotationNode;
 import org.objectweb.asm.tree.ClassNode;
+import org.objectweb.asm.tree.InvokeDynamicInsnNode;
 import org.objectweb.asm.tree.MethodInsnNode;
 import org.objectweb.asm.tree.MethodNode;
 
@@ -41,7 +43,8 @@ import org.objectweb.asm.tree.MethodNode;
  *       carry {@code @SubscribeEvent}: handlers registered with {@code IEventBus.addListener(...)}
  *       have no annotation, and a method taking only a tick event is a tick handler either way; or
  *   <li>it is reachable by a direct (non-virtual-dispatch-resolved) call chain of depth &le; 3
- *       from such a method, resolved within the same class file only.
+ *       from such a method, resolved within the same class file only; a lambda or method
+ *       reference created in a reachable method counts as a call to its body.
  * </ul>
  *
  * This is explicitly a lint heuristic, not a soundness proof — see doc
@@ -91,13 +94,20 @@ public final class TickReachability {
                 continue;
             }
             for (var insn : current.instructions) {
-                if (!(insn instanceof MethodInsnNode call)) {
+                String calleeKey;
+                if (insn instanceof MethodInsnNode call) {
+                    if (!call.owner.equals(cn.name)) continue;
+                    calleeKey = call.name + call.desc;
+                } else if (insn instanceof InvokeDynamicInsnNode indy) {
+                    // A lambda or method reference created here: its body runs where it
+                    // is called, and a lambda made in tick code usually runs in it too
+                    // (forEach, removeIf, a local Runnable).
+                    Handle impl = lambdaImpl(indy);
+                    if (impl == null || !impl.getOwner().equals(cn.name)) continue;
+                    calleeKey = impl.getName() + impl.getDesc();
+                } else {
                     continue;
                 }
-                if (!call.owner.equals(cn.name)) {
-                    continue;
-                }
-                String calleeKey = call.name + call.desc;
                 if (!byKey.containsKey(calleeKey)) {
                     continue;
                 }
@@ -109,6 +119,15 @@ public final class TickReachability {
         }
 
         return reachable;
+    }
+
+    /** The implementation method of a {@code LambdaMetafactory} call site, or {@code null}. */
+    public static Handle lambdaImpl(InvokeDynamicInsnNode indy) {
+        if (indy.bsm == null || !indy.bsm.getOwner().equals("java/lang/invoke/LambdaMetafactory")) return null;
+        for (Object arg : indy.bsmArgs) {
+            if (arg instanceof Handle h) return h;
+        }
+        return null;
     }
 
     private static boolean isSeed(MethodNode m) {

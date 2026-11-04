@@ -14,6 +14,7 @@ package net.multiforge.runtime.region;
 
 import java.util.List;
 import net.multiforge.api.world.ChunkPos;
+import org.jetbrains.annotations.ApiStatus;
 
 /**
  * Resolves the chunks a given region currently owns. Backs {@link
@@ -33,6 +34,7 @@ import net.multiforge.api.world.ChunkPos;
  * ChunkHolderManager.holdersOwnedBy(RegionId)}.
  */
 @FunctionalInterface
+@ApiStatus.Internal
 public interface RegionChunkSource {
 
     /** Snapshot of the chunks {@code region} currently owns. Never {@code null}. */

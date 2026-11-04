@@ -17,7 +17,15 @@ You don't need it to *play* on a MultiForge server — MultiForge is a drop-in N
 3. Drop the jar into your instance's `mods/` folder. Nothing else — no config file to edit up front, no keybind to register manually.
 4. Launch. In the mod list you should see **MultiForge Debug Client** at whatever version you downloaded.
 
-The mod jar is fully self-contained — the wire-protocol types from `multiforge-runtime` are bundled inside it, so nothing else has to be installed alongside.
+The mod jar is self-contained: it carries its own copy of the debug wire protocol, so nothing else has to be installed alongside.
+
+**Client only.** Do not put it in a server's `mods/` folder; a server ignores it.
+
+**Use the client of the same release as the server.** A server from v1.9.0 on speaks debug protocol 4, and clients older than v1.9.0 refuse it and show nothing. A client newer than the server is served at the server's protocol.
+
+### Who can see the overlay
+
+Every player with this mod gets the overlay by default (permission node `multiforge.debug.view`, granted to everyone). It shows region boundaries, tick costs and pins for the whole server, and the violation panel shows the sites and chunk coordinates of ownership violations anywhere on it. To limit it to operators, deny `multiforge.debug.view` with a permissions mod (LuckPerms, for example) for everyone but your staff.
 
 ### Uninstall
 
@@ -121,7 +129,7 @@ region-1 [tick-6] mspt=8.1/12.4 owned=132 sections=6
 region-2 [server] mspt=2.0/3.1 owned=18 sections=2
 ```
 
-That's the region id, where its last tick ran (v1.8.0 servers: `tick-N` is worker thread `multiforge-tick-N`, `server` is the server thread, `server, busy lane` means it was moved there for posting too many serial-lane events), its p50/p95 tick cost in milliseconds, how many entities it owns, and how many sections it spans. Capped at 8 rows by default (`hud.regionListMaxRows`), with a `… N more region(s)` line when there are more.
+That's the region id, where its last tick ran (v1.8.0 servers: `tick-N` is worker thread `multiforge-tick-N`, `server` is the server thread, `server, busy lane` means it was moved there for posting too many serial-lane events), its p50/p95 tick cost in milliseconds, how many entities its last tick ran (servers before v1.11.1 always send 0), and how many sections it spans. Capped at 8 rows by default (`hud.regionListMaxRows`), with a `… N more region(s)` line when there are more.
 
 **New in v1.4.0**, in the same sense as the violation panel: the data and its exact format have existed since M6 and were documented, but nothing drew them.
 
@@ -188,7 +196,7 @@ The server speaks a version of the debug protocol this client mod doesn't know. 
 The server is older than v1.4.0 and doesn't send region-ownership data. Rather than fabricate seams from a hash (which is what v1.3.5–v1.3.18 did), the overlay draws nothing. Upgrade the server.
 
 **No overlays, and the server log says "SUBSCRIBE from &lt;you&gt; declined: missing multiforge.debug.view".**
-Someone has restricted the `multiforge.debug.view` permission on that server. It defaults to allow-everyone, so this only happens where an operator running a permission plugin has deliberately denied it. Ask them to grant it.
+Someone has restricted the `multiforge.debug.view` permission on that server. It defaults to allow-everyone, so this only happens where an operator running a permissions mod has deliberately denied it. Ask them to grant it.
 
 **"File mods/multiforge-client.jar is not a valid mod file — Illegal version number".**
 You have v1.3.7–v1.3.10 (mods.toml carried a literal `${version}` token). Upgrade to v1.3.11 or newer.

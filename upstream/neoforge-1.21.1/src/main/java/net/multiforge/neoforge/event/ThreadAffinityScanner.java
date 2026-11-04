@@ -19,6 +19,7 @@ import java.util.Deque;
 import java.util.HashSet;
 import java.util.Set;
 import net.multiforge.runtime.event.ListenerAffinity;
+import org.jetbrains.annotations.ApiStatus;
 import org.objectweb.asm.ClassReader;
 import org.objectweb.asm.Handle;
 import org.objectweb.asm.Opcodes;
@@ -42,6 +43,7 @@ import org.objectweb.asm.tree.MethodNode;
  * method reference has no known method: every method of its host class that
  * takes the event type is read.
  */
+@ApiStatus.Internal
 public final class ThreadAffinityScanner implements ListenerAffinity.Scanner {
     static final int DEPTH = 3;
 

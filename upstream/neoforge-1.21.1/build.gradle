@@ -105,6 +105,42 @@ license {
     }
 }
 
+// MultiForge fork addition: licenser skips net/multiforge/** (above), so this
+// task holds that glue to MultiForge's own GPL-3.0 header instead; licenseCheck
+// runs it.
+abstract class MultiforgeHeaderCheck extends DefaultTask {
+    @InputFiles
+    @PathSensitive(PathSensitivity.RELATIVE)
+    abstract ConfigurableFileCollection getSources()
+
+    @InputFile
+    @PathSensitive(PathSensitivity.NONE)
+    abstract RegularFileProperty getHeader()
+
+    @OutputFile
+    abstract RegularFileProperty getMarker()
+
+    @TaskAction
+    void check() {
+        String[] parts = header.get().asFile.getText('UTF-8').trim().split(Pattern.quote('$YEAR'), -1)
+        Pattern expected = Pattern.compile(parts.collect { Pattern.quote(it) }.join('\\d{4}'))
+        List<String> missing = sources.files.findAll { !expected.matcher(it.getText('UTF-8')).lookingAt() }
+                .collect { it.path }.sort()
+        if (!missing.isEmpty()) {
+            throw new GradleException("Missing MultiForge's GPL-3.0 header (outer buildSrc/src/main/resources/license-header.txt):\n  " + missing.join('\n  '))
+        }
+        marker.get().asFile.text = "${sources.files.size()} files\n"
+    }
+}
+
+def checkMultiforgeHeaders = tasks.register('checkMultiforgeHeaders', MultiforgeHeaderCheck) {
+    sources.from(fileTree('src/main/java') { include 'net/multiforge/**/*.java' })
+    sources.from(fileTree('tests/src/main/java') { include 'net/multiforge/**/*.java' })
+    header = file('../../buildSrc/src/main/resources/license-header.txt')
+    marker = layout.buildDirectory.file('multiforge/header-check.txt')
+}
+tasks.named('licenseCheck') { dependsOn checkMultiforgeHeaders }
+
 // Put spotless here because it wants the files to live inside the project root
 immaculate {
     workflows.named("java") {

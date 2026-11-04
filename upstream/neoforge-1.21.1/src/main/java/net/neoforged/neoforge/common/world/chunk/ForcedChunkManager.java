@@ -84,6 +84,23 @@ public class ForcedChunkManager {
             throw new IllegalArgumentException("Controller with ID " + id + " is not registered!");
         }
 
+        // MultiForge: on a region worker the whole change runs on the server thread after
+        // the tick barrier (the saved records and the ticket maps are the server thread's).
+        // Return what it will return: whether the owner's set of forced chunks changes,
+        // read without creating the saved data on this thread.
+        if (net.multiforge.neoforge.OwnershipGuard.deferForcedChunk(
+                level, chunkX, chunkZ, () -> forceChunk(level, id, owner, chunkX, chunkZ, add, ticking, type, ticketGetter))) {
+            ForcedChunksSavedData existing = level.getDataStorage().get(ForcedChunksSavedData.factory(), "chunks");
+            TicketOwner<T> predictedOwner = new TicketOwner<>(id, owner);
+            boolean present = false;
+            if (existing != null) {
+                TicketTracker<T> tracker = ticketGetter.apply(existing);
+                LongSet chunks = (ticking ? tracker.getTickingChunks() : tracker.getChunks()).get(predictedOwner);
+                present = chunks != null && chunks.contains(new ChunkPos(chunkX, chunkZ).toLong());
+            }
+            return add != present;
+        }
+
         ForcedChunksSavedData saveData = level.getDataStorage().computeIfAbsent(ForcedChunksSavedData.factory(), "chunks");
         ChunkPos pos = new ChunkPos(chunkX, chunkZ);
         long chunk = pos.toLong();

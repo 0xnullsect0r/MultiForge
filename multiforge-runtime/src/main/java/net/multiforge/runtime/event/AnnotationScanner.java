@@ -21,6 +21,7 @@ import net.multiforge.api.event.DispatchDomain;
 import net.multiforge.api.event.DispatchDomainKind;
 import net.multiforge.api.event.Ordering;
 import net.multiforge.api.event.OrderingContract;
+import org.jetbrains.annotations.ApiStatus;
 
 /**
  * Reads {@link DispatchDomain} and {@link Ordering} off an {@code
@@ -52,6 +53,7 @@ import net.multiforge.api.event.OrderingContract;
  * plain identity-keyed map (not a {@code WeakHashMap}) is correct and
  * avoids re-resolving on every registration lookup.
  */
+@ApiStatus.Internal
 public final class AnnotationScanner {
 
     /** The dispatch domain and ordering contract resolved for one listener method. */

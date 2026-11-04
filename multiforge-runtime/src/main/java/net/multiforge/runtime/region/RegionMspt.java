@@ -14,6 +14,7 @@ package net.multiforge.runtime.region;
 
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLongArray;
+import org.jetbrains.annotations.ApiStatus;
 
 /**
  * Fixed-window MSPT (milliseconds per tick) tracker for a region. Uses
@@ -24,6 +25,7 @@ import java.util.concurrent.atomic.AtomicLongArray;
  * 20 TPS = 5 seconds of history, which matches Folia's
  * {@code getTickReport5s}.
  */
+@ApiStatus.Internal
 public final class RegionMspt {
 
     private final AtomicLongArray samplesNanos;
@@ -107,7 +109,10 @@ public final class RegionMspt {
         return (total / (double) filled) / 1_000_000.0;
     }
 
-    /** Percentile in milliseconds (approximate — sorts a snapshot). */
+    /**
+     * Percentile in milliseconds, nearest-rank over the window (the same method as
+     * {@code TickStats}): p99 of 100 samples is the 99th smallest, not the largest.
+     */
     public double percentileMillis(double p) {
         if (p <= 0 || p >= 1) throw new IllegalArgumentException("p must be in (0,1)");
         long[] copy = new long[capacity];
@@ -118,7 +123,8 @@ public final class RegionMspt {
         }
         if (filled == 0) return 0.0;
         java.util.Arrays.sort(copy, 0, filled);
-        int idx = (int) Math.floor(p * filled);
+        int idx = (int) Math.ceil(p * filled) - 1;
+        if (idx < 0) idx = 0;
         if (idx >= filled) idx = filled - 1;
         return copy[idx] / 1_000_000.0;
     }

@@ -31,6 +31,8 @@ public final class ServerHangReporting {
     public static void start(MinecraftServer server) {
         if (!HangReporter.enabled()) return;
         HangReporter.forServer(Thread.currentThread(), server::getNextTickTime, () -> server.mfTickStartNanos)
-                .startDaemon("multiforge-hang-reporter", server::isRunning);
+                // Also stop when the server thread itself is gone (a crash can leave
+                // isRunning() true while the crash save runs, which is not a hang).
+                .startDaemon("multiforge-hang-reporter", () -> server.isRunning() && server.getRunningThread().isAlive());
     }
 }

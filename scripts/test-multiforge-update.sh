@@ -42,6 +42,8 @@ fail() {
     exit 1
 }
 pass() { echo "ok: $*"; }
+# The JDK 21 to run Java with: JAVA_HOME when set (the machine default may be newer).
+JAVA="${JAVA_HOME:+$JAVA_HOME/bin/}java"
 sum() { sha256sum "$1" | awk '{print $1}'; }
 launched() { sed -n 's|.*libraries/net/neoforged/neoforge/\([^/]*\)/unix_args\.txt.*|\1|p' run.sh | head -n 1; }
 count_versions() { find "$LIBS" -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' '; }
@@ -49,16 +51,18 @@ update() { MF_BASE_URL="file://$ASSETS" sh "$UPDATER" "$@"; }
 
 rm -rf "$WORK"
 mkdir -p "$WORK/srv/config" "$WORK/srv/mods" "$WORK/srv/world"
-SRV=$(cd "$WORK/srv" && pwd -P)
+# Absolute from here on: the steps below cd into the work and server directories.
+WORK=$(cd "$WORK" && pwd -P)
+SRV=$WORK/srv
 
 echo "== installing the old version"
-(cd "$WORK" && java -jar "$OLD_INSTALLER" --installServer "$SRV" >"$WORK/old-install.log" 2>&1) || fail "old installer failed (see $WORK/old-install.log)"
+(cd "$WORK" && "$JAVA" -jar "$OLD_INSTALLER" --installServer "$SRV" >"$WORK/old-install.log" 2>&1) || fail "old installer failed (see $WORK/old-install.log)"
 cd "$SRV"
 OLD=$(launched)
 [ -n "$OLD" ] || fail "old install left no version in run.sh"
 pass "old version $OLD installed"
 
-printf 'mode = "on"\n# operator comment, must survive\nthreadsPerCore = 3\n' >config/multiforge-server.toml
+printf '[mtserver]\nmode = "hybrid"\n# operator comment, must survive\nthreadsPerCore = 3\n' >config/multiforge-server.toml
 printf -- '-Xmx2G\n# operator JVM args\n' >user_jvm_args.txt
 echo "operator file" >mods/notes.txt
 echo "operator file" >world/marker.txt
@@ -90,7 +94,7 @@ pass "config, JVM args, mods, world and eula untouched"
 
 echo "== booting java -jar server.jar nogui"
 rm -f logs/latest.log
-java -Xmx2G -jar server.jar nogui </dev/null >"$WORK/boot.out" 2>&1 &
+"$JAVA" -Xmx2G -jar server.jar nogui </dev/null >"$WORK/boot.out" 2>&1 &
 PID=$!
 booted=0
 i=0

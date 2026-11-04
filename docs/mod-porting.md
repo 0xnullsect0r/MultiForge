@@ -91,11 +91,11 @@ entity's position is therefore not updated when the call returns. A raw
 `setPos`/`moveTo` is not intercepted; use it only for short moves that
 stay in the same region.
 
-Scanner rule **R05** (`entity-setpos-off-coord`, ERROR) flags every direct
-`Entity.setPos`/`setPosRaw` call. Its message refers to an
-`EntityMigrationCoordinator` from the retired M4 design, which no longer
-exists; for a short in-region move, suppress the finding with a
-justification (`certification.md`).
+Scanner rule **R05** (`entity-setpos-off-coord`, WARN) flags every direct
+`Entity.setPos`/`setPosRaw` call and suggests `teleportTo`, which defers a
+jump into another region to the server thread. For a short move that stays
+in the entity's region, suppress the finding with a justification
+(`certification.md`).
 
 ## 3. Static state
 
@@ -259,7 +259,7 @@ rule classes in `multiforge-scanner/src/main/java/net/multiforge/scanner/rules/`
 | R02 | `off-thread-Level.setBlock` | ERROR |
 | R03 | `blocking-future` | ERROR |
 | R04 | `unsync-static-mutation` | WARN |
-| R05 | `entity-setpos-off-coord` | ERROR |
+| R05 | `entity-setpos-off-coord` | WARN |
 | R06 | `direct-ServerChunkCache-mutation` | WARN |
 | R07 | `raw-DistanceManager-ticket` | WARN |
 | R08 | `off-thread-BlockEntity-setChanged` | WARN |

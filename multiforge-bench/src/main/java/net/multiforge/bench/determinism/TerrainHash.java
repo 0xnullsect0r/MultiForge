@@ -34,8 +34,9 @@ import net.multiforge.bench.determinism.WorldDiff.NbtTag;
 
 /**
  * Per-chunk hash of a saved world's terrain: for every chunk saved at status
- * {@code minecraft:full}, its sections' block states and biomes, in canonical
- * NBT form.
+ * {@code minecraft:full}, its sections' block states and biomes, its
+ * heightmaps, its pending block and fluid ticks, and the id and position of
+ * each block entity, in canonical NBT form.
  *
  * <p>This is the part of a world that a fixed seed determines. A whole save
  * is not reproducible even on stock NeoForge (timestamps, {@code
@@ -178,7 +179,7 @@ public final class TerrainHash {
     }
 
     /**
-     * Hash a chunk's sections by content, not encoding: each paletted
+     * Hash a chunk's terrain (see the class comment). Sections by content, not encoding: each paletted
      * container (4096 block states, 64 biomes) is unpacked to its per-entry
      * values, so two chunks with the same blocks hash alike even when their
      * palettes list the states in a different order — palette order is the
@@ -197,10 +198,54 @@ public final class TerrainHash {
                 hashContainer(md, section.entries.get("block_states"), 4096, true);
                 hashContainer(md, section.entries.get("biomes"), 64, false);
             }
+            // Heightmaps are updated incrementally on every block change, so a lost or
+            // misordered update shows here even when the final blocks agree.
+            if (chunk.entries.get("Heightmaps") instanceof NbtCompound heightmaps) {
+                md.update("H\n".getBytes(StandardCharsets.UTF_8));
+                md.update(WorldDiff.writeCanonicalRoot(heightmaps));
+            }
+            // Pending block and fluid ticks, in full: both runs stop with the game
+            // clock frozen after the same number of ticks, so each entry's delay is
+            // comparable. Sorted, since the save order follows scheduling order.
+            hashSorted(md, "T", chunk.entries.get("block_ticks"), TerrainHash::canonicalEntry);
+            hashSorted(md, "F", chunk.entries.get("fluid_ticks"), TerrainHash::canonicalEntry);
+            // Block entities by id and position only: their contents can carry per-run
+            // random state (a spawner's delay), which differs between two stock runs too.
+            hashSorted(md, "E", chunk.entries.get("block_entities"), TerrainHash::blockEntityKey);
         } catch (IOException e) {
             throw new UncheckedIOException(e);
         }
         return HexFormat.of().formatHex(md.digest());
+    }
+
+    private interface EntryEncoder {
+        byte[] encode(NbtCompound entry) throws IOException;
+    }
+
+    /** Feed {@code tag}'s compound entries, each encoded and the encodings sorted, under {@code label}. */
+    private static void hashSorted(MessageDigest md, String label, NbtTag tag, EntryEncoder encoder)
+            throws IOException {
+        if (!(tag instanceof NbtList list) || list.elements.isEmpty()) return;
+        List<String> encoded = new ArrayList<>();
+        for (NbtTag entry : list.elements) {
+            if (entry instanceof NbtCompound c) encoded.add(HexFormat.of().formatHex(encoder.encode(c)));
+        }
+        java.util.Collections.sort(encoded);
+        md.update((label + encoded.size() + "\n").getBytes(StandardCharsets.UTF_8));
+        for (String e : encoded) md.update((e + "\n").getBytes(StandardCharsets.UTF_8));
+    }
+
+    private static byte[] canonicalEntry(NbtCompound entry) throws IOException {
+        return WorldDiff.writeCanonicalRoot(entry);
+    }
+
+    private static byte[] blockEntityKey(NbtCompound entry) {
+        StringBuilder key = new StringBuilder();
+        key.append(entry.entries.get("id") instanceof NbtString id ? id.value() : "?");
+        for (String axis : new String[] {"x", "y", "z"}) {
+            key.append(' ').append(entry.entries.get(axis) instanceof NbtInt v ? Integer.toString(v.value()) : "?");
+        }
+        return key.toString().getBytes(StandardCharsets.UTF_8);
     }
 
     private static int sectionY(NbtCompound section) {

@@ -1,0 +1,38 @@
+--- a/net/minecraft/world/level/block/CommandBlock.java
++++ b/net/minecraft/world/level/block/CommandBlock.java
+@@ -77,6 +77,16 @@ public class CommandBlock extends BaseEntityBlock implements GameMasterBlock {
+ 
+     @Override
+     protected void tick(BlockState p_221005_, ServerLevel p_221006_, BlockPos p_221007_, RandomSource p_221008_) {
++        // MultiForge (multiforge-patches/08-globals/): on a region worker the command
++        // itself runs on the server thread after the tick barrier (a command can reach
++        // any region). Defer the whole tick with it, so the success count the
++        // conditional chain and the comparator output read is the command's own,
++        // exactly as when Vanilla runs all three together. A region the server thread
++        // ticks itself runs it inline.
++        if (net.multiforge.neoforge.OwnershipGuard.deferToServerThread(
++                "CommandBlock.tick", CommandBlock.MfLambdas.tick(this, p_221005_, p_221006_, p_221007_, p_221008_))) {
++            return;
++        }
+         if (p_221006_.getBlockEntity(p_221007_) instanceof CommandBlockEntity commandblockentity) {
+             BaseCommandBlock basecommandblock = commandblockentity.getCommandBlock();
+             boolean flag = !StringUtil.isNullOrEmpty(basecommandblock.getCommand());
+@@ -214,4 +224,18 @@ public class CommandBlock extends BaseEntityBlock implements GameMasterBlock {
+             LOGGER.warn("Command Block chain tried to execute more than {} steps!", j);
+         }
+     }
++
++    /**
++     * MultiForge: the lambdas MultiForge's patches need, kept out of CommandBlock itself.
++     * javac numbers a class's synthetic lambda methods in source order, so a lambda
++     * added to CommandBlock would renumber Vanilla's, and mixins that target those by
++     * name would fail to apply.
++     */
++    static final class MfLambdas {
++        private MfLambdas() {}
++
++        static Runnable tick(CommandBlock block, BlockState state, ServerLevel level, BlockPos pos, RandomSource random) {
++            return () -> block.tick(state, level, pos, random);
++        }
++    }
+ }

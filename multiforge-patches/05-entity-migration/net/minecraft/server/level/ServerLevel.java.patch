@@ -1,10 +1,15 @@
 --- a/net/minecraft/server/level/ServerLevel.java
 +++ b/net/minecraft/server/level/ServerLevel.java
-@@ -197,7 +197,17 @@ public class ServerLevel extends Level implements WorldGenLevel {
+@@ -196,8 +196,21 @@ public class ServerLevel extends Level implements WorldGenLevel {
+     // MultiForge (multiforge-patches/02-region-tick/): mobs start and stop being
      // tracked on any region worker; sendBlockUpdated iterates this concurrently.
      final Set<Mob> navigatingMobs = java.util.concurrent.ConcurrentHashMap.newKeySet();
-     // Per thread: each region worker has its own navigation-update pass.
+-    // Per thread: each region worker has its own navigation-update pass.
 -    private final ThreadLocal<Boolean> mfUpdatingNavigations = ThreadLocal.withInitial(() -> Boolean.FALSE);
++    volatile boolean isUpdatingNavigations;
++    // Per thread: each region worker has its own navigation-update pass. Vanilla's
++    // field above stays (mods' mixins may @Shadow it) and mirrors the server
++    // thread's own pass.
 +    private final ThreadLocal<Boolean> mfUpdatingNavigations = ThreadLocal.withInitial(ServerLevel.MfLambdas.FALSE);
 +    // MultiForge (multiforge-patches/02-region-tick/): while this level's regions
 +    // tick, navigatingMobs split by owning region (mfIndexNavigatingMobs), and the
@@ -19,7 +24,7 @@
      protected final Raids raids;
      private final ObjectLinkedOpenHashSet<BlockEventData> blockEvents = new ObjectLinkedOpenHashSet<>();
      // MultiForge (multiforge-patches/02-region-tick/): what this level's regions run
-@@ -212,6 +222,8 @@ public class ServerLevel extends Level implements WorldGenLevel {
+@@ -212,6 +225,8 @@ public class ServerLevel extends Level implements WorldGenLevel {
      private final java.util.concurrent.ConcurrentHashMap<Long, java.util.List<Entity>> mfRegionEntities =
              new java.util.concurrent.ConcurrentHashMap<>();
      private final java.util.concurrent.ConcurrentLinkedQueue<Entity> mfEntityStragglers = new java.util.concurrent.ConcurrentLinkedQueue<>();
@@ -28,7 +33,7 @@
      // MultiForge (multiforge-patches/02-region-tick/): block events queued by a
      // region worker, one ordered set per region, touched only by that region's
      // worker (and by the server thread while no region runs). See blockEvent.
-@@ -274,6 +286,9 @@ public class ServerLevel extends Level implements WorldGenLevel {
+@@ -274,6 +289,9 @@ public class ServerLevel extends Level implements WorldGenLevel {
              p_214999_
          );
          this.entityManager = new PersistentEntitySectionManager<>(Entity.class, new ServerLevel.EntityCallbacks(), entitypersistentstorage);
@@ -38,7 +43,7 @@
          this.chunkSource = new ServerChunkCache(
              this,
              p_215001_,
-@@ -436,19 +451,43 @@ public class ServerLevel extends Level implements WorldGenLevel {
+@@ -436,19 +454,43 @@ public class ServerLevel extends Level implements WorldGenLevel {
                  profilerfiller.pop();
              }
  
@@ -93,7 +98,7 @@
              }
              profilerfiller.pop();
              this.tickBlockEntities();
-@@ -459,64 +498,148 @@ public class ServerLevel extends Level implements WorldGenLevel {
+@@ -459,65 +501,154 @@ public class ServerLevel extends Level implements WorldGenLevel {
          profilerfiller.pop();
      }
  
@@ -209,14 +214,9 @@
 +        this.mfNavigatingIndexed = false;
 +        this.mfRegionNavigatingMobs = it.unimi.dsi.fastutil.longs.Long2ObjectMaps.emptyMap();
 +        this.mfNavigatingMobsAdded.clear();
-     }
- 
-     /**
--     * MultiForge (multiforge-patches/02-region-tick/): region worker: tick the
--     * entities {@link #mfQueueRegionEntityTicks} assigned to {@code regionId},
--     * through the same {@link #mfTickOneEntity} Vanilla's inline pass uses. An
--     * entity moved into another region since (by something else ticking) is
--     * left for the server thread instead of being ticked from here.
++    }
++
++    /**
 +     * MultiForge (multiforge-patches/02-region-tick/): the mobs {@link
 +     * #sendBlockUpdated} checks. On a region worker while the index is up, the
 +     * calling region's indexed mobs still navigating and the mobs that started
@@ -251,21 +251,32 @@
 +        // Each mob is in out once (added ones are skipped in the indexed pass), so the
 +        // array set can take the array as it is, in order.
 +        return new it.unimi.dsi.fastutil.objects.ObjectArraySet<>(out.toArray(new Mob[0]), out.size());
-+    }
-+
-+    /**
+     }
+ 
+     /**
+-     * MultiForge (multiforge-patches/02-region-tick/): region worker: tick the
+-     * entities {@link #mfQueueRegionEntityTicks} assigned to {@code regionId},
+-     * through the same {@link #mfTickOneEntity} Vanilla's inline pass uses. An
+-     * entity moved into another region since (by something else ticking) is
+-     * left for the server thread instead of being ticked from here.
 +     * MultiForge (multiforge-patches/02-region-tick/): region worker: run this
 +     * tick's per-entity lambda over the entities {@link #mfQueueRegionEntityTicks}
 +     * assigned to {@code regionId}. An entity moved into another region since (by
 +     * something else ticking) is left for the server thread instead.
++     *
++     * @return how many entities it ticked
       */
-     public void mfTickEntitiesForRegion(long regionId) {
-         if (!this.mfRegionRunsEntities) return;
+-    public void mfTickEntitiesForRegion(long regionId) {
+-        if (!this.mfRegionRunsEntities) return;
++    public int mfTickEntitiesForRegion(long regionId) {
++        if (!this.mfRegionRunsEntities) return 0;
          java.util.List<Entity> entities = this.mfRegionEntities.remove(regionId);
-         if (entities == null) return;
+-        if (entities == null) return;
 -        ProfilerFiller profilerfiller = this.getProfiler();
 -        TickRateManager tickratemanager = this.tickRateManager();
++        if (entities == null) return 0;
 +        java.util.function.Consumer<Entity> entityTick = this.mfEntityTick;
++        int mf$ticked = 0;
          for (Entity entity : entities) {
              ChunkPos pos = entity.chunkPosition();
              if (net.multiforge.neoforge.RegionizedTickCoordinator.regionIdAt(this, pos.x, pos.z) != regionId) {
@@ -276,10 +287,13 @@
 +            long mf$cost = net.multiforge.runtime.diagnostics.ChunkCost.start();
 +            entityTick.accept(entity);
 +            net.multiforge.runtime.diagnostics.ChunkCost.end(pos.x, pos.z, mf$cost);
++            mf$ticked++;
          }
++        return mf$ticked;
      }
  
-@@ -527,56 +650,18 @@ public class ServerLevel extends Level implements WorldGenLevel {
+     /**
+@@ -527,56 +658,18 @@ public class ServerLevel extends Level implements WorldGenLevel {
       * across a region border).
       */
      public void mfTickEntitiesAfterRegions() {
@@ -343,7 +357,7 @@
          }
      }
  
-@@ -1044,7 +1129,7 @@ public class ServerLevel extends Level implements WorldGenLevel {
+@@ -1044,7 +1137,7 @@ public class ServerLevel extends Level implements WorldGenLevel {
          // MultiForge (multiforge-patches/01-ownership/): see Level.setBlock for rationale.
          if (!net.multiforge.neoforge.OwnershipGuard.canMutateAt("ServerLevel.addFreshEntity", this, p_8837_.blockPosition())) {
              // Returns whether the entity will be added, as Vanilla would.
@@ -352,7 +366,7 @@
          }
          return this.addEntity(p_8837_);
      }
-@@ -1083,6 +1168,16 @@ public class ServerLevel extends Level implements WorldGenLevel {
+@@ -1083,6 +1176,15 @@ public class ServerLevel extends Level implements WorldGenLevel {
      }
  
      private boolean addEntity(Entity p_8873_) {
@@ -362,14 +376,13 @@
 +        // funnel through this shared private method WITHOUT one — a single guard here covers
 +        // every one of those call sites instead of patching each individually.
 +        if (!net.multiforge.neoforge.OwnershipGuard.canMutateAt("ServerLevel.addEntity", this, p_8873_.blockPosition())) {
-+            net.multiforge.neoforge.OwnershipGuard.rerouteAt(
-+                    "ServerLevel.addEntity", this, p_8873_.blockPosition(), ServerLevel.MfLambdas.addEntity(this, p_8873_));
-+            return false;
++            return net.multiforge.neoforge.OwnershipGuard.rerouteAddEntity(
++                    "ServerLevel.addEntity", this, p_8873_, ServerLevel.MfLambdas.addEntity(this, p_8873_));
 +        }
          if (p_8873_.isRemoved()) {
              LOGGER.warn("Tried to add entity {} but it was marked as removed already", EntityType.getKey(p_8873_.getType()));
              return false;
-@@ -1230,7 +1325,7 @@ public class ServerLevel extends Level implements WorldGenLevel {
+@@ -1230,7 +1332,7 @@ public class ServerLevel extends Level implements WorldGenLevel {
          if (Shapes.joinIsNotEmpty(voxelshape1, voxelshape, BooleanOp.NOT_SAME)) {
              List<PathNavigation> list = new ObjectArrayList<>();
  
@@ -378,16 +391,34 @@
                  // MultiForge: a region worker only re-paths its own mobs. A mob in
                  // another region is that region's state, and a block change here
                  // cannot lie on its path (regions are an unloaded section apart).
-@@ -1351,7 +1446,7 @@ public class ServerLevel extends Level implements WorldGenLevel {
-         net.multiforge.runtime.ownership.OwnerToken mf$token = net.multiforge.runtime.ownership.OwnerToken.current();
+@@ -1244,14 +1346,17 @@ public class ServerLevel extends Level implements WorldGenLevel {
+                 }
+             }
+ 
++            boolean mf$onLevelThread = Thread.currentThread() == this.getServer().getRunningThread();
+             try {
+                 this.mfUpdatingNavigations.set(Boolean.TRUE);
++                if (mf$onLevelThread) this.isUpdatingNavigations = true;
+ 
+                 for (PathNavigation pathnavigation1 : list) {
+                     pathnavigation1.recomputePath();
+                 }
+             } finally {
+                 this.mfUpdatingNavigations.set(Boolean.FALSE);
++                if (mf$onLevelThread) this.isUpdatingNavigations = false;
+             }
+         }
+     }
+@@ -1352,7 +1457,7 @@ public class ServerLevel extends Level implements WorldGenLevel {
          if (mf$token.domain() == net.multiforge.runtime.ownership.Domain.REGION) {
+             if (net.multiforge.neoforge.OwnershipGuard.rerouteBlockEvent(this, p_8746_, p_8747_, p_8748_, p_8749_)) return;
              this.mfRegionBlockEvents
 -                    .computeIfAbsent(mf$token.regionId(), k -> new ObjectLinkedOpenHashSet<>())
 +                    .computeIfAbsent(mf$token.regionId(), ServerLevel.MfLambdas.NEW_BLOCK_EVENT_SET)
                      .add(new BlockEventData(p_8746_, p_8747_, p_8748_, p_8749_));
              return;
          }
-@@ -1451,6 +1546,18 @@ public class ServerLevel extends Level implements WorldGenLevel {
+@@ -1452,6 +1557,18 @@ public class ServerLevel extends Level implements WorldGenLevel {
          this.fluidTicks.tick(k, 65536, this::tickFluid);
      }
  
@@ -406,7 +437,7 @@
      /**
       * MultiForge (multiforge-patches/02-region-tick/): per-region variant of {@link
       * #mfTickBlockFluidTicksAll()} — runs the due scheduled block ticks, then fluid ticks,
-@@ -1460,17 +1567,41 @@ public class ServerLevel extends Level implements WorldGenLevel {
+@@ -1461,17 +1578,50 @@ public class ServerLevel extends Level implements WorldGenLevel {
       * net.multiforge.neoforge.tick.ScheduledTickRunnerBridge} on the owning region's
       * worker with the region's owned chunks.
       */
@@ -426,6 +457,15 @@
 +                this.fluidTicks.mfTickRegion(gameTime, 65536, chunks.get(), this::mfTickFluidTimed);
 +            }
          }
++    }
++
++    /**
++     * MultiForge (multiforge-patches/02-region-tick/): the region's share of
++     * Vanilla's {@code runBlockEvents}, run after its scheduled ticks and its
++     * random ticks, in Vanilla's order (tickPending, then chunkSource.tick, then
++     * runBlockEvents).
++     */
++    public void mfRegionBlockEvents(long regionId) {
          if (this.mfRegionRunsBlockEvents) {
              this.mfRunRegionBlockEvents(regionId);
          }
@@ -451,7 +491,7 @@
      @Nonnull
      @Override
      public MinecraftServer getServer() {
-@@ -1817,7 +1948,7 @@ public class ServerLevel extends Level implements WorldGenLevel {
+@@ -1818,7 +1968,7 @@ public class ServerLevel extends Level implements WorldGenLevel {
      @VisibleForTesting
      public void clearBlockEvents(BoundingBox p_8723_) {
          this.blockEvents.removeIf(p_207568_ -> p_8723_.isInside(p_207568_.pos()));
@@ -460,7 +500,7 @@
      }
  
      @Override
-@@ -2009,6 +2140,8 @@ public class ServerLevel extends Level implements WorldGenLevel {
+@@ -2010,6 +2160,8 @@ public class ServerLevel extends Level implements WorldGenLevel {
                  }
  
                  ServerLevel.this.navigatingMobs.add(mob);
@@ -469,7 +509,7 @@
              }
  
              if (p_143371_.isMultipartEntity()) {
-@@ -2154,4 +2287,30 @@ public class ServerLevel extends Level implements WorldGenLevel {
+@@ -2155,4 +2307,30 @@ public class ServerLevel extends Level implements WorldGenLevel {
          }
      }
  
@@ -491,7 +531,7 @@
 +            return () -> level.addFreshEntity(entity);
 +        }
 +
-+        static Runnable addEntity(ServerLevel level, Entity entity) {
++        static java.util.function.BooleanSupplier addEntity(ServerLevel level, Entity entity) {
 +            return () -> level.addEntity(entity);
 +        }
 +

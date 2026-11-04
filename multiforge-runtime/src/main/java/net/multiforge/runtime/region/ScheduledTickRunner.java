@@ -12,6 +12,8 @@
  */
 package net.multiforge.runtime.region;
 
+import org.jetbrains.annotations.ApiStatus;
+
 /**
  * MC-free abstraction for the per-region {@code BLOCK_FLUID_TICKS} phase
  * body (docs/design/m13-b3-region-tick.md §5.1). Vanilla's scheduled
@@ -36,6 +38,7 @@ package net.multiforge.runtime.region;
  * still drives block/fluid ticks in that case (CLAUDE.md rule 5).
  */
 @FunctionalInterface
+@ApiStatus.Internal
 public interface ScheduledTickRunner {
 
     /**

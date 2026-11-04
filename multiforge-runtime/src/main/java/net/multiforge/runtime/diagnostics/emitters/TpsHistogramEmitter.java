@@ -32,6 +32,7 @@ import net.multiforge.runtime.region.RegionMspt;
 import net.multiforge.runtime.region.SectionPos;
 import net.multiforge.runtime.region.ThreadedRegionizer;
 import net.multiforge.runtime.scheduler.MultiThreadedSchedulerHost;
+import org.jetbrains.annotations.ApiStatus;
 
 /**
  * Produces {@code HEATMAP_UPDATE} payloads (Track C1 task 1.11) at
@@ -51,6 +52,7 @@ import net.multiforge.runtime.scheduler.MultiThreadedSchedulerHost;
  * schema's per-world scoping; the fork's production wiring installs
  * one emitter per active world.
  */
+@ApiStatus.Internal
 public final class TpsHistogramEmitter {
 
     public static final long PERIOD_MILLIS = 250L;

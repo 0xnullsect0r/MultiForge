@@ -60,6 +60,7 @@ import net.multiforge.runtime.region.ScheduledTickRunner;
 import net.multiforge.runtime.region.ThreadedRegionizer;
 import net.multiforge.runtime.region.TickRegionScheduler;
 import net.multiforge.runtime.region.pin.RegionPinManager;
+import org.jetbrains.annotations.ApiStatus;
 
 /**
  * Parallel {@link SchedulerHost} that runs region/entity work on the
@@ -73,6 +74,7 @@ import net.multiforge.runtime.region.pin.RegionPinManager;
  * region. This is Folia's guarantee: cross-thread work never runs on
  * the wrong region.
  */
+@ApiStatus.Internal
 public final class MultiThreadedSchedulerHost implements SchedulerHost, AutoCloseable {
 
     private static final long TICK_MS = 50L;
@@ -147,7 +149,7 @@ public final class MultiThreadedSchedulerHost implements SchedulerHost, AutoClos
             BlockEntityTickRunner.standard(this::worldForRegion, this::chunkManagerForOrNull);
 
     public MultiThreadedSchedulerHost(MultiForgeConfig config) {
-        this(config, region -> {}); // no-op tick body until M2 patch supplies the vanilla body
+        this(config, region -> {}); // no tick body: tests and tools; the server installs one (installRegionTickBody)
     }
 
     public MultiThreadedSchedulerHost(MultiForgeConfig config, RegionTickBody body) {
@@ -326,7 +328,25 @@ public final class MultiThreadedSchedulerHost implements SchedulerHost, AutoClos
         public boolean isPendingRegistration(WorldRef world, int chunkX, int chunkZ) {
             return !pendingLoads.isEmpty() && pendingLoads.contains(pendingKey(world, chunkX, chunkZ));
         }
+
+        @Override
+        public boolean regionsTicking(WorldRef world) {
+            WorldRef ticking = tickingWorld;
+            return ticking == null || ticking.equals(world);
+        }
     };
+
+    /** Test-only: the router {@link #install()} binds into {@link OwnershipEnforcer}. */
+    OwnershipEnforcer.PositionRouter positionRouterForTesting() {
+        return positionRouter;
+    }
+
+    /**
+     * The level whose regions {@link #driveRegions} is ticking, or {@code null}
+     * between level ticks (then every level counts as possibly ticking, the safe
+     * answer for {@link OwnershipEnforcer.PositionRouter#regionsTicking}).
+     */
+    private volatile WorldRef tickingWorld;
 
     /** Chunks loaded while regions ticked, awaiting registration (see {@link #chunkLoaded}). */
     private final java.util.Set<String> pendingLoads = ConcurrentHashMap.newKeySet();
@@ -424,6 +444,7 @@ public final class MultiThreadedSchedulerHost implements SchedulerHost, AutoClos
         ThreadedRegionizer regionizer = regionizerForOrNull(world);
         if (regionizer == null) return scheduler.driveTick(List.of(), deadlineNanos, pump);
         regionsTicking = true;
+        tickingWorld = world;
         // Worker chunk caches live for one phase at most (see WorkerChunkCache).
         net.multiforge.runtime.region.WorkerChunkCache.invalidateAll();
         ChunkCost.beginLevelTick(world.dimensionId());
@@ -432,6 +453,7 @@ public final class MultiThreadedSchedulerHost implements SchedulerHost, AutoClos
         } finally {
             ChunkCost.endLevelTick();
             regionsTicking = false;
+            tickingWorld = null;
             applyDeferredChunkChanges();
             // Fire-and-forget event posts the regions left (SerialLane.defer), now that
             // no region worker runs.
@@ -526,6 +548,12 @@ public final class MultiThreadedSchedulerHost implements SchedulerHost, AutoClos
     public void applyConfig(MultiForgeConfig next) {
         Objects.requireNonNull(next, "next");
         MultiForgeConfig prev = this.config;
+        if (next.regionSize() < 0 || next.regionSize() > MultiForgeConfig.MAX_REGION_SIZE_SHIFT) {
+            // Re-partitioning dissolves every region before building the new ones;
+            // a size the regionizer rejects would leave each world with none.
+            throw new IllegalArgumentException("region size shift " + next.regionSize() + " is outside 0.."
+                    + MultiForgeConfig.MAX_REGION_SIZE_SHIFT + "; regions left as they are");
+        }
         this.config = next;
         applyInlinePolicy(next);
         if (next.tickWorkerCount() != scheduler.workerCount()) scheduler.resize(next.tickWorkerCount());
@@ -826,10 +854,7 @@ public final class MultiThreadedSchedulerHost implements SchedulerHost, AutoClos
      * m13-b3-region-tick.md §5.3). Ticks {@code region}'s own slice of {@code HolderManagerRegionData
      * .blockEntityTickers} via {@link #blockEntityTickRunner}.
      *
-     * <p>OwnerToken correctness guard: mirrors {@code
-     * RegionizedData.assertOwnedOrIgnore}'s shape (same file's package,
-     * {@code net.multiforge.runtime.region.RegionizedData}) — {@link
-     * Domain#UNKNOWN} and {@link Domain#GLOBAL} pass through untouched
+     * <p>OwnerToken correctness guard: {@link Domain#UNKNOWN} and {@link Domain#GLOBAL} pass through untouched
      * (tests driving {@code tickOnce} by hand off any worker thread, and
      * the global region's own worker, both need to reach this body
      * normally); a {@link Domain#REGION} token whose {@code regionId}
@@ -912,7 +937,17 @@ public final class MultiThreadedSchedulerHost implements SchedulerHost, AutoClos
         for (int pass = 0; pass < 16; pass++) {
             int ran = 0;
             for (ThreadedRegionizer regionizer : regionizers.values()) {
-                for (Region region : regionizer.regions()) ran += taskQueue.drain(region, Integer.MAX_VALUE);
+                for (Region region : regionizer.regions()) {
+                    int before = taskQueue.inboxSize(region);
+                    try {
+                        ran += taskQueue.drain(region, Integer.MAX_VALUE);
+                    } catch (RuntimeException | Error e) {
+                        // Stopping or re-partitioning: report it and keep draining the rest.
+                        ran += Math.max(1, before - taskQueue.inboxSize(region));
+                        org.slf4j.LoggerFactory.getLogger("multiforge.scheduler")
+                                .error("a rerouted task failed while draining region {}", region.id(), e);
+                    }
+                }
             }
             total += ran;
             if (ran == 0) return total;
@@ -1018,6 +1053,23 @@ public final class MultiThreadedSchedulerHost implements SchedulerHost, AutoClos
                 0L,
                 periodMillis,
                 TimeUnit.MILLISECONDS);
+    }
+
+    /**
+     * Run {@code task} once on the shared {@code mf-diag-emitters} thread — for
+     * event-driven diagnostics (a violation frame) raised on a region worker, so
+     * the worker never encodes or sends debug traffic. Failures are contained as
+     * in {@link #scheduleGlobal}.
+     */
+    public void runDiagnostics(Runnable task) {
+        Objects.requireNonNull(task, "task");
+        DiagExecutorHolder.EXEC.execute(() -> {
+            try {
+                task.run();
+            } catch (RuntimeException e) {
+                ProbeRegistry.bump("diag-emitter.failure");
+            }
+        });
     }
 
     @Override
@@ -1288,7 +1340,8 @@ public final class MultiThreadedSchedulerHost implements SchedulerHost, AutoClos
         try {
             body.accept(handle);
         } catch (Throwable t) {
-            Thread.currentThread().getUncaughtExceptionHandler().uncaughtException(Thread.currentThread(), t);
+            // A mod's task: logged with its stack, and the region carries on.
+            org.slf4j.LoggerFactory.getLogger("multiforge.scheduler").error("scheduled task {} threw", handle, t);
         } finally {
             handle.markFinished();
         }
@@ -1299,7 +1352,7 @@ public final class MultiThreadedSchedulerHost implements SchedulerHost, AutoClos
         try {
             body.accept(handle);
         } catch (Throwable t) {
-            Thread.currentThread().getUncaughtExceptionHandler().uncaughtException(Thread.currentThread(), t);
+            org.slf4j.LoggerFactory.getLogger("multiforge.scheduler").error("repeating task {} threw", handle, t);
         } finally {
             handle.prepareNextIteration();
         }

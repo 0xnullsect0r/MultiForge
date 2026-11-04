@@ -12,10 +12,13 @@
  */
 package net.multiforge.runtime;
 
+import org.jetbrains.annotations.ApiStatus;
+
 /**
  * Runtime name and version. Mods should read {@code
  * net.multiforge.api.MultiForgeApi#VERSION} instead; this class is internal.
  */
+@ApiStatus.Internal
 public final class MultiForge {
 
     public static final String NAME = "MultiForge";

@@ -1,28 +1,26 @@
 ## Summary
 
-<!-- 1–3 sentences: what changed and why. -->
+<!-- 1–3 sentences: what changed and why. Name the concurrency contract a patch defends. -->
 
 ## Scope
 
-<!-- Which milestone/module. E.g. "M2 · region tick", "M6 · scanner". -->
+<!-- Which module or patch group. E.g. "02-region-tick", "runtime · scheduler", "scanner". -->
 
 ## Checklist
 
-- [ ] Follows the concurrency contract in `docs/blueprint.md` (owner-required / global-only / async-safe declared for any new API).
-- [ ] No blocking calls on region worker threads.
+- [ ] Follows `docs/design/barrier-tick-model.md` and `docs/concurrency-contract.md`.
+- [ ] No blocking calls on region worker threads (CLAUDE.md rule 4 and its bounded exceptions).
 - [ ] Never throws from a mod code path — reroute + warn only.
-- [ ] Tests added or updated; `./gradlew build` green locally.
-- [ ] GPL-3 header on every new source file (spotless will fail otherwise).
-- [ ] No dependency additions (or PR body explains GPL-3-compat + binary-size review).
-- [ ] **Chunk-system regression run** (only if this PR touches `multiforge-runtime/src/main/java/net/multiforge/runtime/chunk/`, `net/multiforge/runtime/region/`, `multiforge-patches/04-chunk-system/`, or `upstream/neoforge-1.21.1/src/main/java/net/multiforge/neoforge/chunk/`):
-  - [ ] `./gradlew :multiforge-runtime:build` green
-  - [ ] `./gradlew :multiforge-bench:determinism` byte-identical parity vs. baseline (fixed seed, single worker)
-  - [ ] `./gradlew :multiforge-bench:determinism --workers=8` semantic NBT parity vs. baseline
-  - [ ] Strict-mode watchdog (`-Dmultiforge.regiontick.strict=on`) zero warns over 5-min gameTestServer
+- [ ] Every behaviour fix has a test that fails without it (unit test or GameTest).
+- [ ] GPL-3 header on every new source file (spotless / licenseCheck fail otherwise).
+- [ ] No new dependency (or the PR body explains GPL-3 compatibility and binary size).
+- [ ] Commits end with the co-author trailer when AI-authored (CLAUDE.md, Git workflow).
+- [ ] **Patches to `net.minecraft.*`** (`multiforge-patches/`): edited through `scripts/mf-patches.py`, no new lambdas in Vanilla classes, and:
+  - [ ] `cd upstream/neoforge-1.21.1 && ./gradlew --no-configuration-cache :neoforge:checkMixinTargets :tests:runGameTestServer` green
+  - [ ] `./gradlew :multiforge-bench:determinism -Pworkers=1,4` passes (vanilla-parity gate)
 
 ## Test plan
 
-- [ ] Unit tests: `./gradlew test`
-- [ ] Spotless: `./gradlew spotlessCheck`
-- [ ] Deterministic-mode regression (when touching NMS patches): `./gradlew :multiforge-bench:determinism`
-- [ ] Manual smoke: attach steps if this touches user-visible behavior.
+- [ ] `./gradlew spotlessCheck` and the module builds (`./gradlew build`)
+- [ ] GameTests (above) when the fork or runtime changed
+- [ ] Manual smoke: attach steps if this touches user-visible behaviour.

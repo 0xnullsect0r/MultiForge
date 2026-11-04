@@ -59,19 +59,31 @@ class ViolationEmitterTest {
 
     @Test
     void installSubscribesToLiveViolationLoggerFanOut() throws Exception {
-        List<DebugPayload> received = new ArrayList<>();
+        List<DebugPayload> received = new java.util.concurrent.CopyOnWriteArrayList<>();
+        java.util.Set<String> senders = java.util.concurrent.ConcurrentHashMap.newKeySet();
         var host = new net.multiforge.runtime.scheduler.MultiThreadedSchedulerHost(
                 net.multiforge.runtime.config.MultiForgeConfig.defaults()
                         .withCores(1)
                         .withThreadsPerCore(1));
-        AutoCloseable handle = ViolationEmitter.install(host, received::add, PermissionFilter.ALWAYS_ALLOW);
+        AutoCloseable handle = ViolationEmitter.install(
+                host,
+                p -> {
+                    senders.add(Thread.currentThread().getName());
+                    received.add(p);
+                },
+                PermissionFilter.ALWAYS_ALLOW);
         try {
             ViolationLogger.warn("modA", "site1", "detail1");
             ViolationLogger.warn("modA", "site1", "detail1");
             ViolationLogger.warn("modA", "site1", "detail1");
 
-            assertThat(received).hasSize(3);
+            org.awaitility.Awaitility.await()
+                    .atMost(java.time.Duration.ofSeconds(5))
+                    .until(() -> received.size() == 3);
             assertThat(received).allSatisfy(p -> assertThat(p).isInstanceOf(DebugPayload.ViolationEvent.class));
+            // Frames are built and sent on the diagnostics thread, never on the
+            // thread that logged the violation (a region worker in production).
+            assertThat(senders).containsExactly("mf-diag-emitters");
         } finally {
             handle.close();
             host.close();
@@ -79,6 +91,7 @@ class ViolationEmitterTest {
 
         // Unsubscribed after close — no further payloads.
         ViolationLogger.warn("modA", "site1", "detail1");
+        Thread.sleep(200);
         assertThat(received).hasSize(3);
     }
 

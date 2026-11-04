@@ -26,6 +26,7 @@ import net.multiforge.runtime.region.Region;
 import net.multiforge.runtime.region.RegionId;
 import net.multiforge.runtime.region.RegionListener;
 import net.multiforge.runtime.region.SectionPos;
+import org.jetbrains.annotations.ApiStatus;
 
 /**
  * One world's index of loaded chunks by owning region, plus each region's
@@ -38,6 +39,7 @@ import net.multiforge.runtime.region.SectionPos;
  * ({@link Region#ownedChunkSnapshot()}) and holds the region-local data the
  * region tick phases need.
  */
+@ApiStatus.Internal
 public final class ChunkHolderManager implements RegionListener {
 
     private final WorldRef world;

@@ -60,6 +60,70 @@ class DispatchingEventBusTest {
     }
 
     @Test
+    void registeringTheSameObjectTwiceFiresItsListenersOnce() {
+        // NeoForge's bus ignores a repeat register (a mod with @EventBusSubscriber that
+        // also registers the class itself); ours registered every listener again.
+        DispatchingEventBus bus =
+                new DispatchingEventBus(BusBuilder.builder().build(), new RecordingDispatchExecutor());
+        InstanceListener listener = new InstanceListener();
+        bus.register(listener);
+        bus.register(listener);
+        bus.register(StaticListener.class);
+        bus.register(StaticListener.class);
+        bus.post(new TestEvent());
+        assertThat(listener.calls.get()).isEqualTo(1);
+        assertThat(StaticListener.CALLS.get()).isEqualTo(1);
+    }
+
+    @Test
+    void registerAgainAfterUnregisterWorks() {
+        DispatchingEventBus bus =
+                new DispatchingEventBus(BusBuilder.builder().build(), new RecordingDispatchExecutor());
+        InstanceListener listener = new InstanceListener();
+        bus.register(listener);
+        bus.unregister(listener);
+        bus.post(new TestEvent());
+        assertThat(listener.calls.get()).isZero();
+        bus.register(listener);
+        bus.post(new TestEvent());
+        assertThat(listener.calls.get()).isEqualTo(1);
+    }
+
+    @Test
+    void unregisterRemovesListenersInheritedFromASuperclass() {
+        DispatchingEventBus bus =
+                new DispatchingEventBus(BusBuilder.builder().build(), new RecordingDispatchExecutor());
+        SubListener sub = new SubListener();
+        bus.register(sub);
+        bus.unregister(sub);
+        bus.post(new TestEvent());
+        assertThat(sub.calls.get()).isZero();
+    }
+
+    @Test
+    void disabledBusIsAPlainPassThrough() {
+        String prior = System.getProperty(DispatchingEventBus.DISABLE_PROPERTY);
+        try {
+            System.setProperty(DispatchingEventBus.DISABLE_PROPERTY, "off");
+            RecordingDispatchExecutor executor = new RecordingDispatchExecutor();
+            DispatchingEventBus bus =
+                    new DispatchingEventBus(BusBuilder.builder().build(), executor);
+            InstanceListener listener = new InstanceListener();
+            bus.register(listener);
+            AtomicInteger consumer = new AtomicInteger();
+            bus.addListener(TestEvent.class, e -> consumer.incrementAndGet());
+            // Posted from a region, a routing bus would hand the unmapped event to the serial lane.
+            OwnerToken.runAs(OwnerToken.forRegion(1L), () -> bus.post(new TestEvent()));
+            assertThat(listener.calls.get()).isEqualTo(1);
+            assertThat(consumer.get()).isEqualTo(1);
+            assertThat(executor.serial.get()).isZero();
+        } finally {
+            if (prior == null) System.clearProperty(DispatchingEventBus.DISABLE_PROPERTY);
+            else System.setProperty(DispatchingEventBus.DISABLE_PROPERTY, prior);
+        }
+    }
+
+    @Test
     void registerHonorsDispatchDomainAnnotations() {
         RecordingDispatchExecutor executor = new RecordingDispatchExecutor();
         DispatchingEventBus bus = new DispatchingEventBus(BusBuilder.builder().build(), executor);
@@ -435,4 +499,15 @@ class DispatchingEventBusTest {
             task.run();
         }
     }
+
+    public static class SuperListener {
+        public final AtomicInteger calls = new AtomicInteger();
+
+        @SubscribeEvent
+        public void onTest(TestEvent event) {
+            calls.incrementAndGet();
+        }
+    }
+
+    public static class SubListener extends SuperListener {}
 }

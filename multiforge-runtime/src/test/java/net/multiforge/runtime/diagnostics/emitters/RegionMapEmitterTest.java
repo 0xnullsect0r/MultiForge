@@ -106,4 +106,24 @@ class RegionMapEmitterTest {
         }
         assertThat(received).isNotEmpty();
     }
+
+    @Test
+    void theInstalledEmitterReportsWhatTheRegionsEntityPassTicked() throws Exception {
+        Region region = host.touchChunk(WORLD, 0, 0);
+        region.recordEntitiesTicked(12);
+        List<DebugPayload> received = new java.util.concurrent.CopyOnWriteArrayList<>();
+        AutoCloseable handle = RegionMapEmitter.install(host, received::add, PermissionFilter.ALWAYS_ALLOW);
+        try {
+            org.awaitility.Awaitility.await()
+                    .atMost(java.time.Duration.ofSeconds(2))
+                    .until(() -> !received.isEmpty());
+        } finally {
+            handle.close();
+        }
+        DebugPayload.RegionSnapshot snapshot = (DebugPayload.RegionSnapshot) received.get(0);
+        assertThat(snapshot.regions())
+                .filteredOn(stat -> stat.regionId() == region.id().value())
+                .first()
+                .satisfies(stat -> assertThat(stat.ownedEntities()).isEqualTo(12));
+    }
 }

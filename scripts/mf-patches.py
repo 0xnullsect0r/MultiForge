@@ -173,10 +173,18 @@ def cmd_export(_):
     changed = 0
     for g in groups():
         sha = commit_of(g.name)
-        names = git("diff", "--name-only", f"{sha}~1", sha, capture=True).stdout.split()
-        existing = {t: p for p, t in minecraft_patches(g)}
+        names = git("diff", "--name-only", "--no-ext-diff", f"{sha}~1", sha, capture=True).stdout.split()
+        existing = {}
+        for p, t in minecraft_patches(g):
+            if t in existing:
+                raise SystemExit(f"{g.name}: {existing[t].name} and {p.name} both patch {t}; merge them first")
+            existing[t] = p
         for t in names:
-            diff = git("diff", "--no-color", "-U3", f"{sha}~1", sha, "--", t, capture=True).stdout
+            # Pin the header shape: `git apply` (-p1) needs `a/`/`b/` prefixes, and a user's
+            # diff.noprefix / diff.mnemonicPrefix / external diff would otherwise change it.
+            diff = git("-c", "diff.noprefix=false", "-c", "diff.mnemonicPrefix=false", "diff", "--no-ext-diff",
+                       "--no-color", "--src-prefix=a/", "--dst-prefix=b/", "-U3", f"{sha}~1", sha, "--", t,
+                       capture=True).stdout
             lines = [l for l in diff.splitlines()
                      if not l.startswith(("diff --git", "index ", "new file mode", "deleted file mode"))]
             text = "\n".join(lines) + "\n"

@@ -12,6 +12,8 @@
  */
 package net.multiforge.runtime.ownership;
 
+import org.jetbrains.annotations.ApiStatus;
+
 /**
  * A tag carried by each MultiForge-owned worker thread describing which
  * {@link Domain} it is currently executing in, and (for region workers)
@@ -22,6 +24,7 @@ package net.multiforge.runtime.ownership;
  * {@code null} here, which the assertion layer treats as {@link
  * Domain#UNKNOWN}.
  */
+@ApiStatus.Internal
 public record OwnerToken(Domain domain, long regionId) {
 
     public static final long NO_REGION = Long.MIN_VALUE;

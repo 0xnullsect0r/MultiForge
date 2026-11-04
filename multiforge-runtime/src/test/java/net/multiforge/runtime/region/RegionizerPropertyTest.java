@@ -56,10 +56,54 @@ class RegionizerPropertyTest {
     void regionsAreTheConnectedComponentsOfOccupiedSections(
             @ForAll @Size(max = 120) List<@net.jqwik.api.From("ops") Op> ops,
             @ForAll @IntRange(min = 0, max = 2) int shift) {
+        check(ops, shift, 0, 0, -12, 12);
+    }
+
+    /**
+     * The sizes servers run (shift 3 = 8 chunks, the configurable minimum, to 8),
+     * anywhere up to the world border. Ops pick a section in a 13x13 window
+     * and a chunk inside it, so merges and splits still collide at large sizes.
+     */
+    @Provide
+    Arbitrary<Op> sectionOps() {
+        return Combinators.combine(
+                        Arbitraries.of(true, true, false),
+                        Arbitraries.integers().between(-6 * 256, 6 * 256 + 255),
+                        Arbitraries.integers().between(-6 * 256, 6 * 256 + 255))
+                .as(Op::new);
+    }
+
+    @Property(tries = 200)
+    void productionSizesAnywhereInTheWorld(
+            @ForAll @Size(max = 150) List<@net.jqwik.api.From("sectionOps") Op> ops,
+            @ForAll @IntRange(min = 3, max = 8) int shift,
+            @ForAll @IntRange(min = -1_800_000, max = 1_800_000) int baseX,
+            @ForAll @IntRange(min = -1_800_000, max = 1_800_000) int baseZ) {
+        // Op coordinates are in 1/256-section units; scale them to this shift.
+        List<Op> scaled = ops.stream()
+                .map(o -> new Op(o.add(), scale(o.x(), shift), scale(o.z(), shift)))
+                .toList();
+        check(scaled, shift, baseX, baseZ, -6 << shift, (7 << shift) - 1);
+    }
+
+    private static int scale(int units, int shift) {
+        int sectionIndex = Math.floorDiv(units, 256);
+        int inside = Math.floorMod(units, 256) >> (8 - shift);
+        return (sectionIndex << shift) + inside;
+    }
+
+    /**
+     * Apply {@code ops} (offset by the base, aligned to a section) and compare the
+     * regions with the 8-connected components of occupied sections; {@code
+     * min..max} is the op window in chunks relative to the base.
+     */
+    private static void check(List<Op> ops, int shift, int baseX, int baseZ, int min, int max) {
+        int bx = (baseX >> shift) << shift;
+        int bz = (baseZ >> shift) << shift;
         ThreadedRegionizer regionizer = new ThreadedRegionizer(WORLD, shift);
         Set<ChunkPos> loaded = new HashSet<>();
         for (Op op : ops) {
-            ChunkPos pos = new ChunkPos(op.x(), op.z());
+            ChunkPos pos = new ChunkPos(bx + op.x(), bz + op.z());
             if (op.add()) {
                 regionizer.addChunk(pos);
                 loaded.add(pos);
@@ -105,11 +149,12 @@ class RegionizerPropertyTest {
             if (prior != null) assertThat(r).isSameAs(prior);
         }
         assertThat(new HashSet<>(regionOfComponent.values())).hasSize(components);
-        // No region survives for a section with nothing loaded.
-        for (int x = -12; x <= 12; x++) {
-            for (int z = -12; z <= 12; z++) {
-                if (!occupied.contains(section(x >> shift, z >> shift))) {
-                    assertThat(regionizer.regionAtChunk(x, z)).isNull();
+        // No region survives for a section with nothing loaded (one chunk per section).
+        int step = Math.max(1, (max - min + 1) / 25);
+        for (int x = min; x <= max; x += step) {
+            for (int z = min; z <= max; z += step) {
+                if (!occupied.contains(section((bx + x) >> shift, (bz + z) >> shift))) {
+                    assertThat(regionizer.regionAtChunk(bx + x, bz + z)).isNull();
                 }
             }
         }

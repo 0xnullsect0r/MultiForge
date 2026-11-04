@@ -13,6 +13,7 @@
 package net.multiforge.runtime.event;
 
 import java.util.Locale;
+import org.jetbrains.annotations.ApiStatus;
 
 /**
  * How much of a mod's event-listener code may run on region workers in
@@ -24,6 +25,7 @@ import java.util.Locale;
  * [modproperties.<modid>] multiforge_safety = "strict-safe"}. The config file
  * overrides the declaration; the default is {@link #HYBRID_SAFE}.
  */
+@ApiStatus.Internal
 public enum ModSafety {
     /** Every unannotated listener runs on the serial lane. For mods with unsynchronised global state. */
     LEGACY,

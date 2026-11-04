@@ -19,8 +19,8 @@
 #   curl -fsSL .../multiforge-update.sh | sh -s -- /path/to/server
 #   curl -fsSL .../multiforge-update.sh | sh -s -- --rollback [/path/to/server]
 #
-# Afterwards start the server with `java -Xms4G -Xmx20G -jar server.jar nogui`
-# (or ./run.sh). server.jar is replaced on every run; it launches whatever
+# Afterwards start the server with `<jdk21>/bin/java -Xmx8G -jar server.jar nogui`
+# (or ./run.sh, which refuses to start on anything but Java 21). server.jar is replaced on every run; it launches whatever
 # run.sh names, and the installer rewrites run.sh to the new version.
 #
 # Leaves alone: config/ (multiforge-server.toml included), mods/, worlds,
@@ -31,6 +31,7 @@
 #   MF_VERSION   release tag to install (e.g. v1.8.0); default: the latest release
 #   MF_BASE_URL  where to download the release assets from, overriding GitHub
 #                (a directory URL; file:// works) — for testing and mirrors
+#   MF_ALLOW_UNVERIFIED=1  install even if the release's SHA256SUMS cannot be fetched
 #   JAVA_HOME    JDK 21 to use; default: java on PATH
 #
 # The whole script is one function called on the last line, so a download cut
@@ -87,16 +88,6 @@ mf_main() {
         done
     fi
 
-    if [ -n "${JAVA_HOME:-}" ] && [ -x "$JAVA_HOME/bin/java" ]; then
-        JAVA="$JAVA_HOME/bin/java"
-    else
-        JAVA=$(command -v java || true)
-    fi
-    [ -n "$JAVA" ] || fail "no java on PATH and JAVA_HOME is unset. Install a JDK 21 (e.g. Temurin 21)."
-    java_major=$("$JAVA" -version 2>&1 | awk -F '"' '/version/ { split($2, a, "."); print a[1]; exit }')
-    [ "${java_major:-0}" = "21" ] || fail "MultiForge needs Java 21; $JAVA is Java ${java_major:-unknown}.
-       Re-run with JAVA_HOME pointing at a JDK 21."
-
     # The version a run script launches: libraries/net/neoforged/neoforge/<ver>/unix_args.txt
     launched_version() {
         [ -f run.sh ] || return 0
@@ -123,16 +114,20 @@ mf_main() {
     # --- rollback --------------------------------------------------------------
 
     if [ "$ROLLBACK" = 1 ]; then
+        swap="$BACKUP.swap"
+        [ ! -d "$swap" ] || fail "$swap exists: an earlier rollback was interrupted. Its files are split between
+       $BACKUP/ and $swap/; move the launch files and the version folder back by hand, then remove $swap."
         [ -f "$BACKUP/VERSION" ] || fail "nothing to roll back to: $BACKUP/VERSION is missing."
         target=$(cat "$BACKUP/VERSION")
         current=$(launched_version)
         [ -d "$BACKUP/versions/$target" ] || fail "$BACKUP/versions/$target is missing; cannot roll back."
         say "rolling back ${current:-unknown} -> $target"
-        swap="$BACKUP.swap"
-        rm -rf "$swap"
+        trap 'warn "rollback interrupted: files are split between $BACKUP/ and $swap/"; exit 1' INT TERM
         mkdir -p "$swap/versions"
         for f in $LAUNCH_FILES; do
-            [ -f "$f" ] && mv "$f" "$swap/$f"
+            # A file the backup does not hold (server.jar after a first install by
+            # another method) stays: the server starter works with any version.
+            [ -f "$f" ] && [ -f "$BACKUP/$f" ] && mv "$f" "$swap/$f"
         done
         park_other_versions "" "$swap/versions"
         mv "$BACKUP/versions/$target" "$NEOFORGE_LIBS/$target"
@@ -145,6 +140,16 @@ mf_main() {
         say "done: run.sh now launches $(launched_version). Run --rollback again to return to ${current:-the newer version}."
         exit 0
     fi
+
+    if [ -n "${JAVA_HOME:-}" ] && [ -x "$JAVA_HOME/bin/java" ]; then
+        JAVA="$JAVA_HOME/bin/java"
+    else
+        JAVA=$(command -v java || true)
+    fi
+    [ -n "$JAVA" ] || fail "no java on PATH and JAVA_HOME is unset. Install a JDK 21 (e.g. Temurin 21)."
+    java_major=$("$JAVA" -XshowSettings:properties -version 2>&1 | sed -n 's/^ *java\.specification\.version = //p' | head -n 1)
+    [ "${java_major:-0}" = "21" ] || fail "MultiForge needs Java 21; $JAVA is Java ${java_major:-unknown}.
+       Re-run with JAVA_HOME pointing at a JDK 21."
 
     # --- download ---------------------------------------------------------------
 
@@ -185,7 +190,20 @@ mf_main() {
         done
         say "checksums verified"
     else
-        warn "this release has no SHA256SUMS; skipping checksum verification"
+        # Every release from v1.8.0 on ships SHA256SUMS. A missing one means a release
+        # still being published (assets upload one by one) or a broken download, not an
+        # old release: refuse, unless the operator pinned a release older than v1.8.0.
+        old_release=0
+        case "${MF_VERSION:-}" in
+            v1.[0-7].* | 1.[0-7].*) old_release=1 ;;
+        esac
+        if [ "$old_release" = 1 ] || [ "${MF_ALLOW_UNVERIFIED:-0}" = 1 ]; then
+            warn "no SHA256SUMS for this release; the downloads were not verified"
+        else
+            fail "could not download $BASE/SHA256SUMS, so the downloads cannot be verified.
+       If a release is being published right now, wait a minute and re-run.
+       (MF_ALLOW_UNVERIFIED=1 skips the check.)"
+        fi
     fi
 
     # --- install ---------------------------------------------------------------
@@ -223,7 +241,8 @@ mf_main() {
         fail "after installing, run.sh does not name an installed version; restored the previous launch files."
     fi
 
-    # The installer rewrites user_jvm_args.txt; keep the operator's.
+    # The installer leaves an existing user_jvm_args.txt alone; restore it anyway in
+    # case an older installer replaced it.
     [ -f "$stage/user_jvm_args.txt" ] && cp -p "$stage/user_jvm_args.txt" user_jvm_args.txt
 
     # Exactly one version stays under libraries/; the one we replaced becomes the rollback point.
@@ -257,7 +276,10 @@ mf_main() {
         say "MultiForge $current installed"
     fi
     [ -f eula.txt ] || say "first run: accept the Minecraft EULA by setting eula=true in eula.txt"
-    say "start the server with:  java -Xms4G -Xmx20G -jar server.jar nogui   (or ./run.sh)"
+    # server.jar runs in the JVM that starts it, so name the Java 21 checked above:
+    # a bare `java` may be a newer JDK, which NeoForge 1.21.1 mods cannot load on.
+    say "start the server with:  \"$JAVA\" -Xms4G -Xmx8G -jar server.jar nogui   (or ./run.sh, which checks the JDK)"
+    say "set -Xmx to what this machine can give the server (8G is a starting point for modpacks)"
 }
 
 mf_main "$@"

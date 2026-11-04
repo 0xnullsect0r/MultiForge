@@ -147,6 +147,78 @@ class TerrainHashTest {
         assertThat(vine.apply(3)).isEqualTo(vine.apply(22));
     }
 
+    private static NbtCompound tick(String block, int x, int delay) {
+        return new NbtCompound()
+                .put("i", new NbtString(block))
+                .put("x", new NbtInt(x))
+                .put("y", new NbtInt(64))
+                .put("z", new NbtInt(0))
+                .put("t", new NbtInt(delay))
+                .put("p", new NbtInt(0));
+    }
+
+    private static NbtCompound blockEntity(String id, int x, int delay) {
+        return new NbtCompound()
+                .put("id", new NbtString(id))
+                .put("x", new NbtInt(x))
+                .put("y", new NbtInt(64))
+                .put("z", new NbtInt(0))
+                .put("Delay", new WorldDiff.NbtShort((short) delay));
+    }
+
+    private static NbtList list(NbtCompound... entries) {
+        return new NbtList(WorldDiff.TAG_COMPOUND, new java.util.ArrayList<>(List.of(entries)));
+    }
+
+    private static String hashWith(String key, NbtTagLike value) {
+        NbtCompound c = chunk(0, 0, "minecraft:full", "minecraft:stone", 1);
+        if (value != null) c.put(key, value.tag());
+        return TerrainHash.hashTerrain(c);
+    }
+
+    private interface NbtTagLike {
+        WorldDiff.NbtTag tag();
+    }
+
+    @Test
+    void pendingTicksAreTerrainInAnyOrder() {
+        String none = hashWith("block_ticks", null);
+        String two = hashWith("block_ticks", () -> list(tick("minecraft:water", 1, 5), tick("minecraft:sand", 2, 2)));
+        String swapped =
+                hashWith("block_ticks", () -> list(tick("minecraft:sand", 2, 2), tick("minecraft:water", 1, 5)));
+        String later = hashWith("block_ticks", () -> list(tick("minecraft:water", 1, 6), tick("minecraft:sand", 2, 2)));
+        String asFluid =
+                hashWith("fluid_ticks", () -> list(tick("minecraft:water", 1, 5), tick("minecraft:sand", 2, 2)));
+        assertThat(two)
+                .isEqualTo(swapped)
+                .isNotEqualTo(none)
+                .isNotEqualTo(later)
+                .isNotEqualTo(asFluid);
+    }
+
+    @Test
+    void blockEntitiesCountByIdAndPositionNotContents() {
+        String spawner = hashWith("block_entities", () -> list(blockEntity("minecraft:mob_spawner", 1, 20)));
+        String rolled = hashWith("block_entities", () -> list(blockEntity("minecraft:mob_spawner", 1, 377)));
+        String moved = hashWith("block_entities", () -> list(blockEntity("minecraft:mob_spawner", 2, 20)));
+        String lost = hashWith("block_entities", () -> list());
+        String doubled = hashWith(
+                "block_entities",
+                () -> list(blockEntity("minecraft:mob_spawner", 1, 20), blockEntity("minecraft:mob_spawner", 1, 20)));
+        assertThat(spawner)
+                .isEqualTo(rolled)
+                .isNotEqualTo(moved)
+                .isNotEqualTo(lost)
+                .isNotEqualTo(doubled);
+    }
+
+    @Test
+    void heightmapsAreTerrain() {
+        java.util.function.LongFunction<String> withHeight = h -> hashWith("Heightmaps", () -> new NbtCompound()
+                .put("WORLD_SURFACE", new WorldDiff.NbtLongArray(new long[] {h, 0L})));
+        assertThat(withHeight.apply(70)).isEqualTo(withHeight.apply(70)).isNotEqualTo(withHeight.apply(71));
+    }
+
     @Test
     void bitWidthsFollowVanilla() {
         assertThat(TerrainHash.bitsFor(2, true, 256, 4096)).isEqualTo(4);

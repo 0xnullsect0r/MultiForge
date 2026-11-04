@@ -20,6 +20,7 @@ import net.multiforge.runtime.scheduler.MultiForgeRegionizedRuntime;
 import net.multiforge.runtime.scheduler.MultiThreadedSchedulerHost;
 import net.neoforged.neoforge.common.NeoForge;
 import net.neoforged.neoforge.event.level.ChunkEvent;
+import org.jetbrains.annotations.ApiStatus;
 
 /**
  * Keeps the regionizer and each world's {@link ChunkHolderManager} in step
@@ -31,6 +32,7 @@ import net.neoforged.neoforge.event.level.ChunkEvent;
  * <p>Registration is idempotent per JVM: a GameTest server reuses one JVM
  * across server instances.
  */
+@ApiStatus.Internal
 public final class RegionizedChunkLifecycle {
     private static final AtomicBoolean INSTALLED = new AtomicBoolean(false);
 

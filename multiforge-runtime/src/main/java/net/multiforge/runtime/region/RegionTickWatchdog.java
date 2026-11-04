@@ -15,6 +15,7 @@ package net.multiforge.runtime.region;
 import java.util.Locale;
 import net.multiforge.runtime.diagnostics.ProbeRegistry;
 import net.multiforge.runtime.diagnostics.ViolationLogger;
+import org.jetbrains.annotations.ApiStatus;
 
 /**
  * Detects region ticks that exceed a per-tick deadline — the primary
@@ -57,6 +58,7 @@ import net.multiforge.runtime.diagnostics.ViolationLogger;
  * via {@link RegionMspt} exposed on the scheduler, and the
  * extra-thread cost isn't worth the marginal coverage.
  */
+@ApiStatus.Internal
 public final class RegionTickWatchdog {
 
     /** Selected via {@code -Dmultiforge.regiontick.strict}: off (default) → WARN; on → STRICT. */

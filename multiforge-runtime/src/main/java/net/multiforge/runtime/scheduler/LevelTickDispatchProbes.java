@@ -13,6 +13,7 @@
 package net.multiforge.runtime.scheduler;
 
 import net.multiforge.runtime.diagnostics.ProbeRegistry;
+import org.jetbrains.annotations.ApiStatus;
 
 /**
  * Operator visibility for {@code RegionizedTickCoordinator.dispatchLevelTick}
@@ -26,6 +27,7 @@ import net.multiforge.runtime.diagnostics.ProbeRegistry;
  * {@link #noRegionizerInline} only counts it under {@link
  * #NO_REGIONIZER_INLINE_PROBE}.
  */
+@ApiStatus.Internal
 public final class LevelTickDispatchProbes {
 
     private LevelTickDispatchProbes() {}

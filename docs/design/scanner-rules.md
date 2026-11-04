@@ -260,11 +260,14 @@ level.getChunkSource().getChunkNow(pos.x, pos.z); // stable ChunkSource API
 
 ### R02 — `off-thread-Level.setBlock`
 
-**Severity:** ERROR. **Detects:** a call to
+**Severity:** WARN (ERROR before v1.11.1). **Detects:** a call to
 `Level.setBlock(BlockPos, BlockState, int)` (or overloads) from a method
-the tick-reachability heuristic (§1.4) classifies as running off the
-region-tick thread — not annotated `@RegionThread`, not itself a
-tick-event handler.
+not known to run on a region or the server thread: not tick-reachable
+(§1.4, which follows lambdas created in reachable code), not a Vanilla
+game callback taking the level (`onPlace`, `neighborChanged`, `useItemOn`,
+`tick`, …), and not a lambda handed straight to a scheduler that runs it on
+the server thread or a region (`IPayloadContext.enqueueWork`,
+`MinecraftServer.execute`, `ServerDomains` tasks).
 
 **Bytecode pattern:**
 ```
@@ -277,12 +280,14 @@ visitMethodInsn(INVOKEVIRTUAL, "net/minecraft/world/level/Level", "setBlock", "(
 synchronization of its own — it assumes the caller already owns the
 target region (CLAUDE.md rule 4 extended to block mutation, not just
 blocking calls). An off-thread call races the owning region worker or
-silently no-ops depending on patch state — a determinism hazard, hence
-ERROR (contrast R01, R08).
+silently no-ops depending on patch state. MultiForge reroutes an
+off-thread `setBlock` to the server thread at runtime, and the analysis
+cannot follow calls into other classes (a helper called from tick code in
+another class is reported too), so this is a WARN.
 
-**Escape hatch:** `.multiforgeignore` fingerprint. The fix is almost
-always mechanical (wrap in `RegionizedTaskQueue.queueChunkTask`), so
-suppressions here should mostly be transient.
+**Escape hatch:** `.multiforgeignore` fingerprint with a justification
+(for example "only called from MyBlock.tick"). The fix for real off-thread
+code is `ServerDomains.region(level, pos)` or `IPayloadContext.enqueueWork`.
 
 **Buggy:**
 ```java

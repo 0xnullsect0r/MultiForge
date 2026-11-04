@@ -18,11 +18,13 @@ import java.util.TreeMap;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.atomic.LongAdder;
+import org.jetbrains.annotations.ApiStatus;
 
 /**
  * Cheap named counters used by ownership probes. Read via
  * {@link #snapshot()}, cleared per-JVM only.
  */
+@ApiStatus.Internal
 public final class ProbeRegistry {
 
     private static final ConcurrentMap<String, LongAdder> COUNTERS = new ConcurrentHashMap<>();

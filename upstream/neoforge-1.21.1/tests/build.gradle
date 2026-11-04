@@ -95,6 +95,16 @@ runs {
             // MultiForge fork addition: check every indexed entity-tracking update
             // against Vanilla's full pass (EntityTrackingTests asserts on it).
             systemProperty("multiforge.tracking.verify", "true")
+            // MultiForge fork addition: tick every region on a worker. By default a level
+            // with one region, or a region whose serial-lane hand-offs are costly, ticks on
+            // the server thread, and most region-tick tests would then pass without any
+            // region ever running on a worker. RegionPlacementTests asserts this took effect.
+            systemProperty("multiforge.inlineSingleRegion", "false")
+            systemProperty("multiforge.serialLaneHotWaitMs", "0")
+            // `-PmultiforgeMode=strict` (CI's second run) or `=off` (the control).
+            if (project.hasProperty("multiforgeMode")) {
+                systemProperty("multiforge.mode", project.property("multiforgeMode").toString())
+            }
     }
     data {
             data()

@@ -12,6 +12,8 @@
  */
 package net.multiforge.runtime.ownership;
 
+import org.jetbrains.annotations.ApiStatus;
+
 /**
  * Thrown by {@link OwnershipEnforcer} only when running in {@link
  * OwnershipEnforcer.Mode#STRICT}, i.e. under {@code
@@ -19,6 +21,7 @@ package net.multiforge.runtime.ownership;
  * REROUTE} mode — see CLAUDE.md rule 5 (auto-reroute + warn is the
  * default; never throw from a mod's code path).
  */
+@ApiStatus.Internal
 public final class OwnershipViolationException extends RuntimeException {
 
     private final String site;

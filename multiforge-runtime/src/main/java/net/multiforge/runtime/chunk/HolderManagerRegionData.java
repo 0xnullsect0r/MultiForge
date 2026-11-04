@@ -15,6 +15,7 @@ package net.multiforge.runtime.chunk;
 import java.util.List;
 import java.util.function.Predicate;
 import net.multiforge.api.world.ChunkPos;
+import org.jetbrains.annotations.ApiStatus;
 
 /**
  * Per-region state kept by {@link ChunkHolderManager}: the region's slice of
@@ -25,6 +26,7 @@ import net.multiforge.api.world.ChunkPos;
  * thread between ticks (tickers routed from the level), never both at once:
  * see docs/design/barrier-tick-model.md.
  */
+@ApiStatus.Internal
 public final class HolderManagerRegionData {
 
     private static final TickingBlockEntityRef[] EMPTY = new TickingBlockEntityRef[0];

@@ -106,6 +106,23 @@ class OwnershipEnforcerPositionalTest {
                 .isZero();
     }
 
+    private static boolean crossRegion(long id, int chunkX) {
+        AtomicBoolean out = new AtomicBoolean();
+        OwnerToken.runAs(
+                OwnerToken.forRegion(id), () -> out.set(OwnershipEnforcer.isCrossRegionFromWorker(WORLD, chunkX, 0)));
+        return out.get();
+    }
+
+    @Test
+    void crossRegionQueryAgreesWithCanMutateAt() {
+        assertThat(crossRegion(1, -5)).isFalse();
+        assertThat(crossRegion(1, 5)).isTrue();
+        assertThat(crossRegion(1, 150)).isTrue();
+        // The global region may write anywhere, so nothing it does is a cross-region move.
+        assertThat(crossRegion(99, 5)).isFalse();
+        assertThat(crossRegion(99, 150)).isFalse();
+    }
+
     @Test
     void globalRegionAndTickThreadAreAllowed() {
         AtomicBoolean global = new AtomicBoolean();

@@ -156,8 +156,10 @@ final class ReportEmitter {
                 + q(level) + ",\n" + "          \"message\": { \"text\": "
                 + q(f.message()) + " },\n"
                 + "          \"locations\": [ { \"physicalLocation\": { \"artifactLocation\": { \"uri\": "
-                + q(f.className().replace('.', '/') + ".class") + " }, \"region\": { \"startLine\": "
-                + Math.max(f.line(), 0) + " } } } ],\n"
+                + q(f.className().replace('.', '/') + ".class") + " }"
+                // SARIF requires startLine >= 1: a class compiled without line numbers gets no region.
+                + (f.line() > 0 ? ", \"region\": { \"startLine\": " + f.line() + " }" : "")
+                + " } } ],\n"
                 + "          \"partialFingerprints\": { \"multiforgeFingerprint/v1\": "
                 + q(fingerprintTail) + " }\n" + "        }";
     }

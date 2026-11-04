@@ -18,6 +18,7 @@ import net.minecraft.core.Direction;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.redstone.NeighborUpdater;
+import org.jetbrains.annotations.ApiStatus;
 import org.jetbrains.annotations.Nullable;
 
 /**
@@ -33,6 +34,7 @@ import org.jetbrains.annotations.Nullable;
  * chunks (regions are separated by unloaded sections), so per-thread chains
  * are complete.
  */
+@ApiStatus.Internal
 public final class PerThreadNeighborUpdater implements NeighborUpdater {
     private final Thread owner;
     private final NeighborUpdater primary;

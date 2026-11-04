@@ -1,121 +1,106 @@
 # Releasing MultiForge
 
-Standard release flow + fallback if the fork-installer CI job fails.
-
 ## Prerequisites
 
 - Push access to `main` and tag push permissions.
-- Local machine with the vendored NeoForge workspace ready — `./gradlew :setup` must have run at least once (~5-10 min, ~20 GB disk).
-- GitHub CLI (`gh`) authed against the repo.
-- JDK 21 (`JAVA_HOME`).
-
-## Standard release
-
-1. **Merge develop → main via PR.** Wait for green CI.
-2. **Cut the tag from main:**
-   ```
-   git checkout main && git pull --ff-only
-   git tag -a v1.3.2 -m "v1.3.2 — <one-line summary>"
-   git push origin v1.3.2
-   ```
-3. **Watch the release workflow.**
-   ```
-   gh run watch --workflow=release.yml
-   ```
-   `build-jars` runs first, then `build-fork-installer` (~15 min). Both are required: `gh-release` publishes only when both succeed, and it writes `SHA256SUMS` over every asset.
-4. **If both succeed:** the GitHub Release at `https://github.com/0xnullsect0r/MultiForge/releases/tag/v1.3.2` has all artifacts:
-   - `multiforge-update.sh` (the one-line installer/updater: `curl -fsSL …/latest/download/multiforge-update.sh | sh`)
-   - `server.jar` (NeoForged's server starter, LGPL-2.1, mirrored at the version and checksum pinned in `release.yml`; the updater installs it)
-   - `multiforge-scanner-1.3.2.jar` + `multiforge-scanner.jar` (the scanner behind `/multiforge certify`; the updater installs it)
-   - `SHA256SUMS` (checked by the updater)
-   - `multiforge-runtime-1.3.2.jar` (mod-author compile target)
-   - `multiforge-1.3.2-installer.jar` (**the fork installer — this is the one users install with**)
-   - `multiforge-installer.jar` (stable-alias copy of the fork installer)
-   - `multiforge-1.3.2-replacement.zip` + `multiforge-replacement.zip` (drop-in overlay)
-   - `multiforge-client-1.3.2.jar` (optional client debug mod; NeoForge 1.21.1)
-   - `multiforge-client.jar` (stable-alias copy of the client mod)
-   - `pelican-egg.json` (Pelican Panel / Pterodactyl egg)
-
-   The updater downloads from `…/releases/latest/download/`, so the stable names above (`multiforge-update.sh`, `multiforge-installer.jar`, `server.jar`, `multiforge-scanner.jar`, `SHA256SUMS`) must be present in every release.
-
-   To bump the mirrored `server.jar`, change `SERVER_STARTER_VERSION` and `SERVER_STARTER_SHA256` in `release.yml` and run `scripts/test-multiforge-update.sh` against the new jar first.
-
-   No further action needed.
-
-## Fallback: build-fork-installer CI job failed
-
-The fork-installer job has historically been preempted on GHA `ubuntu-latest` during `neoFormDecompile` (~2 min of subprocess-heavy javap + vineflower work inside the same JVM heap as Gradle — infrastructure issue, not code). If the job failed, `multiforge-1.3.2-installer.jar` is MISSING from the release, and the Pelican egg's download URL is broken.
-
-**Local fallback:**
-
-```bash
-export JAVA_HOME=/path/to/jdk-21
-export PATH=$JAVA_HOME/bin:$PATH
-
-# Ensure you're on the tag
-git checkout v1.3.2
-
-# Publish MultiForge runtime + api to mavenLocal (fork consumes these)
-./gradlew :multiforge-api:publishToMavenLocal :multiforge-runtime:publishToMavenLocal
-
-# Build the fork installer (two separate invocations per the pre-existing
-# Gradle task-graph quirk — combined invocation wipes patches back to
-# pristine before compileJava runs)
-cd upstream/neoforge-1.21.1
-./gradlew :setup :neoforge:applyMultiforgePatches
-./gradlew :neoforge:installerJar
-
-# The fork installer's actual filename derives from gradleutils; find it
-# and rename to the release-friendly form
-FORK_JAR=$(find projects/neoforge/build/distributions -maxdepth 1 \
-    -name 'neoforge-*-installer.jar' ! -name '*-unsigned.jar' | head -1)
-[ -z "$FORK_JAR" ] && FORK_JAR=$(find projects/neoforge/build/distributions -maxdepth 1 \
-    -name 'neoforge-*-installer-unsigned.jar' | head -1)
-cp "$FORK_JAR" /tmp/multiforge-1.3.2-installer.jar
-
-# Attach to the existing release (--clobber replaces if a stale one is there)
-cd ../..
-gh release upload v1.3.2 /tmp/multiforge-1.3.2-installer.jar --clobber
-```
-
-## Verification (post-release, before announcing)
-
-1. **Fork installer downloads:**
-   ```
-   curl -LI https://github.com/0xnullsect0r/MultiForge/releases/download/v1.3.2/multiforge-1.3.2-installer.jar
-   # HTTP/2 200 (or 302 → 200)
-   ```
-
-2. **Fresh install boots:**
-   ```
-   TEST=$(mktemp -d)
-   cd $TEST
-   curl -LO https://github.com/0xnullsect0r/MultiForge/releases/download/v1.3.2/multiforge-1.3.2-installer.jar
-   java -jar multiforge-1.3.2-installer.jar --installServer .
-   echo eula=true > eula.txt
-   chmod +x run.sh
-   timeout 60 ./run.sh nogui | tee /tmp/boot.log
-   grep 'Done' /tmp/boot.log       # server booted
-   grep 'NoSuchMethodError' /tmp/boot.log || echo 'no NoSuchMethodError — good'
-   grep 'no-regionizer-skip' /tmp/boot.log | wc -l   # expect 0-2 lines (R.1 eager materialise covers boot dims; R.2 rate-limits any edge cases)
-   ```
-
-3. **Egg import** (if you have a Pelican Panel test instance):
-   - Import `pelican-egg.json` from the release into your panel.
-   - Create a server. Wait for install to complete.
-   - Boot; verify no install-script errors.
+- GitHub CLI (`gh`) authenticated against the repo.
+- For local checks: JDK 21 (`JAVA_HOME`) and the fork workspace (in
+  `upstream/neoforge-1.21.1`: `./gradlew --no-configuration-cache setup`,
+  ~5-10 min, ~20 GB disk).
 
 ## Bumping the version
 
-- Update `gradle.properties` `version=`.
-- Update `upstream/neoforge-1.21.1/gradle.properties` `multiforge_runtime_version=` (must match for the fork's jarJar embed to resolve from mavenLocal).
-- Update `CHANGELOG.md` with the new version entry.
-- Commit as `chore(release): bump version to <v>`.
+- `gradle.properties`: `version=<v>`.
+- `upstream/neoforge-1.21.1/gradle.properties`: `multiforge_runtime_version=<v>`
+  (the fork embeds the runtime and API of exactly this version).
+- `CHANGELOG.md`: the new version's entry.
+- Commit as `chore(release): v<v>`.
+
+The release workflow refuses a tag that does not match both properties.
+
+## Standard release
+
+1. **Run the live checks on the release candidate.** The nightly runs only on
+   the default branch, so dispatch it on the commit you will tag:
+   ```
+   gh workflow run nightly.yml --ref develop
+   gh run watch "$(gh run list --workflow=nightly.yml --limit 1 --json databaseId -q '.[0].databaseId')"
+   ```
+   It must be green: vanilla-parity gate, scenarios, the strict-mode swarm
+   with regions on workers, and the stress checks.
+2. **Merge develop → main via PR.** Wait for green CI.
+3. **Tag main:**
+   ```
+   git checkout main && git pull --ff-only
+   git tag -a v<v> -m "v<v> — <one-line summary>"
+   git push origin v<v>
+   ```
+4. **Watch the release workflow:** `gh run watch --workflow=release.yml`.
+   - `build-jars` checks that the tag matches both version properties and is
+     on `main`, then builds the outer modules, the client mod and the scanner.
+   - `build-fork-installer` builds the fork installer, checks mixin targets,
+     installs a server from that installer and boots it (NeoForge's production
+     self-test), and checks the installer embeds the MultiForge runtime and API.
+   - `gh-release` writes `SHA256SUMS` over every asset, creates the release as
+     a draft, attaches everything, then publishes it. Until then
+     `releases/latest` still points at the previous release, so the updater
+     never sees a half-uploaded one.
+
+   Assets of every release:
+   - `multiforge-update.sh` — the one-line installer/updater
+   - `server.jar` — NeoForged's server starter (LGPL-2.1), mirrored at the
+     version and checksum pinned in `release.yml`
+   - `multiforge-scanner-<v>.jar` + `multiforge-scanner.jar` — the scanner
+     behind `/multiforge certify`
+   - `SHA256SUMS` — checked by the updater and the Pelican egg
+   - `multiforge-runtime-<v>.jar` — mod-author compile target
+   - `multiforge-<v>-installer.jar` + `multiforge-installer.jar` — the fork
+     installer
+   - `multiforge-<v>-replacement.zip` + `multiforge-replacement.zip` — the
+     in-place converter
+   - `multiforge-client-<v>.jar` + `multiforge-client.jar` — the client debug mod
+   - `pelican-egg.json`
+
+   The updater and the egg download from `…/releases/latest/download/`, so the
+   stable names must be in every release. To bump the mirrored `server.jar`,
+   change `SERVER_STARTER_VERSION` and `SERVER_STARTER_SHA256` in
+   `release.yml` and run `scripts/test-multiforge-update.sh` first.
+
+## If a release job fails
+
+No release is published unless every job succeeds, so there is nothing to
+patch up by hand: fix the cause (or wait out an infrastructure failure) and
+re-run the failed jobs:
+
+```
+gh run rerun --failed "$(gh run list --workflow=release.yml --limit 1 --json databaseId -q '.[0].databaseId')"
+```
+
+If the fix needs a code change, delete the tag (below), land the fix through
+develop → main, and tag again. Do not upload hand-built assets to a release:
+`SHA256SUMS` would not cover them and the updater would refuse the release.
+
+## Verification (after the release, before announcing)
+
+1. **The updater installs it** into an empty directory and updates an older
+   install, with a JDK 21:
+   ```
+   TEST=$(mktemp -d) && cd "$TEST"
+   curl -fsSL https://github.com/0xnullsect0r/MultiForge/releases/latest/download/multiforge-update.sh | sh
+   echo eula=true > eula.txt
+   timeout 120 ./run.sh nogui | tee boot.log
+   grep -E 'Done \(' boot.log
+   grep -c NoSuchMethodError boot.log    # expect 0
+   ```
+2. **The Pelican egg** (on a test panel): import `pelican-egg.json` from the
+   release, create a server, let the install finish, start it, accept the
+   EULA prompt, and check it reaches `Done`. Repeat with `MULTIFORGE_VERSION`
+   set to the new version.
 
 ## Rolling back a bad release
 
-- Delete the tag: `git tag -d v1.3.2 && git push origin :refs/tags/v1.3.2`.
-- Delete the GitHub Release: `gh release delete v1.3.2 --cleanup-tag`.
+- Delete the GitHub Release and its tag:
+  `gh release delete v<v> --cleanup-tag`.
 - Fix the underlying bug, re-tag.
 
 Never `git push --force` to `main` or `develop`.

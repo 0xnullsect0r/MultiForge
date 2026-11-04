@@ -1,0 +1,15 @@
+# Vanilla members MultiForge's patches change on purpose, checked by
+# :neoforge:checkMixinTargets. One "<class file>: <member>" per line; every
+# entry needs the reason in a comment above it, and the change belongs in
+# docs/compatibility.md (a mod's mixin targeting it will not apply).
+
+# NeoForge's static drop-capture list is per thread (02-region-tick Block
+# patch): two regions breaking blocks at once corrupted the shared list and
+# crashed the server. Mods use NeoForge's capture methods, not the field.
+net/minecraft/world/level/block/Block.class: field capturedDrops Ljava/util/List;
+
+# PathTypeCache keeps one immutable entry per slot, replaced with a single
+# reference write (02-region-tick): Vanilla's two parallel arrays tore when two
+# regions' mobs pathfound at once.
+net/minecraft/world/level/pathfinder/PathTypeCache.class: field pathTypes [Lnet/minecraft/world/level/pathfinder/PathType;
+net/minecraft/world/level/pathfinder/PathTypeCache.class: field positions [J

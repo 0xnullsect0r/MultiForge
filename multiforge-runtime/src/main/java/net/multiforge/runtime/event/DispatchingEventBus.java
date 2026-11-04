@@ -29,6 +29,7 @@ import net.neoforged.bus.api.Event;
 import net.neoforged.bus.api.EventPriority;
 import net.neoforged.bus.api.IEventBus;
 import net.neoforged.bus.api.SubscribeEvent;
+import org.jetbrains.annotations.ApiStatus;
 
 /**
  * Wrapper around a real {@link IEventBus} that routes each listener's
@@ -46,6 +47,7 @@ import net.neoforged.bus.api.SubscribeEvent;
  * because the bus cannot resolve it from the wrapper. A registration map
  * lets {@link #unregister} remove the wrappers installed for an object.
  */
+@ApiStatus.Internal
 public class DispatchingEventBus implements IEventBus {
 
     /** {@code -Dmultiforge.event-dispatch=off} disables routing — see {@link #isEnabled()}. */
@@ -67,11 +69,11 @@ public class DispatchingEventBus implements IEventBus {
     }
 
     /**
-     * Whether {@code -Dmultiforge.event-dispatch=off} was set at
-     * construction time. This instance still routes regardless of this
-     * flag's value — the flag is read once, here, purely so the fork
-     * bridge (which decides whether to construct/install a {@code
-     * DispatchingEventBus} at all) has a single accessor to consult. See
+     * Whether routing is on: {@code false} when {@code
+     * -Dmultiforge.event-dispatch=off} was set at construction. Off, this bus is
+     * NeoForge's own: {@link #register}, every {@code addListener} and {@link
+     * #post} go straight to the wrapped bus — no annotation scan, no wrapper, no
+     * deferral, no serial lane — so the kill switch is a full rollback. See
      * {@code docs/design/m12-event-routing.md} §8.
      */
     public boolean isEnabled() {
@@ -85,6 +87,16 @@ public class DispatchingEventBus implements IEventBus {
     @Override
     public void register(Object target) {
         Objects.requireNonNull(target, "target");
+        if (!enabled) {
+            inner.register(target);
+            return;
+        }
+        // NeoForge's bus ignores a second register of the same object (a mod with
+        // @EventBusSubscriber that also registers the class itself); so must this one,
+        // or every listener of that object fires twice.
+        synchronized (registrations) {
+            if (!registeredTargets.add(target)) return;
+        }
         boolean staticOnly = target instanceof Class<?>;
         Class<?> scanClass = staticOnly ? (Class<?>) target : target.getClass();
         Object receiver = staticOnly ? null : target;
@@ -104,13 +116,14 @@ public class DispatchingEventBus implements IEventBus {
                 if (!seen.add(method.getName() + Arrays.toString(method.getParameterTypes()))) {
                     continue;
                 }
-                registerSubscribeEventMethod(method, ann, receiver);
+                registerSubscribeEventMethod(target, method, ann, receiver);
             }
         }
     }
 
     @SuppressWarnings("unchecked")
-    private <T extends Event> void registerSubscribeEventMethod(Method method, SubscribeEvent ann, Object receiver) {
+    private <T extends Event> void registerSubscribeEventMethod(
+            Object target, Method method, SubscribeEvent ann, Object receiver) {
         if (method.getParameterCount() != 1) {
             throw new IllegalArgumentException(
                     "@SubscribeEvent method " + method + " must declare exactly one parameter");
@@ -128,7 +141,9 @@ public class DispatchingEventBus implements IEventBus {
         RoutingListenerWrapper<T> wrapped = new RoutingListenerWrapper<>(
                 raw, metadata, dispatcher, method.getDeclaringClass(), eventClass, method.getName());
         inner.addListener(ann.priority(), ann.receiveCanceled(), eventClass, wrapped);
-        track(receiver != null ? receiver : method.getDeclaringClass(), wrapped);
+        // Tracked under the registered object, so unregister(target) also removes the
+        // listeners it inherited from a superclass.
+        track(target, wrapped);
     }
 
     /**
@@ -200,6 +215,10 @@ public class DispatchingEventBus implements IEventBus {
             EventPriority priority, boolean receiveCanceled, Class<T> eventType, Consumer<T> consumer) {
         Objects.requireNonNull(consumer, "consumer");
         Objects.requireNonNull(eventType, "eventType");
+        if (!enabled) {
+            inner.addListener(priority, receiveCanceled, eventType, consumer);
+            return;
+        }
         RoutingListenerWrapper<T> wrapped = new RoutingListenerWrapper<>(
                 consumer, AnnotationScanner.forUnannotated(eventType), dispatcher, consumer.getClass(), eventType);
         inner.addListener(priority, receiveCanceled, eventType, wrapped);
@@ -219,6 +238,9 @@ public class DispatchingEventBus implements IEventBus {
     // Registered object (listener instance, class, or consumer) -> the
     // wrappers installed on the inner bus for it.
     private final java.util.Map<Object, java.util.List<Consumer<?>>> registrations = new java.util.IdentityHashMap<>();
+    /** Objects passed to {@link #register}, by identity; guarded by {@link #registrations}. */
+    private final java.util.Set<Object> registeredTargets =
+            java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>());
 
     private void track(Object owner, RoutingListenerWrapper<?> wrapped) {
         synchronized (registrations) {
@@ -269,6 +291,7 @@ public class DispatchingEventBus implements IEventBus {
         java.util.List<Consumer<?>> wrappers;
         synchronized (registrations) {
             wrappers = registrations.remove(target);
+            registeredTargets.remove(target);
         }
         if (wrappers != null) {
             for (Consumer<?> w : wrappers) {
@@ -289,6 +312,7 @@ public class DispatchingEventBus implements IEventBus {
      */
     @Override
     public <T extends Event> T post(T event) {
+        if (!enabled) return inner.post(event);
         // The deferred post's closure is built only on that branch: post runs for every event.
         if (shouldDefer(event) && deferPost(event, () -> inner.post(event))) return event;
         if (postOnLane(event)) {
@@ -300,6 +324,7 @@ public class DispatchingEventBus implements IEventBus {
 
     @Override
     public <T extends Event> T post(EventPriority priority, T event) {
+        if (!enabled) return inner.post(priority, event);
         if (shouldDefer(event) && deferPost(event, () -> inner.post(priority, event))) return event;
         if (postOnLane(event)) {
             dispatcher.runPostOnSerialLane(() -> inner.post(priority, event));

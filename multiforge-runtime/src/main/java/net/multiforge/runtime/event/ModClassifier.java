@@ -14,6 +14,7 @@ package net.multiforge.runtime.event;
 
 import java.util.Objects;
 import java.util.function.Function;
+import org.jetbrains.annotations.ApiStatus;
 
 /**
  * Maps a listener's class to the {@link ModSafety} of the mod that defines
@@ -22,6 +23,7 @@ import java.util.function.Function;
  * loaded; until then, and for classes of no mod, everything is {@link
  * ModSafety#HYBRID_SAFE}.
  */
+@ApiStatus.Internal
 public final class ModClassifier {
 
     private static volatile Function<Class<?>, ModSafety> lookup = c -> ModSafety.HYBRID_SAFE;

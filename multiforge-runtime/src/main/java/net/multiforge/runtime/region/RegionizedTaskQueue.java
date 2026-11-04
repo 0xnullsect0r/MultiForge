@@ -20,6 +20,7 @@ import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.locks.Lock;
 import net.multiforge.api.world.ChunkPos;
 import net.multiforge.api.world.WorldRef;
+import org.jetbrains.annotations.ApiStatus;
 
 /**
  * Per-region mailboxes used to route cross-region work. The primary
@@ -39,6 +40,7 @@ import net.multiforge.api.world.WorldRef;
  * either the {@link ThreadedRegionizer} (production) or a stub map
  * (unit tests).
  */
+@ApiStatus.Internal
 public final class RegionizedTaskQueue implements RegionListener {
 
     /** Look up the owner region for a chunk. May return {@code null} for unloaded chunks. */
@@ -75,6 +77,14 @@ public final class RegionizedTaskQueue implements RegionListener {
     private final ReadLockLookup readLockLookup;
     private final ConcurrentMap<RegionId, Queue<PendingTask>> inboxes = new ConcurrentHashMap<>();
     private final ConcurrentMap<OrphanBucket, Queue<PendingTask>> orphanedBySection = new ConcurrentHashMap<>();
+    /**
+     * Where the tasks still queued on a region go when it dies without merging
+     * (its last section unloaded). {@code null} — unit tests and MC-free hosts —
+     * parks them in the orphan queue under their chunk; a server binds the
+     * server-thread reroute target, so a write rerouted to a region just before
+     * it unloaded still lands (Vanilla would have applied it).
+     */
+    private volatile java.util.function.Consumer<Runnable> deadRegionSink;
 
     /**
      * Legacy constructor: no read-lock enforcement around {@link
@@ -146,9 +156,20 @@ public final class RegionizedTaskQueue implements RegionListener {
         queueChunkTask(world, pos.x(), pos.z(), task);
     }
 
+    /** See {@link #deadRegionSink}. */
+    public void setDeadRegionSink(java.util.function.Consumer<Runnable> sink) {
+        this.deadRegionSink = sink;
+    }
+
     /**
      * Drain up to {@code max} tasks from {@code region}'s inbox, running
      * each one in caller context.
+     *
+     * <p>A task that throws does not stop the others: the batch runs to its
+     * end, then the first failure is rethrown (later ones attached as
+     * suppressed). On a region tick that reaches the barrier, which rethrows it
+     * on the server thread, where Vanilla's crash handling applies to it as to
+     * the same write made inline.
      *
      * @return the number of tasks executed.
      */
@@ -156,17 +177,21 @@ public final class RegionizedTaskQueue implements RegionListener {
         Queue<PendingTask> inbox = inboxes.get(region.id());
         if (inbox == null) return 0;
         int run = 0;
+        Throwable first = null;
         while (run < max) {
             PendingTask p = inbox.poll();
             if (p == null) break;
             try {
                 p.task().run();
             } catch (Throwable t) {
-                // Never let a mod-thrown exception drop the tick pipeline.
-                Thread.currentThread().getUncaughtExceptionHandler().uncaughtException(Thread.currentThread(), t);
+                if (first == null) first = t;
+                else first.addSuppressed(t);
             }
             run++;
         }
+        if (first instanceof RuntimeException re) throw re;
+        if (first instanceof Error err) throw err;
+        if (first != null) throw new IllegalStateException("rerouted task failed", first);
         return run;
     }
 
@@ -245,14 +270,23 @@ public final class RegionizedTaskQueue implements RegionListener {
     }
 
     /**
-     * {@link RegionListener} hook: on region death (after a merge or
-     * last-section removal), drop any residual entries. In the merge
-     * case {@link #onRegionsMerging} already moved them; in the
-     * last-chunk case the queue simply disappears.
+     * {@link RegionListener} hook: on region death. After a merge {@link
+     * #onRegionsMerging} already moved the inbox. After its last section
+     * unloaded, the tasks still queued (a write another region rerouted here
+     * after this one's last drain) go to the {@link #setDeadRegionSink dead-region
+     * sink}, or wait in the orphan queue under their chunk — they used to be
+     * dropped silently.
      */
     @Override
     public void onRegionDied(Region region) {
-        clear(region);
+        Queue<PendingTask> left = inboxes.remove(region.id());
+        if (left == null || left.isEmpty()) return;
+        java.util.function.Consumer<Runnable> sink = deadRegionSink;
+        for (PendingTask p; (p = left.poll()) != null; ) {
+            net.multiforge.runtime.diagnostics.ProbeRegistry.bump("reroute.region-died.redirected");
+            if (sink != null) sink.accept(p.task());
+            else orphanBucketFor(p.world, p.chunkX, p.chunkZ).add(p);
+        }
     }
 
     /**

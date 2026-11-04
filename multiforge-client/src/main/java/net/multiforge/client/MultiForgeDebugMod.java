@@ -12,6 +12,7 @@
  */
 package net.multiforge.client;
 
+import net.neoforged.api.distmarker.Dist;
 import net.neoforged.bus.api.IEventBus;
 import net.neoforged.fml.ModContainer;
 import net.neoforged.fml.common.Mod;
@@ -29,9 +30,10 @@ import org.slf4j.LoggerFactory;
 /**
  * NeoForge entry point for the MultiForge client debug mod.
  *
- * <p>Loads on any vanilla NeoForge 1.21.x client ({@code side =
- * "CLIENT"} in {@code META-INF/neoforge.mods.toml}, so this class never
- * loads on a dedicated server). It:
+ * <p>Client only: {@code dist = Dist.CLIENT} keeps FML from constructing it
+ * on a dedicated server (the {@code side = "CLIENT"} lines in {@code
+ * neoforge.mods.toml} only scope the dependency checks), where the client
+ * classes it touches do not exist. It loads on a NeoForge 1.21.1 client and:
  *
  * <ul>
  *   <li>registers the {@code multiforge:debug/v1} payload channel
@@ -52,7 +54,7 @@ import org.slf4j.LoggerFactory;
  * a vanilla or non-MultiForge NeoForge server, which never opens the
  * {@code multiforge:debug/v1} channel -- see protocol doc §1.
  */
-@Mod(MultiForgeDebugMod.MOD_ID)
+@Mod(value = MultiForgeDebugMod.MOD_ID, dist = Dist.CLIENT)
 public final class MultiForgeDebugMod {
 
     public static final String MOD_ID = "multiforge_debug";
@@ -85,9 +87,11 @@ public final class MultiForgeDebugMod {
         // it up within 250 ms anyway — syncIfChanged is a no-op when the
         // mask is unchanged — but that depends on the server keepaliving,
         // which is a v1.3.14-and-later behaviour.)
+        // An edited config file is reloaded on FML's file-watcher thread; the HUD
+        // state and the subscription are the client thread's, so resync there.
         modEventBus.addListener((ModConfigEvent.Reloading event) -> {
             if (event.getConfig().getSpec() == MultiForgeDebugConfig.SPEC) {
-                resync(state, subscriptions);
+                net.minecraft.client.Minecraft.getInstance().execute(() -> resync(state, subscriptions));
             }
         });
 

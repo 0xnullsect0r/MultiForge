@@ -24,6 +24,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import net.multiforge.api.event.DispatchDomainKind;
 import net.multiforge.runtime.diagnostics.ProbeRegistry;
 import net.multiforge.runtime.diagnostics.ViolationLogger;
+import org.jetbrains.annotations.ApiStatus;
 
 /**
  * Fixed-size pool backing {@link DispatchDomainKind#ASYNC ASYNC}-domain
@@ -45,6 +46,7 @@ import net.multiforge.runtime.diagnostics.ViolationLogger;
  * bridge, not this module; this class exists so either choice is
  * available and independently testable.
  */
+@ApiStatus.Internal
 public final class AsyncEventPool implements AutoCloseable {
 
     private static final String SIZE_PROPERTY = "multiforge.event-async-pool.size";

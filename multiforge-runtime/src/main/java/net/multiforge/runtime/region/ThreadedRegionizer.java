@@ -31,6 +31,7 @@ import java.util.function.Supplier;
 import net.multiforge.api.world.ChunkPos;
 import net.multiforge.api.world.WorldRef;
 import net.multiforge.runtime.region.pin.RegionPin;
+import org.jetbrains.annotations.ApiStatus;
 
 /**
  * Per-world regionizer: maintains the section→region map and enforces
@@ -52,6 +53,7 @@ import net.multiforge.runtime.region.pin.RegionPin;
  * queueChunkTask}'s resolve-then-enqueue) can acquire {@link #readLock()}
  * to block merge/split for the duration of the read.
  */
+@ApiStatus.Internal
 public final class ThreadedRegionizer {
 
     /** 8 immediate neighbours around a section, radius 1. */
@@ -434,7 +436,9 @@ public final class ThreadedRegionizer {
         int toX = pin.toChunkX() >> sectionChunkShift;
         int fromZ = pin.fromChunkZ() >> sectionChunkShift;
         int toZ = pin.toChunkZ() >> sectionChunkShift;
-        long span = (long) (toX - fromX + 1) * (toZ - fromZ + 1);
+        // In long: a pin spanning most of the int range overflowed int and took the
+        // nested loop below over billions of sections, on the server thread.
+        long span = ((long) toX - fromX + 1) * ((long) toZ - fromZ + 1);
         if (span > candidates.size()) {
             for (SectionPos s : List.copyOf(candidates)) {
                 if (s.x() >= fromX && s.x() <= toX && s.z() >= fromZ && s.z() <= toZ) visitor.accept(s);

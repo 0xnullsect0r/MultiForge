@@ -15,6 +15,24 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Tag matches the version and is on main
+        # A tag pushed without the version bump shipped jars named for the tag
+        # that reported the previous version. Releases come from main (CLAUDE.md:
+        # develop is merged into main, then tagged).
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF_NAME#v}"
+          OUTER=$(sed -n 's/^version=//p' gradle.properties)
+          FORK=$(sed -n 's/^multiforge_runtime_version=//p' upstream/neoforge-1.21.1/gradle.properties)
+          echo "tag=$TAG gradle.properties=$OUTER fork=$FORK"
+          [ "$TAG" = "$OUTER" ] || { echo "::error::tag $GITHUB_REF_NAME but gradle.properties version=$OUTER"; exit 1; }
+          [ "$TAG" = "$FORK" ] || { echo "::error::tag $GITHUB_REF_NAME but the fork's multiforge_runtime_version=$FORK"; exit 1; }
+          git fetch --no-tags origin main
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main \
+              || { echo "::error::$GITHUB_REF_NAME ($GITHUB_SHA) is not on main"; exit 1; }
 
       - name: Set up JDK 21
         uses: actions/setup-java@v4
@@ -50,8 +68,10 @@ jobs:
           mkdir -p "$RELEASE_DIR"
 
           # Runtime library — mod authors compile against this.
-          cp multiforge-runtime/build/libs/multiforge-runtime-*.jar "$RELEASE_DIR/" \
-              2>/dev/null || cp multiforge-runtime/build/libs/*.jar "$RELEASE_DIR/"
+          RUNTIME_JAR=$(find multiforge-runtime/build/libs -maxdepth 1 -type f \
+              -name 'multiforge-runtime-*.jar' ! -name '*-sources.jar' | head -1)
+          [ -n "$RUNTIME_JAR" ] || { echo "::error::multiforge-runtime jar not found"; exit 1; }
+          cp "$RUNTIME_JAR" "$RELEASE_DIR/"
 
           # v1.3.5: client debug mod. Ships both a versioned filename and
           # a stable-alias multiforge-client.jar so docs can link
@@ -59,12 +79,12 @@ jobs:
           # a version bump every release.
           CLIENT_JAR=$(find multiforge-client/build/libs -maxdepth 1 -type f \
               -name 'multiforge-client-*.jar' ! -name '*-sources.jar' | head -1)
-          if [ -n "$CLIENT_JAR" ]; then
-              cp "$CLIENT_JAR" "$RELEASE_DIR/"
-              cp "$CLIENT_JAR" "$RELEASE_DIR/multiforge-client.jar"
-          else
-              echo "::warning::multiforge-client jar not found under multiforge-client/build/libs — client debug mod will not ship in this release."
+          if [ -z "$CLIENT_JAR" ]; then
+              echo "::error::multiforge-client jar not found under multiforge-client/build/libs"
+              exit 1
           fi
+          cp "$CLIENT_JAR" "$RELEASE_DIR/"
+          cp "$CLIENT_JAR" "$RELEASE_DIR/multiforge-client.jar"
 
           # Mod-safety scanner, run by /multiforge certify from the server
           # directory. The updater installs it next to server.jar.
@@ -150,7 +170,15 @@ jobs:
         # safe whether or not setup just regenerated the sources.
         run: |
           ./gradlew --no-configuration-cache --no-daemon --stacktrace setup
-          ./gradlew --no-configuration-cache --no-daemon --stacktrace :neoforge:installerJar
+          ./gradlew --no-configuration-cache --no-daemon --stacktrace \
+              :neoforge:installerJar :neoforge:checkMixinTargets
+
+      - name: Boot a server installed from the installer
+        working-directory: upstream/neoforge-1.21.1
+        # NeoForge's own production self-test: install from the built installer
+        # (downloading Minecraft from Mojang), start the server and wait for it to
+        # tick. CI's GameTests run from the dev classpath; this is the jar we ship.
+        run: ./gradlew --no-configuration-cache --no-daemon --stacktrace :neoforge:testProductionServer
 
       - name: Assert the fork reports a real NeoForge version
         working-directory: upstream/neoforge-1.21.1
@@ -184,6 +212,16 @@ jobs:
               echo "::error::No fork installer jar found under upstream/neoforge-1.21.1/projects/neoforge/build/libs"
               exit 1
           fi
+          # The installer must carry the universal jar, and the universal jar the
+          # MultiForge runtime and API (jar-in-jar); a build missing them installs a
+          # plain NeoForge server.
+          UNIVERSAL=$(unzip -Z1 "$FORK_JAR" | grep -E '^maven/net/neoforged/neoforge/[^/]+/neoforge-[^/]+-universal\.jar$' | head -1)
+          [ -n "$UNIVERSAL" ] || { echo "::error::the installer has no universal jar"; exit 1; }
+          unzip -p "$FORK_JAR" "$UNIVERSAL" > /tmp/universal.jar
+          for m in multiforge-runtime multiforge-api; do
+              unzip -Z1 /tmp/universal.jar | grep -qE "^META-INF/jarjar/${m}-${VER}\.jar$" \
+                  || { echo "::error::the universal jar does not embed ${m}-${VER}.jar"; exit 1; }
+          done
           cp "$FORK_JAR" "release/multiforge-${VER}-installer.jar"
           # Stable alias — the URL the README + docs point at.
           # multiforge-installer.jar now == the fork installer (v1.3.3+).
@@ -271,7 +309,10 @@ jobs:
           tag_name: ${{ github.ref_name }}
           name: ${{ github.ref_name }}
           files: release/*
-          draft: false
+          # Published as a draft, then un-drafted below once every asset is
+          # attached: assets upload one by one, and the updater reading
+          # releases/latest mid-upload could miss SHA256SUMS or the installer.
+          draft: true
           prerelease: ${{ contains(github.ref_name, '-') }}
           generate_release_notes: true
           body: |
@@ -283,10 +324,10 @@ jobs:
             curl -fsSL https://github.com/${{ github.repository }}/releases/latest/download/multiforge-update.sh | sh
             ```
 
-            Then start the server with `java -Xms4G -Xmx20G -jar server.jar nogui` (or `./run.sh`).
+            Then start the server with `./run.sh`, or `<JDK 21>/bin/java -Xmx8G -jar server.jar nogui`.
             The updater never touches `config/`, `mods/`, worlds, `server.properties` or `eula.txt`,
             and keeps the previous version for `... | sh -s -- --rollback`.
-            See [docs/install.md § Updating](https://github.com/${{ github.repository }}/blob/main/docs/install.md#updating).
+            See [docs/install.md § Updating](https://github.com/${{ github.repository }}/blob/${{ github.ref_name }}/docs/install.md#updating).
 
             Downloads:
             - `multiforge-update.sh` — the updater above; `server.jar` — NeoForged's
@@ -296,13 +337,13 @@ jobs:
             - **Fresh installer JAR: `multiforge-*-installer.jar`**
               (stable alias: [multiforge-installer.jar](https://github.com/${{ github.repository }}/releases/latest/download/multiforge-installer.jar))
               Run with `java -jar multiforge-installer.jar --installServer <dir>` —
-              standard NeoForge installer CLI. See [docs/install.md § Method 1](https://github.com/${{ github.repository }}/blob/main/docs/install.md#method-1--fresh-installer-jar).
+              standard NeoForge installer CLI. See [docs/install.md § Method 1](https://github.com/${{ github.repository }}/blob/${{ github.ref_name }}/docs/install.md#method-1--fresh-installer-jar).
             - **Drop-in replacement ZIP: `multiforge-*-replacement.zip`**
               (stable alias: [multiforge-replacement.zip](https://github.com/${{ github.repository }}/releases/latest/download/multiforge-replacement.zip))
               Unzip into an existing NeoForge 1.21.1 server directory and run
               `./install-multiforge.sh` (Windows: `install-multiforge.bat`) to
               convert it in place — world, mods and configs untouched. See
-              [docs/install.md § Method 2](https://github.com/${{ github.repository }}/blob/main/docs/install.md#method-2--drop-in-replacement-zip).
+              [docs/install.md § Method 2](https://github.com/${{ github.repository }}/blob/${{ github.ref_name }}/docs/install.md#method-2--drop-in-replacement-zip).
             - Runtime library (for mod authors): `multiforge-runtime-*.jar`
             - **Client debug mod: `multiforge-client-*.jar`**
               (stable alias: [multiforge-client.jar](https://github.com/${{ github.repository }}/releases/latest/download/multiforge-client.jar))
@@ -312,6 +353,11 @@ jobs:
               advertise `multiforge:debug/v1`.
             - Pelican Panel / Pterodactyl egg: `pelican-egg.json`
               (import via panel: Nests → Import Egg — see
-              [docs/install.md § Method 3](https://github.com/${{ github.repository }}/blob/main/docs/install.md#method-3--pelican-panel--pterodactyl-egg))
+              [docs/install.md § Method 3](https://github.com/${{ github.repository }}/blob/${{ github.ref_name }}/docs/install.md#method-3--pelican-panel--pterodactyl-egg))
 
-            See [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/main/CHANGELOG.md) for what changed.
+            See [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/${{ github.ref_name }}/CHANGELOG.md) for what changed.
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release edit "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" --draft=false

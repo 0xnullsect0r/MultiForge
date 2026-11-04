@@ -14,6 +14,7 @@ package net.multiforge.runtime.region;
 
 import java.util.EnumMap;
 import java.util.Map;
+import org.jetbrains.annotations.ApiStatus;
 
 /**
  * A {@link RegionTickBody} composed of the six ordered phases from
@@ -27,18 +28,20 @@ import java.util.Map;
  *       drained from the per-region tick lists.</li>
  *   <li>{@link Phase#ENTITY_AI} — entity iteration, AI, physics.</li>
  *   <li>{@link Phase#BLOCK_ENTITIES} — block-entity iteration.</li>
- *   <li>{@link Phase#REGION_EVENTS} — per-region NeoForge events + tasks.</li>
- *   <li>{@link Phase#FLUSH_OUTBOUND} — deliver outbound cross-region
- *       messages that phases 2–5 produced.</li>
+ *   <li>{@link Phase#REGION_EVENTS} — empty in production.</li>
+ *   <li>{@link Phase#FLUSH_OUTBOUND} — empty in production.</li>
  * </ol>
  *
  * <p>Each phase is an independent {@link RegionTickBody} slot. Empty
- * slots are silent no-ops. The M8 patches wire the block/fluid,
- * entity, block-entity, and event slots to real {@code ServerLevel}
- * subsystem calls; the mailbox and outbound slots are usually left
- * empty in production because {@link TickRegionScheduler}'s own
- * before/after drain covers them.
+ * slots are silent no-ops. The server wires only {@link
+ * Phase#BLOCK_FLUID_TICKS}, {@link Phase#ENTITY_AI} and {@link
+ * Phase#BLOCK_ENTITIES} ({@code MultiThreadedSchedulerHost.installRegionTickBody});
+ * {@link Phase#INBOUND_MAILBOX}, {@link Phase#REGION_EVENTS} and {@link
+ * Phase#FLUSH_OUTBOUND} stay empty in production (the scheduler drains the
+ * mailbox itself, and events dispatch from where they are posted) and serve
+ * as hooks for tests.
  */
+@ApiStatus.Internal
 public final class PhasedRegionTickBody implements RegionTickBody {
 
     public enum Phase {

@@ -23,7 +23,7 @@ It cannot safely run “any mod” at full parallel speed without isolation/seri
 14. [Compatibility with “Any NeoForge Mod”](#compatibility-with-any-neoforge-mod)  
 15. [Legacy Compatibility Lane (Serialized Facade)](#legacy-compatibility-lane-serialized-facade)  
 16. [Networking Model](#networking-model)  
-17. [Persistence, Autosave, and Crash Safety](#ersistence-autosave-and-crash-safety)  
+17. [Persistence, Autosave, and Crash Safety](#persistence-autosave-and-crash-safety)  
 18. [Determinism, Testing, and Debuggability](#determinism-testing-and-debuggability)  
 19. [Security and Failure Containment](#security-and-failure-containment)  
 20. [Performance Model and Expected Gains](#performance-model-and-expected-gains)  

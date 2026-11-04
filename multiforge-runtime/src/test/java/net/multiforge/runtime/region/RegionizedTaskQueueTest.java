@@ -88,9 +88,12 @@ class RegionizedTaskQueueTest {
         });
         q.queueChunkTask(WORLD, 0, 0, post::incrementAndGet);
 
-        int drained = q.drain(region, 10);
-        assertThat(drained).isEqualTo(2);
+        // The rest of the batch still runs; the failure is then reported to the
+        // caller (a region tick rethrows it at the barrier) rather than swallowed.
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> q.drain(region, 10))
+                .hasMessage("mod threw");
         assertThat(post.get()).isEqualTo(1);
+        assertThat(q.inboxSize(region)).isZero();
     }
 
     /**

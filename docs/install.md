@@ -12,7 +12,7 @@ All three land the same runtime + patched NeoForge fork. Post-install steps (EUL
 
 **Requirements**
 
-- **JDK 21 exactly.** MultiForge (like NeoForge 1.21.1 itself) does *not* run on JDK 22 or newer. Any 1.21.1 modpack that uses SpongeMixin (ATM10, ATM9, AllTheModsX, most kitchen-sink packs) crashes at mod-scan with `Unsupported class file major version 7X` on JDK 22+ because the bundled mixin transformer's class-file reader only understands Java 21 bytecode. Common trap: `java -version` shows JDK 24/25/26 because you installed the "latest" JDK from your distro. Install Temurin 21 (`brew install temurin@21` / `apt install temurin-21-jdk` / `pacman -S jdk21-temurin`) and either set `JAVA_HOME=/path/to/jdk-21` or invoke the launcher with an explicit path (`JAVA_HOME=/usr/lib/jvm/temurin-21-jdk ./run.sh`). As of v1.3.18 the launcher scripts refuse to run on the wrong JDK with a clear remediation message.
+- **JDK 21 exactly.** MultiForge (like NeoForge 1.21.1 itself) does *not* run on JDK 22 or newer. Any 1.21.1 modpack that uses SpongeMixin (ATM10, ATM9, AllTheModsX, most kitchen-sink packs) crashes at mod-scan with `Unsupported class file major version 7X` on JDK 22+ because the bundled mixin transformer's class-file reader only understands Java 21 bytecode. Common trap: `java -version` shows JDK 24/25/26 because you installed the "latest" JDK from your distro. Install Temurin 21 (`brew install temurin@21` / `apt install temurin-21-jdk` / `pacman -S jdk21-temurin`) and either set `JAVA_HOME=/path/to/jdk-21` or invoke the launcher with an explicit path (`JAVA_HOME=/usr/lib/jvm/temurin-21-jdk ./run.sh`). From v1.11.1 the `run.sh` / `run.bat` the installer writes refuse to start on anything but Java 21 and name the JDK they found. `java -jar server.jar` runs in whatever JVM starts it, so use `./run.sh` or name the JDK 21 explicitly.
 - **8 GB RAM** per typical server (adjust via `-Xmx`).
 - **MC 1.21.1 server directory shape**: `world/`, `mods/`, `config/`, `eula.txt`.
 
@@ -31,10 +31,10 @@ curl -fsSL https://github.com/0xnullsect0r/MultiForge/releases/latest/download/m
 Then start the server with:
 
 ```
-java -Xms4G -Xmx20G -jar server.jar nogui
+./run.sh
 ```
 
-(`./run.sh` works too; it reads its JVM flags from `user_jvm_args.txt`, while `java -jar server.jar` takes them from the command line.)
+`./run.sh` checks for Java 21 and reads its JVM flags (set `-Xmx` there) from `user_jvm_args.txt`. `java -jar server.jar nogui` also works, but runs in whatever JVM starts it, so give it the JDK 21 path: `/path/to/jdk-21/bin/java -Xmx8G -jar server.jar nogui` (the updater prints the path it checked). Size `-Xmx` to the machine; 8 GB is a starting point for a modpack.
 
 What it does, every run:
 
@@ -43,7 +43,7 @@ What it does, every run:
 - **Replaces `server.jar` every time.** It is NeoForged's [server starter](https://github.com/NeoForged/serverstarterjar) (LGPL-2.1, mirrored unchanged): it reads `run.sh` and launches the version named there in the same JVM, so it can never start an old one.
 - Installs `multiforge-scanner.jar` next to `server.jar`, where `/multiforge certify` looks for it.
 - Leaves exactly one version under `libraries/net/neoforged/neoforge/`. The version it replaced goes to `.multiforge-backup/` with the previous `run.sh`, `run.bat`, `server.jar` and scanner.
-- Keeps your `user_jvm_args.txt` (the installer would otherwise reset it).
+- Keeps your `user_jvm_args.txt`.
 
 What it never touches: `config/` (including `config/multiforge-server.toml` — MultiForge only writes that file when it does not exist, and settings a newer version adds take their defaults until you set them), `mods/`, the world, `server.properties`, `eula.txt`, and the ops/whitelist/ban lists.
 
@@ -120,7 +120,7 @@ The Fabric-installer-shaped path: run a small JAR that lays out a fresh MultiFor
 4. **Configure** (optional — defaults work):
 
    ```
-   $EDITOR config/multiforge-server.toml     # cores, threads-per-core, region size, autosave, etc.
+   $EDITOR config/multiforge-server.toml     # cores, threads-per-core, region size, entity activation, …
    ```
 
 5. **Copy your mods and world** (if migrating from a previous NeoForge install):
@@ -235,11 +235,11 @@ Convert an existing NeoForge 1.21.1 server directory to MultiForge in place, wit
    JAVA_HOME=/usr/lib/jvm/temurin-21-jdk ./install-multiforge.sh
    ```
 
-   What it does, in order: preflights the JDK, backs up `run.sh` / `run.bat` / `user_jvm_args.txt` to `*.pre-multiforge-<timestamp>.bak`, runs the installer against the current directory, rewrites `run.sh` to carry the same JDK-21 preflight, and writes `config/multiforge-server.toml` and `eula.txt` if they are absent.
+   What it does, in order: preflights the JDK, backs up `run.sh` / `run.bat` / `user_jvm_args.txt` to `*.pre-multiforge-<timestamp>.bak` (only on the first run, so the backups are always the originals), runs the installer against the current directory (its `run.sh` checks for Java 21 itself), and writes `config/multiforge-server.toml` and `eula.txt` if they are absent.
 
    Needs internet the first time — it downloads the Minecraft server jar and the NeoForge libraries.
 
-5. **Configure MultiForge** (default is 8 cores × 2 threads-per-core; adjust to your box):
+5. **Configure MultiForge** (the default is one worker per available processor; adjust to your box):
 
    ```
    $EDITOR config/multiforge-server.toml
@@ -256,7 +256,8 @@ Convert an existing NeoForge 1.21.1 server directory to MultiForge in place, wit
 | Path | Change |
 |---|---|
 | `libraries/` | NeoForge + MultiForge + Minecraft artifacts added |
-| `run.sh`, `run.bat`, `user_jvm_args.txt` | regenerated; originals kept as `*.pre-multiforge-<timestamp>.bak` |
+| `run.sh`, `run.bat` | regenerated (with a Java 21 check); originals kept as `*.pre-multiforge-<timestamp>.bak` |
+| `user_jvm_args.txt` | kept if present; a copy is backed up too |
 | `config/multiforge-server.toml` | written if absent |
 | `eula.txt` | written if absent, as `eula=false` |
 
@@ -301,10 +302,10 @@ If you host Minecraft servers through a panel (Pelican Panel, Pterodactyl, or an
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `MULTIFORGE_VERSION` | `latest` | Which release to install. `latest` resolves via the GitHub API to the latest published release. Otherwise substitute into `DOWNLOAD_URL`'s `{VERSION}` placeholder (e.g. `v1.3.2`). |
+| `MULTIFORGE_VERSION` | `latest` | Which release to install: `latest`, or a version such as `1.11.1` (a leading `v` is accepted). |
 | `DOWNLOAD_URL` | GitHub Releases template | Where to fetch the installer from. Only override for a mirror or a custom build. Not user-editable by default. |
 | `MC_VERSION` | `1.21.1` | Display-only; used by the panel UI to show which MC version the server targets. |
-| `SERVER_JARFILE` | `multiforge.jar` | Fallback jar name for the rare case the installer isn't detected (single runnable jar path). Normal flow doesn't use this. |
+| `SERVER_JARFILE` | `multiforge.jar` | Fallback jar name, used only if the install left no `unix_args.txt`. The normal flow doesn't use it. |
 
 The startup command mirrors NeoForge's own `run.sh`:
 
@@ -316,18 +317,19 @@ java @user_jvm_args.txt -Xms128M -Xmx{{SERVER_MEMORY}}M -Dterminal.jline=false -
 
 ### What the install script does
 
-1. Downloads `multiforge-<v>-installer.jar` from the release.
-2. Runs `java -jar multiforge-installer.jar --installServer /mnt/server`.
-3. Symlinks `libraries/net/neoforged/neoforge/<v>/unix_args.txt` to `/mnt/server/unix_args.txt` (the startup command's `@unix_args.txt` expects it at top level).
-4. Writes `eula=true` to `eula.txt`.
-5. Creates `mods/` and `config/` if not present.
+It runs in an `eclipse-temurin:21-jdk` container (the installer is a Java program and MultiForge needs Java 21):
 
-The resulting layout is identical to Method 1's fresh-installer flow — MultiForge's own `config/multiforge-server.toml` is written by the installer, and mod installation, world backups, etc. work per your panel's normal UX.
+1. Downloads the installer from the release (`multiforge-installer.jar` for `latest`, `multiforge-<v>-installer.jar` for a pinned version) and checks it against the release's `SHA256SUMS`.
+2. Runs `java -jar <installer> --installServer /mnt/server`.
+3. Symlinks `libraries/net/neoforged/neoforge/<v>/unix_args.txt` to `/mnt/server/unix_args.txt` (the startup command's `@unix_args.txt` expects it at top level).
+4. Creates `mods/` and `config/` if not present.
+
+It does not accept the Minecraft EULA for you: the egg's EULA feature asks on first start. The resulting layout is identical to Method 1's fresh-installer flow. `config/multiforge-server.toml` is written by the server on its first start, and mod installation, world backups, etc. work per your panel's normal UX. To update, reinstall the server from the panel (worlds, `mods/` and `config/` stay), or run the updater in the server's directory.
 
 ### Requirements
 
 - A panel supporting the Pelican-format egg schema (`PLCN_v1`) — Pelican Panel or Pterodactyl current versions.
-- The container running the server needs Java 21 (any of the yolks images `ghcr.io/pterodactyl/yolks:java_21|java_22|java_25`).
+- The container running the server needs Java 21: the egg offers only `ghcr.io/parkervcp/yolks:java_21`. Newer Java versions cannot load 1.21.1 mods.
 - Sufficient memory allocation on the panel (default startup uses `-Xms128M -Xmx{{SERVER_MEMORY}}M` — allocate 4-8 GB for a normal MultiForge server).
 
 ### Troubleshooting
@@ -362,7 +364,7 @@ For deep observability (region borders, MSPT heatmap, live pin selection) downlo
 
 ## Troubleshooting
 
-**"Unsupported class file major version 7X" at mod scan.** Your `java` is a JDK newer than 21 (`70` = JDK 26, `69` = JDK 25, `68` = JDK 24, `67` = JDK 23, `66` = JDK 22). SpongeMixin — bundled by nearly every 1.21.1 mod, including everything in ATM10 / AllTheModsX / most kitchen-sink packs — ships a class-file reader that only understands Java 21 bytecode and rejects anything newer, which crashes mod-loading before MultiForge or NeoForge ever gets a chance to run. Fix: install Temurin 21 (`sudo pacman -S jdk21-temurin` / `apt install temurin-21-jdk` / `brew install temurin@21`), then re-invoke the launcher with an explicit JDK path — for example `JAVA_HOME=/usr/lib/jvm/temurin-21-jdk ./run.sh`. As of v1.3.18 the installer-generated `run.sh` refuses to run on the wrong JDK with this message and a non-zero exit. See Requirements above.
+**"Unsupported class file major version 7X" at mod scan.** Your `java` is a JDK newer than 21 (`70` = JDK 26, `69` = JDK 25, `68` = JDK 24, `67` = JDK 23, `66` = JDK 22). SpongeMixin — bundled by nearly every 1.21.1 mod, including everything in ATM10 / AllTheModsX / most kitchen-sink packs — ships a class-file reader that only understands Java 21 bytecode and rejects anything newer, which crashes mod-loading before MultiForge or NeoForge ever gets a chance to run. Fix: install Temurin 21 (`sudo pacman -S jdk21-temurin` / `apt install temurin-21-jdk` / `brew install temurin@21`), then re-invoke the launcher with an explicit JDK path — for example `JAVA_HOME=/usr/lib/jvm/temurin-21-jdk ./run.sh`. From v1.11.1 the installer-generated `run.sh` and `run.bat` refuse to start on anything but Java 21, with this message. See Requirements above.
 
 **Mods refuse to load: "Mod X requires neoforge 21.1.NNN or above / Currently, neoforge is 21.1.251-multiforge-…".** MultiForge is based on NeoForge 21.1.251, the latest 1.21.1 release; a mod needing something newer is refused by stock NeoForge 21.1.251 too. See [`compatibility.md`](compatibility.md). If instead the line reads `Currently, neoforge is 1.21.1-v…-beta`, you are on v1.5.0 or older, where the reported version was not a NeoForge version at all and *every* mod was refused; upgrade to v1.5.1+.
 

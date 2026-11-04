@@ -341,7 +341,7 @@ Each `RegionStat` element:
 | `sectionCount` | i32 | Number of loaded chunk sections owned by the region. |
 | `msptP50` | f64 | Median tick duration, milliseconds. |
 | `msptP95` | f64 | 95th-percentile tick duration, milliseconds. |
-| `ownedEntities` | i32 | Entity count currently owned by the region. |
+| `ownedEntities` | i32 | Entities the region's last entity pass ticked (v1.11.1+; earlier servers send 0). |
 
 ### 7.3 `HEATMAP_UPDATE` (0x03) — `DebugPayload.HeatmapUpdate`
 

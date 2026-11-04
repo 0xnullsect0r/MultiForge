@@ -15,18 +15,6 @@ package net.multiforge.scanner;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import java.util.List;
-import net.multiforge.scanner.rules.R01DirectChunkMapInvoke;
-import net.multiforge.scanner.rules.R02OffThreadLevelSetBlock;
-import net.multiforge.scanner.rules.R03BlockingFuture;
-import net.multiforge.scanner.rules.R04UnsyncStaticMutation;
-import net.multiforge.scanner.rules.R05EntitySetPosOffCoord;
-import net.multiforge.scanner.rules.R06DirectServerChunkCacheMutation;
-import net.multiforge.scanner.rules.R07RawDistanceManagerTicket;
-import net.multiforge.scanner.rules.R08OffThreadBlockEntitySetChanged;
-import net.multiforge.scanner.rules.R09SyncIoInTick;
-import net.multiforge.scanner.rules.R10ThreadStartInModCtor;
-import net.multiforge.scanner.rules.R11ReflectOnNeoforgedInternal;
-import net.multiforge.scanner.rules.R12CaptureServerInLambda;
 import org.junit.jupiter.api.Test;
 
 /**
@@ -39,19 +27,8 @@ import org.junit.jupiter.api.Test;
  */
 class SarifEmitterTest {
 
-    private static final List<Rule> ALL_RULES = List.of(
-            new R01DirectChunkMapInvoke(),
-            new R02OffThreadLevelSetBlock(),
-            new R03BlockingFuture(),
-            new R04UnsyncStaticMutation(),
-            new R05EntitySetPosOffCoord(),
-            new R06DirectServerChunkCacheMutation(),
-            new R07RawDistanceManagerTicket(),
-            new R08OffThreadBlockEntitySetChanged(),
-            new R09SyncIoInTick(),
-            new R10ThreadStartInModCtor(),
-            new R11ReflectOnNeoforgedInternal(),
-            new R12CaptureServerInLambda());
+    // The list the scanner ships with, so a rule added or dropped there shows up here.
+    private static final List<Rule> ALL_RULES = Main.ACTIVE_RULES;
 
     private static final Finding SAMPLE_ERROR = new Finding(
             "R03",
@@ -124,5 +101,22 @@ class SarifEmitterTest {
 
         assertThat(sarif).contains("\"uri\": \"com/example/mod/ChunkListener.class\"");
         assertThat(sarif).contains("\"startLine\": 42");
+    }
+
+    @Test
+    void aFindingWithoutALineHasNoRegion() {
+        // SARIF requires startLine >= 1; a class compiled without line numbers has none.
+        Finding noLine = new Finding(
+                "R03",
+                Severity.ERROR,
+                "com.example.mod.NoDebug",
+                "run()V",
+                0,
+                "msg",
+                "R03:com.example.mod.NoDebug#run()V#000000000000");
+        String sarif = ReportEmitter.toSarif(ALL_RULES, List.of(noLine));
+
+        assertThat(sarif).contains("\"uri\": \"com/example/mod/NoDebug.class\"");
+        assertThat(sarif).doesNotContain("\"startLine\"").doesNotContain("\"region\"");
     }
 }

@@ -12,8 +12,16 @@ operator or mod author can tune.
    (`multiforge-patches/01-ownership/`) checks whether the calling region
    owns the chunk being written. A write into another region's chunk is
    rerouted to that region's mailbox (or to the server thread for a chunk no
-   region owns) and a rate-limited warning names the site. Mod code cannot
-   corrupt another region's state, whichever thread it runs on.
+   region owns) and a rate-limited warning names the site. The guarded sites
+   are block writes (`setBlock` and what goes through it: removing,
+   destroying and exploding blocks), entity spawning and removal, block
+   entity placement and `setChanged`, scheduled ticks, block events and
+   teleports. Not every write goes through one of them: a container's
+   `setItem`, an entity's `setPos`, `hurt` or synched data, game events and
+   sounds reach the other region's state directly. Regions are at least one
+   unloaded section apart, so ordinary block and entity behaviour never
+   reaches another region; a mod that does so on purpose (a remote
+   inventory, a long-range effect) should use `ServerDomains.region(...)`.
 2. **The serial lane for event listeners.** A listener of a mod that has not
    declared itself thread-safe, for an event MultiForge does not know to be
    local to one block, chunk or entity, runs on the server thread one
@@ -32,6 +40,17 @@ operator or mod author can tune.
 |---|---|---|
 | `legacy` | on the serial lane, for every event | Mods that share unsynchronised state across listeners and break under `hybrid-safe`. |
 | `hybrid-safe` (default) | on the posting region worker for block/chunk/entity-local events, on the serial lane otherwise | Most mods. |
+
+**The default trusts undeclared mods on local events.** A mod that declares
+nothing is `hybrid-safe`: its listeners of about 50 block-, chunk- and
+entity-local events (entity ticks, joins, deaths, drops, damage, neighbour
+updates, explosions, crop growth; the list is in `events.md`) run on the
+region worker that posts them, in parallel across regions. A listener that
+updates a static collection from such an event (a per-mod cache or counter)
+can then corrupt it. MultiForge reads listener bytecode and keeps a listener
+on the serial lane when it asks which thread it runs on, but it cannot see
+every shared-state write. If a mod misbehaves only on MultiForge, classify it
+`legacy` in `config/multiforge-mods.toml` first.
 | `strict-safe` | on the posting thread, for every event | Mods whose listeners are thread-safe. |
 
 A mod declares its classification in `neoforge.mods.toml`
@@ -52,13 +71,15 @@ policy = "warn"         # warn | reroute-only | fail
 warnPerMin = 5          # warnings per minute per violation site
 ```
 
-- `mode = "off"` disables the regionized runtime entirely: Vanilla's
-  single-threaded tick, no rerouting. Use it to check whether a problem is
-  MultiForge's (takes effect at the next start).
+- `mode = "off"` disables the regionized runtime: Vanilla's
+  single-threaded level tick, no regions. Writes made from threads other
+  than the server thread are still rerouted to it. Use it to check whether a
+  problem comes from region ticking (takes effect at the next start); to
+  rule MultiForge out entirely, compare with stock NeoForge.
 - `mode = "strict"` and `policy = "fail"` turn a cross-region write into an
   `OwnershipViolationException` instead of a reroute — for testing a mod,
   never for production.
-- `policy = "reroute-only"` reroutes without logging.
+- `policy = "reroute-only"` reroutes without logging ownership violations.
 
 `-Dmultiforge.mode=…` overrides `mode` for one run.
 

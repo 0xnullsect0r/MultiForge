@@ -54,4 +54,112 @@ class R02OffThreadLevelSetBlockTest {
 
         assertThat(findings).isEmpty();
     }
+
+    @Test
+    void isAWarningMultiForgeReroutesItAtRuntime() {
+        assertThat(new R02OffThreadLevelSetBlock().severity()).isEqualTo(net.multiforge.scanner.Severity.WARN);
+    }
+
+    @Test
+    void doesNotFireInABlockCallbackThatTakesTheLevel() {
+        ClassWriter cw = Bytecode.newClass("com/example/mod/MyBlock", false);
+        MethodVisitor mv = cw.visitMethod(
+                org.objectweb.asm.Opcodes.ACC_PUBLIC,
+                "neighborChanged",
+                "(Lnet/minecraft/world/level/block/state/BlockState;Lnet/minecraft/world/level/Level;)V",
+                null,
+                null);
+        mv.visitCode();
+        Bytecode.invokeVirtual(mv, OWNER, "setBlock", "()Z");
+        Bytecode.endVoid(mv);
+        assertThat(new RuleEngine(List.of(new R02OffThreadLevelSetBlock()))
+                        .scanClassBytes(Bytecode.finish(cw), "test.jar"))
+                .isEmpty();
+    }
+
+    @Test
+    void doesNotFireInALambdaHandedToEnqueueWork() {
+        // A packet handler: context.enqueueWork(() -> level.setBlock(...)) is the documented fix.
+        String host = "com/example/mod/Packets";
+        ClassWriter cw = Bytecode.newClass(host, false);
+        MethodVisitor handler = Bytecode.beginMethod(cw, "handle", false);
+        handler.visitInsn(org.objectweb.asm.Opcodes.ACONST_NULL);
+        handler.visitInvokeDynamicInsn(
+                "run",
+                "()Ljava/lang/Runnable;",
+                LAMBDA_METAFACTORY,
+                org.objectweb.asm.Type.getType("()V"),
+                new org.objectweb.asm.Handle(
+                        org.objectweb.asm.Opcodes.H_INVOKESTATIC, host, "lambda$handle$0", "()V", false),
+                org.objectweb.asm.Type.getType("()V"));
+        handler.visitMethodInsn(
+                org.objectweb.asm.Opcodes.INVOKEINTERFACE,
+                "net/neoforged/neoforge/network/handling/IPayloadContext",
+                "enqueueWork",
+                "(Ljava/lang/Runnable;)Ljava/util/concurrent/CompletableFuture;",
+                true);
+        handler.visitInsn(org.objectweb.asm.Opcodes.POP);
+        Bytecode.endVoid(handler);
+        MethodVisitor body = cw.visitMethod(
+                org.objectweb.asm.Opcodes.ACC_PRIVATE
+                        | org.objectweb.asm.Opcodes.ACC_STATIC
+                        | org.objectweb.asm.Opcodes.ACC_SYNTHETIC,
+                "lambda$handle$0",
+                "()V",
+                null,
+                null);
+        body.visitCode();
+        Bytecode.invokeVirtual(body, OWNER, "setBlock", "()Z");
+        Bytecode.endVoid(body);
+        assertThat(new RuleEngine(List.of(new R02OffThreadLevelSetBlock()))
+                        .scanClassBytes(Bytecode.finish(cw), "test.jar"))
+                .isEmpty();
+    }
+
+    @Test
+    void stillFiresInALambdaHandedToAPlainExecutor() {
+        String host = "com/example/mod/Async";
+        ClassWriter cw = Bytecode.newClass(host, false);
+        MethodVisitor m = Bytecode.beginMethod(cw, "kickOff", false);
+        m.visitInsn(org.objectweb.asm.Opcodes.ACONST_NULL);
+        m.visitInvokeDynamicInsn(
+                "run",
+                "()Ljava/lang/Runnable;",
+                LAMBDA_METAFACTORY,
+                org.objectweb.asm.Type.getType("()V"),
+                new org.objectweb.asm.Handle(
+                        org.objectweb.asm.Opcodes.H_INVOKESTATIC, host, "lambda$kickOff$0", "()V", false),
+                org.objectweb.asm.Type.getType("()V"));
+        m.visitMethodInsn(
+                org.objectweb.asm.Opcodes.INVOKEINTERFACE,
+                "java/util/concurrent/ExecutorService",
+                "submit",
+                "(Ljava/lang/Runnable;)Ljava/util/concurrent/Future;",
+                true);
+        m.visitInsn(org.objectweb.asm.Opcodes.POP);
+        Bytecode.endVoid(m);
+        MethodVisitor body = cw.visitMethod(
+                org.objectweb.asm.Opcodes.ACC_PRIVATE
+                        | org.objectweb.asm.Opcodes.ACC_STATIC
+                        | org.objectweb.asm.Opcodes.ACC_SYNTHETIC,
+                "lambda$kickOff$0",
+                "()V",
+                null,
+                null);
+        body.visitCode();
+        Bytecode.invokeVirtual(body, OWNER, "setBlock", "()Z");
+        Bytecode.endVoid(body);
+        assertThat(new RuleEngine(List.of(new R02OffThreadLevelSetBlock()))
+                        .scanClassBytes(Bytecode.finish(cw), "test.jar"))
+                .hasSize(1);
+    }
+
+    private static final org.objectweb.asm.Handle LAMBDA_METAFACTORY = new org.objectweb.asm.Handle(
+            org.objectweb.asm.Opcodes.H_INVOKESTATIC,
+            "java/lang/invoke/LambdaMetafactory",
+            "metafactory",
+            "(Ljava/lang/invoke/MethodHandles$Lookup;Ljava/lang/String;Ljava/lang/invoke/MethodType;"
+                    + "Ljava/lang/invoke/MethodType;Ljava/lang/invoke/MethodHandle;Ljava/lang/invoke/MethodType;)"
+                    + "Ljava/lang/invoke/CallSite;",
+            false);
 }

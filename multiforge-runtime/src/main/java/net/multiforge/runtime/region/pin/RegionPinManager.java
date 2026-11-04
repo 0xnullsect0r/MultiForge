@@ -24,6 +24,7 @@ import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import net.multiforge.api.world.ChunkPos;
 import net.multiforge.api.world.WorldRef;
+import org.jetbrains.annotations.ApiStatus;
 
 /**
  * Operator-facing store of pinned region rectangles, persisted to
@@ -36,6 +37,7 @@ import net.multiforge.api.world.WorldRef;
  * pinContaining}; the {@link #save()} method serializes the current
  * snapshot atomically.
  */
+@ApiStatus.Internal
 public final class RegionPinManager {
 
     private final Path file;

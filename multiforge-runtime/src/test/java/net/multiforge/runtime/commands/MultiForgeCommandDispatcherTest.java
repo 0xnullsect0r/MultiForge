@@ -111,6 +111,16 @@ class MultiForgeCommandDispatcherTest {
     }
 
     @Test
+    void regionSizeBelowEightChunksIsRefused(@TempDir Path tmp) throws IOException {
+        MultiForgeCommandDispatcher d = make(tmp);
+        List<String> out = new ArrayList<>();
+        assertThat(d.dispatch(new String[] {"region", "size", "4"}, out::add)).isFalse();
+        assertThat(String.join("\n", out)).contains("between 8 and 256");
+        out.clear();
+        assertThat(d.dispatch(new String[] {"region", "size", "8"}, out::add)).isTrue();
+    }
+
+    @Test
     void regionSizeWithoutArgumentShowsTheCurrentSize(@TempDir Path tmp) throws IOException {
         MultiForgeCommandDispatcher d = make(tmp);
         List<String> out = new ArrayList<>();
@@ -141,8 +151,21 @@ class MultiForgeCommandDispatcherTest {
         assertThat(MultiForgeCommandDispatcher.describeCost(mspt)).isEmpty();
         for (int i = 1; i <= 100; i++) mspt.recordNanos(i * 100_000L); // 0.1 .. 10 ms
         assertThat(MultiForgeCommandDispatcher.describeCost(mspt))
-                .isEqualTo(", tick 5.1/9.6/10.0 ms (p50/p95/p99, last 5 s)");
+                .isEqualTo(", tick 5.0/9.5/9.9 ms (p50/p95/p99, last 5 s)"); // nearest rank
         assertThat(MultiForgeCommandDispatcher.describeCost(null)).isEmpty();
+    }
+
+    @Test
+    void aPinBeyondTheWorldBorderIsRefused(@TempDir Path tmp) throws IOException {
+        MultiForgeCommandDispatcher d = make(tmp);
+        List<String> out = new ArrayList<>();
+        assertThat(d.dispatch(
+                        new String[] {
+                            "region", "pin", "huge", "minecraft:overworld", "-2000000000", "0", "2000000000", "0"
+                        },
+                        out::add))
+                .isFalse();
+        assertThat(String.join("\n", out)).contains("world border");
     }
 
     @Test
@@ -396,8 +419,33 @@ class MultiForgeCommandDispatcherTest {
                 jar -> new MultiForgeCommandDispatcher.ScanResult(2, "", "scanner jar not found or unreadable"));
         List<String> out = new ArrayList<>();
         assertThat(d.dispatch(new String[] {"certify", "brokenmod"}, out::add)).isFalse();
-        assertThat(out).anyMatch(l -> l.contains("scanner internal failure"));
+        assertThat(out).anyMatch(l -> l.contains("the scanner did not complete"));
         assertThat(out).anyMatch(l -> l.contains("NOT CERTIFIED"));
+    }
+
+    @Test
+    void certifyFailsClosedWhenTheScannerDiesWithoutAReport(@TempDir Path tmp) throws IOException {
+        // A scanner JVM that died (corrupt jar, OutOfMemoryError, wrong Java) exits 1
+        // and prints nothing; that used to parse as "no findings" and certify the mod.
+        Path modsDir = tmp.resolve("mods");
+        Files.createDirectories(modsDir);
+        Files.createFile(modsDir.resolve("examplemod-1.0.0.jar"));
+        MultiForgeCommandDispatcher d = makeWithScanner(
+                tmp, modsDir, jar -> new MultiForgeCommandDispatcher.ScanResult(1, "", "Invalid or corrupt jarfile"));
+        List<String> out = new ArrayList<>();
+        assertThat(d.dispatch(new String[] {"certify", "examplemod"}, out::add)).isFalse();
+        assertThat(out).anyMatch(l -> l.contains("NOT CERTIFIED: examplemod-1.0.0.jar"));
+        assertThat(out).noneMatch(l -> l.startsWith("CERTIFIED"));
+    }
+
+    @Test
+    void certifyMatchesAModIdNotAPrefixOfAnotherMod() {
+        assertThat(MultiForgeCommandDispatcher.namesMod("create-1.21.1-6.0.4.jar", "create"))
+                .isTrue();
+        assertThat(MultiForgeCommandDispatcher.namesMod("Create_1.21.1.jar", "create"))
+                .isTrue();
+        assertThat(MultiForgeCommandDispatcher.namesMod("createaddition-1.21.1.jar", "create"))
+                .isFalse();
     }
 
     @Test

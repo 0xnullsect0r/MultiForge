@@ -22,6 +22,9 @@ import java.time.Duration;
 import java.util.Map;
 import java.util.NavigableMap;
 import net.multiforge.runtime.diagnostics.ProbeRegistry;
+import org.jetbrains.annotations.ApiStatus;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * Hand-rolled OTLP-HTTP metrics exporter. No OpenTelemetry SDK
@@ -37,18 +40,21 @@ import net.multiforge.runtime.diagnostics.ProbeRegistry;
  * <a href="https://opentelemetry.io/docs/specs/otlp/#otlphttp">the OTLP
  * spec</a>) built from {@link ProbeRegistry#snapshot()} to that endpoint
  * every {@link #DEFAULT_INTERVAL_MILLIS} milliseconds. A failed export
- * is logged to stderr and retried on the next tick — it never brings
- * down the exporter thread or the caller.
+ * is retried on the next tick — it never brings down the exporter thread
+ * or the caller. The first failure and the recovery are logged once each,
+ * not every interval while the collector is down.
  *
  * <p>Not on any region worker thread: the exporter thread is a plain
  * daemon thread outside the regionized scheduler, and every export does
  * its own blocking HTTP call on that thread only (CLAUDE.md rule 4).
  */
+@ApiStatus.Internal
 public final class OtelExporter {
 
     /** System property read at {@link #startFromSystemProperty()}. */
     public static final String ENDPOINT_PROPERTY = "multiforge.otel.endpoint";
 
+    private static final Logger LOG = LoggerFactory.getLogger("multiforge.otel");
     private static final long DEFAULT_INTERVAL_MILLIS = 10_000L;
 
     private static final Object LOCK = new Object();
@@ -117,12 +123,27 @@ public final class OtelExporter {
     }
 
     private static void runLoop(String endpoint) {
+        boolean failing = false;
         while (running && !Thread.currentThread().isInterrupted()) {
             try {
                 export(endpoint);
+                if (failing) {
+                    LOG.info("OTLP export to {} recovered", endpoint);
+                    failing = false;
+                }
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return;
             } catch (Exception e) {
                 // Never let an export failure kill the daemon thread — retry next tick.
-                System.err.println("[multiforge] otel export to " + endpoint + " failed: " + e);
+                if (!failing) {
+                    LOG.warn(
+                            "OTLP export to {} failed; retrying every {} ms, quietly until it recovers: {}",
+                            endpoint,
+                            intervalMillis,
+                            e.toString());
+                    failing = true;
+                }
             }
             try {
                 //noinspection BusyWait

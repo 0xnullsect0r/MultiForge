@@ -14,6 +14,7 @@ package net.multiforge.runtime.diagnostics.wire;
 
 import java.util.List;
 import java.util.Objects;
+import org.jetbrains.annotations.ApiStatus;
 
 /**
  * Payload records carried on the {@code multiforge:debug/v1} channel.
@@ -40,6 +41,7 @@ import java.util.Objects;
  * {@link HeatmapUpdate}, {@link PinList}, {@link OwnershipUpdate}
  * respectively), not standalone packet kinds in their own right.
  */
+@ApiStatus.Internal
 public sealed interface DebugPayload {
 
     /** Handshake reply. */

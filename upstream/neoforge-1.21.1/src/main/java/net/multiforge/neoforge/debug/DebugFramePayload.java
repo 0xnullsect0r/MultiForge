@@ -18,6 +18,7 @@ import net.minecraft.network.codec.ByteBufCodecs;
 import net.minecraft.network.codec.StreamCodec;
 import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
+import org.jetbrains.annotations.ApiStatus;
 
 /**
  * Server-side {@link CustomPacketPayload} wrapper for a single raw
@@ -33,6 +34,7 @@ import net.minecraft.resources.ResourceLocation;
  * CLAUDE.md; cannot live in {@code multiforge-client} because the fork
  * build does not depend on that module. Duplicate is the simplest fix.
  */
+@ApiStatus.Internal
 public record DebugFramePayload(byte[] data) implements CustomPacketPayload {
     public static final CustomPacketPayload.Type<DebugFramePayload> TYPE = new CustomPacketPayload.Type<>(ResourceLocation.parse("multiforge:debug/v1"));
 

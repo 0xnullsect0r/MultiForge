@@ -241,7 +241,10 @@ removed before its turn is dropped (`event.dispatch.deferred.dropped`).
 | xycraft `core.event.ItemEntityTickEvent` | Posted for every item entity every tick; the poster discards the result. Its listener, `CollectorBlockEntity.absorbItem`, reads a per-level volume map and inserts into a collector that may sit in another region, so it must not overlap any region. |
 
 `[events] "<class>" = "deferred"` defers another event (probes
-`event.dispatch.deferred`, `event.dispatch.deferred.event.<class>`).
+`event.dispatch.deferred`, `event.dispatch.deferred.event.<class>`). Only
+cancellability is checked: deferring an event whose poster reads a value the
+listeners set (`LivingBreatheEvent`'s breathing flags, `MobDespawnEvent`'s
+result) makes the poster see the unchanged value, silently.
 
 ## What `ASYNC` is for
 

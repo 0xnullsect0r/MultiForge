@@ -16,6 +16,7 @@ import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
 import net.multiforge.api.world.WorldRef;
 import net.multiforge.runtime.scheduler.MultiThreadedSchedulerHost;
+import org.jetbrains.annotations.ApiStatus;
 
 /**
  * On {@code ServerAboutToStartEvent}, iterate every already-loaded
@@ -31,6 +32,7 @@ import net.multiforge.runtime.scheduler.MultiThreadedSchedulerHost;
  * ({@code computeIfAbsent} on the regionizers map), so re-materialising
  * an already-loaded world is a no-op.
  */
+@ApiStatus.Internal
 public final class RegionizerEagerInit {
     private RegionizerEagerInit() {}
 

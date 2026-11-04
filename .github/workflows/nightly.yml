@@ -6,8 +6,11 @@ name: nightly
 #   determinism  the vanilla-parity gate: one seed world ticked on stock
 #                NeoForge and on MultiForge (1 and 4 workers), terrain equal
 #   scenario     Phase X checks x1-x4 on stock vs MultiForge
-#   swarm        20 protocol bots for 5 minutes in strict mode (x8StrictSwarm
-#                preset, shortened): no ownership violation, no overrun
+#   swarm        12 protocol bots spread 2000 blocks apart for 5 minutes in
+#                strict mode (x8StrictSwarm preset, shortened): regions tick
+#                on workers, no ownership violation, no overrun
+#   stress       entity-limbo and slow-tick stress with the fixture mods
+#   updater      scripts/test-multiforge-update.sh against this installer
 #
 # The full-size runs (100/500 bots, 60 minutes, ATM10) need more than a
 # hosted runner has; see docs/verification/README.md for their runbooks.
@@ -61,11 +64,39 @@ jobs:
         if: always()
         run: ./gradlew :multiforge-bench:scenario --no-daemon --stacktrace
 
-      - name: Strict-mode swarm (20 bots, 5 minutes)
+      - name: Strict-mode swarm (12 bots spread over 2000 blocks, 5 minutes)
         if: always()
+        # Spread out so the bots fall into separate regions that tick on workers;
+        # the run fails if no region ever ticked on one. ZGC: a full G1 pause
+        # stops every region at once and reads as an overrun.
         run: |
-          ./gradlew :multiforge-bench:x8StrictSwarm -Pplayers=20 -Pticks=6000 \
-            -PoutputFile="$PWD/nightly-results/swarm-20.json" --no-daemon --stacktrace
+          ./gradlew :multiforge-bench:x8StrictSwarm -Pplayers=12 -Pspread=2000 -Pticks=6000 \
+            "-PextraJvmArgs=-Xmx8G -XX:+UseZGC" \
+            -PoutputFile="$PWD/nightly-results/swarm-12-spread2000.json" --no-daemon --stacktrace
+
+      - name: Stress checks (entity limbo, slow ticks)
+        if: always()
+        run: ./gradlew :multiforge-bench:stress -PlimboSeconds=120 --no-daemon --stacktrace
+
+      - name: Updater install, update and rollback
+        if: always()
+        # Before: the latest published release. After: this commit's installer,
+        # scanner and the pinned server starter, with SHA256SUMS like a release.
+        run: |
+          set -euo pipefail
+          mkdir -p updater/assets
+          curl -fsSL -o updater/old-installer.jar \
+            "https://github.com/${{ github.repository }}/releases/latest/download/multiforge-installer.jar"
+          cp "$(find upstream/neoforge-1.21.1/projects/neoforge/build/libs -maxdepth 1 -name 'neoforge-*-installer.jar' | head -1)" \
+            updater/assets/multiforge-installer.jar
+          ./gradlew :multiforge-scanner:jar --no-daemon -q
+          cp "$(find multiforge-scanner/build/libs -maxdepth 1 -name 'multiforge-scanner-*.jar' ! -name '*-sources.jar' | head -1)" \
+            updater/assets/multiforge-scanner.jar
+          curl -fsSL -o updater/assets/server.jar \
+            https://github.com/NeoForged/serverstarterjar/releases/download/0.1.35/server.jar
+          echo "d019d815868d451e57bdb965174b8443ec361336e84e9c41abc41a6c627bacd1  updater/assets/server.jar" | sha256sum -c -
+          (cd updater/assets && sha256sum -- * > SHA256SUMS)
+          scripts/test-multiforge-update.sh updater/old-installer.jar updater/assets updater/work
 
       - name: Upload results and server logs
         if: always()
