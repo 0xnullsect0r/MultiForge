@@ -384,7 +384,8 @@ public final class TickRegionScheduler implements AutoCloseable, RegionListener 
         // chunk promotion or demotion) are held back and replayed at the barrier.
         if (parallel > 0) RegionPhase.beginWorkers();
         try {
-            submitAndAwaitWorkers(batch, states, placement, remaining, startedAt, finishedAt, waited, failures, waiter, pump);
+            submitAndAwaitWorkers(
+                    batch, states, placement, remaining, startedAt, finishedAt, waited, failures, waiter, pump);
         } finally {
             if (parallel > 0) RegionPhase.endWorkers();
         }
