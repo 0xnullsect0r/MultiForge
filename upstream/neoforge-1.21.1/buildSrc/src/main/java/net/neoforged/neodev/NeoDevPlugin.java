@@ -650,6 +650,12 @@ public class NeoDevPlugin implements Plugin<Project> {
 
             var destinationDir = project.getLayout().getBuildDirectory().dir("production-server");
             task.getInstallationDir().set(destinationDir);
+            // Upstream NeoDev maps serverLauncher from the task's own installationDir inside
+            // the task constructor; the mapped provider then carries the task itself as
+            // producer, which Gradle refuses to resolve during the task's own mutation
+            // check. Fine under the configuration cache (value captured at store time),
+            // fatal without it. Wire it here from the producer-free destinationDir instead.
+            task.getServerLauncher().set(destinationDir.map(d -> d.file("server.jar")));
         });
 
         project.getTasks().register("runProductionServer", RunProductionServer.class, task -> {

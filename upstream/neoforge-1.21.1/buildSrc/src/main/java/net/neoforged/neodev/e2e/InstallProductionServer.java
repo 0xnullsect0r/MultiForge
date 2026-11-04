@@ -40,8 +40,10 @@ public abstract class InstallProductionServer extends JavaExec {
     @Inject
     public InstallProductionServer() {
         classpath(getInstaller());
-        getServerLauncher().set(getInstallationDir().map(id -> id.file("server.jar")));
-        getServerLauncher().finalizeValueOnRead();
+        // serverLauncher is wired by NeoDevPlugin from the destination directory provider,
+        // not here from this task's own installationDir: a provider mapped from the task's
+        // own output property carries the task as its producer, and Gradle refuses to
+        // resolve it before the task has completed (breaks --no-configuration-cache runs).
     }
 
     @TaskAction
