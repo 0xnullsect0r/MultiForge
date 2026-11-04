@@ -51,7 +51,9 @@ update() { MF_BASE_URL="file://$ASSETS" sh "$UPDATER" "$@"; }
 
 rm -rf "$WORK"
 mkdir -p "$WORK/srv/config" "$WORK/srv/mods" "$WORK/srv/world"
-SRV=$(cd "$WORK/srv" && pwd -P)
+# Absolute from here on: the steps below cd into the work and server directories.
+WORK=$(cd "$WORK" && pwd -P)
+SRV=$WORK/srv
 
 echo "== installing the old version"
 (cd "$WORK" && "$JAVA" -jar "$OLD_INSTALLER" --installServer "$SRV" >"$WORK/old-install.log" 2>&1) || fail "old installer failed (see $WORK/old-install.log)"
@@ -60,7 +62,7 @@ OLD=$(launched)
 [ -n "$OLD" ] || fail "old install left no version in run.sh"
 pass "old version $OLD installed"
 
-printf 'mode = "on"\n# operator comment, must survive\nthreadsPerCore = 3\n' >config/multiforge-server.toml
+printf '[mtserver]\nmode = "hybrid"\n# operator comment, must survive\nthreadsPerCore = 3\n' >config/multiforge-server.toml
 printf -- '-Xmx2G\n# operator JVM args\n' >user_jvm_args.txt
 echo "operator file" >mods/notes.txt
 echo "operator file" >world/marker.txt
