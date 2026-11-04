@@ -25,9 +25,9 @@ dependencies {
     // here is what produced the v1.4.1-and-earlier archive that shipped a
     // library jar and a launcher for a class that never existed.
 
-    testImplementation("org.junit.jupiter:junit-jupiter:5.10.3")
+    testImplementation("org.junit.jupiter:junit-jupiter:6.1.3")
     testImplementation("org.assertj:assertj-core:3.26.3")
-    testImplementation("org.junit.jupiter:junit-jupiter-params:5.10.3")
+    testImplementation("org.junit.jupiter:junit-jupiter-params:6.1.3")
 }
 
 application {

@@ -47,7 +47,7 @@ dependencies {
     // JetBrains annotations for @ApiStatus.Internal etc.
     compileOnly("org.jetbrains:annotations:24.1.0")
 
-    testImplementation("org.junit.jupiter:junit-jupiter:5.10.3")
+    testImplementation("org.junit.jupiter:junit-jupiter:6.1.3")
     testImplementation("org.assertj:assertj-core:3.26.3")
     testImplementation("org.slf4j:slf4j-simple:2.0.9")
     testImplementation("org.awaitility:awaitility:4.2.1")

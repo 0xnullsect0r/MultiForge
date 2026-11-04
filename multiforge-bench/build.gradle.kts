@@ -35,9 +35,9 @@ dependencies {
     implementation("org.geysermc.mcprotocollib:protocol:1.21-20241010.155958-24")
     runtimeOnly("org.slf4j:slf4j-simple:2.0.9")
 
-    testImplementation("org.junit.jupiter:junit-jupiter:5.10.3")
+    testImplementation("org.junit.jupiter:junit-jupiter:6.1.3")
     testImplementation("org.assertj:assertj-core:3.26.3")
-    testImplementation("org.junit.jupiter:junit-jupiter-params:5.10.3")
+    testImplementation("org.junit.jupiter:junit-jupiter-params:6.1.3")
 }
 
 application {

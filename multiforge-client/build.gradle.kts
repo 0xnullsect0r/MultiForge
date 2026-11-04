@@ -58,7 +58,7 @@ dependencies {
     // declaring a compileOnly on 2.0.13 here caused an unresolvable
     // version-strictly conflict at compile time in v1.3.5.
 
-    testImplementation("org.junit.jupiter:junit-jupiter:5.10.3")
+    testImplementation("org.junit.jupiter:junit-jupiter:6.1.3")
     testImplementation("org.assertj:assertj-core:3.26.3")
 }
 
