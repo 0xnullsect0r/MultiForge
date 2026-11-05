@@ -12,6 +12,7 @@
  */
 package net.multiforge.scanner.rules;
 
+import java.util.Set;
 import java.util.function.Consumer;
 import net.multiforge.scanner.BytecodeUtil;
 import net.multiforge.scanner.ClassContext;
@@ -30,11 +31,17 @@ import org.objectweb.asm.tree.MethodNode;
  *
  * <p>WARN: a call to {@code BlockEntity.setChanged()} from a method not classified
  * tick-reachable (same heuristic family as R02) — not {@code @RegionThread}, not itself a
- * tick-event handler.
+ * tick-event handler, not a game callback, not a scheduler-handed lambda body or a
+ * same-class helper one calls. The receiver may be statically typed as any subtype of
+ * {@code BlockEntity} — a mod block entity's {@code this.setChanged()} compiles with the
+ * subclass as the owner — resolved through the scan's hierarchy index (a receiver typed as
+ * a <em>vanilla</em> block-entity subclass is the one accepted gap: the scanner is
+ * Minecraft-free and cannot walk vanilla hierarchies).
  */
 public final class R08OffThreadBlockEntitySetChanged extends AbstractTreeRule {
 
     private static final String OWNER = "net/minecraft/world/level/block/entity/BlockEntity";
+    private static final Set<String> TARGET_OWNERS = Set.of(OWNER);
     private static final String TARGET_NAME = "setChanged";
     private static final String TARGET_DESC = "()V";
 
@@ -61,10 +68,12 @@ public final class R08OffThreadBlockEntitySetChanged extends AbstractTreeRule {
     @Override
     protected void scanClass(ClassContext ctx, ClassNode cn, Consumer<Finding> emit) {
         String classFqn = ctx.className().replace('/', '.');
-        var tickReachable = TickReachability.compute(cn);
+        // Same heuristic family as R02: scheduler-handed lambda bodies seed the call
+        // closure, and game callbacks run on the region that owns the position.
+        var tickReachable = TickReachability.compute(cn, TickReachability.scheduledLambdaBodies(cn));
         for (MethodNode mn : cn.methods) {
             String methodKey = BytecodeUtil.methodKey(mn);
-            if (tickReachable.contains(mn.name + mn.desc)) {
+            if (tickReachable.contains(mn.name + mn.desc) || TickReachability.isGameCallback(mn)) {
                 continue;
             }
             for (var insn : mn.instructions) {
@@ -72,9 +81,9 @@ public final class R08OffThreadBlockEntitySetChanged extends AbstractTreeRule {
                     continue;
                 }
                 if (call.getOpcode() != Opcodes.INVOKEVIRTUAL
-                        || !call.owner.equals(OWNER)
                         || !call.name.equals(TARGET_NAME)
-                        || !call.desc.equals(TARGET_DESC)) {
+                        || !call.desc.equals(TARGET_DESC)
+                        || !ctx.typeHierarchy().isSubtypeOfAny(call.owner, TARGET_OWNERS)) {
                     continue;
                 }
                 emit.accept(new Finding(
