@@ -127,6 +127,20 @@ public class ExtendedGameTestHelper extends GameTestHelper {
 
             @Override
             public void send(Packet<?> packet, @Nullable PacketSendListener listeners, boolean flush) {
+                // The bare EmbeddedChannel behind this connection is only safe to
+                // write from the server thread: EmbeddedEventLoop claims every
+                // thread, so a send from anywhere else (e.g. the mf-diag-emitters
+                // HELLO broadcast) runs inline and races the server thread's own
+                // writes — two threads linking ChannelOutboundBuffer entries can
+                // corrupt the unflushed chain into a cycle, and the server thread
+                // then spins forever inside addFlush (observed as a strict-mode
+                // GameTest hang). Real connections marshal sends onto their socket
+                // event loop; the mock defers them to the server thread instead,
+                // which also serialises them with every other mock write.
+                if (!serverplayer.getServer().isSameThread()) {
+                    serverplayer.getServer().execute(() -> send(packet, listeners, flush));
+                    return;
+                }
                 super.send(packet, listeners, flush);
                 // Respond to keepalive packets instantly
                 if (packet instanceof ClientboundKeepAlivePacket ckp) {
