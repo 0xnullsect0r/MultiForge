@@ -224,15 +224,21 @@ public final class TickRegionScheduler implements AutoCloseable, RegionListener 
      * {@link RegionListener} hook: a split child starts with the source's recent
      * tick times scaled by its share of the sections (see {@link
      * RegionMspt#seedFrom}), so its heat and {@code region list} figures do not
-     * start from an empty window. Fired before {@link #onRegionCreated}, whose
-     * {@link #register} is then a no-op.
+     * start from an empty window. The source keeps only its remaining share
+     * ({@link RegionMspt#scaleInPlace}): a split conserves the seeded mass, so
+     * repeated peels (a 3-way split) seed each child from what its group actually
+     * still carries instead of compounding on the never-reduced original window.
+     * Fired before {@link #onRegionCreated}, whose {@link #register} is then a
+     * no-op.
      */
     @Override
     public void onRegionSplit(Region source, Region child) {
         RegionState_ src = perRegion.get(source.id());
         if (src == null) return;
         int total = source.sectionCount() + child.sectionCount();
-        register(child, src.mspt, total == 0 ? 0.0 : child.sectionCount() / (double) total);
+        double share = total == 0 ? 0.0 : child.sectionCount() / (double) total;
+        register(child, src.mspt, share);
+        src.mspt.scaleInPlace(1.0 - share);
     }
 
     /**
@@ -348,7 +354,6 @@ public final class TickRegionScheduler implements AutoCloseable, RegionListener 
         Objects.requireNonNull(pump, "pump");
         if (mode != Mode.BARRIER) throw new IllegalStateException("driveTick requires Mode.BARRIER");
         if (regions.isEmpty()) return TickAllResult.EMPTY;
-        long deadline = System.nanoTime() + Math.max(0L, deadlineNanos);
         List<Region> batch = List.copyOf(regions);
         int n = batch.size();
         RegionState_[] states = new RegionState_[n];
@@ -370,6 +375,11 @@ public final class TickRegionScheduler implements AutoCloseable, RegionListener 
         }
         AtomicInteger remaining = new AtomicInteger(parallel);
         long[] finishedAt = new long[n];
+        // When each region's own turn started: on its worker (a queued region's
+        // wait for a free worker is not its tick), or here for a server-thread
+        // region. An overrun is measured from there, not from the batch start —
+        // a region queued behind a slow one is not itself late.
+        long[] startedAt = new long[n];
         // Designed waits (a main-thread chunk load, a serial-lane hand-off) are not
         // the region's own time: RegionTickWatchdog leaves them out per region, and
         // so does the deadline. The listeners the lane runs for a region do count.
@@ -380,14 +390,14 @@ public final class TickRegionScheduler implements AutoCloseable, RegionListener 
         // chunk promotion or demotion) are held back and replayed at the barrier.
         if (parallel > 0) RegionPhase.beginWorkers();
         try {
-            submitAndAwaitWorkers(batch, states, placement, remaining, finishedAt, waited, failures, waiter, pump);
+            submitAndAwaitWorkers(
+                    batch, states, placement, remaining, startedAt, finishedAt, waited, failures, waiter, pump);
         } finally {
             if (parallel > 0) RegionPhase.endWorkers();
         }
         // Server-thread regions run now, one after another, with no worker
         // running: the caller is the serial lane and the chunk source's thread,
         // so their posts and chunk loads run directly instead of being handed off.
-        long[] startedAt = new long[n];
         for (int i = 0; i < n; i++) {
             if (placement[i] == TickPlacement.WORKER) continue;
             Region region = batch.get(i);
@@ -406,9 +416,7 @@ public final class TickRegionScheduler implements AutoCloseable, RegionListener 
         List<RegionId> overrun = new ArrayList<>();
         Throwable first = null;
         for (int i = 0; i < n; i++) {
-            boolean late = placement[i] == TickPlacement.WORKER
-                    ? finishedAt[i] - waited[i] > deadline
-                    : finishedAt[i] - startedAt[i] - waited[i] > Math.max(0L, deadlineNanos);
+            boolean late = finishedAt[i] - startedAt[i] - waited[i] > Math.max(0L, deadlineNanos);
             if (late) overrun.add(batch.get(i).id());
             updateHot(states[i], placement[i]);
             if (failures[i] != null) {
@@ -478,6 +486,7 @@ public final class TickRegionScheduler implements AutoCloseable, RegionListener 
             RegionState_[] states,
             TickPlacement[] placement,
             AtomicInteger remaining,
+            long[] startedAt,
             long[] finishedAt,
             long[] waited,
             Throwable[] failures,
@@ -488,6 +497,9 @@ public final class TickRegionScheduler implements AutoCloseable, RegionListener 
             Region region = batch.get(i);
             RegionState_ s = states[i];
             pool.execute(() -> {
+                // First thing on a free worker: from here, not from the batch start,
+                // the region's own turn is measured (see startedAt in driveTick).
+                startedAt[idx] = System.nanoTime();
                 try {
                     if (region.tryMarkTicking()) {
                         s.placement = TickPlacement.WORKER;

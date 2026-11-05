@@ -100,11 +100,12 @@ single-pass property honest.
 
 ### 1.4 Method-reachability approximation
 
-Two rules (R02, R04) need "is this method reachable from the region-tick
-thread" — a whole-program call-graph question the scanner cannot answer
-precisely from a single class file (it has no closed-world view of the
-mod jar, let alone NeoForge's event bus wiring). The scanner uses a
-conservative **name/signature heuristic** instead of true reachability:
+Three rules (R02, R04, R08) need "is this method reachable from the
+region-tick thread" — a whole-program call-graph question the scanner
+cannot answer precisely from a single class file (it has no closed-world
+view of the mod jar, let alone NeoForge's event bus wiring). The scanner
+uses a conservative **name/signature heuristic** instead of true
+reachability:
 
 - A method is **tick-reachable** if its sole parameter is a tick event
   — a type whose name ends in `TickEvent`, or a class nested in one
@@ -117,11 +118,30 @@ conservative **name/signature heuristic** instead of true reachability:
   resolved within the same class file only — no cross-class call-graph;
   whole-jar closure is explicitly deferred (see §8, scoped to single-hop
   sentinel fixtures for this reason).
+- Two families of extra seeds count as reachable for R02/R08: the body
+  of a lambda or method reference handed straight to a scheduler that
+  runs it on the server thread or a region
+  (`IPayloadContext.enqueueWork`, `MinecraftServer.execute`, MultiForge
+  scheduler tasks) — and, by the call-chain rule above, the same-class
+  helpers such a body calls; and overrides of Vanilla game callbacks
+  (`onPlace`, `neighborChanged`, `serverTick`, `tick`, …) that run on
+  the region owning the position. R04 asks the opposite direction
+  (writes *from* tick code) and seeds only the worker-side subset of the
+  callback table (`TickReachability.isRegionWorkerGameCallback`):
+  scheduler-handed bodies run on the serialised server thread, and
+  interaction/client callbacks never run on a region worker — a static
+  write from any of those is not R04's race.
+- Receiver-typed calls resolve the owner through the per-scan class
+  hierarchy index (§1.3): javac stamps the receiver's *static* type on
+  `invokevirtual`, and mod code usually holds a subtype
+  (`ServerLevel.setBlock`, a mod `BlockEntity` subclass's
+  `this.setChanged()`).
 - This trades recall for zero cross-jar false negatives on the common
   case (a tick handler calling a private helper 1–2 hops deep — the
   dominant shape in the ATM10 corpus). It misses virtual-dispatch chains
   and reflection-invoked handlers: an accepted gap, since the scanner is
-  a lint pass, not a soundness proof. R02 and R04 flag this explicitly.
+  a lint pass, not a soundness proof. R02, R04 and R08 flag this
+  explicitly.
 
 ### 1.5 The `@RegionThread` marker
 
@@ -372,7 +392,9 @@ void onNeighborChanged(BlockPos pos) {
 **Severity:** WARN. **Detects:** a `PUTSTATIC` to a non-`final` static
 field declared in a `@Mod`-annotated class, from a method the
 tick-reachability heuristic (§1.4) classifies as reachable on the
-region-tick thread.
+region-tick thread — including the worker-side Vanilla game callbacks
+(`serverTick`, entity `tick`/`aiStep`/`baseTick`/`die`/`hurt`, random
+ticks, the neighbour updates a region's own block change triggers).
 
 **Bytecode pattern:**
 ```
@@ -380,6 +402,7 @@ visitFieldInsn(PUTSTATIC, owner, name, desc)
   where owner is @Mod-annotated (or shares its top-level enclosing class)
     and the target field's ACC_FINAL bit is not set
     guarded by: enclosingMethod is tick-reachable (§1.4)
+                OR enclosingMethod is a worker-side game callback (§1.4)
 ```
 The field's `ACC_FINAL` bit is read from its own `visitField` callback
 and reconciled against `PUTSTATIC` sites at `visitEnd`, rather than
@@ -531,15 +554,18 @@ serverLevel.getChunkSource().addRegionTicket(TicketType.START, pos, 22, Unit.INS
 ### R08 — `off-thread-BlockEntity-setChanged`
 
 **Severity:** WARN. **Detects:** a call to `BlockEntity.setChanged()`
+— on the base class or any subtype the hierarchy index resolves to it —
 from a method not classified tick-reachable for that entity's owner
 (same heuristic family as R02, §1.4) — not `@RegionThread`, not itself a
-tick-event handler.
+tick-event handler, not a Vanilla game callback, not a scheduler-handed
+lambda body or a same-class helper one calls.
 
 **Bytecode pattern:**
 ```
-visitMethodInsn(INVOKEVIRTUAL, "net/minecraft/world/level/block/entity/BlockEntity", "setChanged", "()V", false)
-  guarded by: enclosingMethod NOT tick-reachable (§1.4)
+visitMethodInsn(INVOKEVIRTUAL, <any subtype of BlockEntity per the hierarchy index>, "setChanged", "()V", false)
+  guarded by: enclosingMethod NOT tick-reachable (§1.4, scheduler seeds included)
               AND enclosingMethod has no @RegionThread annotation
+              AND enclosingMethod is not a game callback (§1.4)
 ```
 
 **Rationale:** `setChanged` flips the block entity's dirty flag, feeding

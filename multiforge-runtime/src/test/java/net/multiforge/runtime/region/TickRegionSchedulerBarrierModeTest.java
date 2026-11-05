@@ -230,6 +230,37 @@ class TickRegionSchedulerBarrierModeTest {
     }
 
     @Test
+    void aRegionQueuedBehindASlowOneIsNotItselfOverrun() {
+        // One worker, one slow region (150 ms) holding it, two fast regions queued
+        // behind, budget 100 ms. The fast regions' own ticks are no-ops: only the
+        // slow one is late. Measuring from the batch start instead flagged every
+        // region that happened to be queued when the budget ran out.
+        ThreadedRegionizer regionizer = new ThreadedRegionizer(WORLD, 0);
+        RegionizedTaskQueue queue = RegionizedTaskQueue.of(regionizer);
+        try (TickRegionScheduler scheduler =
+                new TickRegionScheduler(1, r -> {}, queue, 32, TickRegionScheduler.Mode.BARRIER)) {
+            regionizer.addListener(scheduler);
+            Region slow = regionizer.addChunk(new ChunkPos(0, 0));
+            Region fast1 = regionizer.addChunk(new ChunkPos(500, 500));
+            Region fast2 = regionizer.addChunk(new ChunkPos(-500, 500));
+            AtomicBoolean slowDone = new AtomicBoolean();
+            scheduler.setBody(r -> {
+                if (r.id() != slow.id()) return;
+                try {
+                    Thread.sleep(150);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+                slowDone.set(true);
+            });
+            TickRegionScheduler.TickAllResult result =
+                    scheduler.driveTick(List.of(slow, fast1, fast2), 100_000_000L, () -> false);
+            assertThat(slowDone.get()).isTrue();
+            assertThat(result.overrunRegions()).containsExactly(slow.id());
+        }
+    }
+
+    @Test
     void queuedChunkTasksDrainDuringADrivenTick() {
         ThreadedRegionizer regionizer = new ThreadedRegionizer(WORLD, 0);
         RegionizedTaskQueue queue = RegionizedTaskQueue.of(regionizer);

@@ -17,6 +17,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import java.util.concurrent.atomic.AtomicInteger;
 import net.multiforge.api.event.DispatchDomain;
 import net.multiforge.api.event.DispatchDomainKind;
+import net.multiforge.api.event.EventConsumer;
 import net.multiforge.runtime.diagnostics.ProbeRegistry;
 import net.multiforge.runtime.diagnostics.ViolationLogger;
 import net.multiforge.runtime.ownership.OwnerToken;
@@ -430,6 +431,64 @@ class DispatchingEventBusTest {
         }
     }
 
+    @Test
+    void aMethodRefListenerHonorsItsMethodDispatchDomainAnnotation() {
+        RecordingDispatchExecutor executor = new RecordingDispatchExecutor();
+        DispatchingEventBus bus = new DispatchingEventBus(BusBuilder.builder().build(), executor);
+        MethodRefListener listener = new MethodRefListener();
+
+        bus.addListener((EventConsumer<TestEvent>) listener::onRegionRouted);
+
+        OwnerToken.runAs(OwnerToken.forRegion(1L), () -> bus.post(new TestEvent()));
+
+        assertThat(listener.calls.get()).isEqualTo(1);
+        assertThat(executor.serial.get()).isZero(); // REGION domain: stays on the worker, no lane hand-off
+    }
+
+    @Test
+    void aMethodRefListenerHonorsItsClassDispatchDomainAnnotation() {
+        RecordingDispatchExecutor executor = new RecordingDispatchExecutor();
+        DispatchingEventBus bus = new DispatchingEventBus(BusBuilder.builder().build(), executor);
+        ClassRoutedListener listener = new ClassRoutedListener();
+
+        bus.addListener((EventConsumer<TestEvent>) listener::onEvent);
+
+        OwnerToken.runAs(OwnerToken.forRegion(1L), () -> bus.post(new TestEvent()));
+
+        assertThat(listener.calls.get()).isEqualTo(1);
+        assertThat(executor.serial.get()).isZero();
+    }
+
+    @Test
+    void anUnannotatedMethodRefListenerStillFallsBackToTheSerialLane() {
+        RecordingDispatchExecutor executor = new RecordingDispatchExecutor();
+        DispatchingEventBus bus = new DispatchingEventBus(BusBuilder.builder().build(), executor);
+        MethodRefListener listener = new MethodRefListener();
+
+        bus.addListener((EventConsumer<TestEvent>) listener::onUnannotated);
+
+        OwnerToken.runAs(OwnerToken.forRegion(1L), () -> bus.post(new TestEvent()));
+
+        assertThat(listener.calls.get()).isEqualTo(1);
+        assertThat(executor.serial.get()).isEqualTo(1); // TestEvent is unmapped: the lane, as before
+    }
+
+    @Test
+    void aMethodRefListenerOfAStrictSafeModRunsInlineLikeASubscribeEventOne() {
+        RecordingDispatchExecutor executor = new RecordingDispatchExecutor();
+        DispatchingEventBus bus = new DispatchingEventBus(BusBuilder.builder().build(), executor);
+        MethodRefListener listener = new MethodRefListener();
+        bus.addListener((EventConsumer<TestEvent>) listener::onUnannotated);
+        ModClassifier.bind(c -> c == MethodRefListener.class ? ModSafety.STRICT_SAFE : ModSafety.HYBRID_SAFE);
+        try {
+            OwnerToken.runAs(OwnerToken.forRegion(1L), () -> bus.post(new TestEvent()));
+        } finally {
+            ModClassifier.reset();
+        }
+        assertThat(listener.calls.get()).isEqualTo(1);
+        assertThat(executor.serial.get()).isZero(); // safety consults the declaring class, not the lambda class
+    }
+
     private static final class TestEvent extends Event {}
 
     private static final class InstanceListener {
@@ -446,6 +505,30 @@ class DispatchingEventBusTest {
 
         @SubscribeEvent
         @DispatchDomain(DispatchDomainKind.REGION)
+        void onEvent(TestEvent event) {
+            calls.incrementAndGet();
+        }
+    }
+
+    /** Listener whose methods are registered as {@code addListener(impl::method)} method references. */
+    private static final class MethodRefListener {
+        final AtomicInteger calls = new AtomicInteger();
+
+        @SubscribeEvent
+        @DispatchDomain(DispatchDomainKind.REGION)
+        void onRegionRouted(TestEvent event) {
+            calls.incrementAndGet();
+        }
+
+        void onUnannotated(TestEvent event) {
+            calls.incrementAndGet();
+        }
+    }
+
+    @DispatchDomain(DispatchDomainKind.REGION)
+    private static final class ClassRoutedListener {
+        final AtomicInteger calls = new AtomicInteger();
+
         void onEvent(TestEvent event) {
             calls.incrementAndGet();
         }

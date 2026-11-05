@@ -22,6 +22,7 @@ import java.util.Map;
 import java.util.Set;
 import org.objectweb.asm.Handle;
 import org.objectweb.asm.Type;
+import org.objectweb.asm.tree.AbstractInsnNode;
 import org.objectweb.asm.tree.AnnotationNode;
 import org.objectweb.asm.tree.ClassNode;
 import org.objectweb.asm.tree.InvokeDynamicInsnNode;
@@ -62,6 +63,16 @@ public final class TickReachability {
 
     /** Returns the set of {@code name+descriptor} keys of tick-reachable methods in {@code cn}. */
     public static Set<String> compute(ClassNode cn) {
+        return compute(cn, Set.of());
+    }
+
+    /**
+     * {@link #compute(ClassNode)} plus {@code additionalSeeds}: {@code name+descriptor} keys of
+     * methods already known to run on the region-tick or server thread by other means (R02's
+     * scheduler-handed lambda bodies). Seeds still spread through the same intra-class call
+     * chain, so a helper called from a seeded lambda counts too.
+     */
+    public static Set<String> compute(ClassNode cn, Set<String> additionalSeeds) {
         List<MethodNode> methods = cn.methods;
         Map<String, MethodNode> byKey = new HashMap<>();
         for (MethodNode m : methods) {
@@ -80,6 +91,12 @@ public final class TickReachability {
                     depthOf.put(k, 0);
                     frontier.add(k);
                 }
+            }
+        }
+        for (String seed : additionalSeeds) {
+            if (byKey.containsKey(seed) && reachable.add(seed)) {
+                depthOf.put(seed, 0);
+                frontier.add(seed);
             }
         }
 
@@ -128,6 +145,159 @@ public final class TickReachability {
             if (arg instanceof Handle h) return h;
         }
         return null;
+    }
+
+    /**
+     * Vanilla callbacks that take the level (or reach it through {@code this}) and run on
+     * the region owning the position, or the server thread: a block's, item's or entity's
+     * override of one of them is not off-thread. Shared by the R02/R08 heuristic family.
+     */
+    private static final Set<String> GAME_CALLBACKS = Set.of(
+            "onPlace",
+            "onRemove",
+            "neighborChanged",
+            "updateShape",
+            "tick",
+            "randomTick",
+            "animateTick",
+            "useItemOn",
+            "useWithoutItem",
+            "use",
+            "useOn",
+            "entityInside",
+            "stepOn",
+            "fallOn",
+            "playerWillDestroy",
+            "playerDestroy",
+            "setPlacedBy",
+            "attack",
+            "onProjectileHit",
+            "onExplosionHit",
+            "spawnAfterBreak",
+            "inventoryTick",
+            "onUseTick",
+            "finishUsingItem",
+            "releaseUsing",
+            "aiStep",
+            "baseTick",
+            "die",
+            "hurt",
+            "interact",
+            "mobInteract",
+            "serverTick",
+            "clientTick");
+
+    /** Whether {@code mn} is shaped like one of {@link #GAME_CALLBACKS}. */
+    public static boolean isGameCallback(MethodNode mn) {
+        if (!GAME_CALLBACKS.contains(mn.name)) return false;
+        for (Type t : Type.getArgumentTypes(mn.desc)) {
+            if (t.getSort() != Type.OBJECT) continue;
+            String n = t.getInternalName();
+            if (n.equals("net/minecraft/world/level/Level")
+                    || n.equals("net/minecraft/server/level/ServerLevel")
+                    || n.equals("net/minecraft/world/level/LevelAccessor")) {
+                return true;
+            }
+        }
+        // Entity and item callbacks without a level parameter reach it through `this`.
+        return mn.name.equals("aiStep") || mn.name.equals("baseTick") || mn.name.equals("tick");
+    }
+
+    /**
+     * The subset of {@link #GAME_CALLBACKS} that runs on a region worker rather than the
+     * server thread or the client: the region tick body ticks block entities
+     * ({@code serverTick}/{@code tick}), entities ({@code tick}/{@code aiStep}/
+     * {@code baseTick}, plus the damage/death path they run), random ticks and the
+     * neighbour/block-shape updates a region's own block change triggers. Interaction
+     * callbacks ({@code use}, {@code attack}, …) run in the server thread's connection
+     * phase, which the barrier serialises against the regions, and the client-only
+     * callbacks never run on a dedicated server — neither is a static-write race, so
+     * R04 seeds only this list (R02/R08 exempt the whole table: a server-thread
+     * {@code setBlock}/{@code setChanged} is safe regardless).
+     */
+    private static final Set<String> WORKER_GAME_CALLBACKS = Set.of(
+            "onPlace",
+            "onRemove",
+            "neighborChanged",
+            "updateShape",
+            "tick",
+            "randomTick",
+            "entityInside",
+            "stepOn",
+            "fallOn",
+            "onProjectileHit",
+            "onExplosionHit",
+            "spawnAfterBreak",
+            "inventoryTick",
+            "onUseTick",
+            "aiStep",
+            "baseTick",
+            "die",
+            "hurt",
+            "serverTick");
+
+    /** Whether {@code mn} is shaped like a callback that runs on a region worker. */
+    public static boolean isRegionWorkerGameCallback(MethodNode mn) {
+        if (!WORKER_GAME_CALLBACKS.contains(mn.name)) return false;
+        for (Type t : Type.getArgumentTypes(mn.desc)) {
+            if (t.getSort() != Type.OBJECT) continue;
+            String n = t.getInternalName();
+            if (n.equals("net/minecraft/world/level/Level")
+                    || n.equals("net/minecraft/server/level/ServerLevel")
+                    || n.equals("net/minecraft/world/level/LevelAccessor")) {
+                return true;
+            }
+        }
+        // Entity and item callbacks without a level parameter reach it through `this`.
+        return mn.name.equals("aiStep")
+                || mn.name.equals("baseTick")
+                || mn.name.equals("tick")
+                || mn.name.equals("die")
+                || mn.name.equals("hurt");
+    }
+
+    /** Schedulers whose argument runs on the server thread or a region. */
+    private static final Set<String> SCHEDULER_METHODS = Set.of(
+            "enqueueWork", "execute", "executeBlocking", "submit", "tell", "run", "runDelayed", "runAtFixedRate");
+
+    /**
+     * Bodies of lambdas and method references handed straight to a scheduler: the next call
+     * after the {@code invokedynamic} (arguments may sit in between) is one of {@link
+     * #SCHEDULER_METHODS} on a Minecraft, NeoForge payload or MultiForge scheduler type.
+     * Shared by the R02/R08 heuristic family (R02 seeds these into {@link #compute};
+     * pass them as {@code additionalSeeds}).
+     */
+    public static Set<String> scheduledLambdaBodies(ClassNode cn) {
+        Set<String> out = new HashSet<>();
+        for (MethodNode mn : cn.methods) {
+            if (mn.instructions == null) continue;
+            for (AbstractInsnNode insn : mn.instructions) {
+                if (!(insn instanceof InvokeDynamicInsnNode indy)) continue;
+                Handle impl = lambdaImpl(indy);
+                if (impl == null || !impl.getOwner().equals(cn.name)) continue;
+                MethodInsnNode next = nextCall(indy);
+                if (next != null && SCHEDULER_METHODS.contains(next.name) && isSchedulerOwner(next.owner)) {
+                    out.add(impl.getName() + impl.getDesc());
+                }
+            }
+        }
+        return out;
+    }
+
+    private static MethodInsnNode nextCall(AbstractInsnNode from) {
+        int budget = 8;
+        for (AbstractInsnNode n = from.getNext(); n != null && budget-- > 0; n = n.getNext()) {
+            if (n instanceof MethodInsnNode m) return m;
+            if (n instanceof InvokeDynamicInsnNode) return null;
+        }
+        return null;
+    }
+
+    private static boolean isSchedulerOwner(String owner) {
+        return owner.startsWith("net/minecraft/server/MinecraftServer")
+                || owner.startsWith("net/minecraft/util/thread/")
+                || owner.startsWith("net/neoforged/neoforge/network/handling/IPayloadContext")
+                || owner.startsWith("net/multiforge/api/scheduler/");
     }
 
     private static boolean isSeed(MethodNode m) {

@@ -154,6 +154,96 @@ class R02OffThreadLevelSetBlockTest {
                 .hasSize(1);
     }
 
+    @Test
+    void firesOnSetBlockThroughAServerLevelTypedReceiver() {
+        // javac emits the receiver's static type as the invokevirtual owner, and mod
+        // code overwhelmingly holds a ServerLevel — an exact-owner check misses it.
+        ClassWriter cw = Bytecode.newClass("com/example/mod/BadR02ServerLevel", false);
+        MethodVisitor mv = Bytecode.beginMethod(cw, "onDownloadComplete", false);
+        Bytecode.invokeVirtual(mv, "net/minecraft/server/level/ServerLevel", "setBlock", "()Z");
+        Bytecode.endVoid(mv);
+
+        List<Finding> findings = new RuleEngine(List.of(new R02OffThreadLevelSetBlock()))
+                .scanClassBytes(Bytecode.finish(cw), "test.jar");
+
+        assertThat(findings).hasSize(1);
+        assertThat(findings).allMatch(f -> f.ruleId().equals("R02"));
+    }
+
+    @Test
+    void firesOnSetBlockThroughAModLevelSubclassReceiver() {
+        // A mod-defined Level subclass: resolved through the scan's in-jar hierarchy index.
+        String myLevel = "com/example/mod/MyLevel";
+        ClassWriter receiver = Bytecode.newClass(myLevel, false);
+        byte[] receiverBytes = Bytecode.finish(receiver);
+
+        ClassWriter cw = Bytecode.newClass("com/example/mod/BadR02Subtype", false);
+        MethodVisitor mv = Bytecode.beginMethod(cw, "onDownloadComplete", false);
+        Bytecode.invokeVirtual(mv, myLevel.replace('.', '/'), "setBlock", "()Z");
+        Bytecode.endVoid(mv);
+
+        net.multiforge.scanner.TypeHierarchy hierarchy = net.multiforge.scanner.TypeHierarchy.index(List.of(
+                new net.multiforge.scanner.TypeHierarchy.ClassInfo(myLevel.replace('.', '/'), OWNER, List.of()),
+                new net.multiforge.scanner.TypeHierarchy.ClassInfo(
+                        "com/example/mod/BadR02Subtype", "java/lang/Object", List.of())));
+        List<Finding> findings = new RuleEngine(List.of(new R02OffThreadLevelSetBlock()))
+                .scanClassBytes(Bytecode.finish(cw), "test.jar", hierarchy);
+
+        assertThat(findings).hasSize(1);
+    }
+
+    @Test
+    void doesNotFireInAHelperCalledFromAScheduledLambda() {
+        // context.enqueueWork(() -> this.place(level)) — the lambda body itself is
+        // exempt, but so must be the same-class helper it calls.
+        String host = "com/example/mod/PacketsHelper";
+        String hostInternal = host.replace('.', '/');
+        ClassWriter cw = Bytecode.newClass(host, false);
+        MethodVisitor handler = Bytecode.beginMethod(cw, "handle", false);
+        handler.visitInvokeDynamicInsn(
+                "run",
+                "()Ljava/lang/Runnable;",
+                LAMBDA_METAFACTORY,
+                org.objectweb.asm.Type.getType("()V"),
+                new org.objectweb.asm.Handle(
+                        org.objectweb.asm.Opcodes.H_INVOKESTATIC, hostInternal, "lambda$handle$0", "()V", false),
+                org.objectweb.asm.Type.getType("()V"));
+        handler.visitMethodInsn(
+                org.objectweb.asm.Opcodes.INVOKEINTERFACE,
+                "net/neoforged/neoforge/network/handling/IPayloadContext",
+                "enqueueWork",
+                "(Ljava/lang/Runnable;)Ljava/util/concurrent/CompletableFuture;",
+                true);
+        handler.visitInsn(org.objectweb.asm.Opcodes.POP);
+        Bytecode.endVoid(handler);
+        MethodVisitor body = cw.visitMethod(
+                org.objectweb.asm.Opcodes.ACC_PRIVATE
+                        | org.objectweb.asm.Opcodes.ACC_STATIC
+                        | org.objectweb.asm.Opcodes.ACC_SYNTHETIC,
+                "lambda$handle$0",
+                "()V",
+                null,
+                null);
+        body.visitCode();
+        body.visitMethodInsn(org.objectweb.asm.Opcodes.INVOKESTATIC, hostInternal, "place", "()V", false);
+        body.visitInsn(org.objectweb.asm.Opcodes.RETURN);
+        body.visitMaxs(0, 0);
+        body.visitEnd();
+        MethodVisitor helper = cw.visitMethod(
+                org.objectweb.asm.Opcodes.ACC_PRIVATE | org.objectweb.asm.Opcodes.ACC_STATIC,
+                "place",
+                "()V",
+                null,
+                null);
+        helper.visitCode();
+        Bytecode.invokeVirtual(helper, OWNER, "setBlock", "()Z");
+        Bytecode.endVoid(helper);
+
+        assertThat(new RuleEngine(List.of(new R02OffThreadLevelSetBlock()))
+                        .scanClassBytes(Bytecode.finish(cw), "test.jar"))
+                .isEmpty();
+    }
+
     private static final org.objectweb.asm.Handle LAMBDA_METAFACTORY = new org.objectweb.asm.Handle(
             org.objectweb.asm.Opcodes.H_INVOKESTATIC,
             "java/lang/invoke/LambdaMetafactory",

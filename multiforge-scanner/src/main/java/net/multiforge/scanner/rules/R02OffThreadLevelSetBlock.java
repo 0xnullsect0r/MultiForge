@@ -20,12 +20,8 @@ import net.multiforge.scanner.Finding;
 import net.multiforge.scanner.Fingerprint;
 import net.multiforge.scanner.Severity;
 import net.multiforge.scanner.TickReachability;
-import org.objectweb.asm.Handle;
 import org.objectweb.asm.Opcodes;
-import org.objectweb.asm.Type;
-import org.objectweb.asm.tree.AbstractInsnNode;
 import org.objectweb.asm.tree.ClassNode;
-import org.objectweb.asm.tree.InvokeDynamicInsnNode;
 import org.objectweb.asm.tree.MethodInsnNode;
 import org.objectweb.asm.tree.MethodNode;
 
@@ -42,7 +38,8 @@ import org.objectweb.asm.tree.MethodNode;
  *       level and run on the region owning the position;
  *   <li>a lambda or method reference passed straight to a scheduler that runs it on
  *       the server thread or a region ({@code IPayloadContext.enqueueWork},
- *       {@code MinecraftServer.execute}, {@code ServerDomains} tasks).
+ *       {@code MinecraftServer.execute}, {@code ServerDomains} tasks) — and the
+ *       same-class helpers such a body calls, which run on that thread too.
  * </ul>
  *
  * <p>The analysis does not follow calls into other classes, so a helper another class
@@ -52,6 +49,18 @@ import org.objectweb.asm.tree.MethodNode;
 public final class R02OffThreadLevelSetBlock extends AbstractTreeRule {
 
     private static final String OWNER = "net/minecraft/world/level/Level";
+    private static final Set<String> TARGET_OWNERS = Set.of(OWNER);
+    /**
+     * Vanilla {@code Level} subclasses a receiver may be statically typed as. The scan's
+     * in-jar hierarchy index cannot resolve these (the scanner is Minecraft-free), so they
+     * are hand-listed; a mod-defined {@code Level} subclass resolves through the index
+     * instead, and an unknown third-party subtype between them stays a documented gap.
+     */
+    private static final Set<String> VANILLA_LEVEL_SUBTYPES = Set.of(
+            "net/minecraft/server/level/ServerLevel",
+            "net/minecraft/client/multiplayer/ClientLevel",
+            "net/minecraft/world/level/LevelAccessor");
+
     private static final Set<String> TARGET_NAMES = Set.of("setBlock");
 
     @Override
@@ -77,13 +86,12 @@ public final class R02OffThreadLevelSetBlock extends AbstractTreeRule {
     @Override
     protected void scanClass(ClassContext ctx, ClassNode cn, Consumer<Finding> emit) {
         String classFqn = ctx.className().replace('/', '.');
-        var tickReachable = TickReachability.compute(cn);
-        Set<String> scheduled = scheduledLambdaBodies(cn);
+        // Scheduler-handed lambda bodies are seeds, not just exemptions: a same-class helper
+        // they call runs on the same thread and must not be reported either.
+        var tickReachable = TickReachability.compute(cn, TickReachability.scheduledLambdaBodies(cn));
         for (MethodNode mn : cn.methods) {
             String methodKey = BytecodeUtil.methodKey(mn);
-            if (tickReachable.contains(mn.name + mn.desc)
-                    || scheduled.contains(mn.name + mn.desc)
-                    || isGameCallback(mn)) {
+            if (tickReachable.contains(mn.name + mn.desc) || TickReachability.isGameCallback(mn)) {
                 continue;
             }
             for (var insn : mn.instructions) {
@@ -91,8 +99,8 @@ public final class R02OffThreadLevelSetBlock extends AbstractTreeRule {
                     continue;
                 }
                 if (call.getOpcode() != Opcodes.INVOKEVIRTUAL
-                        || !call.owner.equals(OWNER)
-                        || !TARGET_NAMES.contains(call.name)) {
+                        || !TARGET_NAMES.contains(call.name)
+                        || !isLevelReceiver(call.owner, ctx)) {
                     continue;
                 }
                 emit.accept(new Finding(
@@ -112,98 +120,14 @@ public final class R02OffThreadLevelSetBlock extends AbstractTreeRule {
     }
 
     /**
-     * Vanilla callbacks that take the level and run on the region owning the position (or the
-     * server thread): a block's, item's or entity's override of one of them is not off-thread.
+     * The receiver of a {@code setBlock} call: {@code Level} itself, a hand-listed vanilla
+     * subtype, or anything the scan's hierarchy index resolves to {@code Level} (a mod-defined
+     * subclass — javac stamps the receiver's static type on the instruction, and mod code
+     * usually holds a {@code ServerLevel}, not the base class).
      */
-    private static final Set<String> GAME_CALLBACKS = Set.of(
-            "onPlace",
-            "onRemove",
-            "neighborChanged",
-            "updateShape",
-            "tick",
-            "randomTick",
-            "animateTick",
-            "useItemOn",
-            "useWithoutItem",
-            "use",
-            "useOn",
-            "entityInside",
-            "stepOn",
-            "fallOn",
-            "playerWillDestroy",
-            "playerDestroy",
-            "setPlacedBy",
-            "attack",
-            "onProjectileHit",
-            "onExplosionHit",
-            "spawnAfterBreak",
-            "inventoryTick",
-            "onUseTick",
-            "finishUsingItem",
-            "releaseUsing",
-            "aiStep",
-            "baseTick",
-            "die",
-            "hurt",
-            "interact",
-            "mobInteract",
-            "serverTick",
-            "clientTick");
-
-    private static boolean isGameCallback(MethodNode mn) {
-        if (!GAME_CALLBACKS.contains(mn.name)) return false;
-        for (Type t : Type.getArgumentTypes(mn.desc)) {
-            if (t.getSort() != Type.OBJECT) continue;
-            String n = t.getInternalName();
-            if (n.equals("net/minecraft/world/level/Level")
-                    || n.equals("net/minecraft/server/level/ServerLevel")
-                    || n.equals("net/minecraft/world/level/LevelAccessor")) {
-                return true;
-            }
-        }
-        // Entity and item callbacks without a level parameter reach it through `this`.
-        return mn.name.equals("aiStep") || mn.name.equals("baseTick") || mn.name.equals("tick");
-    }
-
-    /** Schedulers whose argument runs on the server thread or a region. */
-    private static final Set<String> SCHEDULER_METHODS = Set.of(
-            "enqueueWork", "execute", "executeBlocking", "submit", "tell", "run", "runDelayed", "runAtFixedRate");
-
-    /**
-     * Bodies of lambdas and method references handed straight to a scheduler: the next call
-     * after the {@code invokedynamic} (arguments may sit in between) is one of {@link
-     * #SCHEDULER_METHODS} on a Minecraft, NeoForge payload or MultiForge scheduler type.
-     */
-    private static Set<String> scheduledLambdaBodies(ClassNode cn) {
-        Set<String> out = new java.util.HashSet<>();
-        for (MethodNode mn : cn.methods) {
-            if (mn.instructions == null) continue;
-            for (AbstractInsnNode insn : mn.instructions) {
-                if (!(insn instanceof InvokeDynamicInsnNode indy)) continue;
-                Handle impl = TickReachability.lambdaImpl(indy);
-                if (impl == null || !impl.getOwner().equals(cn.name)) continue;
-                MethodInsnNode next = nextCall(indy);
-                if (next != null && SCHEDULER_METHODS.contains(next.name) && isSchedulerOwner(next.owner)) {
-                    out.add(impl.getName() + impl.getDesc());
-                }
-            }
-        }
-        return out;
-    }
-
-    private static MethodInsnNode nextCall(AbstractInsnNode from) {
-        int budget = 8;
-        for (AbstractInsnNode n = from.getNext(); n != null && budget-- > 0; n = n.getNext()) {
-            if (n instanceof MethodInsnNode m) return m;
-            if (n instanceof InvokeDynamicInsnNode) return null;
-        }
-        return null;
-    }
-
-    private static boolean isSchedulerOwner(String owner) {
-        return owner.startsWith("net/minecraft/server/MinecraftServer")
-                || owner.startsWith("net/minecraft/util/thread/")
-                || owner.startsWith("net/neoforged/neoforge/network/handling/IPayloadContext")
-                || owner.startsWith("net/multiforge/api/scheduler/");
+    private static boolean isLevelReceiver(String owner, ClassContext ctx) {
+        return owner.equals(OWNER)
+                || VANILLA_LEVEL_SUBTYPES.contains(owner)
+                || ctx.typeHierarchy().isSubtypeOfAny(owner, TARGET_OWNERS);
     }
 }
