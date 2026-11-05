@@ -62,6 +62,16 @@ public final class TickReachability {
 
     /** Returns the set of {@code name+descriptor} keys of tick-reachable methods in {@code cn}. */
     public static Set<String> compute(ClassNode cn) {
+        return compute(cn, Set.of());
+    }
+
+    /**
+     * {@link #compute(ClassNode)} plus {@code additionalSeeds}: {@code name+descriptor} keys of
+     * methods already known to run on the region-tick or server thread by other means (R02's
+     * scheduler-handed lambda bodies). Seeds still spread through the same intra-class call
+     * chain, so a helper called from a seeded lambda counts too.
+     */
+    public static Set<String> compute(ClassNode cn, Set<String> additionalSeeds) {
         List<MethodNode> methods = cn.methods;
         Map<String, MethodNode> byKey = new HashMap<>();
         for (MethodNode m : methods) {
@@ -80,6 +90,12 @@ public final class TickReachability {
                     depthOf.put(k, 0);
                     frontier.add(k);
                 }
+            }
+        }
+        for (String seed : additionalSeeds) {
+            if (byKey.containsKey(seed) && reachable.add(seed)) {
+                depthOf.put(seed, 0);
+                frontier.add(seed);
             }
         }
 
