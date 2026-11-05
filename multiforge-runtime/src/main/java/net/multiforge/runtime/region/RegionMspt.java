@@ -59,6 +59,22 @@ public final class RegionMspt {
     }
 
     /**
+     * Multiply every recorded sample by {@code factor} (the source side of a split:
+     * {@link #seedFrom} takes the peeled share, this leaves the remaining share, so
+     * a split conserves the seeded tick-time mass — on repeated peels, a 3-way split
+     * say, the later children would otherwise be seeded from a never-reduced window
+     * and the total would inflate with every peel). Sample values stay &ge; 1 ns, as
+     * in {@code seedFrom}.
+     */
+    public void scaleInPlace(double factor) {
+        if (factor <= 0 || factor == 1.0) return;
+        for (int i = 0; i < capacity; i++) {
+            long v = samplesNanos.get(i);
+            if (v > 0) samplesNanos.set(i, Math.max(1L, Math.round(v * factor)));
+        }
+    }
+
+    /**
      * Fold a region that is merging into this one: the merged region does both
      * regions' work, so its expected tick time is the sum. Samples are added pairwise
      * by recency (newest with newest), and a slot only {@code other} had is taken

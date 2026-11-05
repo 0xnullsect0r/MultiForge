@@ -224,15 +224,21 @@ public final class TickRegionScheduler implements AutoCloseable, RegionListener 
      * {@link RegionListener} hook: a split child starts with the source's recent
      * tick times scaled by its share of the sections (see {@link
      * RegionMspt#seedFrom}), so its heat and {@code region list} figures do not
-     * start from an empty window. Fired before {@link #onRegionCreated}, whose
-     * {@link #register} is then a no-op.
+     * start from an empty window. The source keeps only its remaining share
+     * ({@link RegionMspt#scaleInPlace}): a split conserves the seeded mass, so
+     * repeated peels (a 3-way split) seed each child from what its group actually
+     * still carries instead of compounding on the never-reduced original window.
+     * Fired before {@link #onRegionCreated}, whose {@link #register} is then a
+     * no-op.
      */
     @Override
     public void onRegionSplit(Region source, Region child) {
         RegionState_ src = perRegion.get(source.id());
         if (src == null) return;
         int total = source.sectionCount() + child.sectionCount();
-        register(child, src.mspt, total == 0 ? 0.0 : child.sectionCount() / (double) total);
+        double share = total == 0 ? 0.0 : child.sectionCount() / (double) total;
+        register(child, src.mspt, share);
+        src.mspt.scaleInPlace(1.0 - share);
     }
 
     /**
