@@ -1,5 +1,57 @@
 # CHANGELOG
 
+## v1.11.2 — scheduler fairness, honest MSPT numbers, scanner that sees the usual shapes
+
+A follow-up round from the v1.11.1 audit: smaller correctness fixes, no
+known crash paths. **Upgrade at your leisure; nothing here blocks a
+running v1.11.1 server.**
+
+### Scheduler
+
+- **A region queued behind a slow one is no longer reported as overrunning
+  its deadline.** A worker region's own time is measured from when its tick
+  actually starts, not from the batch start — the second region sharing a
+  busy worker used to be charged for the wait.
+- **Region splits no longer double-count tick time.** Splitting a region
+  seeded each new region with the *original* window and left the source at
+  full value, so after a split the world's total MSPT read about 1.5× (and
+  a three-way split ~1.75×) for five seconds. Splits now conserve the
+  seeded history; the heatmap and `region list` stay honest through peels.
+
+### Events (for mod authors)
+
+- Method references registered with `addListener(this::handler)` can now
+  declare `@DispatchDomain`/`@Ordering`: cast the reference to
+  `net.multiforge.api.event.EventConsumer` and MultiForge reads the
+  annotations off the referenced method, exactly as it does for
+  `@SubscribeEvent`. A plain `Consumer` reference cannot be introspected on
+  modern JVMs, so uncast references keep the old (serial-lane) behaviour.
+
+### Scanner (`/multiforge certify`)
+
+- R02 (`off-thread-Level.setBlock`) now recognises receivers typed as
+  `ServerLevel`, `ClientLevel` or a mod-defined `Level` subclass — the
+  common shapes it previously missed entirely — and no longer flags helpers
+  called from a lambda handed to `enqueueWork`/`execute`.
+- R08 (`off-thread-BlockEntity.setChanged`) gained the same family: a mod
+  block entity's own `setChanged()` is seen through the subclass receiver,
+  Vanilla `serverTick`/`tick` callbacks are exempt, and scheduler-handed
+  lambda helpers no longer fire.
+- R04 (`unsync-static-mutation`) now flags static writes from the
+  worker-side game callbacks too (`serverTick`, entity `tick`/`aiStep`/
+  `baseTick`/`die`/`hurt`, random ticks, neighbour updates) — those run on
+  region workers like any tick handler.
+
+### Internal
+
+- The GameTest harness's mock players are written from the server thread
+  only (the strict-mode suite hung intermittently when the diagnostics
+  heartbeat and region workers raced the server thread on a mock
+  connection's in-memory channel).
+- CI: Gradle actions refreshed; the nightly's updater test accepts a
+  same-version update (the first nightly after a release ships found the
+  latest release equal to the tree under test).
+
 ## v1.11.1 — command blocks, block-entity races, and gates that test the parallel path
 
 A full audit of v1.11.0 found two bugs that can take a server down, a set of
