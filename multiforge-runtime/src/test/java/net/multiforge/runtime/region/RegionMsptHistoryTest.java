@@ -36,8 +36,19 @@ class RegionMsptHistoryTest {
         RegionMspt child = new RegionMspt(10);
         child.seedFrom(source, 0.25);
         assertThat(child.averageMillis()).isCloseTo(10.0, within(1e-9));
-        // The source is not touched.
+        // seedFrom itself does not touch the source; the scheduler hook scales it
+        // separately (see splitPeelReducesTheSourceToItsRemainingShare).
         assertThat(source.averageMillis()).isCloseTo(40.0, within(1e-9));
+    }
+
+    @Test
+    void scaleInPlaceReducesEverySample() {
+        RegionMspt region = new RegionMspt(10);
+        for (int i = 0; i < 10; i++) region.recordNanos(40 * MS);
+        region.scaleInPlace(0.75);
+        assertThat(region.averageMillis()).isCloseTo(30.0, within(1e-9));
+        region.scaleInPlace(1.5);
+        assertThat(region.averageMillis()).isCloseTo(45.0, within(1e-9));
     }
 
     @Test
@@ -80,9 +91,52 @@ class RegionMsptHistoryTest {
             Region right = regionizer.regionAtChunk(2, 0);
             assertThat(left).isNotSameAs(right);
             Region child = left == whole ? right : left;
-            // One section each: the child gets half of the source's recent cost.
+            // One section each: the child gets half of the source's recent cost and the
+            // source keeps the other half — the split conserves the seeded mass.
             assertThat(scheduler.mspt(child).averageMillis()).isCloseTo(15.0, within(1e-6));
-            assertThat(scheduler.mspt(whole).averageMillis()).isCloseTo(30.0, within(1e-6));
+            assertThat(scheduler.mspt(whole).averageMillis()).isCloseTo(15.0, within(1e-6));
+        }
+    }
+
+    @Test
+    void aThreeWaySplitSeedsEachChildConsistently() throws Exception {
+        // Five chunks in a line at a steady 60 ms; removing (1,0) and (3,0) peels two
+        // one-section regions off. Each peel takes its section share of the source's
+        // history, so the mass stays conserved instead of compounding with every peel
+        // (the last child used to be seeded from the never-reduced original window).
+        ThreadedRegionizer regionizer = new ThreadedRegionizer(WORLD, 0);
+        RegionizedTaskQueue queue = RegionizedTaskQueue.of(regionizer);
+        try (TickRegionScheduler scheduler =
+                new TickRegionScheduler(1, r -> {}, queue, 32, TickRegionScheduler.Mode.BARRIER)) {
+            regionizer.addListener(scheduler);
+            regionizer.addChunk(new ChunkPos(0, 0));
+            regionizer.addChunk(new ChunkPos(1, 0));
+            regionizer.addChunk(new ChunkPos(2, 0));
+            regionizer.addChunk(new ChunkPos(3, 0));
+            Region whole = regionizer.addChunk(new ChunkPos(4, 0));
+            scheduler.register(whole);
+            for (int i = 0; i < 100; i++) scheduler.mspt(whole).recordNanos(60 * MS);
+
+            regionizer.removeChunk(new ChunkPos(1, 0));
+            regionizer.removeChunk(new ChunkPos(3, 0));
+
+            Region a = regionizer.regionAtChunk(0, 0);
+            Region b = regionizer.regionAtChunk(2, 0);
+            Region c = regionizer.regionAtChunk(4, 0);
+            assertThat(a).isNotSameAs(b);
+            assertThat(b).isNotSameAs(c);
+            double first = scheduler.mspt(a).averageMillis();
+            double second = scheduler.mspt(b).averageMillis();
+            double third = scheduler.mspt(c).averageMillis();
+            // Sections are counted at split time (the unloaded section has already left):
+            // the first peel is 1 of the 4 remaining sections — 60 ms split 15/45.
+            assertThat(first).isCloseTo(15.0, within(1e-6));
+            // The second peel halves what the middle group actually carries (45 ms),
+            // not the never-reduced original 60 — the old bug seeded 30 from it.
+            assertThat(second).isCloseTo(22.5, within(1e-6));
+            assertThat(third).isCloseTo(22.5, within(1e-6));
+            // Mass conserved across both peels.
+            assertThat(first + second + third).isCloseTo(60.0, within(1e-6));
         }
     }
 
