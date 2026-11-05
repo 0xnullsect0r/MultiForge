@@ -219,8 +219,26 @@ public class DispatchingEventBus implements IEventBus {
             inner.addListener(priority, receiveCanceled, eventType, consumer);
             return;
         }
-        RoutingListenerWrapper<T> wrapped = new RoutingListenerWrapper<>(
-                consumer, AnnotationScanner.forUnannotated(eventType), dispatcher, consumer.getClass(), eventType);
+        // A method reference names a declared method: read @DispatchDomain/
+        // @Ordering off it and let ModSafety/ListenerAffinity consult its
+        // declaring class, exactly as the @SubscribeEvent scan does for the
+        // same method. Lambdas (and anything unresolvable) keep the
+        // unannotated-listener path.
+        Method referenced = MethodReferences.declaredMethodBehind(consumer);
+        RoutingListenerWrapper<T> wrapped = referenced == null
+                ? new RoutingListenerWrapper<>(
+                        consumer,
+                        AnnotationScanner.forUnannotated(eventType),
+                        dispatcher,
+                        consumer.getClass(),
+                        eventType)
+                : new RoutingListenerWrapper<>(
+                        consumer,
+                        AnnotationScanner.scan(referenced),
+                        dispatcher,
+                        referenced.getDeclaringClass(),
+                        eventType,
+                        referenced.getName());
         inner.addListener(priority, receiveCanceled, eventType, wrapped);
         track(consumer, wrapped);
     }
