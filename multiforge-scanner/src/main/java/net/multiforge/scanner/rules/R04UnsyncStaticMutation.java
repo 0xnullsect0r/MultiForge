@@ -75,7 +75,11 @@ public final class R04UnsyncStaticMutation extends AbstractTreeRule {
 
         var tickReachable = TickReachability.compute(cn);
         for (MethodNode mn : cn.methods) {
-            if (!tickReachable.contains(mn.name + mn.desc)) {
+            // Worker-side game callbacks (serverTick, entity tick, random tick, the
+            // neighbour updates a region's own change triggers) run on region workers
+            // like any tick handler; interaction and client callbacks stay out — the
+            // barrier serialises the server thread's writes against the regions.
+            if (!tickReachable.contains(mn.name + mn.desc) && !TickReachability.isRegionWorkerGameCallback(mn)) {
                 continue;
             }
             for (var insn : mn.instructions) {

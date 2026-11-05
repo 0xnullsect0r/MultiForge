@@ -55,4 +55,65 @@ class R04UnsyncStaticMutationTest {
 
         assertThat(findings).isEmpty();
     }
+
+    @Test
+    void firesFromAWorkerSideGameCallback() {
+        // A block entity's serverTick(BlockState, Level, BlockPos, T) runs on the region
+        // that owns the position — a PUTSTATIC there races exactly like one in a tick
+        // handler, but the callback is no @RegionThread method and takes no tick event.
+        ClassWriter cw = Bytecode.newClass("com/example/mod/BadR04b", true);
+        Bytecode.addStaticField(cw, "count", "I", false);
+        MethodVisitor mv = cw.visitMethod(
+                org.objectweb.asm.Opcodes.ACC_PUBLIC | org.objectweb.asm.Opcodes.ACC_STATIC,
+                "serverTick",
+                "(Lnet/minecraft/world/level/block/state/BlockState;Lnet/minecraft/world/level/Level;"
+                        + "Lnet/minecraft/core/BlockPos;Lnet/minecraft/world/level/block/entity/BlockEntity;)V",
+                null,
+                null);
+        mv.visitCode();
+        Bytecode.putStaticInt(mv, "com/example/mod/BadR04b", "count");
+        Bytecode.endVoid(mv);
+        byte[] bytes = Bytecode.finish(cw);
+
+        List<Finding> findings =
+                new RuleEngine(List.of(new R04UnsyncStaticMutation())).scanClassBytes(bytes, "test.jar");
+
+        assertThat(findings).hasSize(1);
+        assertThat(findings).allMatch(f -> f.ruleId().equals("R04"));
+    }
+
+    @Test
+    void doesNotFireFromClientOrInteractionCallbacks() {
+        // clientTick and use(...) run off the region workers (client thread, or the
+        // server thread's connection phase, which the barrier serialises) — a static
+        // write there is not R04's race.
+        ClassWriter cw = Bytecode.newClass("com/example/mod/GoodR04b", true);
+        Bytecode.addStaticField(cw, "count", "I", false);
+        MethodVisitor client = cw.visitMethod(
+                org.objectweb.asm.Opcodes.ACC_PUBLIC | org.objectweb.asm.Opcodes.ACC_STATIC,
+                "clientTick",
+                "(Lnet/minecraft/world/level/Level;Lnet/minecraft/core/BlockPos;"
+                        + "Lnet/minecraft/world/level/block/entity/BlockEntity;)V",
+                null,
+                null);
+        client.visitCode();
+        Bytecode.putStaticInt(client, "com/example/mod/GoodR04b", "count");
+        Bytecode.endVoid(client);
+        MethodVisitor use = cw.visitMethod(
+                org.objectweb.asm.Opcodes.ACC_PUBLIC | org.objectweb.asm.Opcodes.ACC_STATIC,
+                "use",
+                "(Lnet/minecraft/world/level/Level;Lnet/minecraft/world/level/block/state/BlockState;"
+                        + "Lnet/minecraft/core/BlockPos;)V",
+                null,
+                null);
+        use.visitCode();
+        Bytecode.putStaticInt(use, "com/example/mod/GoodR04b", "count");
+        Bytecode.endVoid(use);
+        byte[] bytes = Bytecode.finish(cw);
+
+        List<Finding> findings =
+                new RuleEngine(List.of(new R04UnsyncStaticMutation())).scanClassBytes(bytes, "test.jar");
+
+        assertThat(findings).isEmpty();
+    }
 }
