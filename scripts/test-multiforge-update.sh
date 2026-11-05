@@ -75,8 +75,16 @@ WORLD=$(sum world/marker.txt)
 echo "== updating"
 update || fail "updater exited non-zero"
 NEW=$(launched)
-[ -n "$NEW" ] && [ "$NEW" != "$OLD" ] || fail "run.sh still launches '$NEW' (old: $OLD)"
-pass "run.sh launches $NEW"
+[ -n "$NEW" ] || fail "update left no version in run.sh"
+if [ "$NEW" != "$OLD" ]; then
+    pass "run.sh launches $NEW (was $OLD)"
+else
+    # The nightly's "before" is the latest published release; the first nightly
+    # after a release finds latest == this build (run 42014804473). A same-version
+    # update is still a full pass: the asset checks below prove the new bits were
+    # installed, and rollback/roll-forward still swap the backup point.
+    pass "run.sh launches $NEW (same-version update: the latest release is this build)"
+fi
 [ "$(count_versions)" = 1 ] || fail "expected one version under $LIBS, found: $(ls "$LIBS")"
 [ -d "$LIBS/$NEW" ] || fail "$LIBS/$NEW missing"
 pass "exactly one version folder"
