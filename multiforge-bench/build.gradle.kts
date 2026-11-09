@@ -25,7 +25,7 @@ description =
 dependencies {
     // LZ4 chunk payloads (server.properties region-file-compression=lz4) in
     // WorldDiff. Same library and version Minecraft 1.21.1 ships; Apache-2.0.
-    implementation("org.lz4:lz4-java:1.8.0")
+    implementation("org.lz4:lz4-java:1.8.1")
     // SwarmBench protocol bots. MCProtocolLib is MIT; its tree is Apache-2.0
     // (netty, cloudburst nbt/math, nukkitx fastutil), MIT (adventure, gson is
     // Apache-2.0, checker-qual) and LGPL-3.0 (MinecraftAuth, unused offline).
