@@ -1,0 +1,10 @@
+--- a/net/minecraft/world/entity/player/Player.java
++++ b/net/minecraft/world/entity/player/Player.java
+@@ -1627,6 +1627,7 @@ public abstract class Player extends Avatar implements ContainerUser, net.neofor
+     }
+ 
+     public void causeFoodExhaustion(float amount) {
++        if (net.multiforge.neoforge.world.CrossRegionEffects.deferExhaustion(this, amount)) return; // MultiForge: entity in another region
+         if (!this.abilities.invulnerable) {
+             if (!this.level().isClientSide()) {
+                 this.foodData.addExhaustion(amount);

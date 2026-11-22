@@ -12,7 +12,60 @@
      public int getNoActionTime() {
          return this.noActionTime;
      }
-@@ -3270,7 +3275,13 @@ public abstract class LivingEntity extends Entity implements Attackable, Waypoin
+@@ -977,6 +982,7 @@ public abstract class LivingEntity extends Entity implements Attackable, Waypoin
+     }
+ 
+     public boolean removeAllEffects() {
++        if (net.multiforge.neoforge.world.CrossRegionEffects.deferRemoveAll(this)) return !this.activeEffects.isEmpty(); // MultiForge: entity in another region
+         if (this.level().isClientSide()) {
+             return false;
+         } else if (this.activeEffects.isEmpty()) {
+@@ -1020,6 +1026,7 @@ public abstract class LivingEntity extends Entity implements Attackable, Waypoin
+     }
+ 
+     public boolean addEffect(MobEffectInstance newEffect, @Nullable Entity source) {
++        if (net.multiforge.neoforge.world.CrossRegionEffects.deferAdd(this, newEffect, source)) return true; // MultiForge: entity in another region
+         if (!net.neoforged.neoforge.common.CommonHooks.canMobEffectBeApplied(this, newEffect, source)) {
+             return false;
+         } else {
+@@ -1060,6 +1067,7 @@ public abstract class LivingEntity extends Entity implements Attackable, Waypoin
+     }
+ 
+     public void forceAddEffect(MobEffectInstance newEffect, @Nullable Entity source) {
++        if (net.multiforge.neoforge.world.CrossRegionEffects.deferForceAdd(this, newEffect, source)) return; // MultiForge: entity in another region
+         if (net.neoforged.neoforge.common.CommonHooks.canMobEffectBeApplied(this, newEffect, source)) {
+             MobEffectInstance previousEffect = this.activeEffects.put(newEffect.getEffect(), newEffect);
+             if (previousEffect == null) {
+@@ -1076,10 +1084,12 @@ public abstract class LivingEntity extends Entity implements Attackable, Waypoin
+     }
+ 
+     public final @Nullable MobEffectInstance removeEffectNoUpdate(Holder<MobEffect> effect) {
++        if (net.multiforge.neoforge.world.CrossRegionEffects.deferRemoveNoUpdate(this, effect)) return this.activeEffects.get(effect); // MultiForge: entity in another region
+         return this.activeEffects.remove(effect);
+     }
+ 
+     public boolean removeEffect(Holder<MobEffect> effect) {
++        if (net.multiforge.neoforge.world.CrossRegionEffects.deferRemove(this, effect)) return this.activeEffects.containsKey(effect); // MultiForge: entity in another region
+         if (net.neoforged.neoforge.event.EventHooks.onEffectRemoved(this, effect)) return false;
+         MobEffectInstance effectInstance = this.removeEffectNoUpdate(effect);
+         if (effectInstance != null) {
+@@ -1172,6 +1182,7 @@ public abstract class LivingEntity extends Entity implements Attackable, Waypoin
+     }
+ 
+     public void heal(float heal) {
++        if (net.multiforge.neoforge.world.CrossRegionEffects.deferHeal(this, heal)) return; // MultiForge: entity in another region
+         heal = net.neoforged.neoforge.event.EventHooks.onLivingHeal(this, heal);
+         if (heal <= 0) return;
+         float health = this.getHealth();
+@@ -1185,6 +1196,7 @@ public abstract class LivingEntity extends Entity implements Attackable, Waypoin
+     }
+ 
+     public void setHealth(float health) {
++        if (net.multiforge.neoforge.world.CrossRegionEffects.deferSetHealth(this, health)) return; // MultiForge: entity in another region
+         this.entityData.set(DATA_HEALTH_ID, Mth.clamp(health, 0.0F, this.getMaxHealth()));
+     }
+ 
+@@ -3270,7 +3282,13 @@ public abstract class LivingEntity extends Entity implements Attackable, Waypoin
                  }
              }
  
@@ -26,3 +79,11 @@
                  this.doPush(entityx);
              }
          }
+@@ -3426,6 +3444,7 @@ public abstract class LivingEntity extends Entity implements Attackable, Waypoin
+     }
+ 
+     public final void setAbsorptionAmount(float absorptionAmount) {
++        if (net.multiforge.neoforge.world.CrossRegionEffects.deferAbsorption(this, absorptionAmount)) return; // MultiForge: entity in another region
+         this.internalSetAbsorptionAmount(Mth.clamp(absorptionAmount, 0.0F, this.getMaxAbsorption()));
+     }
+ 

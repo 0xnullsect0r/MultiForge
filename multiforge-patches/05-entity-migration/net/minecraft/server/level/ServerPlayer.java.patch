@@ -1,6 +1,14 @@
 --- a/net/minecraft/server/level/ServerPlayer.java
 +++ b/net/minecraft/server/level/ServerPlayer.java
-@@ -1132,6 +1132,9 @@ public class ServerPlayer extends Player {
+@@ -555,6 +555,7 @@ public class ServerPlayer extends Player {
+ 
+     @Override
+     public void giveExperienceLevels(int amount) {
++        if (net.multiforge.neoforge.world.CrossRegionEffects.deferExperienceLevels(this, amount)) return; // MultiForge: entity in another region
+         if (amount != 0) {
+             super.giveExperienceLevels(amount);
+             this.lastSentExp = -1;
+@@ -1132,6 +1133,9 @@ public class ServerPlayer extends Player {
      }
  
      public @Nullable ServerPlayer teleport(TeleportTransition transition) {
@@ -10,7 +18,15 @@
          if (!net.neoforged.neoforge.common.CommonHooks.onTravelToDimension(this, transition.newLevel().dimension())) return null;
          if (this.isRemoved()) {
              return null;
-@@ -1792,16 +1795,20 @@ public class ServerPlayer extends Player {
+@@ -1657,6 +1661,7 @@ public class ServerPlayer extends Player {
+ 
+     @Override
+     public void giveExperiencePoints(int i) {
++        if (net.multiforge.neoforge.world.CrossRegionEffects.deferExperiencePoints(this, i)) return; // MultiForge: entity in another region
+         if (i != 0) {
+             super.giveExperiencePoints(i);
+             this.lastSentExp = -1;
+@@ -1792,16 +1797,20 @@ public class ServerPlayer extends Player {
  
      @Override
      public void teleportTo(double x, double y, double z) {
