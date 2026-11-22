@@ -236,6 +236,7 @@ abstract class MultiforgeCheckMixinTargets extends DefaultTask {
     @Internal abstract DirectoryProperty getOutDir()
     @Internal abstract Property<File> getAllowedFile()
     @Internal abstract Property<Integer> getJavaRelease()
+    @Internal abstract Property<String> getJavacPath()
     @Classpath abstract ConfigurableFileCollection getCompileClasspath()
 
     static Set<String> members(File f) {
@@ -273,12 +274,15 @@ abstract class MultiforgeCheckMixinTargets extends DefaultTask {
         out.deleteDir()
         out.mkdirs()
         def cp = ([classes] + compileClasspath.files).collect { it.absolutePath }.join(File.pathSeparator)
-        def javac = javax.tools.ToolProvider.getSystemJavaCompiler()
+        // The project's toolchain, not the JVM running Gradle, which may be older.
         def args = ['-proc:none', '-nowarn', '-g:none', '--release', javaRelease.get().toString(), '-encoding', 'UTF-8', '-cp', cp, '-d', out.absolutePath] +
                 sources.collect { it.absolutePath }
-        def err = new ByteArrayOutputStream()
-        if (javac.run(null, null, err, args as String[]) != 0) {
-            throw new GradleException("MultiForge: pristine sources did not compile:\n${err.toString().readLines().take(40).join('\n')}")
+        File argFile = new File(out.parentFile, 'multiforge-pristine-javac.args')
+        argFile.text = args.collect { '"' + it.replace('\\', '\\\\') + '"' }.join('\n')
+        def proc = new ProcessBuilder(javacPath.get(), '@' + argFile.absolutePath).redirectErrorStream(true).start()
+        String javacOut = proc.inputStream.text
+        if (proc.waitFor() != 0) {
+            throw new GradleException("MultiForge: pristine sources did not compile:\n${javacOut.readLines().take(40).join('\n')}")
         }
         def problems = []
         int checked = 0
@@ -338,6 +342,7 @@ tasks.register('checkMixinTargets', MultiforgeCheckMixinTargets) {
     outDir.set(project.layout.buildDirectory.dir('multiforge-pristine-classes'))
     allowedFile.set(rootProject.file('../../multiforge-patches/mixin-target-exceptions.txt'))
     javaRelease.set(project.java_version.toString().toInteger())
+    javacPath.set(javaToolchains.compilerFor(java.toolchain).map { it.executablePath.asFile.absolutePath })
     compileClasspath.from(sourceSets.main.compileClasspath)
     outputs.upToDateWhen { false }
 }

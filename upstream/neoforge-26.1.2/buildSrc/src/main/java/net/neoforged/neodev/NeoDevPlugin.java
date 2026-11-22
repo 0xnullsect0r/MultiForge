@@ -689,11 +689,13 @@ public class NeoDevPlugin implements Plugin<Project> {
             var mainSourceSet = sourceSets.getByName(SourceSet.MAIN_SOURCE_SET_NAME);
             task.from(mainSourceSet.getJava().getClassesDirectory(), spec -> {
                 spec.exclude("net/neoforged/**");
+                spec.exclude("net/multiforge/**"); // MultiForge: ships in the universal jar, like net/neoforged
             });
             if (type == BinaryPatchBaseType.CLIENT || type == BinaryPatchBaseType.JOINED) {
                 var clientSourceSet = sourceSets.getByName("client");
                 task.from(clientSourceSet.getJava().getClassesDirectory(), spec -> {
                     spec.exclude("net/neoforged/**");
+                    spec.exclude("net/multiforge/**"); // MultiForge: ships in the universal jar, like net/neoforged
                 });
             }
             task.from(extraResourcesDir);
