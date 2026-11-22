@@ -346,6 +346,15 @@ public class RegionTickBehaviourTests {
         });
     }
 
+    /**
+     * Not {@code TicketType.FORCED}: at distance 2 that ticket equals the one {@code
+     * setChunkForced} adds, and this test's end listener runs after the runner has
+     * started the next batch. When that batch's structure landed in this chunk, the
+     * listener removed its forced ticket and the test waited forever for the chunk.
+     */
+    private static final net.minecraft.server.level.TicketType<net.minecraft.world.level.ChunkPos> RANDOM_TICK_TICKET = net.minecraft.server.level.TicketType.create(
+            "multiforge_random_tick_test", java.util.Comparator.comparingLong(net.minecraft.world.level.ChunkPos::toLong));
+
     @GameTest(template = TestsMod.TEMPLATE_3x3, timeoutTicks = 400)
     @TestHolder(description = {
             "Random ticks run in the region owning the chunk: unsupported leaves decay",
@@ -367,13 +376,13 @@ public class RegionTickBehaviourTests {
             // A force-ticking ticket (NeoForge: forceTicks = true) random-ticks the
             // chunk without players nearby; a high speed makes the decay near-certain.
             speed.set(1024, level.getServer());
-            level.getChunkSource().addRegionTicket(net.minecraft.server.level.TicketType.FORCED, chunk, 2, chunk, true);
+            level.getChunkSource().addRegionTicket(RANDOM_TICK_TICKET, chunk, 2, chunk, true);
             helper.setBlock(rel, Blocks.OAK_LEAVES.defaultBlockState()
                     .setValue(net.minecraft.world.level.block.LeavesBlock.PERSISTENT, false)
                     .setValue(net.minecraft.world.level.block.LeavesBlock.DISTANCE, 7));
             Runnable restore = () -> {
                 speed.set(oldSpeed, level.getServer());
-                level.getChunkSource().removeRegionTicket(net.minecraft.server.level.TicketType.FORCED, chunk, 2, chunk, true);
+                level.getChunkSource().removeRegionTicket(RANDOM_TICK_TICKET, chunk, 2, chunk, true);
             };
             // Restored when the test ends, pass or fail: a timed-out run left the game
             // rule at 1024 and the ticket in place for every later test.
