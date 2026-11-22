@@ -1,5 +1,16 @@
 # CHANGELOG
 
+## v1.12.2 — Server panels work behind PROXY protocol
+
+**Upgrade if you use PROXY protocol with a panel such as Crafty on the same
+machine.** Nothing changes with the setting off.
+
+- **Panels can read status again.** A connection from `127.0.0.1` or `::1` may
+  complete a status ping without a PROXY header, so player counts return and the
+  console stops filling with `network.proxy.untrusted` warnings.
+- **Local connections still cannot log in.** Without a header they are limited
+  to status. A login, transfer, legacy ping or forged header closes them.
+
 ## v1.12.1 — Fix a crash from effects applied across regions
 
 **Upgrade if your modpack has blocks that apply potion effects to players at a
