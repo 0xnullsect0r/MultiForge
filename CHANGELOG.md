@@ -1,5 +1,27 @@
 # CHANGELOG
 
+## v1.11.3 — natural spawning respects mob caps with Cupboard installed
+
+**Upgrade if your server runs Cupboard** (All the Mods 10 does). Without this
+fix, natural spawning can pile up thousands of mobs and stall the server.
+
+### Spawning
+
+- **Mobs spawned on region workers no longer bypass the mob caps.** Cupboard
+  holds back entities added from any thread without `server` in its name, and
+  releases them on a later add from the server thread. Region workers were
+  named `multiforge-tick-N`, so their spawns waited in that queue where no mob
+  cap could count them, and spawning kept going. Workers are now named
+  `multiforge-tick-N-server`, and their adds reach the world immediately.
+  Mobs that already piled up stay in the world until they despawn or are
+  removed.
+
+### Client debug mod
+
+- **Loads on NeoForge 21.1.234 and newer 21.1.x clients.** It required 21.1.251,
+  which crashed modpacks pinned to an older NeoForge at startup even though the
+  mod compiles against 21.1.234.
+
 ## v1.11.2 — scheduler fairness, honest MSPT numbers, scanner that sees the usual shapes
 
 A follow-up round from the v1.11.1 audit: smaller correctness fixes, no
