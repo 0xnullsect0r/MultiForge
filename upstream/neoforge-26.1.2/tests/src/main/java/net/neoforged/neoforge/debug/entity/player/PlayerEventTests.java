@@ -149,6 +149,8 @@ public class PlayerEventTests {
             // Spawn a player at the centre of the test
             final GameTestPlayer player = helper.makeTickingMockServerPlayerInLevel(GameType.SURVIVAL)
                     .moveToCentre();
+            // MultiForge fork note: logs chunk and thread state if this test fails.
+            net.multiforge.testfixtures.TestFailureDiagnostics.onFailure(helper, "itemPickupEvent", player.blockPosition());
             helper.spawnItem(Items.MELON_SEEDS, 1, 2, 1);
 
             helper.startSequence()

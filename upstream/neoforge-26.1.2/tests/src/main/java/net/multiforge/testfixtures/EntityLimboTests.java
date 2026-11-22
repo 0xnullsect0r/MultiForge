@@ -162,6 +162,15 @@ public class EntityLimboTests {
             ChunkPos home = ChunkPos.containing(helper.absolutePos(new BlockPos(1, 2, 1)));
             ChunkPos east = eastChunk(helper);
             Runnable releaseEast = TestForcedChunks.force(level, east);
+            TestFailureDiagnostics.onFailure(helper, "deferredVisibilityPreventsLimbo", east.getMiddleBlockPosition(helper.absolutePos(BlockPos.ZERO).getY()));
+            // 26.1's GameTest server does not wait between ticks, so a tick timeout cannot bound
+            // a chunk load. Finish it here on a wall-clock limit; a chunk that never gets there
+            // still fails this test.
+            long loadDeadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(60);
+            level.getServer().managedBlock(
+                    () -> (manager.canPositionTick(east) && manager.canPositionTick(home)) || System.nanoTime() > loadDeadline);
+            helper.assertTrue(manager.canPositionTick(east) && manager.canPositionTick(home),
+                    "chunks " + home + " / " + east + " did not reach entity-ticking within 60 s");
             Pig unguarded = floatingPig(helper, new BlockPos(1, 2, 1));
             Pig guarded = floatingPig(helper, new BlockPos(1, 2, 1));
             boolean killSwitch = RegionPhase.deferVisibility();
