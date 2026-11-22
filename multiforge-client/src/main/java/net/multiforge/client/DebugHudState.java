@@ -264,7 +264,8 @@ public final class DebugHudState {
 
     /**
      * Short label for where a region last ticked: {@code tick-6} for worker
-     * {@code multiforge-tick-6}, {@code server} for the server thread,
+     * {@code multiforge-tick-6-server} (or {@code multiforge-tick-6} from an
+     * older server), {@code server} for the server thread,
      * {@code server, busy lane} when it was moved there for posting too many
      * events to the serial lane, and empty when not known yet.
      */
@@ -274,7 +275,7 @@ public final class DebugHudState {
             case SERVER_THREAD_SINGLE -> "server";
             case SERVER_THREAD_HOT -> "server, busy lane";
             case WORKER, UNKNOWN -> t.thread().startsWith("multiforge-")
-                    ? t.thread().substring("multiforge-".length())
+                    ? t.thread().substring("multiforge-".length()).replaceFirst("-server$", "")
                     : t.thread();
         };
     }

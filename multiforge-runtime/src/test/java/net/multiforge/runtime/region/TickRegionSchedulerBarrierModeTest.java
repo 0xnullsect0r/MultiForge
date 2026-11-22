@@ -352,6 +352,9 @@ class TickRegionSchedulerBarrierModeTest {
             assertThat(tickedOn.get(b.id())).isNotSameAs(Thread.currentThread());
             assertThat(scheduler.lastTickPlacement(a)).isEqualTo(TickRegionScheduler.TickPlacement.WORKER);
             assertThat(scheduler.lastTickThread(b)).startsWith("multiforge-tick-");
+            // Cupboard queues entity adds from any thread without "server" in its name,
+            // which lets natural spawning run past the mob caps.
+            assertThat(scheduler.lastTickThread(b)).containsIgnoringCase("server");
 
             scheduler.setInlinePolicy(false, 0);
             scheduler.driveTick(List.of(a), 5_000_000_000L, () -> false);
