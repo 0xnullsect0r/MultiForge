@@ -24,6 +24,14 @@ jobs:
       - name: Resolve the release line
         run: .github/scripts/mf-line.sh --tree >> "$GITHUB_ENV"
 
+      - name: Set up JDK 21 for the updater guard
+        # multiforge-update.sh requires Java 21 until it is ported (port step 8).
+        # Installed first, so the line's JDK below stays the default.
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: "21"
+
       - name: Set up JDK ${{ env.MF_JAVA }}
         uses: actions/setup-java@v6
         with:
@@ -39,7 +47,7 @@ jobs:
         run: ./gradlew spotlessCheck --no-daemon --stacktrace
 
       - name: Updater Minecraft version guard
-        run: sh scripts/test-multiforge-update-guard.sh
+        run: PATH="$JAVA_HOME_21_X64/bin:$PATH" JAVA_HOME="$JAVA_HOME_21_X64" sh scripts/test-multiforge-update-guard.sh
 
       - name: Build + test
         # Enumerate the CI-scoped modules explicitly. `./gradlew build`
