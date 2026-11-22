@@ -29,6 +29,11 @@ dependencies {
     }
     implementation(testframeworkProject)
 
+    // MultiForge fork addition: the fixtures under net/multiforge/testfixtures/
+    // assert against the runtime directly.
+    implementation "net.multiforge:multiforge-runtime:${project.multiforge_runtime_version}"
+    implementation "net.multiforge:multiforge-api:${project.multiforge_runtime_version}"
+
     junitImplementation(platform("org.junit:junit-bom:${project.jupiter_api_version}"))
     junitImplementation "org.junit.jupiter:junit-jupiter"
     junitImplementation "org.junit.jupiter:junit-jupiter-params"
@@ -97,6 +102,16 @@ neoDev {
         gameTestServer {
             type = "gameTestServer"
             systemProperty("eventbus.checkTypesOnDispatch", "true")
+            // MultiForge fork addition: tick every region on a worker. By default a level
+            // with one region, or a region whose serial-lane hand-offs are costly, ticks on
+            // the server thread, and most region-tick tests would then pass without any
+            // region ever running on a worker.
+            systemProperty("multiforge.inlineSingleRegion", "false")
+            systemProperty("multiforge.serialLaneHotWaitMs", "0")
+            // `-PmultiforgeMode=strict` (CI's second run) or `=off` (the control).
+            if (project.hasProperty("multiforgeMode")) {
+                systemProperty("multiforge.mode", project.property("multiforgeMode").toString())
+            }
         }
         data {
             clientData()
@@ -138,4 +153,9 @@ license {
     header = rootProject.file('codeformat/HEADER.txt')
     skipExistingHeaders = true
     include '**/*.java'
+    // MultiForge fork addition: net/multiforge/** carries MultiForge's
+    // GPL-3.0 header, not NeoForge's LGPL one — see build.gradle's
+    // matching exclusion at the root project for the full rationale.
+    exclude '**/net/multiforge/**'
 }
+

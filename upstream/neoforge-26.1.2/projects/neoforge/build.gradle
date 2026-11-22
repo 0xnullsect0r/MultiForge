@@ -153,6 +153,20 @@ dependencies {
         endorseStrictVersions()
     }
 
+    // MultiForge fork addition: the regionized runtime that
+    // net/multiforge/neoforge/** (src/main/java) and the patches under
+    // ../../multiforge-patches/ call into. Resolved from mavenLocal (see
+    // settings.gradle) — publish it first with
+    // `./gradlew :multiforge-api:publishToMavenLocal :multiforge-runtime:publishToMavenLocal`
+    // from the outer repo root.
+    implementation "net.multiforge:multiforge-runtime:${project.multiforge_runtime_version}"
+    implementation "net.multiforge:multiforge-api:${project.multiforge_runtime_version}"
+    // ...and embedded into the universal jar through JarJar, so the runtime
+    // ships inside NeoForge itself: the installer's library list only accepts
+    // artifacts from Mojang/NeoForged repositories.
+    jarJar "net.multiforge:multiforge-runtime:${project.multiforge_runtime_version}"
+    jarJar "net.multiforge:multiforge-api:${project.multiforge_runtime_version}"
+
     // Must be implementation instead of compileOnly so that running dependent projects such as tests will trigger (re)compilation of coremods.
     // (Only needed when compiling through IntelliJ non-delegated builds - otherwise `compileOnly` would work).
     implementation(jarJar(project(":neoforge-coremods")))
@@ -187,6 +201,12 @@ neoDev {
         server {
             server()
             loadedMods = [commonMod, neoDev.mods."neoforge-coremods"]
+            // MultiForge fork addition: headless server for verification runs,
+            // so piped stdin (`save-all flush`, `stop`) reaches the console
+            // reader. -Pmultiforge.server.gui=1 keeps the GUI.
+            if (!project.hasProperty('multiforge.server.gui')) {
+                programArgument 'nogui'
+            }
         }
         gameTestServer {
             type = "gameTestServer"
@@ -586,3 +606,7 @@ publishing {
 tasks.withType(JavaCompile.class).configureEach(task -> {
     Collections.addAll(task.getOptions().getCompilerArgs(), "-Xmaxerrs", "9999");
 });
+
+
+// MultiForge fork addition — see multiforge-patches.gradle.
+apply from: 'multiforge-patches.gradle'

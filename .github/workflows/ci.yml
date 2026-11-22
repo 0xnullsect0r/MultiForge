@@ -208,7 +208,8 @@ jobs:
         run: ./gradlew --no-configuration-cache --stacktrace :neoforge:compileJava immaculateCheck licenseCheck
 
       - name: Mixin-target parity (patched classes keep every Vanilla method and lambda)
-        if: env.MF_PATCHES == 'true'
+        # Also on a partly ported tree: every ported group must keep the rule.
+        if: env.MF_PATCHES != 'false'
         working-directory: ${{ env.MF_TREE }}
         run: ./gradlew --no-configuration-cache --stacktrace :neoforge:checkMixinTargets
 

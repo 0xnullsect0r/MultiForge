@@ -19,7 +19,7 @@ group on top of a "pristine" commit, so an edit can be committed as a fixup
 of the group it belongs to and the patch files re-exported.
 
 Workflow (after `./gradlew setup` and `:neoforge:applyMultiforgePatches` in
-upstream/neoforge-1.21.1):
+upstream/neoforge-26.1.2):
 
   scripts/mf-patches.py init            # build the work repo from the applied tree
   $EDITOR build/mf-patches/work/net/minecraft/...   # edit the fully-patched files
@@ -44,7 +44,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 PATCHES = ROOT / "multiforge-patches"
-FORK = ROOT / "upstream" / "neoforge-1.21.1"
+FORK = ROOT / "upstream" / "neoforge-26.1.2"
 TREE = FORK / "projects" / "neoforge" / "src" / "main" / "java"
 BASE = FORK / "projects" / "base" / "src" / "main" / "java"
 WORK = ROOT / "build" / "mf-patches" / "work"
@@ -59,7 +59,8 @@ def git(*args, check=True, capture=False, cwd=WORK):
 
 
 def groups():
-    return sorted(p for p in PATCHES.iterdir() if p.is_dir())
+    # NN-group only: spec-1.21.1/ is the old patch set, kept as the port's spec.
+    return sorted(p for p in PATCHES.iterdir() if p.is_dir() and p.name[:2].isdigit())
 
 
 def target_of(patch: Path) -> str:
