@@ -272,9 +272,7 @@ public class RegionTickBehaviourTests {
         });
     }
 
-    // The timeout covers loading the far chunk to entity-ticking. 26.1's GameTest server does
-    // not wait between ticks, so 300 ticks can pass in well under a second of chunk loading.
-    @GameTest(template = TestsMod.TEMPLATE_3x3, timeoutTicks = 2400)
+    @GameTest(template = TestsMod.TEMPLATE_3x3, timeoutTicks = 300)
     @TestHolder(description = {
             "A rerouted setBlock / addFreshEntity / addWithUUID returns what Vanilla would have:",
             "true when the block changes or the entity is added, false otherwise."
@@ -295,6 +293,12 @@ public class RegionTickBehaviourTests {
             int farChunkX = far.getX() >> 4;
             int farChunkZ = far.getZ() >> 4;
             Runnable releaseFar = TestForcedChunks.force(level, new net.minecraft.world.level.ChunkPos(farChunkX, farChunkZ));
+            // 26.1's GameTest server does not wait between ticks, so a tick timeout says nothing
+            // about how long a chunk load may take. Finish the load here, on a wall-clock limit;
+            // a chunk that never reaches entity-ticking still fails this test.
+            long loadDeadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(60);
+            level.getServer().managedBlock(() -> level.isPositionEntityTicking(far) || System.nanoTime() > loadDeadline);
+            helper.assertTrue(level.isPositionEntityTicking(far), "the far chunk did not reach entity-ticking within 60 s");
             Pig pig = EntityType.PIG.create(level, net.minecraft.world.entity.EntitySpawnReason.TRIGGERED);
             helper.assertTrue(pig != null, "pig");
             pig.snapTo(far.getX() + 0.5, far.getY(), far.getZ() + 0.5, 0, 0);

@@ -82,7 +82,10 @@ public class ItemTests {
         final var captureDispensedEntities = new AtomicBoolean();
         final var dispensedEntities = new ArrayList<Entity>();
         test.eventListeners().forge().addListener((EntityJoinLevelEvent event) -> {
-            if (captureDispensedEntities.get()) {
+            // MultiForge fork note: boats only, anywhere in the level. An unrelated entity (a
+            // block left unsupported when the previous batch's structure was cleared starts
+            // to fall) is not a duplicate of the dispensed boat.
+            if (captureDispensedEntities.get() && event.getEntity() instanceof net.minecraft.world.entity.vehicle.boat.AbstractBoat) {
                 dispensedEntities.add(event.getEntity());
             }
         });

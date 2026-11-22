@@ -318,7 +318,9 @@ public class EntityFluidInteractionTests {
     }
 
     @GameTest(timeoutTicks = 200)
-    @EmptyTemplate(value = "7x6x3", floor = true)
+    // MultiForge fork note: 8 wide, not 7. milkPos is x=7, outside a 7-wide template; when the
+    // template ends on a chunk edge that zombie is in an unforced chunk and never ticks.
+    @EmptyTemplate(value = "8x6x3", floor = true)
     @TestHolder(description = "Tests custom fluid without movement override travel against water and lava controls")
     static void customFluidWithoutMovementOverrideTravel(final TestHelper helper) {
         helper.requireDifficulty(Difficulty.NORMAL);

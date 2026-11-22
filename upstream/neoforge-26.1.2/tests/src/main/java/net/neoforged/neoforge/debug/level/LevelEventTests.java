@@ -58,11 +58,7 @@ public class LevelEventTests {
     @TestHolder(description = "Tests if the alter ground event is fired, replacing podzol with redstone blocks")
     static void alterGroundEvent(final DynamicTest test) {
         test.registerGameTestTemplate(StructureTemplateBuilder.withSize(16, 32, 16)
-                .fill(0, 0, 0, 15, 0, 15, Blocks.GRASS_BLOCK.defaultBlockState())
-                .set(7, 1, 7, Blocks.SPRUCE_SAPLING.defaultBlockState())
-                .set(8, 1, 7, Blocks.SPRUCE_SAPLING.defaultBlockState())
-                .set(7, 1, 8, Blocks.SPRUCE_SAPLING.defaultBlockState())
-                .set(8, 1, 8, Blocks.SPRUCE_SAPLING.defaultBlockState()));
+                .fill(0, 0, 0, 15, 0, 15, Blocks.GRASS_BLOCK.defaultBlockState()));
 
         test.eventListeners().forge().addListener((final AlterGroundEvent event) -> {
             final AlterGroundEvent.StateProvider old = event.getStateProvider();
@@ -73,6 +69,15 @@ public class LevelEventTests {
         });
 
         test.onGameTest(helper -> helper.startSequence(helper::makeMockPlayer)
+                // MultiForge fork note: planted here, not in the template. A random tick between
+                // placing the structure and enabling this test's listener could grow the tree
+                // with real podzol. Also reproducible in principle on stock NeoForge.
+                .thenExecute(player -> {
+                    helper.setBlock(7, 1, 7, Blocks.SPRUCE_SAPLING);
+                    helper.setBlock(8, 1, 7, Blocks.SPRUCE_SAPLING);
+                    helper.setBlock(7, 1, 8, Blocks.SPRUCE_SAPLING);
+                    helper.setBlock(8, 1, 8, Blocks.SPRUCE_SAPLING);
+                })
                 .thenWaitUntil(player -> helper.boneMealUntilGrown(7, 1, 7, player))
                 .thenExecute(player -> helper.assertTrue(
                         helper.blocksBetween(0, 0, 0, 16, 1, 16).anyMatch(pos -> helper.getLevel().getBlockState(pos).is(Blocks.REDSTONE_BLOCK)),
