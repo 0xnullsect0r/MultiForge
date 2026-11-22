@@ -25,6 +25,11 @@ changelog {
     disableAutomaticPublicationRegistration()
 }
 
+// MultiForge fork note: createChangelog walks NeoForge's git tags, which this
+// vendored tree's repository does not have. MultiForge does not publish
+// NeoForge's changelog artifact.
+tasks.named('createChangelog').configure { enabled = false }
+
 sourceSets {
     main {
         java {

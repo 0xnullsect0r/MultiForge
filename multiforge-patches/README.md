@@ -1,5 +1,15 @@
 # multiforge-patches
 
+> **Port status (`port/26.1.2`): these patches are NOT applied.** They target
+> NeoForge 1.21.1 and are kept as the specification for the 26.1.2 port.
+> `upstream/neoforge-26.1.2` is stock NeoForge 26.1.2.129 plus MultiForge's
+> version scheme: it has no `multiforge-patches.gradle`, and its
+> `gradle.properties` sets `multiforge_patches_enabled=false`, which makes the
+> release workflow and the nightly refuse it. The 1.21.1 tree and the fork glue
+> the patches call (`net/multiforge/**`) are at
+> `git show v1.12.0:upstream/neoforge-1.21.1/<path>`. `scripts/mf-patches.py`
+> and the paths below still describe the 1.21.1 layout until port step 3.
+
 Git-format patches applied to a vendored NeoForge 1.21.1 tree at build
 time. NeoForge itself uses the same approach against Vanilla Minecraft
 via [NeoForm](https://github.com/neoforged/NeoForm); this module layers

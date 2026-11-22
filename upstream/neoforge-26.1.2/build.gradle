@@ -22,7 +22,18 @@ if (fixedProjectVersion == null) {
         final preReleaseSuffix = project.minecraft_version.split("-", 2)[1]
         project.version = "${project.neoforge_snapshot_next_stable}.0-alpha.0+${preReleaseSuffix}.${(new Date()).format('yyyyMMdd.HHmmss', TimeZone.getTimeZone('UTC'))}"
     } else {
-        project.version = gradleutils.version.toString()
+        // MultiForge fork note: not gradleutils. It derives a version from
+        // `git describe --tags`, which in this flat vendored tree returns the
+        // outer project's MultiForge tag. Mods' `neoforge` dependency ranges are
+        // resolved against this string, so it must be a real NeoForge version
+        // (v1.5.0 reported `1.21.1-v1.5.0.0-beta` and every mod was refused).
+        // Shape: `<base>-multiforge-<runtime version>`.
+        def base = project.findProperty('neoforge_base_version')
+        if (!base) {
+            throw new GradleException("neoforge_base_version is not set in gradle.properties. It is the " +
+                    "upstream NeoForge release this fork was vendored from.")
+        }
+        project.version = "${base}-multiforge-${project.multiforge_runtime_version}"
     }
 } else {
     project.version = fixedProjectVersion
