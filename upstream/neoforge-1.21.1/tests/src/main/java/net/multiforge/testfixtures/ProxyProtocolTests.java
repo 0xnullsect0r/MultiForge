@@ -133,6 +133,33 @@ public class ProxyProtocolTests {
         return out;
     }
 
+    private static void varInt(ByteArrayOutputStream out, int value) {
+        while ((value & ~0x7F) != 0) {
+            out.write((value & 0x7F) | 0x80);
+            value >>>= 7;
+        }
+        out.write(value);
+    }
+
+    /** A framed Minecraft handshake packet asking for {@code nextState}. */
+    private static byte[] handshake(int protocol, int nextState) {
+        byte[] host = "127.0.0.1".getBytes(StandardCharsets.UTF_8);
+        ByteArrayOutputStream body = new ByteArrayOutputStream();
+        varInt(body, 0);
+        varInt(body, protocol);
+        varInt(body, host.length);
+        body.writeBytes(host);
+        body.write(25565 >> 8);
+        body.write(25565 & 0xFF);
+        varInt(body, nextState);
+        ByteArrayOutputStream frame = new ByteArrayOutputStream();
+        varInt(frame, body.size());
+        frame.writeBytes(body.toByteArray());
+        return frame.toByteArray();
+    }
+
+    private static final byte[] STATUS_REQUEST = { 1, 0 };
+
     private static void assertClient(GameTestHelper helper, Rig rig, String ip, int port) throws Exception {
         InetSocketAddress expected = new InetSocketAddress(InetAddress.getByName(ip), port);
         helper.assertTrue(expected.equals(rig.connection().getRemoteAddress()),
@@ -236,6 +263,70 @@ public class ProxyProtocolTests {
             assertClosedAndDrainable(helper, rig);
             assertClient(helper, rig, "198.51.100.66", 40000);
             rig.dispose();
+        });
+    }
+
+    @GameTest(template = TestsMod.TEMPLATE_3x3)
+    @TestHolder(description = "A local status ping needs no header and reaches the game byte for byte, even split across reads.")
+    static void localStatusPingReachesTheGame(final DynamicTest test) {
+        run(test, helper -> {
+            for (int protocol : new int[] { 767, -1 }) {
+                byte[] ping = concat(handshake(protocol, 1), STATUS_REQUEST);
+                Rig whole = rig("127.0.0.1");
+                whole.receive(ping);
+                helper.assertTrue(whole.channel().isOpen(), "a local status ping was closed");
+                helper.assertTrue(java.util.Arrays.equals(whole.capture().bytes.toByteArray(), ping), "ping bytes changed");
+                assertClient(helper, whole, "127.0.0.1", 40000);
+                whole.dispose();
+                Rig split = rig("127.0.0.1");
+                for (byte b : ping) split.receive(new byte[] { b });
+                helper.assertTrue(split.channel().isOpen(), "a split local status ping was closed");
+                helper.assertTrue(java.util.Arrays.equals(split.capture().bytes.toByteArray(), ping), "split ping bytes changed");
+                split.dispose();
+            }
+        });
+    }
+
+    @GameTest(template = TestsMod.TEMPLATE_3x3)
+    @TestHolder(description = "A local connection without a header cannot log in, transfer, or use the legacy ping.")
+    static void localPeerCannotLogIn(final DynamicTest test) {
+        run(test, helper -> {
+            for (byte[] data : List.of(handshake(767, 2), handshake(767, 3), new byte[] { (byte) 0xFE, 1 })) {
+                Rig rig = rig("127.0.0.1");
+                rig.receive(data);
+                assertClosedAndDrainable(helper, rig);
+                rig.dispose();
+            }
+        });
+    }
+
+    @GameTest(template = TestsMod.TEMPLATE_3x3)
+    @TestHolder(description = "A local connection that is not a trusted proxy cannot set a client address with a header.")
+    static void localPeerCannotForgeAnAddress(final DynamicTest test) {
+        run(test, helper -> {
+            Rig rig = rig("127.0.0.1");
+            rig.receive(v2(0x21, "203.0.113.12", 4447, "127.0.0.1"));
+            assertClosedAndDrainable(helper, rig);
+            assertClient(helper, rig, "127.0.0.1", 40000);
+            rig.dispose();
+        });
+    }
+
+    @GameTest(template = TestsMod.TEMPLATE_3x3)
+    @TestHolder(description = "A local connection claiming an oversized or malformed first packet is closed.")
+    static void localMalformedHandshakeIsClosed(final DynamicTest test) {
+        run(test, helper -> {
+            byte[][] bad = {
+                    { (byte) 0xFF, (byte) 0xFF, (byte) 0xFF, (byte) 0xFF, (byte) 0xFF, 1 },
+                    { 0 },
+                    { 2, 9, 9 },
+            };
+            for (byte[] data : bad) {
+                Rig rig = rig("127.0.0.1");
+                rig.receive(data);
+                assertClosedAndDrainable(helper, rig);
+                rig.dispose();
+            }
         });
     }
 
