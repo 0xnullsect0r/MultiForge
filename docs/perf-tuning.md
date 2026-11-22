@@ -174,6 +174,7 @@ out while chasing a problem, and report what you found.
 | — | `-Dmultiforge.entities.autoHeal=false` | on | The audit every 1200 ticks still runs and warns, but no longer heals. |
 | `perf.lockFreeOutsidePhase` | `-Dmultiforge.perf.lockFreeOutsidePhase=false` | `true` | Server-thread entity queries take the storage lock and copy, as in v1.10. |
 | `perf.workerChunkCache` | `-Dmultiforge.perf.workerChunkCache=false` | `true` | Region workers look up every chunk read in the chunk map. |
+| `network.proxyProtocol` | `-Dmultiforge.network.proxyProtocol=false` | `false` | Connections are read directly, without a PROXY header. Turn it off together with the proxy's own setting, or every connection fails. Applies in every mode. |
 | — | `-Dmultiforge.hangReport=false` | on | No thread dumps from 10 s into a stalled tick. The watchdog still stops a hung server. |
 
 Every `[entities]` key takes a `-Dmultiforge.entities.<key>=<value>`

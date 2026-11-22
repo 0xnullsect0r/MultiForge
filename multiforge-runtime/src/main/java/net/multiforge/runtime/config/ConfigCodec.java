@@ -66,7 +66,9 @@ public final class ConfigCodec {
             "entities.maxEntityCollisions",
             "entities.activationExempt",
             "perf.lockFreeOutsidePhase",
-            "perf.workerChunkCache");
+            "perf.workerChunkCache",
+            "network.proxyProtocol",
+            "network.trustedProxies");
 
     /**
      * Parse a {@code multiforge-server.toml}. Unknown keys are logged (a typo in a
@@ -130,6 +132,14 @@ public final class ConfigCodec {
                 intOr(r, "entities.wakeInterval", a.wakeInterval()),
                 intOr(r, "entities.maxEntityCollisions", a.maxEntityCollisions()),
                 stringsOr(r, "entities.activationExempt", a.exempt()));
+        NetworkConfig network;
+        try {
+            network = new NetworkConfig(
+                    boolOr(r, "network.proxyProtocol", d.network().proxyProtocol()),
+                    stringsOr(r, "network.trustedProxies", d.network().trustedProxies()));
+        } catch (IllegalArgumentException e) {
+            throw new IllegalArgumentException("Key 'network.trustedProxies': " + e.getMessage(), e);
+        }
         return new MultiForgeConfig(
                 cores,
                 tpc,
@@ -142,7 +152,8 @@ public final class ConfigCodec {
                 deferVisibility,
                 lockFree,
                 workerChunkCache,
-                activation);
+                activation,
+                network);
     }
 
     public static String render(MultiForgeConfig c) {
@@ -219,7 +230,21 @@ public final class ConfigCodec {
         sb.append("lockFreeOutsidePhase = ").append(c.lockFreeOutsidePhase()).append("\n");
         sb.append("# Each region worker keeps its last four full-chunk reads, invalidated whenever\n");
         sb.append("# a chunk's status or the loaded-chunk map changes. false = no cache (kill switch).\n");
-        sb.append("workerChunkCache = ").append(c.workerChunkCache()).append("\n");
+        sb.append("workerChunkCache = ").append(c.workerChunkCache()).append("\n\n");
+        NetworkConfig n = c.network();
+        sb.append("[network]\n");
+        sb.append("# Set true only behind a TCP proxy that sends a HAProxy PROXY protocol header\n");
+        sb.append("# (mc-router, HAProxy, ...). Players then show their real IP. Every connection\n");
+        sb.append("# must come from trustedProxies and carry the header; any other is closed, so\n");
+        sb.append("# direct connections stop working. Applies in every mode. Restart to change.\n");
+        sb.append("proxyProtocol = ").append(n.proxyProtocol()).append("\n");
+        sb.append("# IP addresses or CIDR blocks of the proxy. Host names are not accepted.\n");
+        sb.append("trustedProxies = [");
+        for (int i = 0; i < n.trustedProxies().size(); i++) {
+            if (i > 0) sb.append(", ");
+            sb.append('"').append(n.trustedProxies().get(i)).append('"');
+        }
+        sb.append("]\n");
         return sb.toString();
     }
 
