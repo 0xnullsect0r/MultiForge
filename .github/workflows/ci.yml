@@ -96,21 +96,25 @@ jobs:
       - name: Resolve the release line
         run: .github/scripts/mf-line.sh --tree >> "$GITHUB_ENV"
 
+      - name: Does this tree carry the MultiForge patches?
+        # The client and fixture mods are ported after the patches (port steps 6-7).
+        run: echo "MF_PATCHES=$(sed -n 's/^multiforge_patches_enabled=//p' "$MF_TREE/gradle.properties" | grep . || echo true)" >> "$GITHUB_ENV"
+
       - name: Set up JDK ${{ env.MF_JAVA }}
-        if: steps.changes.outputs.client == 'true'
+        if: steps.changes.outputs.client == 'true' && env.MF_PATCHES == 'true'
         uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: ${{ env.MF_JAVA }}
 
       - name: Set up Gradle
-        if: steps.changes.outputs.client == 'true'
+        if: steps.changes.outputs.client == 'true' && env.MF_PATCHES == 'true'
         uses: gradle/actions/setup-gradle@v3
         with:
           cache-read-only: ${{ github.event_name == 'pull_request' }}
 
       - name: Build + test client mod
-        if: steps.changes.outputs.client == 'true'
+        if: steps.changes.outputs.client == 'true' && env.MF_PATCHES == 'true'
         # 6G matches release.yml — moddev's NeoForm decompile is the
         # largest step and OOMs at the default heap.
         env:
@@ -125,7 +129,7 @@ jobs:
             :multiforge-scanner:scanCorpus --no-daemon --stacktrace
 
       - name: Upload test reports on failure
-        if: failure() && steps.changes.outputs.client == 'true'
+        if: failure() && steps.changes.outputs.client == 'true' && env.MF_PATCHES == 'true'
         uses: actions/upload-artifact@v7
         with:
           name: client-test-reports-${{ github.sha }}

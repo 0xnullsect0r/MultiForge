@@ -204,7 +204,11 @@ jobs:
         # NeoForge's own production self-test: install from the built installer
         # (downloading Minecraft from Mojang), start the server and wait for it to
         # tick. CI's GameTests run from the dev classpath; this is the jar we ship.
-        run: ./gradlew --no-configuration-cache --no-daemon --stacktrace :neoforge:testProductionServer
+        # On Gradle 9 (the 26.1 line) this task only works with the configuration cache.
+        run: |
+          CC_FLAG=
+          if [ "$MF_LINE" = 1.21 ]; then CC_FLAG=--no-configuration-cache; fi
+          ./gradlew $CC_FLAG --no-daemon --stacktrace :neoforge:testProductionServer
 
       - name: Assert the fork reports a real NeoForge version
         working-directory: ${{ env.MF_TREE }}
