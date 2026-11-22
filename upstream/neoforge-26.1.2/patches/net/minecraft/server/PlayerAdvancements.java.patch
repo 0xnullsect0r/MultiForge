@@ -1,0 +1,34 @@
+--- a/net/minecraft/server/PlayerAdvancements.java
++++ b/net/minecraft/server/PlayerAdvancements.java
+@@ -163,6 +_,8 @@
+     }
+ 
+     public boolean award(AdvancementHolder holder, String criterion) {
++        // Forge: don't grant advancements for fake players
++        if (this.player instanceof net.neoforged.neoforge.common.util.FakePlayer) return false;
+         boolean result = false;
+         AdvancementProgress progress = this.getOrStartProgress(holder);
+         boolean wasDone = progress.isDone();
+@@ -170,12 +_,14 @@
+             this.unregisterListeners(holder);
+             this.progressChanged.add(holder);
+             result = true;
++            net.neoforged.neoforge.event.EventHooks.onAdvancementProgressedEvent(this.player, holder, progress, criterion, net.neoforged.neoforge.event.entity.player.AdvancementEvent.AdvancementProgressEvent.ProgressType.GRANT);
+             if (!wasDone && progress.isDone()) {
+                 holder.value().rewards().grant(this.player);
+                 holder.value().display().ifPresent(display -> {
+                     if (display.shouldAnnounceChat() && this.player.level().getGameRules().get(GameRules.SHOW_ADVANCEMENT_MESSAGES)) {
+                         this.playerList.broadcastSystemMessage(display.getType().createAnnouncement(holder, this.player), false);
+                     }
++                    net.neoforged.neoforge.event.EventHooks.onAdvancementEarnedEvent(this.player, holder);
+                 });
+             }
+         }
+@@ -195,6 +_,7 @@
+             this.registerListeners(advancement);
+             this.progressChanged.add(advancement);
+             result = true;
++            net.neoforged.neoforge.event.EventHooks.onAdvancementProgressedEvent(this.player, advancement, progress, criterion, net.neoforged.neoforge.event.entity.player.AdvancementEvent.AdvancementProgressEvent.ProgressType.REVOKE);
+         }
+ 
+         if (wasDone && !progress.isDone()) {
