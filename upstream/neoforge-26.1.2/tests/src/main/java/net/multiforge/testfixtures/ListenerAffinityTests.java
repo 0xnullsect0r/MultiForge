@@ -13,7 +13,6 @@
 package net.multiforge.testfixtures;
 
 import java.util.function.Consumer;
-import net.neoforged.testframework.gametest.GameTest;
 import net.minecraft.server.MinecraftServer;
 import net.multiforge.neoforge.event.ThreadAffinityScanner;
 import net.multiforge.runtime.event.ListenerAffinity;
@@ -22,6 +21,7 @@ import net.neoforged.neoforge.eventtest.internal.TestsMod;
 import net.neoforged.testframework.DynamicTest;
 import net.neoforged.testframework.annotation.ForEachTest;
 import net.neoforged.testframework.annotation.TestHolder;
+import net.neoforged.testframework.gametest.GameTest;
 
 /**
  * The bytecode reader behind {@link ListenerAffinity}, run on real class files

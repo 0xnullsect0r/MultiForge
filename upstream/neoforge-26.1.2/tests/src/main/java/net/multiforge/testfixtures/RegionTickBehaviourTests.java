@@ -14,7 +14,6 @@ package net.multiforge.testfixtures;
 
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
-import net.neoforged.testframework.gametest.GameTest;
 import net.minecraft.gametest.framework.GameTestHelper;
 import net.minecraft.world.entity.EntityType;
 import net.minecraft.world.entity.animal.pig.Pig;
@@ -34,6 +33,7 @@ import net.neoforged.neoforge.eventtest.internal.TestsMod;
 import net.neoforged.testframework.DynamicTest;
 import net.neoforged.testframework.annotation.ForEachTest;
 import net.neoforged.testframework.annotation.TestHolder;
+import net.neoforged.testframework.gametest.GameTest;
 
 /**
  * Behavioural GameTests for the barrier tick model: with the regionized

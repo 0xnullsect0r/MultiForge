@@ -13,7 +13,6 @@
 package net.multiforge.testfixtures;
 
 import java.util.concurrent.atomic.AtomicInteger;
-import net.neoforged.testframework.gametest.GameTest;
 import net.multiforge.api.event.DispatchDomain;
 import net.multiforge.api.event.DispatchDomainKind;
 import net.multiforge.runtime.diagnostics.ProbeRegistry;
@@ -29,6 +28,7 @@ import net.neoforged.neoforge.eventtest.internal.TestsMod;
 import net.neoforged.testframework.DynamicTest;
 import net.neoforged.testframework.annotation.ForEachTest;
 import net.neoforged.testframework.annotation.TestHolder;
+import net.neoforged.testframework.gametest.GameTest;
 
 /**
  * GameTest fixtures for M12.2 (docs/design/m12-event-routing.md §2.1/§12):

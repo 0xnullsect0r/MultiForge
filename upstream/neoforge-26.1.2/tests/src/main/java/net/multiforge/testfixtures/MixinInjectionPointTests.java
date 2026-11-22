@@ -13,12 +13,12 @@
 package net.multiforge.testfixtures;
 
 import java.io.InputStream;
-import net.neoforged.testframework.gametest.GameTest;
 import net.minecraft.server.level.ServerLevel;
 import net.neoforged.neoforge.eventtest.internal.TestsMod;
 import net.neoforged.testframework.DynamicTest;
 import net.neoforged.testframework.annotation.ForEachTest;
 import net.neoforged.testframework.annotation.TestHolder;
+import net.neoforged.testframework.gametest.GameTest;
 import org.objectweb.asm.ClassReader;
 import org.objectweb.asm.ClassVisitor;
 import org.objectweb.asm.MethodVisitor;

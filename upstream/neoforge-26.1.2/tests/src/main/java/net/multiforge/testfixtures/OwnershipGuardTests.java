@@ -13,7 +13,6 @@
 package net.multiforge.testfixtures;
 
 import net.minecraft.core.BlockPos;
-import net.neoforged.testframework.gametest.GameTest;
 import net.minecraft.world.level.block.Blocks;
 import net.multiforge.runtime.diagnostics.ProbeRegistry;
 import net.multiforge.runtime.diagnostics.ViolationLogger;
@@ -22,6 +21,7 @@ import net.neoforged.neoforge.eventtest.internal.TestsMod;
 import net.neoforged.testframework.DynamicTest;
 import net.neoforged.testframework.annotation.ForEachTest;
 import net.neoforged.testframework.annotation.TestHolder;
+import net.neoforged.testframework.gametest.GameTest;
 
 /**
  * GameTest fixtures for M7 (multiforge-patches/01-ownership/): prove

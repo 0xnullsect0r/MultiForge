@@ -23,7 +23,7 @@ import net.minecraft.world.level.entity.LevelEntityGetter;
 import net.minecraft.world.phys.AABB;
 import net.multiforge.runtime.region.RegionPhase;
 import org.jetbrains.annotations.ApiStatus;
-import org.jetbrains.annotations.Nullable;
+import org.jspecify.annotations.Nullable;
 
 /**
  * The level's {@link LevelEntityGetter}: Vanilla's getter, read under the
