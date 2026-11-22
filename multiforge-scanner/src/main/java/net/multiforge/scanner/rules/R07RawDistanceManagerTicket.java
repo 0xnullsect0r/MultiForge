@@ -26,14 +26,16 @@ import org.objectweb.asm.tree.MethodNode;
 /**
  * R07 — {@code raw-DistanceManager-ticket}. See {@code docs/design/scanner-rules.md} &sect;4 (R07).
  *
- * <p>WARN: mod calls to {@code DistanceManager.addTicket} where the receiver resolves to {@code
- * net.minecraft.server.level.DistanceManager} directly, rather than through {@code
+ * <p>WARN: mod calls to {@code DistanceManager.addTicket}, or on 26.1, where tickets moved, to
+ * {@code TicketStorage.addTicket} and {@code addTicketWithRadius}, rather than through {@code
  * ServerChunkCache}'s ticket API on the server thread.
  */
 public final class R07RawDistanceManagerTicket extends AbstractTreeRule {
 
     private static final String OWNER = "net/minecraft/server/level/DistanceManager";
     private static final String TARGET_NAME = "addTicket";
+    private static final String TICKET_STORAGE = "net/minecraft/world/level/TicketStorage";
+    private static final String TICKET_STORAGE_RADIUS = "addTicketWithRadius";
 
     @Override
     public String id() {
@@ -67,9 +69,7 @@ public final class R07RawDistanceManagerTicket extends AbstractTreeRule {
                 if (!(insn instanceof MethodInsnNode call)) {
                     continue;
                 }
-                if (call.getOpcode() != Opcodes.INVOKEVIRTUAL
-                        || !call.owner.equals(OWNER)
-                        || !call.name.equals(TARGET_NAME)) {
+                if (call.getOpcode() != Opcodes.INVOKEVIRTUAL || !isRawTicketAdd(call)) {
                     continue;
                 }
                 emit.accept(new Finding(
@@ -78,11 +78,20 @@ public final class R07RawDistanceManagerTicket extends AbstractTreeRule {
                         classFqn,
                         methodKey,
                         BytecodeUtil.lineOf(mn, call),
-                        "DistanceManager.addTicket" + call.desc + " called directly from " + mn.name
-                                + " — use ServerChunkCache.addRegionTicket, from the server thread (or"
+                        call.owner.substring(call.owner.lastIndexOf('/') + 1) + "." + call.name + call.desc
+                                + " called directly from " + mn.name
+                                + " — use ServerChunkCache's ticket API, from the server thread (or"
                                 + " ServerDomains.global() when this can run in a region tick).",
                         Fingerprint.compute(id(), classFqn, methodKey, mn, call)));
             }
         }
+    }
+
+    private static boolean isRawTicketAdd(MethodInsnNode call) {
+        if (call.owner.equals(OWNER)) {
+            return call.name.equals(TARGET_NAME);
+        }
+        return call.owner.equals(TICKET_STORAGE)
+                && (call.name.equals(TARGET_NAME) || call.name.equals(TICKET_STORAGE_RADIUS));
     }
 }

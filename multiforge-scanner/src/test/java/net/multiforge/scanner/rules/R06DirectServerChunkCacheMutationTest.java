@@ -42,6 +42,18 @@ class R06DirectServerChunkCacheMutationTest {
     }
 
     @Test
+    void firesOnTheFutureReturningTicketCallOf26_1() {
+        ClassWriter cw = Bytecode.newClass("com/example/mod/BadR06Future", false);
+        MethodVisitor mv = Bytecode.beginMethod(cw, "forceLoad", false);
+        Bytecode.invokeVirtual(mv, OWNER, "addTicketAndLoadWithRadius", "()Ljava/util/concurrent/CompletableFuture;");
+        mv.visitInsn(org.objectweb.asm.Opcodes.POP);
+        Bytecode.endVoid(mv);
+        List<Finding> findings = new RuleEngine(List.of(new R06DirectServerChunkCacheMutation()))
+                .scanClassBytes(Bytecode.finish(cw), "test.jar");
+        assertThat(findings).isNotEmpty();
+    }
+
+    @Test
     void doesNotFireOnGetterShapedCall() {
         ClassWriter cw = Bytecode.newClass("com/example/mod/GoodR06", false);
         MethodVisitor mv = Bytecode.beginMethod(cw, "peek", false);

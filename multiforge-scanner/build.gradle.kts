@@ -71,13 +71,14 @@ tasks.jar {
 tasks.register<JavaExec>("scanCorpus") {
     group = "verification"
     description = "Scan the mod-jar corpus and compare with corpus/expected.txt (-PupdateCorpus rewrites it)."
-    val corpusJars = listOf(
+    // A line whose client is not ported yet scans the rest and says which jar it left out.
+    val clientPorted = providers.gradleProperty("multiforgeClientPorted").map(String::toBoolean).getOrElse(true)
+    val corpusJars = (listOf(
         ":multiforge-testmods:writer",
         ":multiforge-testmods:legacy",
         ":multiforge-testmods:slowtick",
         ":multiforge-testmods:limbo",
-        ":multiforge-client",
-    )
+    ) + (if (clientPorted) listOf(":multiforge-client") else listOf()))
             .map { project(it).tasks.named<Jar>("jar") }
     dependsOn(corpusJars)
     classpath = sourceSets["test"].runtimeClasspath
@@ -86,6 +87,7 @@ tasks.register<JavaExec>("scanCorpus") {
     val update = project.hasProperty("updateCorpus")
     doFirst {
         args = listOf(expected) + (if (update) listOf("--update") else listOf()) +
+                (if (clientPorted) listOf() else listOf("--unported=multiforge-client")) +
                 corpusJars.map { it.get().archiveFile.get().asFile.absolutePath }
     }
 }

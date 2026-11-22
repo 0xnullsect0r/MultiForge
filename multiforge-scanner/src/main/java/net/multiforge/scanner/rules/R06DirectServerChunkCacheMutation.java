@@ -38,7 +38,8 @@ public final class R06DirectServerChunkCacheMutation extends AbstractTreeRule {
 
     private static final String OWNER = "net/minecraft/server/level/ServerChunkCache";
     private static final Set<String> NAMED_MUTATORS =
-            Set.of("addRegionTicket", "removeRegionTicket", "updateChunkForced");
+            // addTicketAndLoadWithRadius returns a future, so only its name marks it (26.1).
+            Set.of("addRegionTicket", "removeRegionTicket", "updateChunkForced", "addTicketAndLoadWithRadius");
 
     @Override
     public String id() {

@@ -50,6 +50,26 @@ class R07RawDistanceManagerTicketTest {
     }
 
     @Test
+    void firesOnTicketStorageAddsOf26_1() {
+        for (String name : List.of("addTicket", "addTicketWithRadius")) {
+            ClassWriter cw = Bytecode.newClass("com/example/mod/BadR07" + name, false);
+            MethodVisitor mv = Bytecode.beginMethod(cw, "grantSpawnChunks", false);
+            Bytecode.invokeVirtual(mv, "net/minecraft/world/level/TicketStorage", name, "()V");
+            Bytecode.endVoid(mv);
+            assertFires(Bytecode.finish(cw));
+        }
+    }
+
+    @Test
+    void doesNotFireOnTicketStorageRemoveTicket() {
+        ClassWriter cw = Bytecode.newClass("com/example/mod/GoodR07c", false);
+        MethodVisitor mv = Bytecode.beginMethod(cw, "releaseSpawnChunks", false);
+        Bytecode.invokeVirtual(mv, "net/minecraft/world/level/TicketStorage", "removeTicket", "()V");
+        Bytecode.endVoid(mv);
+        assertDoesNotFire(Bytecode.finish(cw));
+    }
+
+    @Test
     void doesNotFireOnServerChunkCacheAddRegionTicket() {
         ClassWriter cw = Bytecode.newClass("com/example/mod/GoodR07a", false);
         MethodVisitor mv = Bytecode.beginMethod(cw, "grantSpawnChunks", false);

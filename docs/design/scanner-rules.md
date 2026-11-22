@@ -484,7 +484,7 @@ void teleportToBase(MigratingEntityRef ref, WorldRef world, BlockPos base) {
 
 **Severity:** WARN. **Detects:** mod calls to `ServerChunkCache`'s
 mutating surface (`addRegionTicket`, `removeRegionTicket`,
-`updateChunkForced`, and any `void`-returning method not named
+`updateChunkForced`, on 26.1 `addTicketAndLoadWithRadius`, and any `void`-returning method not named
 `get*`/`is*`/`has*`) bypassing `ServerChunkCacheDelegate`
 (`upstream/neoforge-1.21.1/src/main/java/net/multiforge/neoforge/chunk/ServerChunkCacheDelegate.java`,
 per `docs/design/m9-patch-strategy.md` §"ServerChunkCache", verdict PATCH
@@ -521,7 +521,7 @@ serverLevel.getChunkSource().addRegionTicket(TicketType.FORCED, pos, 2, pos);
 ### R07 — `raw-DistanceManager-ticket`
 
 **Severity:** WARN. **Detects:** mod calls to `DistanceManager.addTicket`
-where the receiver resolves to `net.minecraft.server.level.DistanceManager`
+(on 26.1, `TicketStorage.addTicket` and `addTicketWithRadius`) where the receiver resolves to `net.minecraft.server.level.DistanceManager`
 directly, rather than through `MultiForgeDistanceManager`
 (`upstream/neoforge-1.21.1/src/main/java/net/multiforge/neoforge/chunk/MultiForgeDistanceManager.java`,
 per `docs/design/m9-patch-strategy.md` §"DistanceManager", verdict
