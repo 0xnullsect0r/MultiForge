@@ -81,7 +81,7 @@ proxyProtocol = true
 trustedProxies = ["10.0.0.5/32"]   # the proxy's IP or CIDR block; host names are not accepted
 ```
 
-Change the server and the proxy together and restart: with this on, every connection must come from a trusted proxy and carry the header, so direct connections, including a panel's player-count ping, are closed. Keep `prevent-proxy-connections=false` until real IPs show up in the login log.
+Change the server and the proxy together and restart: with this on, every connection must come from a trusted proxy and carry the header, so other direct connections are closed. Keep `prevent-proxy-connections=false` until real IPs show up in the login log. A panel on the same machine, such as Crafty, can still read status and player counts over `127.0.0.1`, but a local connection without a PROXY header cannot log in.
 
 **Kill switches.** Every new behaviour has a switch in `config/multiforge-server.toml`, and a JVM flag for one run: `entities.activation`, `entities.maxEntityCollisions` (`0` = Vanilla), `entities.deferVisibility`, `perf.lockFreeOutsidePhase`, `perf.workerChunkCache`, plus `-Dmultiforge.entities.autoHeal=false` and `-Dmultiforge.hangReport=false`. The table is in [perf-tuning.md § Kill switches](perf-tuning.md#kill-switches). An existing config file gets no new keys written; they take their defaults until you add them.
 

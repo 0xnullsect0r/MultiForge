@@ -14,9 +14,11 @@ package net.multiforge.neoforge.network;
 
 import com.google.common.net.InetAddresses;
 import com.mojang.logging.LogUtils;
+import io.netty.buffer.ByteBuf;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelInboundHandlerAdapter;
 import io.netty.channel.ChannelPipeline;
+import io.netty.handler.codec.ByteToMessageDecoder;
 import io.netty.handler.codec.haproxy.HAProxyCommand;
 import io.netty.handler.codec.haproxy.HAProxyMessage;
 import io.netty.handler.codec.haproxy.HAProxyMessageDecoder;
@@ -50,6 +52,10 @@ import org.slf4j.Logger;
  * connection that never saw it has no channel, and {@code
  * ServerConnectionListener.tick} would keep it in its list forever.
  *
+ * <p>The one exception is a loopback peer not listed as a proxy, such as a server
+ * panel on the same machine checking the player count. It may complete a status
+ * ping without a header. Anything else it sends, including a login, closes it.
+ *
  * <p>Everything runs on the connection's Netty thread. The address is replaced
  * before the first Minecraft packet is decoded.
  */
@@ -58,6 +64,7 @@ public final class ProxyProtocol {
     static final String GATE = "multiforge_proxy_gate";
     static final String DECODER = "multiforge_proxy_decoder";
     static final String MESSAGE = "multiforge_proxy_message";
+    static final String LOCAL_STATUS = "multiforge_proxy_local_status";
     private static final String PACKET_HANDLER = "packet_handler";
 
     private static final Logger LOGGER = LogUtils.getLogger();
@@ -133,14 +140,81 @@ public final class ProxyProtocol {
         public void channelActive(ChannelHandlerContext ctx) {
             ctx.fireChannelActive();
             SocketAddress peer = ctx.channel().remoteAddress();
+            ChannelPipeline pipeline = ctx.pipeline();
             if (!(peer instanceof InetSocketAddress socket) || !isTrusted(trusted, socket.getAddress())) {
+                if (peer instanceof InetSocketAddress local && local.getAddress().isLoopbackAddress()) {
+                    pipeline.addAfter(ctx.name(), LOCAL_STATUS, new LocalStatusOnly());
+                    pipeline.remove(this);
+                    return;
+                }
                 reject(ctx, "network.proxy.untrusted", "not in network.trustedProxies");
                 return;
             }
-            ChannelPipeline pipeline = ctx.pipeline();
             pipeline.addAfter(ctx.name(), DECODER, new HAProxyMessageDecoder());
             pipeline.addAfter(DECODER, MESSAGE, new MessageHandler());
             pipeline.remove(this);
+        }
+    }
+
+    /**
+     * Admits a loopback peer only if its first packet is a handshake asking for
+     * status. The packet is left in the buffer and reaches the game unchanged. A
+     * status connection cannot switch to login, so nothing else needs guarding.
+     */
+    private static final class LocalStatusOnly extends ByteToMessageDecoder {
+        private static final int MAX_HANDSHAKE_BYTES = 1100;
+        private static final int MAX_HOST_BYTES = 1020;
+        private static final int LEGACY_PING = 0xFE;
+        private static final int NEXT_STATE_STATUS = 1;
+        private static final long INCOMPLETE = -1;
+        private static final long MALFORMED = -2;
+
+        @Override
+        protected void decode(ChannelHandlerContext ctx, ByteBuf in, List<Object> out) {
+            if (!in.isReadable()) return;
+            if (in.getUnsignedByte(in.readerIndex()) == LEGACY_PING) {
+                refuse(ctx, in);
+                return;
+            }
+            ByteBuf view = in.slice();
+            long length = readVarInt(view);
+            if (length == INCOMPLETE) return;
+            if (length <= 0 || length > MAX_HANDSHAKE_BYTES) {
+                refuse(ctx, in);
+                return;
+            }
+            if (view.readableBytes() < length) return;
+            if (isStatusHandshake(view.readSlice((int) length))) {
+                ctx.pipeline().remove(this);
+            } else {
+                refuse(ctx, in);
+            }
+        }
+
+        private static void refuse(ChannelHandlerContext ctx, ByteBuf in) {
+            in.skipBytes(in.readableBytes());
+            reject(ctx, "network.proxy.local", "a local connection without a PROXY header may only read server status");
+        }
+
+        private static boolean isStatusHandshake(ByteBuf packet) {
+            if (readVarInt(packet) != 0) return false;
+            if (readVarInt(packet) < 0) return false; // protocol version; pingers may send -1
+            long host = readVarInt(packet);
+            if (host < 0 || host > MAX_HOST_BYTES || packet.readableBytes() < host + Short.BYTES) return false;
+            packet.skipBytes((int) host + Short.BYTES);
+            return readVarInt(packet) == NEXT_STATE_STATUS && !packet.isReadable();
+        }
+
+        /** The VarInt's 32 bits as an unsigned value, or {@link #INCOMPLETE} / {@link #MALFORMED}. */
+        private static long readVarInt(ByteBuf buf) {
+            long value = 0;
+            for (int i = 0; i < 5; i++) {
+                if (!buf.isReadable()) return INCOMPLETE;
+                int b = buf.readUnsignedByte();
+                value |= (long) (b & 0x7F) << (7 * i);
+                if ((b & 0x80) == 0) return value & 0xFFFFFFFFL;
+            }
+            return MALFORMED;
         }
     }
 
