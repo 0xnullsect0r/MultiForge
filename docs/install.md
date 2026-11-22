@@ -10,6 +10,15 @@ MultiForge ships three install methods, each suited to a different starting poin
 
 All three land the same runtime + patched NeoForge fork. Post-install steps (EULA, `multiforge-server.toml`, mods, world) are the same regardless of how you installed.
 
+> **The 26.1.2 line (`v2.x-alpha`) is a pre-release.** Everything below describes the stable 1.21.1 line unless it says otherwise. On 26.1.2:
+>
+> - **JDK 25 exactly.** `run.sh`, `run.bat`, the converter and the updater refuse any other Java.
+> - **Name the release.** GitHub's `latest` is always a 1.21.1 release and never moves a server to 26.x; the updater refuses a 26.x server that does not name one:
+>   `curl -fsSL https://github.com/0xnullsect0r/MultiForge/releases/download/v2.0.0-alpha.1/multiforge-update.sh | MF_VERSION=v2.0.0-alpha.1 sh`
+> - **No crossing versions.** The updater and the converter refuse to move a server between Minecraft versions in either direction, because loading a world in a newer version upgrades it for good and a modpack's mods load on one version only.
+> - **No Pelican egg yet.** `pelican-egg.json` is the 1.21.1 egg (Java 21).
+> - **No client debug mod yet.** `multiforge-client` is not ported to 26.1.2.
+
 **Requirements**
 
 - **JDK 21 exactly.** MultiForge (like NeoForge 1.21.1 itself) does *not* run on JDK 22 or newer. Any 1.21.1 modpack that uses SpongeMixin (ATM10, ATM9, AllTheModsX, most kitchen-sink packs) crashes at mod-scan with `Unsupported class file major version 7X` on JDK 22+ because the bundled mixin transformer's class-file reader only understands Java 21 bytecode. Common trap: `java -version` shows JDK 24/25/26 because you installed the "latest" JDK from your distro. Install Temurin 21 (`brew install temurin@21` / `apt install temurin-21-jdk` / `pacman -S jdk21-temurin`) and either set `JAVA_HOME=/path/to/jdk-21` or invoke the launcher with an explicit path (`JAVA_HOME=/usr/lib/jvm/temurin-21-jdk ./run.sh`). From v1.11.1 the `run.sh` / `run.bat` the installer writes refuse to start on anything but Java 21 and name the JDK they found. `java -jar server.jar` runs in whatever JVM starts it, so use `./run.sh` or name the JDK 21 explicitly.

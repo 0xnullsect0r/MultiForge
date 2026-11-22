@@ -8,7 +8,7 @@ Swap your `neoforge-<version>-server.jar` for MultiForge's. Your existing world,
 
 ## Status
 
-Pre-release, based on NeoForge **21.1.251** (Minecraft 1.21.1). A MultiForge server boots real modpacks, ticks its regions in parallel, and passes:
+Pre-release, based on NeoForge **21.1.251** (Minecraft 1.21.1). A separate pre-release line for Minecraft 26.1.2 needs JDK 25 and a pinned release; see [Installing](docs/install.md). A MultiForge server boots real modpacks, ticks its regions in parallel, and passes:
 
 - every NeoForge GameTest plus MultiForge's own region-tick tests;
 - a **vanilla-parity gate**: one fixed-seed world ticked on stock NeoForge and on MultiForge (1 and 4 workers) comes out identical, chunk for chunk;
