@@ -16,7 +16,6 @@ import java.util.ArrayList;
 import java.util.List;
 import net.minecraft.core.BlockPos;
 import net.minecraft.gametest.framework.GameTestHelper;
-import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.damagesource.DamageTypes;
 import net.minecraft.world.entity.EntityType;
 import net.minecraft.world.entity.Mob;
@@ -77,22 +76,16 @@ public class EntityActivationTests {
         return new BlockPos(1, 2, 1);
     }
 
-    /** A real player close enough to wake {@code mob} (a mock player of another test). */
-    private static boolean playerNear(GameTestHelper helper, Mob mob, int range) {
-        for (ServerPlayer p : helper.getLevel().players()) {
-            if (!p.isSpectator() && Math.abs(p.getX() - mob.getX()) <= range && Math.abs(p.getZ() - mob.getZ()) <= range) {
-                return true;
-            }
-        }
-        return false;
-    }
-
     /** Throws until {@code mob} has run {@code ticks} ticks since its counts were reset. */
     private static int[] countsAfter(GameTestHelper helper, Mob mob, int ticks) {
         int[] c = EntityActivation.testCounts(mob);
         helper.assertTrue(c[0] + c[1] >= ticks, "only " + (c[0] + c[1]) + " of " + ticks + " ticks counted so far for "
                 + mob.getType().toShortString() + " at " + mob.blockPosition() + " (tickCount " + mob.tickCount
-                + (mob.isRemoved() ? ", removed" : "") + ")");
+                + (mob.isRemoved() ? ", removed" : "") + ") " + RegionTickBehaviourTests.describe(helper, helper.relativePos(mob.blockPosition()))
+                + " regionAtMob=" + net.multiforge.neoforge.RegionizedTickCoordinator.regionIdAt(helper.getLevel(), mob.chunkPosition().x(), mob.chunkPosition().z())
+                + " players=" + helper.getLevel().players().stream()
+                        .map(p -> p.getScoreboardName() + "@" + p.blockPosition() + (p.isSpectator() ? "(spectator)" : ""))
+                        .toList());
         return c;
     }
 
@@ -113,15 +106,12 @@ public class EntityActivationTests {
             target[0] = squid;
             squid.setPersistenceRequired();
             EntityActivation.testSubject(squid);
+            EntityActivation.testIgnorePlayers(squid); // another test's mock player may stand nearby
             int window = 80;
             helper.startSequence()
                     .thenWaitUntil(() -> helper.assertTrue(squid.tickCount >= 25, "the squid is still young"))
                     .thenExecute(() -> EntityActivation.testResetCounts(squid))
-                    .thenWaitUntil(() -> {
-                        // Another test's mock player nearby wakes the squid: start the window over.
-                        if (playerNear(helper, squid, 24)) EntityActivation.testResetCounts(squid);
-                        countsAfter(helper, squid, window);
-                    })
+                    .thenWaitUntil(() -> countsAfter(helper, squid, window))
                     .thenExecute(() -> {
                         int[] c = EntityActivation.testCounts(squid);
                         if (regionized()) {
@@ -187,10 +177,10 @@ public class EntityActivationTests {
             hurt.setNoAi(true);
             lover.setNoAi(true);
             List<Mob> mobs = List.of(lover, hurt, control);
-            boolean[] playerSeen = { false };
             for (Mob m : mobs) {
                 m.setPersistenceRequired();
                 EntityActivation.testSubject(m);
+                EntityActivation.testIgnorePlayers(m); // another test's mock player may stand nearby
             }
             helper.startSequence()
                     .thenWaitUntil(() -> helper.assertTrue(control.tickCount >= 25, "the mobs are still young"))
@@ -202,8 +192,6 @@ public class EntityActivationTests {
                         for (Mob m : mobs) EntityActivation.testResetCounts(m);
                     })
                     .thenWaitUntil(() -> {
-                        // A near player only makes a mob more active; it just voids the control.
-                        if (playerNear(helper, control, 40)) playerSeen[0] = true;
                         countsAfter(helper, control, 60);
                         countsAfter(helper, lover, 60);
                         countsAfter(helper, hurt, 60);
@@ -214,7 +202,7 @@ public class EntityActivationTests {
                         int[] none = EntityActivation.testCounts(control);
                         helper.assertTrue(love[1] == 0, "the pig in love skipped " + love[1] + " ticks");
                         helper.assertTrue(ouch[1] == 0, "the hurt cow skipped " + ouch[1] + " ticks");
-                        if (regionized() && !playerSeen[0]) {
+                        if (regionized()) {
                             helper.assertTrue(none[1] > 0, "the control pig was never throttled: " + none[0] + "/" + none[1]);
                         } else {
                             helper.assertTrue(none[1] == 0, "mode off throttled the control pig");

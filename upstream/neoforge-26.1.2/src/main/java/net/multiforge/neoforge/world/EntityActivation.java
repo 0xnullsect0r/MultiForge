@@ -100,6 +100,7 @@ public final class EntityActivation {
     private static volatile boolean testing;
     private static final Set<Entity> TEST_SUBJECTS = ConcurrentHashMap.newKeySet();
     private static final Map<Entity, Vec3> TEST_VIEWERS = new ConcurrentHashMap<>();
+    private static final Set<Entity> TEST_IGNORE_PLAYERS = ConcurrentHashMap.newKeySet();
     private static final Map<Entity, AtomicIntegerArray> TEST_COUNTS = new ConcurrentHashMap<>();
 
     private EntityActivation() {}
@@ -225,8 +226,10 @@ public final class EntityActivation {
         double y = mob.getY();
         double z = mob.getZ();
         double[] p = ctx.players;
-        for (int i = 0; i < p.length; i += 3) {
-            if (near(p[i], p[i + 1], p[i + 2], x, y, z, range)) return true;
+        if (!(testing && TEST_IGNORE_PLAYERS.contains(mob))) {
+            for (int i = 0; i < p.length; i += 3) {
+                if (near(p[i], p[i + 1], p[i + 2], x, y, z, range)) return true;
+            }
         }
         if (testViewer != null && near(testViewer.x, testViewer.y, testViewer.z, x, y, z, range)) return true;
         return isImmune(mob, ctx.gameTime);
@@ -329,6 +332,15 @@ public final class EntityActivation {
         TEST_VIEWERS.put(subject, pos);
     }
 
+    /**
+     * Tests: real players do not wake this {@link #testSubject}. GameTests share a level,
+     * and another test's mock player can stand next to a mob that must count as distant.
+     */
+    @VisibleForTesting
+    public static void testIgnorePlayers(Entity subject) {
+        TEST_IGNORE_PLAYERS.add(subject);
+    }
+
     /** Tests: [full ticks, inactive ticks] of a {@link #testSubject} so far. */
     @VisibleForTesting
     public static int[] testCounts(Entity entity) {
@@ -348,6 +360,7 @@ public final class EntityActivation {
         for (Entity e : subjects) {
             TEST_SUBJECTS.remove(e);
             TEST_VIEWERS.remove(e);
+            TEST_IGNORE_PLAYERS.remove(e);
             TEST_COUNTS.remove(e);
         }
         testing = !TEST_SUBJECTS.isEmpty();
