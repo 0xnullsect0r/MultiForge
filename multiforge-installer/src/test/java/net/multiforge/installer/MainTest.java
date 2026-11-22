@@ -141,11 +141,11 @@ class MainTest {
     }
 
     @Test
-    void theConverterPreflightsJdk21() {
+    void theConverterPreflightsJdk25() {
         String sh = Main.installShScript();
         assertThat(sh).contains("JAVA_MAJOR");
-        assertThat(sh).contains("!= \"21\"");
-        assertThat(Main.installBatScript()).contains("if not \"%JAVA_MAJOR%\"==\"21\"");
+        assertThat(sh).contains("!= \"25\"");
+        assertThat(Main.installBatScript()).contains("if not \"%JAVA_MAJOR%\"==\"25\"");
     }
 
     @Test
@@ -173,12 +173,12 @@ class MainTest {
         // Stock NeoForge's run.sh calls bare `java`, so a correct install still died at
         // mod-scan on the wrong JDK, and every update (which rewrites run.sh) removed the
         // check the converter had added. The fork installer's template now carries it.
-        java.nio.file.Path template = java.nio.file.Path.of("../upstream/neoforge-1.21.1/server_files/run.sh");
-        org.junit.jupiter.api.Assumptions.assumeTrue(java.nio.file.Files.exists(template), "fork tree not present");
+        java.nio.file.Path template = java.nio.file.Path.of("../upstream/neoforge-26.1.2/server_files/run.sh");
+        assertThat(template).as("the fork tree is part of this repository").exists();
         String runSh = java.nio.file.Files.readString(template);
         assertThat(runSh)
                 .contains("java\\.specification\\.version")
-                .contains("!= \"21\"")
+                .contains("!= \"25\"")
                 .contains("exit 1");
         // NeoForged's server starter (server.jar) launches the first non-comment line whose
         // first word ends in "java" (run.sh) or is "java" (run.bat). A preflight line such as

@@ -48,7 +48,7 @@ import java.util.zip.ZipOutputStream;
  *
  * <p>The archive also cannot simply ship the finished install tree. A
  * completed server install is ~180&nbsp;MB and contains Mojang's
- * {@code server-1.21.1.jar} together with the patched derivatives
+ * {@code server-26.1.2.jar} together with the patched derivatives
  * ({@code -srg}, {@code -slim}, {@code -extra}, {@code -unpacked})
  * produced from it. Redistributing those is not permitted, which is
  * precisely why NeoForge — and Forge before it — ship an installer that
@@ -57,7 +57,7 @@ import java.util.zip.ZipOutputStream;
  *
  * <p>So the archive embeds the fork installer and a wrapper script that
  * runs it in place against an existing server directory, then leaves
- * behind a launcher with a JDK-21 preflight. That is a genuine in-place
+ * behind a launcher with a JDK-25 preflight. That is a genuine in-place
  * conversion, and it is the only lawful shape for one.
  *
  * <p>Subcommands:
@@ -126,7 +126,7 @@ public final class Main {
         if (forkInstaller == null) {
             err.println("build-zip: --installer FORK_INSTALLER_JAR is required");
             err.println("  Pass the NeoForge-format fork installer built by");
-            err.println("  :neoforge:build under upstream/neoforge-1.21.1 — the archive");
+            err.println("  :neoforge:build under upstream/neoforge-26.1.2 — the archive");
             err.println("  embeds it and runs it against the operator's server directory.");
             return 2;
         }
@@ -206,7 +206,7 @@ public final class Main {
                 #!/usr/bin/env bash
                 # MultiForge in-place converter.
                 #
-                # Run this from inside an existing NeoForge 1.21.1 dedicated server
+                # Run this from inside an existing NeoForge 26.1.2 dedicated server
                 # directory. It converts that directory to MultiForge, leaving your
                 # world, mods, and configs untouched.
                 set -euo pipefail
@@ -215,30 +215,30 @@ public final class Main {
                 say() { printf '\\033[1;36m[multiforge]\\033[0m %s\\n' "$*"; }
                 fail() { printf '\\033[1;31m[multiforge]\\033[0m %s\\n' "$*" >&2; exit 1; }
 
-                # ---- 1. JDK 21 preflight -------------------------------------------
+                # ---- 1. JDK 25 preflight -------------------------------------------
                 if [ -n "${JAVA_HOME:-}" ] && [ -x "$JAVA_HOME/bin/java" ]; then
                     JAVA_BIN="$JAVA_HOME/bin/java"
                 else
                     JAVA_BIN="$(command -v java || true)"
                 fi
-                [ -n "$JAVA_BIN" ] || fail "No java on PATH and JAVA_HOME is unset. Install Temurin 21."
+                [ -n "$JAVA_BIN" ] || fail "No java on PATH and JAVA_HOME is unset. Install Temurin 25."
 
                 JAVA_MAJOR=$("$JAVA_BIN" -XshowSettings:properties -version 2>&1 | sed -n 's/^ *java\\.specification\\.version = //p' | head -n 1)
-                if [ "${JAVA_MAJOR:-0}" != "21" ]; then
+                if [ "${JAVA_MAJOR:-0}" != "25" ]; then
                     cat >&2 <<PREFLIGHT_FAIL
-                MultiForge requires JDK 21. Found: ${JAVA_MAJOR:-unknown} at $JAVA_BIN
+                MultiForge requires JDK 25. Found: ${JAVA_MAJOR:-unknown} at $JAVA_BIN
 
-                NeoForge 1.21.1 targets JDK 21, and any 1.21.1 modpack bundling SpongeMixin
-                (ATM10, ATM9, most kitchen-sink packs) crashes at mod-scan on JDK 22+ with
-                "Unsupported class file major version 7X" — 70 = JDK 26, 69 = 25, 68 = 24.
+                Minecraft 26.1 needs JDK 25. An older JDK cannot load it, and mods or the
+                Mixin library may fail on a newer one with
+                "Unsupported class file major version 7X" — 70 = JDK 26.
 
-                Install Temurin 21, then either:
-                    export JAVA_HOME=/usr/lib/jvm/temurin-21-jdk
-                    JAVA_HOME=/path/to/jdk-21 ./install-multiforge.sh
+                Install Temurin 25, then either:
+                    export JAVA_HOME=/usr/lib/jvm/temurin-25-jdk
+                    JAVA_HOME=/path/to/jdk-25 ./install-multiforge.sh
                 PREFLIGHT_FAIL
                     exit 1
                 fi
-                say "JDK 21 at $JAVA_BIN"
+                say "JDK 25 at $JAVA_BIN"
 
                 # ---- 2. Sanity-check the target directory --------------------------
                 if [ ! -d libraries ] && [ ! -f run.sh ] && [ ! -f server.properties ]; then
@@ -254,8 +254,8 @@ public final class Main {
                     PACK_NEOFORGE="$(sed -n 's|.*libraries/net/neoforged/neoforge/\\([^/]*\\)/unix_args\\.txt.*|\\1|p' run.sh | head -n 1)"
                 fi
                 case "$PACK_NEOFORGE" in
-                    "" | 21.1.*) ;;
-                    *) fail "This server runs NeoForge $PACK_NEOFORGE, but this MultiForge is for Minecraft 1.21.1 (NeoForge 21.1.x). Nothing was changed." ;;
+                    "" | 26.1.2.*) ;;
+                    *) fail "This server runs NeoForge $PACK_NEOFORGE, but this MultiForge is for Minecraft 26.1.2 (NeoForge 26.1.2.x). Nothing was changed." ;;
                 esac
 
                 # ---- 3. Back up the existing launcher ------------------------------
@@ -274,7 +274,7 @@ public final class Main {
                 "$JAVA_BIN" -jar multiforge/multiforge-installer.jar --installServer .
 
                 # ---- 5. Launcher -----------------------------------------------------
-                # The installer's run.sh refuses to start on anything but Java 21
+                # The installer's run.sh refuses to start on anything but Java 25
                 # (JAVA_HOME first, then java on PATH), so it is used as written.
                 chmod +x run.sh 2>/dev/null || true
 
@@ -301,7 +301,7 @@ public final class Main {
         return """
                 @echo off
                 REM MultiForge in-place converter.
-                REM Run from inside an existing NeoForge 1.21.1 server directory.
+                REM Run from inside an existing NeoForge 26.1.2 server directory.
                 setlocal
                 cd /d "%~dp0"
 
@@ -312,19 +312,19 @@ public final class Main {
                 set "JAVA_MAJOR="
                 for /f "tokens=2 delims==" %%v in ('"%JAVA_BIN%" -XshowSettings:properties -version 2^>^&1 ^| findstr java.specification.version') do set "JAVA_MAJOR=%%v"
                 if defined JAVA_MAJOR set "JAVA_MAJOR=%JAVA_MAJOR: =%"
-                if not "%JAVA_MAJOR%"=="21" (
-                    echo [multiforge] MultiForge requires JDK 21. Found: %JAVA_MAJOR% at %JAVA_BIN%
-                    echo [multiforge] NeoForge 1.21.1 targets JDK 21; SpongeMixin packs crash on 22+
+                if not "%JAVA_MAJOR%"=="25" (
+                    echo [multiforge] MultiForge requires JDK 25. Found: %JAVA_MAJOR% at %JAVA_BIN%
+                    echo [multiforge] Minecraft 26.1 needs JDK 25; mods may fail on a newer JDK
                     echo [multiforge] with "Unsupported class file major version 7X" at mod-scan.
-                    echo [multiforge] Install Temurin 21 and set JAVA_HOME, then retry.
+                    echo [multiforge] Install Temurin 25 and set JAVA_HOME, then retry.
                     exit /b 1
                 )
 
                 REM A world loaded in another Minecraft version is upgraded for good.
                 if exist run.bat (
                     findstr /i /c:"libraries/net/neoforged/neoforge/" /c:"libraries\\net\\neoforged\\neoforge\\" run.bat >nul && (
-                        findstr /i /c:"neoforge/21.1." /c:"neoforge\\21.1." run.bat >nul || (
-                            echo [multiforge] This server is not on NeoForge 21.1.x ^(Minecraft 1.21.1^). Nothing was changed.
+                        findstr /i /c:"neoforge/26.1.2." /c:"neoforge\\26.1.2." run.bat >nul || (
+                            echo [multiforge] This server is not on NeoForge 26.1.2.x ^(Minecraft 26.1.2^). Nothing was changed.
                             exit /b 1
                         )
                     )
@@ -343,7 +343,7 @@ public final class Main {
                 if not exist config\\multiforge-server.toml copy config\\multiforge-server.toml.example config\\multiforge-server.toml >nul
                 if not exist eula.txt echo eula=false> eula.txt
 
-                echo [multiforge] done. Start the server with:  run.bat   ^(it refuses to start on anything but Java 21^)
+                echo [multiforge] done. Start the server with:  run.bat   ^(it refuses to start on anything but Java 25^)
                 endlocal
                 """;
     }
@@ -376,7 +376,7 @@ public final class Main {
                 MultiForge — drop-in replacement bundle
                 =======================================
 
-                Converts an existing NeoForge 1.21.1 dedicated server directory to
+                Converts an existing NeoForge 26.1.2 dedicated server directory to
                 MultiForge in place. Your world, mods, and configs are left alone.
 
                 What is in this archive:
@@ -416,10 +416,10 @@ public final class Main {
                 and delete world/multiforge/, config/multiforge-server.toml, and
                 logs/multiforge-*.log. The world is byte-compatible with upstream NeoForge.
 
-                Requires JDK 21 exactly. Both the converter and the launcher it writes
-                refuse to run on anything else — NeoForge 1.21.1 targets 21, and packs
-                bundling SpongeMixin crash at mod-scan on JDK 22+ with "Unsupported
-                class file major version 7X".
+                Requires JDK 25 exactly. Both the converter and the launcher it writes
+                refuse to run on anything else — Minecraft 26.1 needs 25, and mods may
+                fail at mod-scan on a newer JDK with "Unsupported class file major
+                version 7X". A server on another Minecraft version is refused.
 
                 Docs: https://github.com/0xnullsect0r/multiforge/tree/main/docs
                 Support: https://github.com/0xnullsect0r/multiforge/issues

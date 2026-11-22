@@ -1,6 +1,20 @@
 #!/usr/bin/env sh
-# Forge requires a configured set of both JVM and program arguments.
+# NeoForge requires a configured set of both JVM and program arguments.
 # Add custom JVM arguments to the user_jvm_args.txt
 # Add custom program arguments {such as nogui} to this file in the next line before the "$@" or
 #  pass them to this script directly
-exec java @user_jvm_args.txt @libraries/@MAVEN_PATH@/unix_args.txt "$@"
+
+# MultiForge: Java 25 exactly. Minecraft 26.1 needs Java 25, and mods (and the Mixin
+# library most of them use) may not read class files of a newer Java, which fails at
+# mod loading with "Unsupported class file major version".
+# JAVA_HOME, when it points at a JDK, goes first on PATH.
+if [ -n "${JAVA_HOME:-}" ] && [ -x "$JAVA_HOME/bin/java" ]; then PATH="$JAVA_HOME/bin:$PATH"; export PATH; fi
+JAVA_MAJOR=$(command java -XshowSettings:properties -version 2>&1 | sed -n 's/^ *java\.specification\.version = //p' | head -n 1)
+if [ "$JAVA_MAJOR" != "25" ]; then
+    echo "MultiForge requires Java 25. Found: ${JAVA_MAJOR:-no working java} at $(command -v java)" >&2
+    echo "Install a JDK 25 (for example Temurin 25) and point JAVA_HOME at it." >&2
+    exit 1
+fi
+# NeoForged's server starter (server.jar) skips "#" lines and launches the first line
+# whose first word ends in "java": keep the launch line below the only such line.
+java @user_jvm_args.txt @libraries/@MAVEN_PATH@/unix_args.txt "$@"
