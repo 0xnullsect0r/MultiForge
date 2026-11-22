@@ -1,0 +1,41 @@
+--- a/net/minecraft/world/level/storage/SavedDataStorage.java
++++ b/net/minecraft/world/level/storage/SavedDataStorage.java
+@@ -71,7 +71,10 @@ public class SavedDataStorage implements AutoCloseable {
+         }
+     }
+ 
+-    public <T extends SavedData> T computeIfAbsent(SavedDataType<T> type) {
++    // MultiForge (multiforge-patches/05-entity-migration/): region workers reach this cache
++    // (a map item in an inventory reads its saved data while the holder ticks). Its accessors
++    // hold this storage's monitor, and a miss loads or creates the entry atomically.
++    public synchronized <T extends SavedData> T computeIfAbsent(SavedDataType<T> type) {
+         T data = this.get(type);
+         if (data != null) {
+             return data;
+@@ -82,7 +85,7 @@ public class SavedDataStorage implements AutoCloseable {
+         }
+     }
+ 
+-    public <T extends SavedData> @Nullable T get(SavedDataType<T> type) {
++    public synchronized <T extends SavedData> @Nullable T get(SavedDataType<T> type) {
+         Optional<SavedData> data = this.cache.get(type);
+         if (data == null) {
+             data = Optional.ofNullable(this.readSavedData(type));
+@@ -110,7 +113,7 @@ public class SavedDataStorage implements AutoCloseable {
+         return null;
+     }
+ 
+-    public <T extends SavedData> void set(SavedDataType<T> type, T data) {
++    public synchronized <T extends SavedData> void set(SavedDataType<T> type, T data) {
+         this.cache.put(type, Optional.of(data));
+         data.setDirty();
+     }
+@@ -207,7 +210,7 @@ public class SavedDataStorage implements AutoCloseable {
+         }
+     }
+ 
+-    private Map<SavedDataType<?>, CompoundTag> collectDirtyTagsToSave() {
++    private synchronized Map<SavedDataType<?>, CompoundTag> collectDirtyTagsToSave() {
+         Map<SavedDataType<?>, CompoundTag> tagsToSave = new Object2ObjectArrayMap<>();
+         RegistryOps<Tag> ops = this.registries.createSerializationContext(NbtOps.INSTANCE);
+         this.cache.forEach((type, optional) -> optional.filter(SavedData::isDirty).ifPresent(data -> {

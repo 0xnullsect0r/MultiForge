@@ -8,10 +8,13 @@
 >
 > | Group | 26.1.2 state |
 > |---|---|
-> | `01-ownership`, `02-region-tick`, `09-events` | Ported, except `PoiManager` and `SectionStorage` from 02, and entity activation and the push cap, which need entities on workers |
-> | `04-chunk-system` | Worker chunk reads and ticket deferral only |
-> | `05-entity-migration` | Stage-only substitute: entity storage is **frozen while workers run**, and every add, move, removal and visibility change replays at the barrier. Entities and natural spawning still tick on the server thread. Step 4 replaces this with the spec's leaf locks |
-> | `06-networking`, `08-globals` | Not ported |
+> | `01-ownership`, `02-region-tick`, `04-chunk-system`, `05-entity-migration`, `08-globals`, `09-events` | Ported. GameTests, the parity gate and a two-region soak pass; see the port report before relying on them |
+> | `06-networking` | Not ported (PROXY protocol, IPv6 ban normalisation) |
+>
+> Changes beyond the 1.21.1 spec, for state new in 26.1: locator-bar waypoints and
+> debug synchronizers replay at the barrier; the time-based attribute sampler,
+> simulation chunk levels and saved-data cache take leaf locks; `Level.randValue`
+> is per thread off the level's thread.
 >
 > The 1.21.1 tree and its fork glue are at
 > `git show v1.12.0:upstream/neoforge-1.21.1/<path>`. The sections below still
