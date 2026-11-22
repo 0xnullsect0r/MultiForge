@@ -428,6 +428,8 @@ public final class HeadlessServerRunner implements AutoCloseable {
         props.put("server-ip", "127.0.0.1");
         props.put("server-port", String.valueOf(gamePort));
         props.put("sync-chunk-writes", "true");
+        // No player is online in a bench run, and Vanilla would stop ticking after 60 s.
+        props.put("pause-when-empty-seconds", "0");
         props.put("enable-rcon", "true");
         props.put("rcon.password", RCON_PASSWORD);
         props.put("rcon.port", String.valueOf(rconPort));

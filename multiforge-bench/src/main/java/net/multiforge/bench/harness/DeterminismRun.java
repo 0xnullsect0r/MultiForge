@@ -57,15 +57,15 @@ public final class DeterminismRun {
             "-Dmultiforge.entities.activation=false -Dmultiforge.entities.maxEntityCollisions=0";
 
     private static final List<String> GAMERULES = List.of(
-            "randomTickSpeed 0",
-            "doMobSpawning false",
-            "doPatrolSpawning false",
-            "doTraderSpawning false",
-            "doWardenSpawning false",
-            "doInsomnia false",
-            "doWeatherCycle false",
-            "doFireTick false",
-            "doDaylightCycle false");
+            "random_tick_speed 0",
+            "spawn_mobs false",
+            "spawn_patrols false",
+            "spawn_wandering_traders false",
+            "spawn_wardens false",
+            "spawn_phantoms false",
+            "advance_weather false",
+            "fire_spread_radius_around_player 0",
+            "advance_time false");
 
     public static void main(String[] args) throws Exception {
         String seed = System.getProperty("bench.seed", "1234567890");

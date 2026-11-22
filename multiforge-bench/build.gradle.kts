@@ -104,9 +104,9 @@ fun JavaExec.benchCommon(profile: String) {
     systemProperty("bench.gitSha", gitDescribe.get())
     systemProperty(
             "bench.forkLibs",
-            rootProject.projectDir.resolve("upstream/neoforge-1.21.1/projects/neoforge/build/libs").absolutePath)
+            rootProject.projectDir.resolve("upstream/neoforge-26.1.2/projects/neoforge/build/libs").absolutePath)
     systemProperty(
-            "bench.neoforgeVersion", rootProject.findProperty("neoForgeVersion") as String? ?: "21.1.251")
+            "bench.neoforgeVersion", rootProject.findProperty("neoForgeVersion") as String? ?: "26.1.2.129")
     systemProperty(
             "bench.bootLog",
             (project.findProperty("bootLog") as String?)

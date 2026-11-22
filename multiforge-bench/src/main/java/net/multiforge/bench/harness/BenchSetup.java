@@ -69,7 +69,7 @@ public final class BenchSetup {
         String explicit = System.getProperty("bench.installer", "").trim();
         if (!explicit.isEmpty()) return Path.of(explicit);
         Path libs =
-                Path.of(System.getProperty("bench.forkLibs", "upstream/neoforge-1.21.1/projects/neoforge/build/libs"));
+                Path.of(System.getProperty("bench.forkLibs", "upstream/neoforge-26.1.2/projects/neoforge/build/libs"));
         if (Files.isDirectory(libs)) {
             try (Stream<Path> s = Files.list(libs)) {
                 var newest = s.filter(p -> p.getFileName().toString().endsWith("-installer.jar"))
@@ -78,11 +78,11 @@ public final class BenchSetup {
             }
         }
         throw new IOException("no MultiForge installer in " + libs + ": build it with `./gradlew "
-                + ":neoforge:installerJar` in upstream/neoforge-1.21.1, or pass -Pinstaller=<jar>");
+                + ":neoforge:installerJar` in upstream/neoforge-26.1.2, or pass -Pinstaller=<jar>");
     }
 
     private static Path stockInstaller(Path root) throws IOException, InterruptedException {
-        String version = System.getProperty("bench.neoforgeVersion", "21.1.251");
+        String version = System.getProperty("bench.neoforgeVersion", "26.1.2.129");
         String source = System.getProperty(
                 "bench.stockInstaller",
                 "https://maven.neoforged.net/releases/net/neoforged/neoforge/" + version + "/neoforge-" + version
