@@ -12,7 +12,44 @@
      public int getNoActionTime() {
          return this.noActionTime;
      }
-@@ -2848,7 +2853,13 @@ public abstract class LivingEntity extends Entity implements Attackable, net.neo
+@@ -909,6 +914,7 @@ public abstract class LivingEntity extends Entity implements Attackable, net.neo
+     }
+ 
+     public boolean removeAllEffects() {
++        if (net.multiforge.neoforge.world.CrossRegionEffects.deferRemoveAll(this)) return !this.activeEffects.isEmpty(); // MultiForge: entity in another region
+         if (this.level().isClientSide) {
+             return false;
+         } else {
+@@ -948,6 +954,7 @@ public abstract class LivingEntity extends Entity implements Attackable, net.neo
+     }
+ 
+     public boolean addEffect(MobEffectInstance p_147208_, @Nullable Entity p_147209_) {
++        if (net.multiforge.neoforge.world.CrossRegionEffects.deferAdd(this, p_147208_, p_147209_)) return true; // MultiForge: entity in another region
+         if (!net.neoforged.neoforge.common.CommonHooks.canMobEffectBeApplied(this, p_147208_, p_147209_)) {
+             return false;
+         } else {
+@@ -990,6 +997,7 @@ public abstract class LivingEntity extends Entity implements Attackable, net.neo
+     }
+ 
+     public void forceAddEffect(MobEffectInstance p_147216_, @Nullable Entity p_147217_) {
++        if (net.multiforge.neoforge.world.CrossRegionEffects.deferForceAdd(this, p_147216_, p_147217_)) return; // MultiForge: entity in another region
+         if (net.neoforged.neoforge.common.CommonHooks.canMobEffectBeApplied(this, p_147216_, p_147217_)) {
+             MobEffectInstance mobeffectinstance = this.activeEffects.put(p_147216_.getEffect(), p_147216_);
+             if (mobeffectinstance == null) {
+@@ -1007,10 +1015,12 @@ public abstract class LivingEntity extends Entity implements Attackable, net.neo
+ 
+     @Nullable
+     public MobEffectInstance removeEffectNoUpdate(Holder<MobEffect> p_316233_) {
++        if (net.multiforge.neoforge.world.CrossRegionEffects.deferRemoveNoUpdate(this, p_316233_)) return this.activeEffects.get(p_316233_); // MultiForge: entity in another region
+         return this.activeEffects.remove(p_316233_);
+     }
+ 
+     public boolean removeEffect(Holder<MobEffect> p_316570_) {
++        if (net.multiforge.neoforge.world.CrossRegionEffects.deferRemove(this, p_316570_)) return this.activeEffects.containsKey(p_316570_); // MultiForge: entity in another region
+         if (net.neoforged.neoforge.event.EventHooks.onEffectRemoved(this, p_316570_, null)) return false;
+         MobEffectInstance mobeffectinstance = this.removeEffectNoUpdate(p_316570_);
+         if (mobeffectinstance != null) {
+@@ -2848,7 +2858,13 @@ public abstract class LivingEntity extends Entity implements Attackable, net.neo
                      }
                  }
  
@@ -26,3 +63,11 @@
                      this.doPush(entity1);
                  }
              }
+@@ -3515,6 +3531,7 @@ public abstract class LivingEntity extends Entity implements Attackable, net.neo
+      * @param cure the EffectCure being used
+      */
+     public boolean removeEffectsCuredBy(net.neoforged.neoforge.common.EffectCure cure) {
++        if (net.multiforge.neoforge.world.CrossRegionEffects.deferRemoveCuredBy(this, cure)) return !this.activeEffects.isEmpty(); // MultiForge: entity in another region
+         if (this.level().isClientSide)
+             return false;
+         boolean ret = false;
