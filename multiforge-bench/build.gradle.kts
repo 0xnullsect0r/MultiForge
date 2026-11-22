@@ -29,10 +29,9 @@ dependencies {
     // SwarmBench protocol bots. MCProtocolLib is MIT; its tree is Apache-2.0
     // (netty, cloudburst nbt/math, nukkitx fastutil), MIT (adventure, gson is
     // Apache-2.0, checker-qual) and LGPL-3.0 (MinecraftAuth, unused offline).
-    // Bench-only: none of it ships in the server or the installer. There is no
-    // 1.21.1 release; 1.21 and 1.21.1 share protocol 767, so pin the last
-    // 1.21 snapshot build by its immutable timestamped version.
-    implementation("org.geysermc.mcprotocollib:protocol:1.21-20241010.155958-24")
+    // Bench-only: none of it ships in the server or the installer. 26.1-1 speaks
+    // protocol 775, which is what a 26.1.2 server reports.
+    implementation("org.geysermc.mcprotocollib:protocol:26.1-1")
     runtimeOnly("org.slf4j:slf4j-simple:2.0.9")
 
     testImplementation("org.junit.jupiter:junit-jupiter:5.10.3")

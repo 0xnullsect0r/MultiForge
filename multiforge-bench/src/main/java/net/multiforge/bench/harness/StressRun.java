@@ -115,7 +115,7 @@ public final class StressRun {
                 return false;
             }
             RconClient rcon = runner.rcon();
-            rcon.command("gamerule doMobSpawning false");
+            rcon.command("gamerule minecraft:spawn_mobs false");
             for (int[] b : BASINS) forceload(rcon, b[0] + 8, b[1] + 8);
             forceload(rcon, LOADER[0], LOADER[1]);
             for (int[] b : BASINS) {

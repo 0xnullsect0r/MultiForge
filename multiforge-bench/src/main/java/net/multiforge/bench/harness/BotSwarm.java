@@ -25,11 +25,12 @@ import java.util.concurrent.atomic.AtomicLong;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.serializer.gson.GsonComponentSerializer;
 import org.cloudburstmc.math.vector.Vector3i;
+import org.geysermc.mcprotocollib.network.ClientSession;
 import org.geysermc.mcprotocollib.network.Session;
 import org.geysermc.mcprotocollib.network.event.session.DisconnectedEvent;
 import org.geysermc.mcprotocollib.network.event.session.SessionAdapter;
+import org.geysermc.mcprotocollib.network.factory.ClientNetworkSessionFactory;
 import org.geysermc.mcprotocollib.network.packet.Packet;
-import org.geysermc.mcprotocollib.network.tcp.TcpClientSession;
 import org.geysermc.mcprotocollib.protocol.MinecraftProtocol;
 import org.geysermc.mcprotocollib.protocol.data.game.entity.object.Direction;
 import org.geysermc.mcprotocollib.protocol.data.game.entity.player.Hand;
@@ -37,6 +38,7 @@ import org.geysermc.mcprotocollib.protocol.data.game.entity.player.HandPreferenc
 import org.geysermc.mcprotocollib.protocol.data.game.entity.player.PlayerAction;
 import org.geysermc.mcprotocollib.protocol.data.game.entity.player.PositionElement;
 import org.geysermc.mcprotocollib.protocol.data.game.setting.ChatVisibility;
+import org.geysermc.mcprotocollib.protocol.data.game.setting.ParticleStatus;
 import org.geysermc.mcprotocollib.protocol.data.game.setting.SkinPart;
 import org.geysermc.mcprotocollib.protocol.packet.common.clientbound.ClientboundPingPacket;
 import org.geysermc.mcprotocollib.protocol.packet.common.serverbound.ServerboundClientInformationPacket;
@@ -197,7 +199,7 @@ public final class BotSwarm implements AutoCloseable {
     private final class Bot extends SessionAdapter {
         final String name;
         final Random rnd;
-        final TcpClientSession session;
+        final ClientSession session;
         volatile boolean inWorld;
         volatile boolean blockWork;
         // Position is written by the netty thread (teleports) and the ticker; guarded by `this`.
@@ -211,7 +213,10 @@ public final class BotSwarm implements AutoCloseable {
         Bot(String name, Random rnd) {
             this.name = name;
             this.rnd = rnd;
-            this.session = new TcpClientSession(host, port, new MinecraftProtocol(name));
+            this.session = ClientNetworkSessionFactory.factory()
+                    .setAddress(host, port)
+                    .setProtocol(new MinecraftProtocol(name))
+                    .create();
             this.session.addListener(this);
             this.heading = rnd.nextDouble() * Math.PI * 2;
             this.ticks = rnd.nextInt(ACTION_PERIOD_TICKS);
@@ -236,15 +241,22 @@ public final class BotSwarm implements AutoCloseable {
                         List.of(SkinPart.values()),
                         HandPreference.RIGHT_HAND,
                         false,
-                        true));
+                        true,
+                        ParticleStatus.ALL));
             } else if (packet instanceof ClientboundPlayerPositionPacket pos) {
                 synchronized (this) {
-                    List<PositionElement> rel = pos.getRelative();
-                    x = rel.contains(PositionElement.X) ? x + pos.getX() : pos.getX();
-                    y = rel.contains(PositionElement.Y) ? y + pos.getY() : pos.getY();
-                    z = rel.contains(PositionElement.Z) ? z + pos.getZ() : pos.getZ();
-                    s.send(new ServerboundAcceptTeleportationPacket(pos.getTeleportId()));
-                    s.send(new ServerboundMovePlayerPosRotPacket(false, x, y, z, pos.getYaw(), pos.getPitch()));
+                    List<PositionElement> rel = pos.getRelatives();
+                    x = rel.contains(PositionElement.X)
+                            ? x + pos.getPosition().getX()
+                            : pos.getPosition().getX();
+                    y = rel.contains(PositionElement.Y)
+                            ? y + pos.getPosition().getY()
+                            : pos.getPosition().getY();
+                    z = rel.contains(PositionElement.Z)
+                            ? z + pos.getPosition().getZ()
+                            : pos.getPosition().getZ();
+                    s.send(new ServerboundAcceptTeleportationPacket(pos.getId()));
+                    s.send(new ServerboundMovePlayerPosRotPacket(false, false, x, y, z, pos.getYRot(), pos.getXRot()));
                     if (inWorld) {
                         // A correction: the server refused a step into terrain. Turn,
                         // and hop up so the bot climbs slopes instead of pushing
@@ -285,13 +297,13 @@ public final class BotSwarm implements AutoCloseable {
             }
             // Like a vanilla client: a position packet when the player moved, and
             // otherwise once a second.
-            if (walking || ticks % 20 == 0) session.send(new ServerboundMovePlayerPosPacket(false, x, y, z));
+            if (walking || ticks % 20 == 0) session.send(new ServerboundMovePlayerPosPacket(false, false, x, y, z));
 
             if (blockWork && ticks % ACTION_PERIOD_TICKS == 0) {
                 if (!placedLast) {
                     Vector3i target = Vector3i.from((int) Math.floor(x), (int) Math.floor(y) - 2, (int) Math.floor(z));
                     session.send(new ServerboundUseItemOnPacket(
-                            target, Direction.UP, Hand.MAIN_HAND, 0.5f, 1.0f, 0.5f, false, ++sequence));
+                            target, Direction.UP, Hand.MAIN_HAND, 0.5f, 1.0f, 0.5f, false, false, ++sequence));
                     session.send(new ServerboundSwingPacket(Hand.MAIN_HAND));
                     lastTarget = target;
                     blocksPlaced.incrementAndGet();

@@ -412,8 +412,8 @@ public final class SwarmBench {
         }
         int offset = Integer.getInteger("bench.waterOffset", 24);
         int x0 = bx + offset, x1 = x0 + 49, z0 = bz - 25, z1 = z0 + 49, y0 = 150, y1 = 157;
-        command(runner, "gamerule maxEntityCramming 0");
-        command(runner, "gamerule doMobSpawning false");
+        command(runner, "gamerule minecraft:max_entity_cramming 0");
+        command(runner, "gamerule minecraft:spawn_mobs false");
         command(runner, String.format(Locale.ROOT, "forceload add %d %d %d %d", x0, z0, x1, z1));
         long deadline = System.currentTimeMillis() + 60_000;
         String probe = String.format(Locale.ROOT, "execute if block %d -64 %d minecraft:bedrock", x1, z1);
