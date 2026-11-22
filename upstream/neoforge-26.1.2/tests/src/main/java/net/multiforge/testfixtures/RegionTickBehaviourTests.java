@@ -290,6 +290,7 @@ public class RegionTickBehaviourTests {
             BlockPos far = here.offset(-2000, 0, 0);
             BlockPos farSky = new BlockPos(far.getX(), (level.getMaxY() + 1) - 1, far.getZ());
             BlockPos farOutside = new BlockPos(far.getX(), (level.getMaxY() + 1) + 10, far.getZ());
+            TestFailureDiagnostics.onFailure(helper, "reroutedCallsReturnVanillaResults", far);
             int farChunkX = far.getX() >> 4;
             int farChunkZ = far.getZ() >> 4;
             Runnable releaseFar = TestForcedChunks.force(level, new net.minecraft.world.level.ChunkPos(farChunkX, farChunkZ));

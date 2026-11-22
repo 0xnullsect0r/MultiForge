@@ -60,19 +60,23 @@ public class BlockPropertyTests {
         BlockPos lightPos = new BlockPos(1, 1, 1);
         BlockPos testPos = new BlockPos(1, 2, 1);
 
-        test.onGameTest(helper -> helper.startSequence()
-                .thenExecute(() -> helper.setBlock(lightPos, lightBlock.get()))
-                .thenExecute(() -> helper.useBlock(lightPos, helper.makeMockPlayer(GameType.CREATIVE), Items.ACACIA_BUTTON.getDefaultInstance()))
-                .thenMap(() -> helper.getLevel().getChunkAt(helper.absolutePos(testPos)))
-                .thenMap(chunk -> ((ThreadedLevelLightEngine) helper.getLevel().getLightEngine()).waitForPendingTasks(chunk.getPos().x(), chunk.getPos().z()))
-                .thenWaitUntil(future -> helper.assertTrue(future.isDone(), "Light engine did not update to lit"))
-                .thenExecute(() -> helper.assertTrue(helper.getLevel().getLightEngine().getRawBrightness(helper.absolutePos(testPos), 15) == 14, "Lit light level was not as expected"))
-                .thenExecute(() -> helper.destroyBlock(lightPos))
-                .thenMap(() -> helper.getLevel().getChunkAt(helper.absolutePos(new BlockPos(1, 2, 1))))
-                .thenMap(chunk -> ((ThreadedLevelLightEngine) helper.getLevel().getLightEngine()).waitForPendingTasks(chunk.getPos().x(), chunk.getPos().z()))
-                .thenWaitUntil(future -> helper.assertTrue(future.isDone(), "Light engine did not update to unlit"))
-                .thenExecute(() -> helper.assertTrue(helper.getLevel().getLightEngine().getRawBrightness(helper.absolutePos(testPos), 15) == 0, "Unlit light level was not as expected"))
-                .thenSucceed());
+        test.onGameTest(helper -> {
+            // MultiForge fork note: logs chunk, light and thread state if this test fails.
+            net.multiforge.testfixtures.TestFailureDiagnostics.onFailure(helper, "levelSensitiveLight", helper.absolutePos(testPos));
+            helper.startSequence()
+                    .thenExecute(() -> helper.setBlock(lightPos, lightBlock.get()))
+                    .thenExecute(() -> helper.useBlock(lightPos, helper.makeMockPlayer(GameType.CREATIVE), Items.ACACIA_BUTTON.getDefaultInstance()))
+                    .thenMap(() -> helper.getLevel().getChunkAt(helper.absolutePos(testPos)))
+                    .thenMap(chunk -> ((ThreadedLevelLightEngine) helper.getLevel().getLightEngine()).waitForPendingTasks(chunk.getPos().x(), chunk.getPos().z()))
+                    .thenWaitUntil(future -> helper.assertTrue(future.isDone(), "Light engine did not update to lit"))
+                    .thenExecute(() -> helper.assertTrue(helper.getLevel().getLightEngine().getRawBrightness(helper.absolutePos(testPos), 15) == 14, "Lit light level was not as expected"))
+                    .thenExecute(() -> helper.destroyBlock(lightPos))
+                    .thenMap(() -> helper.getLevel().getChunkAt(helper.absolutePos(new BlockPos(1, 2, 1))))
+                    .thenMap(chunk -> ((ThreadedLevelLightEngine) helper.getLevel().getLightEngine()).waitForPendingTasks(chunk.getPos().x(), chunk.getPos().z()))
+                    .thenWaitUntil(future -> helper.assertTrue(future.isDone(), "Light engine did not update to unlit"))
+                    .thenExecute(() -> helper.assertTrue(helper.getLevel().getLightEngine().getRawBrightness(helper.absolutePos(testPos), 15) == 0, "Unlit light level was not as expected"))
+                    .thenSucceed();
+        });
     }
 
     @GameTest(template = TestsMod.TEMPLATE_9x9)
