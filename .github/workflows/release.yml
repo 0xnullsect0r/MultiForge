@@ -18,27 +18,47 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Tag matches the version and is on main
+      - name: Resolve the release line
+        run: .github/scripts/mf-line.sh --tag "$GITHUB_REF_NAME" >> "$GITHUB_ENV"
+
+      - name: Does this tree carry the MultiForge patches?
+        # false only while a new line is being bootstrapped from stock NeoForge.
+        run: echo "MF_PATCHES=$(sed -n 's/^multiforge_patches_enabled=//p' "$MF_TREE/gradle.properties" | grep . || echo true)" >> "$GITHUB_ENV"
+
+      - name: Tag matches the version and is on its line's branch
         # A tag pushed without the version bump shipped jars named for the tag
-        # that reported the previous version. Releases come from main (CLAUDE.md:
-        # develop is merged into main, then tagged).
+        # that reported the previous version. Each line releases only from its
+        # own branches (.github/scripts/mf-line.sh): 1.x from main or
+        # release/1.21.x, 2.x alphas from port/26.1.2.
         run: |
           set -euo pipefail
+          if [ "$MF_PATCHES" != true ]; then
+              echo "::error::$MF_TREE has multiforge_patches_enabled=$MF_PATCHES: it is stock NeoForge, not MultiForge"
+              exit 1
+          fi
           TAG="${GITHUB_REF_NAME#v}"
           OUTER=$(sed -n 's/^version=//p' gradle.properties)
-          FORK=$(sed -n 's/^multiforge_runtime_version=//p' upstream/neoforge-1.21.1/gradle.properties)
+          FORK=$(sed -n 's/^multiforge_runtime_version=//p' "$MF_TREE/gradle.properties")
           echo "tag=$TAG gradle.properties=$OUTER fork=$FORK"
           [ "$TAG" = "$OUTER" ] || { echo "::error::tag $GITHUB_REF_NAME but gradle.properties version=$OUTER"; exit 1; }
           [ "$TAG" = "$FORK" ] || { echo "::error::tag $GITHUB_REF_NAME but the fork's multiforge_runtime_version=$FORK"; exit 1; }
-          git fetch --no-tags origin main
-          git merge-base --is-ancestor "$GITHUB_SHA" origin/main \
-              || { echo "::error::$GITHUB_REF_NAME ($GITHUB_SHA) is not on main"; exit 1; }
+          ON_BRANCH=
+          for BRANCH in $MF_RELEASE_BRANCHES; do
+              git fetch --no-tags origin "+refs/heads/$BRANCH:refs/remotes/origin/$BRANCH" || continue
+              if git merge-base --is-ancestor "$GITHUB_SHA" "refs/remotes/origin/$BRANCH"; then
+                  ON_BRANCH=$BRANCH
+                  break
+              fi
+          done
+          [ -n "$ON_BRANCH" ] \
+              || { echo "::error::$GITHUB_REF_NAME ($GITHUB_SHA) is not on any of: $MF_RELEASE_BRANCHES"; exit 1; }
+          echo "release line $MF_LINE from $ON_BRANCH"
 
-      - name: Set up JDK 21
+      - name: Set up JDK ${{ env.MF_JAVA }}
         uses: actions/setup-java@v6
         with:
           distribution: temurin
-          java-version: "21"
+          java-version: ${{ env.MF_JAVA }}
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v3
@@ -120,7 +140,10 @@ jobs:
           # Pelican Panel / Pterodactyl egg (v1.3.2 E.3). Kept at repo
           # root but attached to every release so panel users can grab
           # it from the release download page.
-          cp pelican-egg.json "$RELEASE_DIR/pelican-egg.json"
+          # Not on a prerelease line: this egg follows `latest`, which is 1.21.1.
+          if [ "$MF_LINE" = 1.21 ]; then
+              cp pelican-egg.json "$RELEASE_DIR/pelican-egg.json"
+          fi
 
           ls -l "$RELEASE_DIR/"
 
@@ -144,11 +167,14 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - name: Set up JDK 21
+      - name: Resolve the release line
+        run: .github/scripts/mf-line.sh --tag "$GITHUB_REF_NAME" >> "$GITHUB_ENV"
+
+      - name: Set up JDK ${{ env.MF_JAVA }}
         uses: actions/setup-java@v6
         with:
           distribution: temurin
-          java-version: "21"
+          java-version: ${{ env.MF_JAVA }}
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v3
@@ -164,7 +190,7 @@ jobs:
             --no-daemon --stacktrace
 
       - name: Setup + build fork installer
-        working-directory: upstream/neoforge-1.21.1
+        working-directory: ${{ env.MF_TREE }}
         # applyMultiforgePatches (run by compileJava) is idempotent: it resets
         # every patched file to its pristine copy before applying, so it is
         # safe whether or not setup just regenerated the sources.
@@ -174,14 +200,14 @@ jobs:
               :neoforge:installerJar :neoforge:checkMixinTargets
 
       - name: Boot a server installed from the installer
-        working-directory: upstream/neoforge-1.21.1
+        working-directory: ${{ env.MF_TREE }}
         # NeoForge's own production self-test: install from the built installer
         # (downloading Minecraft from Mojang), start the server and wait for it to
         # tick. CI's GameTests run from the dev classpath; this is the jar we ship.
         run: ./gradlew --no-configuration-cache --no-daemon --stacktrace :neoforge:testProductionServer
 
       - name: Assert the fork reports a real NeoForge version
-        working-directory: upstream/neoforge-1.21.1
+        working-directory: ${{ env.MF_TREE }}
         # v1.5.0 shipped reporting `1.21.1-v1.5.0.0-beta`, which is not a
         # NeoForge version: Maven compares its leading `1` against the `21`
         # in a range like [21.1.152,) and puts it below every floor, so a
@@ -192,7 +218,7 @@ jobs:
           VER=$(./gradlew -q --no-daemon :neoforge:properties \
               | awk '/^NeoForge version /{print $3; exit}')
           echo "fork reports: $VER"
-          if ! printf '%s' "$VER" | grep -qE '^21\.[0-9]+\.[0-9]+-multiforge-'; then
+          if ! printf '%s' "$VER" | grep -qE "$MF_FORK_VERSION_REGEX"; then
               echo "::error::Fork version '$VER' is not <neoforge base>-multiforge-<ver>." \
                    "Mods resolve their neoforge dependency range against this string;" \
                    "anything else refuses every mod. See docs/compatibility.md."
@@ -206,10 +232,10 @@ jobs:
           mkdir -p release
           # Fork installer output path (NeoDev's installerJar task):
           # projects/neoforge/build/libs/neoforge-<version>-installer.jar
-          FORK_JAR=$(find upstream/neoforge-1.21.1/projects/neoforge/build/libs \
+          FORK_JAR=$(find "$MF_TREE/projects/neoforge/build/libs" \
               -maxdepth 1 -name 'neoforge-*-installer.jar' 2>/dev/null | head -1)
           if [ -z "$FORK_JAR" ]; then
-              echo "::error::No fork installer jar found under upstream/neoforge-1.21.1/projects/neoforge/build/libs"
+              echo "::error::No fork installer jar found under $MF_TREE/projects/neoforge/build/libs"
               exit 1
           fi
           # The installer must carry the universal jar, and the universal jar the
@@ -274,8 +300,8 @@ jobs:
         with:
           name: fork-installer-reports-${{ github.sha }}
           path: |
-            upstream/neoforge-1.21.1/**/build/reports/
-            upstream/neoforge-1.21.1/**/build/patch-rejects/
+            ${{ env.MF_TREE }}/**/build/reports/
+            ${{ env.MF_TREE }}/**/build/patch-rejects/
           retention-days: 7
 
   gh-release:
@@ -285,6 +311,9 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v7
+
+      - name: Resolve the release line
+        run: .github/scripts/mf-line.sh --tag "$GITHUB_REF_NAME" >> "$GITHUB_ENV"
 
       - name: Download release bundle
         uses: actions/download-artifact@v8
@@ -307,6 +336,7 @@ jobs:
           cat SHA256SUMS
 
       - name: Create Release
+        if: env.MF_LINE == '1.21'
         uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ github.ref_name }}
@@ -360,7 +390,45 @@ jobs:
 
             See [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/${{ github.ref_name }}/CHANGELOG.md) for what changed.
 
+      - name: Create prerelease (never `latest`)
+        if: env.MF_LINE != '1.21'
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          files: release/*
+          draft: true
+          prerelease: true
+          make_latest: "false"
+          generate_release_notes: true
+          # Every URL is pinned to this tag: `releases/latest` is the 1.21.1 line.
+          body: |
+            MultiForge ${{ github.ref_name }} for Minecraft 26.1.2 — GPL-3.0-only.
+
+            **Alpha. Do not use it on a world you cannot lose.** Loading a 1.21.1 world in
+            26.1.2 upgrades it permanently. This prerelease is never offered as an update to
+            1.21.1 servers.
+
+            **Install into a new, empty server directory** (Java 25):
+
+            ```
+            curl -fsSL https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/multiforge-update.sh | MF_VERSION=${{ github.ref_name }} JAVA_HOME=/path/to/jdk-25 sh
+            ```
+
+            Keep `MF_VERSION` when updating: without it the updater follows `latest`, which is
+            the 1.21.1 line. Assets are checked against `SHA256SUMS`.
+
+            See [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/${{ github.ref_name }}/CHANGELOG.md) for what changed.
+
       - name: Publish the release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release edit "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" --draft=false
+        # Un-drafting must not promote a prerelease line to `latest`.
+        run: |
+          set -euo pipefail
+          if [ "$MF_MAKE_LATEST" = false ]; then
+              gh release edit "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" \
+                  --draft=false --prerelease --latest=false
+          else
+              gh release edit "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" --draft=false
+          fi

@@ -31,11 +31,18 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - name: Set up JDK 21
+      - name: Resolve the release line
+        run: .github/scripts/mf-line.sh --tree >> "$GITHUB_ENV"
+
+      - name: Does this tree carry the MultiForge patches?
+        # false only while a new line is being bootstrapped from stock NeoForge.
+        run: echo "MF_PATCHES=$(sed -n 's/^multiforge_patches_enabled=//p' "$MF_TREE/gradle.properties" | grep . || echo true)" >> "$GITHUB_ENV"
+
+      - name: Set up JDK ${{ env.MF_JAVA }}
         uses: actions/setup-java@v6
         with:
           distribution: temurin
-          java-version: "21"
+          java-version: ${{ env.MF_JAVA }}
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v3
@@ -48,11 +55,20 @@ jobs:
       - name: Set heap
         run: echo "GRADLE_OPTS=-Xmx6G" >> "$GITHUB_ENV"
 
+      - name: Refuse a tree without the MultiForge patches
+        # These checks compare MultiForge against stock; on an unpatched
+        # bootstrap tree they would compare stock against itself and pass.
+        run: |
+          if [ "$MF_PATCHES" != true ]; then
+              echo "::error::$MF_TREE has multiforge_patches_enabled=$MF_PATCHES; the live checks cannot run yet"
+              exit 1
+          fi
+
       - name: Publish multiforge-runtime + api to mavenLocal
         run: ./gradlew :multiforge-api:publishToMavenLocal :multiforge-runtime:publishToMavenLocal --no-daemon
 
       - name: Build the MultiForge installer
-        working-directory: upstream/neoforge-1.21.1
+        working-directory: ${{ env.MF_TREE }}
         run: |
           ./gradlew --no-configuration-cache --stacktrace setup
           ./gradlew --no-configuration-cache --stacktrace :neoforge:installerJar
@@ -80,14 +96,30 @@ jobs:
 
       - name: Updater install, update and rollback
         if: always()
-        # Before: the latest published release. After: this commit's installer,
-        # scanner and the pinned server starter, with SHA256SUMS like a release.
+        # Before: the newest published release of this commit's own line, because
+        # the updater refuses to cross Minecraft versions. After: this commit's
+        # installer, scanner and the pinned server starter, with SHA256SUMS like a
+        # release. A line with no release yet has nothing to update from.
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           mkdir -p updater/assets
-          curl -fsSL -o updater/old-installer.jar \
-            "https://github.com/${{ github.repository }}/releases/latest/download/multiforge-installer.jar"
-          cp "$(find upstream/neoforge-1.21.1/projects/neoforge/build/libs -maxdepth 1 -name 'neoforge-*-installer.jar' | head -1)" \
+          if [ "$MF_MAKE_LATEST" = true ]; then
+              BASELINE_URL="https://github.com/${GITHUB_REPOSITORY}/releases/latest/download/multiforge-installer.jar"
+          else
+              BASELINE_TAG=$(gh release list --repo "$GITHUB_REPOSITORY" --limit 100 \
+                  --exclude-drafts --json tagName --jq '.[].tagName' \
+                  | { grep -E "$MF_TAG_REGEX" || true; } | sort -V | tail -n 1)
+              if [ -z "$BASELINE_TAG" ]; then
+                  echo "::notice::no published $MF_LINE release yet; skipping the updater check"
+                  exit 0
+              fi
+              BASELINE_URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/${BASELINE_TAG}/multiforge-installer.jar"
+          fi
+          echo "updater baseline: $BASELINE_URL"
+          curl -fsSL -o updater/old-installer.jar "$BASELINE_URL"
+          cp "$(find "$MF_TREE/projects/neoforge/build/libs" -maxdepth 1 -name 'neoforge-*-installer.jar' | head -1)" \
             updater/assets/multiforge-installer.jar
           ./gradlew :multiforge-scanner:jar --no-daemon -q
           cp "$(find multiforge-scanner/build/libs -maxdepth 1 -name 'multiforge-scanner-*.jar' ! -name '*-sources.jar' | head -1)" \

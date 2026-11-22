@@ -66,6 +66,26 @@ The release workflow refuses a tag that does not match both properties.
    change `SERVER_STARTER_VERSION` and `SERVER_STARTER_SHA256` in
    `release.yml` and run `scripts/test-multiforge-update.sh` first.
 
+## Release lines
+
+`.github/scripts/mf-line.sh` holds what differs per line; `ci.yml`, `nightly.yml`
+and `release.yml` read it.
+
+| Line | Tags | Released from | Tree | JDK | GitHub release |
+|---|---|---|---|---|---|
+| 1.21 | `v1.X.Y` | `main`, `release/1.21.x` | `upstream/neoforge-1.21.1` | 21 | stable, `latest` |
+| 26.1 | `v2.X.Y-alpha.N` | `port/26.1.2` | `upstream/neoforge-26.1.2` | 25 | prerelease, never `latest` |
+
+Any other tag is refused. **A 26.x build must never become `latest`:** old
+updaters and imported eggs follow it and would move a 1.21.1 world to 26.x. So
+26.1 releases carry tag-pinned install commands and no `pelican-egg.json`.
+
+The release workflow and the nightly refuse a tree whose `gradle.properties` has
+`multiforge_patches_enabled=false`, which marks a line still being bootstrapped
+from stock NeoForge. The nightly is scheduled only on the default branch; on
+another line, dispatch it with `--ref <branch>`. Its updater check starts from
+the newest release of the same line, and is skipped if that line has none.
+
 ## If a release job fails
 
 No release is published unless every job succeeds, so there is nothing to
