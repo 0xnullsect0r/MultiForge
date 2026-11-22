@@ -151,6 +151,9 @@ regions are running, so the destination level is idle.
 
 ## Shared Vanilla state made safe
 
+The field-by-field audit behind this section, with what remains unsafe, is in
+[shared-state-audit.md](shared-state-audit.md).
+
 Everything region workers touch that is not per-chunk:
 
 | State | Treatment |
