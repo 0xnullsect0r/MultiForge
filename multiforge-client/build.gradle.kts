@@ -13,7 +13,7 @@
 
 plugins {
     id("multiforge.base")
-    id("net.neoforged.moddev") version "2.0.78"
+    id("net.neoforged.moddev") version "2.0.140"
 }
 
 description = "MultiForge client debug mod — F3 overlay, chunk borders, tick-cost heatmap, pin selection."
@@ -59,6 +59,8 @@ dependencies {
     // version-strictly conflict at compile time in v1.3.5.
 
     testImplementation("org.junit.jupiter:junit-jupiter:5.10.3")
+    // Gradle 9 no longer supplies the launcher; the JUnit BOM above sets its version.
+    testRuntimeOnly("org.junit.platform:junit-platform-launcher")
     testImplementation("org.assertj:assertj-core:3.26.3")
 }
 

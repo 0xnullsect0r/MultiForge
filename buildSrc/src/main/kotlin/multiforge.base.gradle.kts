@@ -21,7 +21,7 @@ plugins {
 group = providers.gradleProperty("group").getOrElse("net.multiforge")
 version = providers.gradleProperty("version").getOrElse("0.1.0-SNAPSHOT")
 
-val javaVersion = providers.gradleProperty("javaVersion").getOrElse("21").toInt()
+val javaVersion = providers.gradleProperty("javaVersion").getOrElse("25").toInt()
 
 java {
     toolchain {

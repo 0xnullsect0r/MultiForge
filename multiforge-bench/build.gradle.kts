@@ -36,6 +36,8 @@ dependencies {
     runtimeOnly("org.slf4j:slf4j-simple:2.0.9")
 
     testImplementation("org.junit.jupiter:junit-jupiter:5.10.3")
+    // Gradle 9 no longer supplies the launcher; the JUnit BOM above sets its version.
+    testRuntimeOnly("org.junit.platform:junit-platform-launcher")
     testImplementation("org.assertj:assertj-core:3.26.3")
     testImplementation("org.junit.jupiter:junit-jupiter-params:5.10.3")
 }

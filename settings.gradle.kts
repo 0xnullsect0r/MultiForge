@@ -80,11 +80,11 @@ include(
 )
 
 // MultiForge patches under `multiforge-patches/<NN-group>/` are applied
-// against the vendored NeoForge workspace at `upstream/neoforge-1.21.1/`
+// against the vendored NeoForge workspace at `upstream/neoforge-26.1.2/`
 // by the `applyMultiforgePatches` Gradle task inside that separate
-// build — see `upstream/neoforge-1.21.1/projects/neoforge/multiforge-patches.gradle`.
+// build — see `upstream/neoforge-26.1.2/projects/neoforge/multiforge-patches.gradle`.
 // The MultiForge fixtures that exercise those patches (an off-thread
-// GameTest for M7 today) live under `upstream/neoforge-1.21.1/tests/`
+// GameTest for M7 today) live under `upstream/neoforge-26.1.2/tests/`
 // (see net/multiforge/testfixtures/) and are picked up by NeoForge's
 // own tests project — no outer-repo module needed.
 //

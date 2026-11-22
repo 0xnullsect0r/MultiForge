@@ -23,6 +23,8 @@ dependencies {
     implementation("org.ow2.asm:asm-tree:9.11.1")
 
     testImplementation("org.junit.jupiter:junit-jupiter:5.10.3")
+    // Gradle 9 no longer supplies the launcher; the JUnit BOM above sets its version.
+    testRuntimeOnly("org.junit.platform:junit-platform-launcher")
     testImplementation("org.assertj:assertj-core:3.26.3")
 }
 
