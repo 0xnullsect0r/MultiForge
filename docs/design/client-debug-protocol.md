@@ -470,7 +470,7 @@ Added in protocol version 3 (v1.8.0). Produced by `RuntimeStatusEmitter`.
 | `regions` count | `int32` | Ceiling 65536. |
 | `regions[i].regionId` | `int64` | Matches `RegionStat.regionId` (§7.2). |
 | `regions[i].worldId` | UTF-8 string | The region's world. |
-| `regions[i].thread` | UTF-8 string | Name of the thread that ran the region's last tick (`multiforge-tick-N`, or the server thread's name); empty before its first tick. |
+| `regions[i].thread` | UTF-8 string | Name of the thread that ran the region's last tick (`multiforge-tick-N-server`, or the server thread's name); empty before its first tick. |
 | `regions[i].placement` | `uint8` | `0` unknown; `1` worker; `2` server thread, alone in its batch; `3` server thread, for posting too much to the serial lane. |
 | `regions[i].serialPosts` | `int64` | Serial-lane events the region's last tick posted. |
 

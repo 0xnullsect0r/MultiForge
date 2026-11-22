@@ -106,7 +106,10 @@ public final class TickRegionScheduler implements AutoCloseable, RegionListener 
         this.mailboxDrainBatch = mailboxDrainBatch;
         AtomicInteger seq = new AtomicInteger();
         this.pool = (java.util.concurrent.ThreadPoolExecutor) Executors.newFixedThreadPool(workerCount, r -> {
-            Thread t = new RegionWorkerThread(r, "multiforge-tick-" + seq.incrementAndGet());
+            // "server" is load-bearing: mods such as Cupboard hold back an entity added
+            // from a thread without it in the name, which hides naturally spawned mobs
+            // from the mob caps until a later add on the server thread releases them.
+            Thread t = new RegionWorkerThread(r, "multiforge-tick-" + seq.incrementAndGet() + "-server");
             t.setDaemon(true);
             return t;
         });

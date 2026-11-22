@@ -152,6 +152,9 @@ class DebugHudStateTest {
                         new DebugPayload.RegionThread(1, "w", "multiforge-tick-12", DebugPayload.Placement.WORKER, 0)))
                 .isEqualTo("tick-12");
         assertThat(DebugHudState.threadTag(new DebugPayload.RegionThread(
+                        1, "w", "multiforge-tick-12-server", DebugPayload.Placement.WORKER, 0)))
+                .isEqualTo("tick-12");
+        assertThat(DebugHudState.threadTag(new DebugPayload.RegionThread(
                         1, "w", "Server thread", DebugPayload.Placement.SERVER_THREAD_SINGLE, 0)))
                 .isEqualTo("server");
     }

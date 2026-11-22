@@ -57,8 +57,8 @@ each one and how many serial-lane events it posted, then the pins.
 ```
 /multiforge region list
 minecraft:overworld: 3 region(s), ticking on worker threads
-  region region#7 — 41 section(s), up to 10496 chunks, READY, tick 3.1/6.8/7.4 ms (p50/p95/p99, last 5 s), last ticked on multiforge-tick-3, 12 serial-lane post(s) last tick
-  region region#9 — 2 section(s), up to 512 chunks, READY, tick 0.4/0.9/1.1 ms (p50/p95/p99, last 5 s), last ticked on multiforge-tick-5, 0 serial-lane post(s) last tick
+  region region#7 — 41 section(s), up to 10496 chunks, READY, tick 3.1/6.8/7.4 ms (p50/p95/p99, last 5 s), last ticked on multiforge-tick-3-server, 12 serial-lane post(s) last tick
+  region region#9 — 2 section(s), up to 512 chunks, READY, tick 0.4/0.9/1.1 ms (p50/p95/p99, last 5 s), last ticked on multiforge-tick-5-server, 0 serial-lane post(s) last tick
   ...
 minecraft:the_nether: 1 region(s), ticking on the server thread (one region)
   region region#12 — 1 section(s), up to 256 chunks, READY, tick 1.2/2.0/2.3 ms (p50/p95/p99, last 5 s), last ticked on Server thread, 40 serial-lane post(s) last tick
