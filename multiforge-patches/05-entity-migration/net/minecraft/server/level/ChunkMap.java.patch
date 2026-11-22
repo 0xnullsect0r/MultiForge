@@ -1,6 +1,6 @@
 --- a/net/minecraft/server/level/ChunkMap.java
 +++ b/net/minecraft/server/level/ChunkMap.java
-@@ -144,6 +144,21 @@ public class ChunkMap extends SimpleRegionStorage implements ChunkHolder.PlayerP
+@@ -144,9 +144,29 @@ public class ChunkMap extends SimpleRegionStorage implements ChunkHolder.PlayerP
      private final String storageName;
      private final PlayerMap playerMap = new PlayerMap();
      private final Int2ObjectMap<ChunkMap.TrackedEntity> entityMap = new Int2ObjectOpenHashMap<>();
@@ -22,7 +22,38 @@
      private final Long2ByteMap chunkTypeCache = new Long2ByteOpenHashMap();
      private final Long2LongMap nextChunkSaveTime = new Long2LongOpenHashMap();
      private final LongSet chunksToEagerlySave = new LongLinkedOpenHashSet();
-@@ -694,6 +709,14 @@ public class ChunkMap extends SimpleRegionStorage implements ChunkHolder.PlayerP
++    /**
++     * MultiForge (multiforge-patches/05-entity-migration/): chunks a region worker marked unsaved.
++     * {@link #chunksToEagerlySave} is the server thread's, which iterates it while workers tick.
++     */
++    private final java.util.Queue<Long> mfUnsavedFromWorkers = new java.util.concurrent.ConcurrentLinkedQueue<>();
+     private final Queue<Runnable> unloadQueue = Queues.newConcurrentLinkedQueue();
+     private final AtomicInteger activeChunkWrites = new AtomicInteger();
+     private int serverViewDistance;
+@@ -209,6 +229,11 @@ public class ChunkMap extends SimpleRegionStorage implements ChunkHolder.PlayerP
+     }
+ 
+     private void setChunkUnsaved(ChunkPos chunkPos) {
++        // MultiForge: a block change on a region worker lands here. See mfUnsavedFromWorkers.
++        if (!this.mainThreadExecutor.isSameThread()) {
++            this.mfUnsavedFromWorkers.add(chunkPos.pack());
++            return;
++        }
+         this.chunksToEagerlySave.add(chunkPos.pack());
+     }
+ 
+@@ -495,6 +520,10 @@ public class ChunkMap extends SimpleRegionStorage implements ChunkHolder.PlayerP
+     private void saveChunksEagerly(BooleanSupplier haveTime) {
+         long now = Util.getMillis();
+         int eagerlySavedCount = 0;
++        // MultiForge: take in what workers marked unsaved since the last pass.
++        for (Long mf$chunk = this.mfUnsavedFromWorkers.poll(); mf$chunk != null; mf$chunk = this.mfUnsavedFromWorkers.poll()) {
++            this.chunksToEagerlySave.add(mf$chunk.longValue());
++        }
+         LongIterator iterator = this.chunksToEagerlySave.iterator();
+ 
+         while (eagerlySavedCount < 20 && this.activeChunkWrites.get() < 128 && haveTime.getAsBoolean() && iterator.hasNext()) {
+@@ -694,6 +723,14 @@ public class ChunkMap extends SimpleRegionStorage implements ChunkHolder.PlayerP
      }
  
      private void onChunkReadyToSend(ChunkHolder chunkHolder, LevelChunk chunk) {
@@ -37,7 +68,7 @@
          ChunkPos chunkPos = chunk.getPos();
  
          for (ServerPlayer player : this.playerMap.getAllPlayers()) {
-@@ -1079,6 +1102,10 @@ public class ChunkMap extends SimpleRegionStorage implements ChunkHolder.PlayerP
+@@ -1079,6 +1116,10 @@ public class ChunkMap extends SimpleRegionStorage implements ChunkHolder.PlayerP
      }
  
      public void move(ServerPlayer player) {
@@ -48,7 +79,7 @@
          for (ChunkMap.TrackedEntity trackedEntity : this.entityMap.values()) {
              if (trackedEntity.entity == player) {
                  trackedEntity.updatePlayers(this.level.players());
-@@ -1086,6 +1113,7 @@ public class ChunkMap extends SimpleRegionStorage implements ChunkHolder.PlayerP
+@@ -1086,6 +1127,7 @@ public class ChunkMap extends SimpleRegionStorage implements ChunkHolder.PlayerP
                  trackedEntity.updatePlayer(player);
              }
          }
@@ -56,7 +87,7 @@
  
          SectionPos oldSection = player.getLastSectionPos();
          SectionPos newSection = SectionPos.of(player);
-@@ -1160,11 +1188,24 @@ public class ChunkMap extends SimpleRegionStorage implements ChunkHolder.PlayerP
+@@ -1160,11 +1202,24 @@ public class ChunkMap extends SimpleRegionStorage implements ChunkHolder.PlayerP
              int range = type.clientTrackingRange() * 16;
              if (range != 0) {
                  int updateInterval = type.updateInterval();
@@ -84,7 +115,7 @@
                      trackedEntity.updatePlayers(this.level.players());
                      if (entity instanceof ServerPlayer player) {
                          this.updatePlayerStatus(player, true);
-@@ -1187,11 +1228,19 @@ public class ChunkMap extends SimpleRegionStorage implements ChunkHolder.PlayerP
+@@ -1187,11 +1242,19 @@ public class ChunkMap extends SimpleRegionStorage implements ChunkHolder.PlayerP
              for (ChunkMap.TrackedEntity trackedEntity : this.entityMap.values()) {
                  trackedEntity.removePlayer(player);
              }
@@ -105,7 +136,7 @@
          }
      }
  
-@@ -1208,6 +1257,8 @@ public class ChunkMap extends SimpleRegionStorage implements ChunkHolder.PlayerP
+@@ -1208,6 +1271,8 @@ public class ChunkMap extends SimpleRegionStorage implements ChunkHolder.PlayerP
              SectionPos newPos = SectionPos.of(trackedEntity.entity);
              boolean sectionPosChanged = !Objects.equals(oldPos, newPos);
              if (sectionPosChanged) {
@@ -114,7 +145,7 @@
                  trackedEntity.updatePlayers(players);
                  Entity entity = trackedEntity.entity;
                  if (entity instanceof ServerPlayer) {
-@@ -1223,40 +1274,193 @@ public class ChunkMap extends SimpleRegionStorage implements ChunkHolder.PlayerP
+@@ -1223,40 +1288,193 @@ public class ChunkMap extends SimpleRegionStorage implements ChunkHolder.PlayerP
          }
  
          if (!movedPlayers.isEmpty()) {
@@ -313,7 +344,7 @@
              if (entity.seenBy.contains(player.connection)) {
                  consumer.accept(entity.entity);
              }
-@@ -1316,7 +1520,7 @@ public class ChunkMap extends SimpleRegionStorage implements ChunkHolder.PlayerP
+@@ -1316,7 +1534,7 @@ public class ChunkMap extends SimpleRegionStorage implements ChunkHolder.PlayerP
  
      // Neo: Getter for players watching an entity.
      public List<ServerPlayer> getPlayersWatching(Entity entity) {
@@ -322,7 +353,7 @@
          if (trackedEntity != null) {
              var ret = new java.util.ArrayList<ServerPlayer>(trackedEntity.seenBy.size());
              for (var connection : trackedEntity.seenBy) {
-@@ -1409,6 +1613,7 @@ public class ChunkMap extends SimpleRegionStorage implements ChunkHolder.PlayerP
+@@ -1409,6 +1627,7 @@ public class ChunkMap extends SimpleRegionStorage implements ChunkHolder.PlayerP
  
          public void removePlayer(ServerPlayer player) {
              if (this.seenBy.remove(player.connection)) {
@@ -330,7 +361,7 @@
                  this.serverEntity.removePairing(player);
                  if (this.seenBy.isEmpty()) {
                      ChunkMap.this.level.debugSynchronizers().dropEntity(this.entity);
-@@ -1428,6 +1633,7 @@ public class ChunkMap extends SimpleRegionStorage implements ChunkHolder.PlayerP
+@@ -1428,6 +1647,7 @@ public class ChunkMap extends SimpleRegionStorage implements ChunkHolder.PlayerP
                      && ChunkMap.this.isChunkTracked(player, this.entity.chunkPosition().x(), this.entity.chunkPosition().z());
                  if (visibleToPlayer) {
                      if (this.seenBy.add(player.connection)) {
@@ -338,7 +369,7 @@
                          this.serverEntity.addPairing(player);
                          if (this.seenBy.size() == 1) {
                              ChunkMap.this.level.debugSynchronizers().registerEntity(this.entity);
-@@ -1441,6 +1647,15 @@ public class ChunkMap extends SimpleRegionStorage implements ChunkHolder.PlayerP
+@@ -1441,6 +1661,15 @@ public class ChunkMap extends SimpleRegionStorage implements ChunkHolder.PlayerP
              }
          }
  
@@ -354,7 +385,7 @@
          private int scaledRange(int range) {
              return ChunkMap.this.level.getServer().getScaledTrackingDistance(range);
          }
-@@ -1479,4 +1694,16 @@ public class ChunkMap extends SimpleRegionStorage implements ChunkHolder.PlayerP
+@@ -1479,4 +1708,16 @@ public class ChunkMap extends SimpleRegionStorage implements ChunkHolder.PlayerP
      public void scheduleOnMainThreadMailbox(Runnable runnable) {
          mainThreadExecutor.schedule(runnable);
      }
