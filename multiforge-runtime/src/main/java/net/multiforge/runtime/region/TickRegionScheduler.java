@@ -323,13 +323,6 @@ public final class TickRegionScheduler implements AutoCloseable, RegionListener 
     }
 
     /**
-     * Result of {@link #tickAll(Collection, long)}: how many regions the
-     * caller synchronised against, and the ids of any that did not
-     * complete their in-flight tick within the deadline. The coordinator
-     * uses {@link #allCompleted()} to decide whether to route to the
-     * warn (default) or STRICT-mode throw path.
-     */
-    /**
      * {@link Mode#BARRIER} driver: tick every region in {@code regions}
      * exactly once, in parallel on the worker pool, and return once all of
      * them finished. While waiting, the calling thread repeatedly invokes
@@ -667,6 +660,13 @@ public final class TickRegionScheduler implements AutoCloseable, RegionListener 
         return s == null ? null : s.placement;
     }
 
+    /**
+     * Result of {@link #tickAll(Collection, long)}: how many regions the
+     * caller synchronised against, and the ids of any that did not
+     * complete their in-flight tick within the deadline. The coordinator
+     * uses {@link #allCompleted()} to decide whether to route to the
+     * warn (default) or STRICT-mode throw path.
+     */
     public static final class TickAllResult {
         static final TickAllResult EMPTY = new TickAllResult(0, List.of());
 

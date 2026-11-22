@@ -56,8 +56,9 @@ import org.jetbrains.annotations.ApiStatus;
 @ApiStatus.Internal
 public final class AnnotationScanner {
 
-    /** The dispatch domain and ordering contract resolved for one listener method. */
     /**
+     * The dispatch domain and ordering contract resolved for one listener method.
+     *
      * @param explicit whether {@code domain} comes from a {@code @DispatchDomain}
      *     annotation; if not, it is the event-type default (or {@code
      *     LEGACY_SERIAL}) and the owning mod's {@link ModSafety} may override it
