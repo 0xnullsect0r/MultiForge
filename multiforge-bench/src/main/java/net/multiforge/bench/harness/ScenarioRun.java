@@ -55,7 +55,7 @@ import java.util.regex.Pattern;
  * </ul>
  */
 public final class ScenarioRun {
-    private static final Pattern COUNT = Pattern.compile("count: (\\d+)");
+    private static final Pattern COUNT = Pattern.compile("count: (\\d+)", Pattern.CASE_INSENSITIVE);
     private static final Pattern ERROR_LINE = Pattern.compile(
             "/ERROR\\]|Exception in |ConcurrentModificationException|Exception ticking|Error executing task");
 
@@ -184,6 +184,7 @@ public final class ScenarioRun {
             // Matching stock is not enough: a scenario that failed the same way on both
             // servers, or ran with every region on the server thread, would match too.
             diffs.addAll(requirements(name, stock, mf));
+            diffs.addAll(missingOutcomes(name, stock, mf));
             if (diffs.isEmpty()) {
                 System.out.println("ScenarioRun: " + name + " PASS");
             } else {
@@ -272,6 +273,52 @@ public final class ScenarioRun {
         }
         return out;
     }
+
+    /** Each outcome {@code name} must have reached, checked on both servers. */
+    static List<String> missingOutcomes(String name, Map<String, String> stock, Map<String, String> mf) {
+        List<String> out = new ArrayList<>();
+        for (Map.Entry<String, String> required :
+                OUTCOMES.getOrDefault(name, Map.of()).entrySet()) {
+            for (Map<String, String> server : List.of(stock, mf)) {
+                String seen = server.get(required.getKey());
+                if (!required.getValue().equals(seen)) {
+                    out.add((server == stock ? "stock: " : "multiforge: ") + required.getKey() + " = " + seen
+                            + ", the scenario requires " + required.getValue());
+                }
+            }
+        }
+        return out;
+    }
+
+    /**
+     * What each scenario must actually have done on both servers. Two servers that both saw
+     * nothing, because a reply format changed for example, would otherwise match.
+     */
+    private static final Map<String, Map<String, String>> OUTCOMES = Map.of(
+            "x1",
+                    Map.of(
+                            "summoned", "10",
+                            "min_count_during_hops", "10",
+                            "at_final_spot", "10",
+                            "uuids_kept", "true",
+                            "after_restart", "10",
+                            "uuids_kept_after_restart", "true"),
+            "x2", Map.of("raid_omen_applied", "true", "raiders_spawned", "true"),
+            "x3",
+                    Map.of(
+                            "dragon_spawned", "true",
+                            "dragon_alive", "false",
+                            "egg_on_podium", "true",
+                            "exit_portal_lit", "true",
+                            "gateways", "1"),
+            "x4",
+                    Map.of(
+                            "target_is_wool", "true",
+                            "writes_at_least_15", "true",
+                            "writer_false_returns", "0",
+                            "legacy_counted_ticks", "true",
+                            "legacy_off_server_thread", "0",
+                            "legacy_consistent", "true"));
 
     /** {@code -1} for a missing or unreadable value, so a check against 0 fails. */
     private static long parseLong(String value) {

@@ -235,7 +235,8 @@ public final class StressRun {
     }
 
     private static int count(RconClient rcon, String selector) throws IOException {
-        Matcher m = Pattern.compile("count: (\\d+)").matcher(rcon.command("execute if entity " + selector));
+        Matcher m = Pattern.compile("count: (\\d+)", Pattern.CASE_INSENSITIVE)
+                .matcher(rcon.command("execute if entity " + selector));
         return m.find() ? Integer.parseInt(m.group(1)) : -1;
     }
 

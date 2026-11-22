@@ -62,6 +62,28 @@ class ScenarioRequirementsTest {
     }
 
     @Test
+    void twoServersThatBothSawNothingFail() {
+        Map<String, String> nothing = Map.of("summoned", "0", "at_final_spot", "0", "after_restart", "0");
+        assertThat(ScenarioRun.missingOutcomes("x1", nothing, nothing)).isNotEmpty();
+    }
+
+    @Test
+    void aScenarioThatReachedItsOutcomesHasNoneMissing() {
+        Map<String, String> done = Map.of("raid_omen_applied", "true", "raiders_spawned", "true");
+        assertThat(ScenarioRun.missingOutcomes("x2", done, done)).isEmpty();
+    }
+
+    @Test
+    void anOutcomeMissingOnOneServerIsNamed() {
+        Map<String, String> done = Map.of("raid_omen_applied", "true", "raiders_spawned", "true");
+        Map<String, String> noRaid = Map.of("raid_omen_applied", "true", "raiders_spawned", "false");
+        assertThat(ScenarioRun.missingOutcomes("x2", done, noRaid))
+                .singleElement()
+                .asString()
+                .startsWith("multiforge: raiders_spawned");
+    }
+
+    @Test
     void parsesTheRegionCount() {
         assertThat(ScenarioRun.regionCount("minecraft:overworld: 4 region(s)")).isEqualTo(4);
         assertThat(ScenarioRun.regionCount("?")).isEqualTo(-1);

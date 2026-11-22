@@ -477,7 +477,8 @@ public final class SwarmBench {
     private static int countWaterMobs(HeadlessServerRunner runner) {
         int n = 0;
         for (String t : WATER_MOBS) {
-            java.util.regex.Matcher m = java.util.regex.Pattern.compile("count: (\\d+)")
+            java.util.regex.Matcher m = java.util.regex.Pattern.compile(
+                            "count: (\\d+)", java.util.regex.Pattern.CASE_INSENSITIVE)
                     .matcher(command(runner, "execute if entity @e[type=minecraft:" + t + "]"));
             if (m.find()) n += Integer.parseInt(m.group(1));
         }
