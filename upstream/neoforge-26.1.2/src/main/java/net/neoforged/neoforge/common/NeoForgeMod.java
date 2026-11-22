@@ -550,6 +550,10 @@ public class NeoForgeMod {
             event.dataPackRegistry(NeoForgeRegistries.Keys.BIOME_MODIFIERS, BiomeModifier.DIRECT_CODEC);
             event.dataPackRegistry(NeoForgeRegistries.Keys.STRUCTURE_MODIFIERS, StructureModifier.DIRECT_CODEC);
         });
+        // MultiForge: the multiforge:debug/v1 payload channel registers on this mod bus,
+        // since the fork has no @Mod class of its own.
+        net.multiforge.neoforge.debug.DebugChannelServer.installOnModBus(modEventBus);
+
         modEventBus.addListener(this::preInit);
         modEventBus.addListener(this::loadComplete);
         modEventBus.addListener(this::registerFluids);

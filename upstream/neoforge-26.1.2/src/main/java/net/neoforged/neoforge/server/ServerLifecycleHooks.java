@@ -226,6 +226,11 @@ public class ServerLifecycleHooks {
         // on the dedi server we need to force the stuff to setup properly
         ConfigTracker.INSTANCE.loadConfigs(ModConfig.Type.SERVER, FMLPaths.CONFIGDIR.get(), getServerConfigPath(server));
         runModifiers(server);
+
+        // MultiForge: game-bus listeners of the multiforge:debug/v1 channel. Idempotent per
+        // JVM, and before the post below so this boot's ServerAboutToStartEvent reaches them.
+        net.multiforge.neoforge.debug.DebugChannelServer.installGameBusHooks();
+
         NeoForge.EVENT_BUS.post(new ServerAboutToStartEvent(server));
     }
 
