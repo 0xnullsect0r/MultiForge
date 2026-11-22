@@ -1,14 +1,21 @@
 # multiforge-patches
 
-> **Port status (`port/26.1.2`): these patches are NOT applied.** They target
-> NeoForge 1.21.1 and are kept as the specification for the 26.1.2 port.
-> `upstream/neoforge-26.1.2` is stock NeoForge 26.1.2.129 plus MultiForge's
-> version scheme: it has no `multiforge-patches.gradle`, and its
-> `gradle.properties` sets `multiforge_patches_enabled=false`, which makes the
-> release workflow and the nightly refuse it. The 1.21.1 tree and the fork glue
-> the patches call (`net/multiforge/**`) are at
-> `git show v1.12.0:upstream/neoforge-1.21.1/<path>`. `scripts/mf-patches.py`
-> and the paths below still describe the 1.21.1 layout until port step 3.
+> **Port status (`port/26.1.2`): partly ported, not safe to ship.** The `NN-*`
+> directories hold the 26.1.2 patch set. `spec-1.21.1/` holds the complete
+> 1.21.1 set, unapplied, as the specification. `multiforge_patches_enabled=partial`
+> in the fork's `gradle.properties` makes the release workflow and the nightly
+> refuse this tree.
+>
+> | Group | 26.1.2 state |
+> |---|---|
+> | `01-ownership`, `02-region-tick`, `09-events` | Ported, except `PoiManager` and `SectionStorage` from 02, and entity activation and the push cap, which need entities on workers |
+> | `04-chunk-system` | Worker chunk reads and ticket deferral only |
+> | `05-entity-migration` | Stage-only substitute: entity storage is **frozen while workers run**, and every add, move, removal and visibility change replays at the barrier. Entities and natural spawning still tick on the server thread. Step 4 replaces this with the spec's leaf locks |
+> | `06-networking`, `08-globals` | Not ported |
+>
+> The 1.21.1 tree and its fork glue are at
+> `git show v1.12.0:upstream/neoforge-1.21.1/<path>`. The sections below still
+> describe the 1.21.1 layout where they name that tree.
 
 Git-format patches applied to a vendored NeoForge 1.21.1 tree at build
 time. NeoForge itself uses the same approach against Vanilla Minecraft
