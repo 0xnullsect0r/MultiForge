@@ -196,7 +196,7 @@ public class EntityActivationTests {
                     .thenWaitUntil(() -> helper.assertTrue(control.tickCount >= 25, "the mobs are still young"))
                     .thenExecute(() -> {
                         long now = helper.getLevel().getGameTime();
-                        helper.assertTrue(now - control.mfLastDamageStamp() >= 100, "the control pig was hurt recently");
+                        helper.assertTrue(control.mfLastDamageStamp() == 0L || now - control.mfLastDamageStamp() >= 100, "the control pig was hurt recently");
                         lover.setInLove(null);
                         hurt.hurt(helper.getLevel().damageSources().generic(), 0.5F);
                         for (Mob m : mobs) EntityActivation.testResetCounts(m);

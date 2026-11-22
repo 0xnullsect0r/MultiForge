@@ -273,7 +273,10 @@ public final class EntityActivation {
         if (mob.isPassenger() || mob.isVehicle()) return true;
         if (mob.isLeashed()) return true;
         if (mob.getTarget() != null) return true;
-        if (gameTime - mob.mfLastDamageStamp() < HURT_RECENTLY_TICKS) return true;
+        // A stamp of 0 means never hurt: without this check, every mob reads as recently
+        // hurt for the first 100 ticks of a new world.
+        long lastDamage = mob.mfLastDamageStamp();
+        if (lastDamage != 0L && gameTime - lastDamage < HURT_RECENTLY_TICKS) return true;
         if (mob instanceof Animal animal && animal.isInLove()) return true;
         if (mob.isMultipartEntity() || mob.isAlwaysTicking()) return true;
         if (isExemptType(mob.getType())) return true;

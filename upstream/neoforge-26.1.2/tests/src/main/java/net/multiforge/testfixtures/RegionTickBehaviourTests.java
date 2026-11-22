@@ -138,6 +138,10 @@ public class RegionTickBehaviourTests {
             java.util.concurrent.atomic.AtomicReference<String> result = new java.util.concurrent.atomic.AtomicReference<>();
             BlockPos abs = helper.absolutePos(start);
             helper.startSequence()
+                    // Vanilla holds a recompute back within 20 game ticks of the last one, and
+                    // that starts at 0: 26.1 runs the test batches in random order, and this
+                    // one can be first, when the world is younger than that.
+                    .thenWaitUntil(() -> helper.assertTrue(helper.getLevel().getGameTime() > 25, "the world is too young to re-path"))
                     .thenExecuteAfter(1, () -> host.taskQueue().queueChunkTask(
                             helper.getLevel().mfWorldRef(), abs.getX() >> 4, abs.getZ() >> 4, () -> {
                                 net.minecraft.world.entity.animal.bee.Bee late = EntityType.BEE.create(helper.getLevel(), net.minecraft.world.entity.EntitySpawnReason.TRIGGERED);
@@ -268,7 +272,9 @@ public class RegionTickBehaviourTests {
         });
     }
 
-    @GameTest(template = TestsMod.TEMPLATE_3x3, timeoutTicks = 300)
+    // The timeout covers loading the far chunk to entity-ticking. 26.1's GameTest server does
+    // not wait between ticks, so 300 ticks can pass in well under a second of chunk loading.
+    @GameTest(template = TestsMod.TEMPLATE_3x3, timeoutTicks = 2400)
     @TestHolder(description = {
             "A rerouted setBlock / addFreshEntity / addWithUUID returns what Vanilla would have:",
             "true when the block changes or the entity is added, false otherwise."
@@ -326,7 +332,9 @@ public class RegionTickBehaviourTests {
                             level.getBlockState(far).is(Blocks.GOLD_BLOCK)
                                     && level.getEntity(pig.getUUID()) != null
                                     && level.getEntity(pig2.getUUID()) != null,
-                            "rerouted block and entity have not landed yet"))
+                            "rerouted block and entity have not landed yet (block=" + level.getBlockState(far).getBlock()
+                                    + " pig=" + (level.getEntity(pig.getUUID()) != null) + " pig2=" + (level.getEntity(pig2.getUUID()) != null)
+                                    + " entityTicking=" + level.isPositionEntityTicking(far) + ")"))
                     .thenExecute(() -> {
                         helper.assertTrue(results.get("gold"), "rerouted setBlock that changes a block returned false");
                         helper.assertFalse(results.get("sameState"), "rerouted setBlock of the existing state returned true");
