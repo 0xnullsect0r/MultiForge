@@ -1,0 +1,12 @@
+--- a/net/minecraft/world/level/chunk/ChunkAccess.java
++++ b/net/minecraft/world/level/chunk/ChunkAccess.java
+@@ -76,7 +76,8 @@ public abstract class ChunkAccess implements LightChunk, StructureAccess, BiomeM
+     private final Map<Structure, StructureStart> structureStarts = Maps.newHashMap();
+     private final Map<Structure, LongSet> structuresRefences = Maps.newHashMap();
+     protected final Map<BlockPos, CompoundTag> pendingBlockEntities = Maps.newHashMap();
+-    protected final Map<BlockPos, BlockEntity> blockEntities = new Object2ObjectOpenHashMap<>();
++    // MultiForge (docs/design/shared-state-audit.md): another region may read this map while the owner writes it.
++    protected final Map<BlockPos, BlockEntity> blockEntities = new java.util.concurrent.ConcurrentHashMap<>();
+     protected final LevelHeightAccessor levelHeightAccessor;
+     protected final LevelChunkSection[] sections;
+ 

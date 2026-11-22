@@ -644,22 +644,22 @@ public class CommonHooks {
         DataComponentMap components = itemstack.getComponents();
 
         if (!(itemstack.getItem() instanceof BucketItem)) // if not bucket
-            level.captureBlockSnapshots = true;
+            level.mfSetCapturingBlocks(true);
 
         ItemStack copy = itemstack.copy();
         InteractionResult ret = itemstack.getItem().useOn(context);
         if (itemstack.isEmpty())
             EventHooks.onPlayerDestroyItem(player, copy, context.getHand());
 
-        level.captureBlockSnapshots = false;
+        level.mfSetCapturingBlocks(false);
 
         if (ret.consumesAction()) {
             // save new item data
             int newSize = itemstack.getCount();
             DataComponentMap newComponents = itemstack.getComponents();
             @SuppressWarnings("unchecked")
-            List<BlockSnapshot> blockSnapshots = (List<BlockSnapshot>) level.capturedBlockSnapshots.clone();
-            level.capturedBlockSnapshots.clear();
+            List<BlockSnapshot> blockSnapshots = (List<BlockSnapshot>) level.mfCapturedBlocks().clone();
+            level.mfCapturedBlocks().clear();
 
             // make sure to set pre-placement item data for event
             itemstack.setCount(size);
@@ -679,9 +679,9 @@ public class CommonHooks {
                 ret = InteractionResult.FAIL; // cancel placement
                 // revert back all captured blocks
                 for (BlockSnapshot blocksnapshot : Lists.reverse(blockSnapshots)) {
-                    level.restoringBlockSnapshots = true;
+                    level.mfSetRestoringBlocks(true);
                     blocksnapshot.restore(blocksnapshot.getFlags() | Block.UPDATE_CLIENTS);
-                    level.restoringBlockSnapshots = false;
+                    level.mfSetRestoringBlocks(false);
                 }
                 // inform the client that the item was not consumed
                 if (player instanceof ServerPlayer serverPlayer) {
@@ -705,7 +705,7 @@ public class CommonHooks {
                     player.awardStat(Stats.ITEM_USED.get(item));
             }
         }
-        level.capturedBlockSnapshots.clear();
+        level.mfCapturedBlocks().clear();
 
         return ret;
     }

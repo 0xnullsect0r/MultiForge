@@ -204,7 +204,20 @@
      private void getFullChunk(long chunkKey, Consumer<LevelChunk> output) {
          ChunkHolder chunkHolder = this.getVisibleChunkIfPresent(chunkKey);
          if (chunkHolder != null) {
-@@ -597,7 +761,10 @@ public class ServerChunkCache extends ChunkSource implements net.neoforged.neofo
+@@ -521,6 +685,12 @@ public class ServerChunkCache extends ChunkSource implements net.neoforged.neofo
+     }
+ 
+     public void move(ServerPlayer player) {
++        // MultiForge (docs/design/shared-state-audit.md): a spectator's tick lands here on a worker; this writes tickets, player
++        // distance maps and tracker sets that other regions read.
++        if (net.multiforge.runtime.region.RegionPhase.deferUntilWorkersStop(
++                ServerChunkCache.MfLambdas.move(this, player), "player.chunk-move.deferred")) {
++            return;
++        }
+         if (!player.isRemoved()) {
+             this.chunkMap.move(player);
+             if (player.isReceivingWaypoints()) {
+@@ -597,7 +767,10 @@ public class ServerChunkCache extends ChunkSource implements net.neoforged.neofo
  
          @Override
          public Runnable wrapRunnable(Runnable runnable) {
@@ -216,7 +229,7 @@
          }
  
          @Override
-@@ -631,4 +798,17 @@ public class ServerChunkCache extends ChunkSource implements net.neoforged.neofo
+@@ -631,4 +804,21 @@ public class ServerChunkCache extends ChunkSource implements net.neoforged.neofo
              }
          }
      }
@@ -224,6 +237,10 @@
 +    /** MultiForge: the lambdas its patches need, kept out of this class so Vanilla's keep their numbers. */
 +    static final class MfLambdas {
 +        private MfLambdas() {}
++
++        static net.multiforge.runtime.region.RegionPhase.Deferred move(ServerChunkCache cache, ServerPlayer player) {
++            return () -> cache.move(player);
++        }
 +
 +        static Runnable spawning(ServerChunkCache cache, LevelChunk chunk, MfRegionChunkTicks work) {
 +            return () -> cache.mfRunSpawning(chunk, work);

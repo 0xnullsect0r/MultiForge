@@ -118,13 +118,19 @@ public final class ScheduledTickRunnerBridge implements ScheduledTickRunner {
         // then random ticks and natural spawning (chunkSource.tick, which
         // ServerChunkCache.tickChunks queued for this region), then block events.
         ChunkHolderManager manager = host.chunkManagerForOrNull(world);
-        if (manager != null) {
-            // Normally the level bucketed this tick's due ticks by region and the
-            // chunk list is never built; it is the fallback when it did not.
-            level.mfTickRegionScheduledTicks(region.id().value(), new OwnedChunks(region, manager));
+        // Vanilla flags these three as handling a tick, and a piston's extension check reads it.
+        level.mfSetRegionHandlingTick(true);
+        try {
+            if (manager != null) {
+                // Normally the level bucketed this tick's due ticks by region and the
+                // chunk list is never built; it is the fallback when it did not.
+                level.mfTickRegionScheduledTicks(region.id().value(), new OwnedChunks(region, manager));
+            }
+            level.getChunkSource().mfTickRegionChunks(region.id().value());
+            level.mfRegionBlockEvents(region.id().value());
+        } finally {
+            level.mfSetRegionHandlingTick(false);
         }
-        level.getChunkSource().mfTickRegionChunks(region.id().value());
-        level.mfRegionBlockEvents(region.id().value());
     }
 
     /** The region's loaded chunks, built on first use and reused. */

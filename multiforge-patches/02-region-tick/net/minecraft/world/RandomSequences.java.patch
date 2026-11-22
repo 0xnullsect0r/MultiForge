@@ -1,0 +1,155 @@
+--- a/net/minecraft/world/RandomSequences.java
++++ b/net/minecraft/world/RandomSequences.java
+@@ -42,7 +42,7 @@ public class RandomSequences extends SavedData {
+         this.sequences.putAll(sequences);
+     }
+ 
+-    public RandomSource get(Identifier key, long worldSeed) {
++    public synchronized RandomSource get(Identifier key, long worldSeed) {
+         RandomSource random = this.sequences.computeIfAbsent(key, rl -> this.createSequence(rl, worldSeed)).random();
+         return new RandomSequences.DirtyMarkingRandomSource(random);
+     }
+@@ -56,27 +56,27 @@ public class RandomSequences extends SavedData {
+         return new RandomSequence(seed, includeSequenceId ? Optional.of(key) : Optional.empty());
+     }
+ 
+-    public void forAllSequences(BiConsumer<Identifier, RandomSequence> consumer) {
++    public synchronized void forAllSequences(BiConsumer<Identifier, RandomSequence> consumer) {
+         this.sequences.forEach(consumer);
+     }
+ 
+-    public void setSeedDefaults(int salt, boolean includeWorldSeed, boolean includeSequenceId) {
++    public synchronized void setSeedDefaults(int salt, boolean includeWorldSeed, boolean includeSequenceId) {
+         this.salt = salt;
+         this.includeWorldSeed = includeWorldSeed;
+         this.includeSequenceId = includeSequenceId;
+     }
+ 
+-    public int clear() {
++    public synchronized int clear() {
+         int count = this.sequences.size();
+         this.sequences.clear();
+         return count;
+     }
+ 
+-    public void reset(Identifier id, long worldSeed) {
++    public synchronized void reset(Identifier id, long worldSeed) {
+         this.sequences.put(id, this.createSequence(id, worldSeed));
+     }
+ 
+-    public void reset(Identifier id, long worldSeed, int salt, boolean includeWorldSeed, boolean includeSequenceId) {
++    public synchronized void reset(Identifier id, long worldSeed, int salt, boolean includeWorldSeed, boolean includeSequenceId) {
+         this.sequences.put(id, this.createSequence(id, worldSeed, salt, includeWorldSeed, includeSequenceId));
+     }
+ 
+@@ -92,6 +92,7 @@ public class RandomSequences extends SavedData {
+         return this.includeSequenceId;
+     }
+ 
++    // MultiForge (docs/design/shared-state-audit.md): loot from every region draws from these, so each draw holds the leaf lock.
+     private class DirtyMarkingRandomSource implements RandomSource {
+         private final RandomSource random;
+ 
+@@ -103,62 +104,82 @@ public class RandomSequences extends SavedData {
+ 
+         @Override
+         public RandomSource fork() {
+-            RandomSequences.this.setDirty();
+-            return this.random.fork();
++            synchronized (RandomSequences.this) {
++                RandomSequences.this.setDirty();
++                return this.random.fork();
++            }
+         }
+ 
+         @Override
+         public PositionalRandomFactory forkPositional() {
+-            RandomSequences.this.setDirty();
+-            return this.random.forkPositional();
++            synchronized (RandomSequences.this) {
++                RandomSequences.this.setDirty();
++                return this.random.forkPositional();
++            }
+         }
+ 
+         @Override
+         public void setSeed(long seed) {
+-            RandomSequences.this.setDirty();
+-            this.random.setSeed(seed);
++            synchronized (RandomSequences.this) {
++                RandomSequences.this.setDirty();
++                this.random.setSeed(seed);
++            }
+         }
+ 
+         @Override
+         public int nextInt() {
+-            RandomSequences.this.setDirty();
+-            return this.random.nextInt();
++            synchronized (RandomSequences.this) {
++                RandomSequences.this.setDirty();
++                return this.random.nextInt();
++            }
+         }
+ 
+         @Override
+         public int nextInt(int bound) {
+-            RandomSequences.this.setDirty();
+-            return this.random.nextInt(bound);
++            synchronized (RandomSequences.this) {
++                RandomSequences.this.setDirty();
++                return this.random.nextInt(bound);
++            }
+         }
+ 
+         @Override
+         public long nextLong() {
+-            RandomSequences.this.setDirty();
+-            return this.random.nextLong();
++            synchronized (RandomSequences.this) {
++                RandomSequences.this.setDirty();
++                return this.random.nextLong();
++            }
+         }
+ 
+         @Override
+         public boolean nextBoolean() {
+-            RandomSequences.this.setDirty();
+-            return this.random.nextBoolean();
++            synchronized (RandomSequences.this) {
++                RandomSequences.this.setDirty();
++                return this.random.nextBoolean();
++            }
+         }
+ 
+         @Override
+         public float nextFloat() {
+-            RandomSequences.this.setDirty();
+-            return this.random.nextFloat();
++            synchronized (RandomSequences.this) {
++                RandomSequences.this.setDirty();
++                return this.random.nextFloat();
++            }
+         }
+ 
+         @Override
+         public double nextDouble() {
+-            RandomSequences.this.setDirty();
+-            return this.random.nextDouble();
++            synchronized (RandomSequences.this) {
++                RandomSequences.this.setDirty();
++                return this.random.nextDouble();
++            }
+         }
+ 
+         @Override
+         public double nextGaussian() {
+-            RandomSequences.this.setDirty();
+-            return this.random.nextGaussian();
++            synchronized (RandomSequences.this) {
++                RandomSequences.this.setDirty();
++                return this.random.nextGaussian();
++            }
+         }
+ 
+         @Override

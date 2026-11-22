@@ -1,6 +1,11 @@
 --- a/net/minecraft/world/level/block/Block.java
 +++ b/net/minecraft/world/level/block/Block.java
-@@ -434,8 +434,9 @@ public class Block extends BlockBehaviour implements ItemLike, net.neoforged.neo
+@@ -430,12 +430,13 @@ public class Block extends BlockBehaviour implements ItemLike, net.neoforged.neo
+     }
+ 
+     private static void popResource(Level level, Supplier<ItemEntity> entityFactory, ItemStack itemStack) {
+-        if (level instanceof ServerLevel serverLevel && !itemStack.isEmpty() && serverLevel.getGameRules().get(GameRules.BLOCK_DROPS) && !level.restoringBlockSnapshots) {
++        if (level instanceof ServerLevel serverLevel && !itemStack.isEmpty() && serverLevel.getGameRules().get(GameRules.BLOCK_DROPS) && !level.mfRestoringBlocks()) {
              ItemEntity entity = entityFactory.get();
              entity.setDefaultPickUpDelay();
              // Neo: Add drops to the captured list if capturing is enabled.
@@ -12,6 +17,15 @@
              }
              else {
                  level.addFreshEntity(entity);
+@@ -444,7 +445,7 @@ public class Block extends BlockBehaviour implements ItemLike, net.neoforged.neo
+     }
+ 
+     public void popExperience(ServerLevel level, BlockPos pos, int amount) {
+-        if (level.getGameRules().get(GameRules.BLOCK_DROPS) && !level.restoringBlockSnapshots) {
++        if (level.getGameRules().get(GameRules.BLOCK_DROPS) && !level.mfRestoringBlocks()) {
+             ExperienceOrb.award(level, Vec3.atCenterOf(pos), amount);
+         }
+     }
 @@ -607,7 +608,8 @@ public class Block extends BlockBehaviour implements ItemLike, net.neoforged.neo
       * When not null, records all item entities from {@link #popResource(Level, Supplier, ItemStack)} instead of adding them to the world.
       */

@@ -1,6 +1,47 @@
 --- a/net/minecraft/world/entity/Entity.java
 +++ b/net/minecraft/world/entity/Entity.java
-@@ -2981,6 +2981,9 @@ public abstract class Entity
+@@ -2556,6 +2556,13 @@ public abstract class Entity
+                     ProfilerFiller profiler = Profiler.get();
+                     profiler.push("portal");
+                     this.setPortalCooldown();
++                    // MultiForge (docs/design/shared-state-audit.md): finding the destination can build a platform or portal in
++                    // another, idle level, which two regions could write at once.
++                    if (net.multiforge.runtime.region.RegionPhase.deferUntilWorkersStop(
++                            Entity.MfLambdas.finishPortal(this, level, this.portalProcess), "portal.deferred")) {
++                        profiler.pop();
++                        return;
++                    }
+                     TeleportTransition teleportTransition = this.portalProcess.getPortalDestination(level, this);
+                     if (teleportTransition != null) {
+                         ServerLevel newLevel = teleportTransition.newLevel();
+@@ -2572,6 +2579,26 @@ public abstract class Entity
+         }
+     }
+ 
++    /** MultiForge: the rest of {@link #handlePortal}, at the barrier. */
++    private void mfFinishPortal(ServerLevel level, PortalProcessor process) {
++        if (this.isRemoved() || this.level() != level) return;
++        TeleportTransition teleportTransition = process.getPortalDestination(level, this);
++        if (teleportTransition != null) {
++            ServerLevel newLevel = teleportTransition.newLevel();
++            if (level.isAllowedToEnterPortal(newLevel) && (newLevel.dimension() == level.dimension() || this.canTeleport(level, newLevel))) {
++                this.teleport(teleportTransition);
++            }
++        }
++    }
++
++    static final class MfLambdas {
++        private MfLambdas() {}
++
++        static net.multiforge.runtime.region.RegionPhase.Deferred finishPortal(Entity entity, ServerLevel level, PortalProcessor process) {
++            return () -> entity.mfFinishPortal(level, process);
++        }
++    }
++
+     public int getDimensionChangingDelay() {
+         Entity firstPassenger = this.getFirstPassenger();
+         return firstPassenger instanceof ServerPlayer ? firstPassenger.getDimensionChangingDelay() : 300;
+@@ -2981,6 +3008,9 @@ public abstract class Entity
      }
  
      public @Nullable Entity teleport(TeleportTransition transition) {
@@ -10,7 +51,7 @@
          if (!net.neoforged.neoforge.common.CommonHooks.onTravelToDimension(this, transition.newLevel().dimension())) return null;
          if (this.level() instanceof ServerLevel serverLevel && !this.isRemoved()) {
              ServerLevel newLevel = transition.newLevel();
-@@ -3270,6 +3273,8 @@ public abstract class Entity
+@@ -3270,6 +3300,8 @@ public abstract class Entity
  
      public void teleportTo(double x, double y, double z) {
          if (this.level() instanceof ServerLevel) {

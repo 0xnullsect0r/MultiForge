@@ -1,6 +1,26 @@
 --- a/net/minecraft/world/level/chunk/LevelChunk.java
 +++ b/net/minecraft/world/level/chunk/LevelChunk.java
-@@ -398,6 +398,12 @@ public class LevelChunk extends ChunkAccess implements DebugValueSource, net.neo
+@@ -324,7 +324,7 @@ public class LevelChunk extends ChunkAccess implements DebugValueSource, net.neo
+                 if (!section.getBlockState(localX, localY, localZ).is(newBlock)) {
+                     return null;
+                 } else {
+-                    if (!this.level.isClientSide() && !this.level.captureBlockSnapshots && (flags & 512) == 0) {
++                    if (!this.level.isClientSide() && !this.level.mfCapturingBlocks() && (flags & 512) == 0) {
+                         state.onPlace(this.level, pos, oldState, movedByPiston);
+                     }
+ 
+@@ -371,6 +371,10 @@ public class LevelChunk extends ChunkAccess implements DebugValueSource, net.neo
+ 
+     public @Nullable BlockEntity getBlockEntity(BlockPos pos, LevelChunk.EntityCreationType creationType) {
+         BlockEntity blockEntity = this.blockEntities.get(pos);
++        // MultiForge (docs/design/shared-state-audit.md): another region only reads. Removing, promoting or creating is the owner's.
++        if (net.multiforge.neoforge.OwnershipGuard.isForeignRead(this.level, pos)) {
++            return blockEntity != null && !blockEntity.isRemoved() ? blockEntity : null;
++        }
+         if (blockEntity != null && blockEntity.isRemoved()) {
+             blockEntities.remove(pos);
+             blockEntity = null;
+@@ -398,6 +402,12 @@ public class LevelChunk extends ChunkAccess implements DebugValueSource, net.neo
      }
  
      public void addAndRegisterBlockEntity(BlockEntity blockEntity) {

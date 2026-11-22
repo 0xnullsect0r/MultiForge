@@ -22,6 +22,24 @@
          this.registryAccess = registryAccess;
          this.palettedContainerFactory = PalettedContainerFactory.create(registryAccess);
          this.damageSources = new DamageSources(registryAccess);
+@@ -237,14 +241,14 @@ public abstract class Level extends net.neoforged.neoforge.attachment.Attachment
+ 
+             pos = pos.immutable(); // Forge - prevent mutable BlockPos leaks
+             net.neoforged.neoforge.common.util.BlockSnapshot blockSnapshot = null;
+-            if (this.captureBlockSnapshots && !this.isClientSide) {
++            if (this.mfCapturingBlocks() && !this.isClientSide) {
+                 blockSnapshot = net.neoforged.neoforge.common.util.BlockSnapshot.create(this.dimension, this, pos, updateFlags);
+-                this.capturedBlockSnapshots.add(blockSnapshot);
++                this.mfCapturedBlocks().add(blockSnapshot);
+             }
+ 
+             BlockState oldState = chunk.setBlockState(pos, blockState, updateFlags);
+             if (oldState == null) {
+-                if (blockSnapshot != null) this.capturedBlockSnapshots.remove(blockSnapshot);
++                if (blockSnapshot != null) this.mfCapturedBlocks().remove(blockSnapshot);
+                 return false;
+             } else {
+                 BlockState newState = this.getBlockState(pos);
 @@ -503,32 +507,99 @@ public abstract class Level extends net.neoforged.neoforge.attachment.Attachment
      }
  
@@ -176,3 +194,89 @@
          return new BlockPos(xo + (val & 15), yo + (val >> 16 & yMask), zo + (val >> 8 & 15));
      }
  
+@@ -1084,13 +1168,13 @@ public abstract class Level extends net.neoforged.neoforge.attachment.Attachment
+         return this.biomeManager;
+     }
+ 
+-    private double maxEntityRadius = 2.0D;
++    private volatile double maxEntityRadius = 2.0D;
+     @Override
+     public double getMaxEntityRadius() {
+         return maxEntityRadius;
+     }
+     @Override
+-    public double increaseMaxEntityRadius(double value) {
++    public synchronized double increaseMaxEntityRadius(double value) {
+         if (value > maxEntityRadius)
+             maxEntityRadius = value;
+         return maxEntityRadius;
+@@ -1102,9 +1186,68 @@ public abstract class Level extends net.neoforged.neoforge.attachment.Attachment
+ 
+     protected abstract LevelEntityGetter<Entity> getEntities();
+ 
++    /** MultiForge (docs/design/shared-state-audit.md): a placement's block capture, one per region worker. */
++    private final ThreadLocal<Level.MfBlockCapture> mfBlockCapture = new ThreadLocal<>();
++
++    private Level.@Nullable MfBlockCapture mfWorkerCapture() {
++        if (!(Thread.currentThread() instanceof net.multiforge.runtime.region.RegionWorkerThread)) return null;
++        Level.MfBlockCapture capture = this.mfBlockCapture.get();
++        if (capture == null) {
++            capture = new Level.MfBlockCapture();
++            this.mfBlockCapture.set(capture);
++        }
++        return capture;
++    }
++
++    public boolean mfCapturingBlocks() {
++        Level.MfBlockCapture capture = this.mfWorkerCapture();
++        return capture != null ? capture.capturing : this.captureBlockSnapshots;
++    }
++
++    public void mfSetCapturingBlocks(boolean capturing) {
++        Level.MfBlockCapture capture = this.mfWorkerCapture();
++        if (capture != null) capture.capturing = capturing;
++        else this.captureBlockSnapshots = capturing;
++    }
++
++    public boolean mfRestoringBlocks() {
++        Level.MfBlockCapture capture = this.mfWorkerCapture();
++        return capture != null ? capture.restoring : this.restoringBlockSnapshots;
++    }
++
++    public void mfSetRestoringBlocks(boolean restoring) {
++        Level.MfBlockCapture capture = this.mfWorkerCapture();
++        if (capture != null) capture.restoring = restoring;
++        else this.restoringBlockSnapshots = restoring;
++    }
++
++    public java.util.ArrayList<net.neoforged.neoforge.common.util.BlockSnapshot> mfCapturedBlocks() {
++        Level.MfBlockCapture capture = this.mfWorkerCapture();
++        return capture != null ? capture.captured : this.capturedBlockSnapshots;
++    }
++
++    private static final class MfBlockCapture {
++        boolean capturing;
++        boolean restoring;
++        final java.util.ArrayList<net.neoforged.neoforge.common.util.BlockSnapshot> captured = new java.util.ArrayList<>();
++    }
++
++    private static final class MfAtomics {
++        static final java.lang.invoke.VarHandle SUB_TICK_COUNT;
++
++        static {
++            try {
++                SUB_TICK_COUNT = java.lang.invoke.MethodHandles.lookup().findVarHandle(Level.class, "subTickCount", long.class);
++            } catch (ReflectiveOperationException e) {
++                throw new ExceptionInInitializerError(e);
++            }
++        }
++    }
++
+     @Override
+     public long nextSubTickCount() {
+-        return this.subTickCount++;
++        // MultiForge (docs/design/shared-state-audit.md): regions schedule ticks concurrently, and each needs a unique order.
++        return (long)Level.MfAtomics.SUB_TICK_COUNT.getAndAdd(this, 1L);
+     }
+ 
+     @Override

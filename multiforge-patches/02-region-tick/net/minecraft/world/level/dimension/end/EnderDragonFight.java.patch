@@ -1,0 +1,25 @@
+--- a/net/minecraft/world/level/dimension/end/EnderDragonFight.java
++++ b/net/minecraft/world/level/dimension/end/EnderDragonFight.java
+@@ -492,7 +492,22 @@ public class EnderDragonFight extends SavedData {
+         return this.aliveCrystals;
+     }
+ 
++    static final class MfLambdas {
++        private MfLambdas() {}
++
++        static net.multiforge.runtime.region.RegionPhase.Deferred crystalDestroyed(
++            EnderDragonFight fight, EndCrystal crystal, DamageSource source
++        ) {
++            return () -> fight.onCrystalDestroyed(crystal, source);
++        }
++    }
++
+     public void onCrystalDestroyed(EndCrystal crystal, DamageSource source) {
++        // MultiForge (docs/design/shared-state-audit.md): the crystal's region may not be the dragon's; the fight is shared.
++        if (net.multiforge.runtime.region.RegionPhase.deferUntilWorkersStop(
++                EnderDragonFight.MfLambdas.crystalDestroyed(this, crystal, source), "dragon.crystal.deferred")) {
++            return;
++        }
+         if (this.respawnStage != null && this.respawnCrystals.contains(crystal)) {
+             this.abortRespawnSequence();
+         } else {

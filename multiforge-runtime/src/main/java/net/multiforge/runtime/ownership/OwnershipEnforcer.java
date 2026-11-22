@@ -283,6 +283,20 @@ public final class OwnershipEnforcer {
     }
 
     /**
+     * Is the caller a region worker reading a chunk its region does not own, while that
+     * chunk's level is ticking regions? A pure question: it counts and logs nothing.
+     */
+    public static boolean isForeignRead(WorldRef world, int chunkX, int chunkZ) {
+        if (mode == Mode.OFF) return false;
+        OwnerToken tok = OwnerToken.current();
+        if (tok.domain() != Domain.REGION || soleWriter()) return false;
+        PositionRouter router = positionRouter;
+        if (router == null || world == null || tok.regionId() == router.globalRegionId()) return false;
+        if (!router.regionsTicking(world)) return false;
+        return router.ownerOf(world, chunkX, chunkZ) != tok.regionId();
+    }
+
+    /**
      * Positional ownership check for a mutation of chunk ({@code chunkX},
      * {@code chunkZ}) in {@code world}.
      *

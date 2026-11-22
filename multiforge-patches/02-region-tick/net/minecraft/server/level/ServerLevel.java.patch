@@ -109,7 +109,25 @@
      @Override
      public boolean shouldTickBlocksAt(long chunkPos) {
          return this.chunkSource.chunkMap.getDistanceManager().inBlockTickingRange(chunkPos);
-@@ -1159,7 +1232,7 @@ public class ServerLevel extends Level implements WorldGenLevel, ServerEntityGet
+@@ -650,7 +723,16 @@ public class ServerLevel extends Level implements WorldGenLevel, ServerEntityGet
+     }
+ 
+     public boolean isHandlingTick() {
+-        return this.handlingTick;
++        // MultiForge (docs/design/shared-state-audit.md): the block phase of a region tick runs after tick() cleared the flag.
++        return this.handlingTick || this.mfRegionHandlingTick.get() != null;
++    }
++
++    private final ThreadLocal<Boolean> mfRegionHandlingTick = new ThreadLocal<>();
++
++    /** The calling region thread enters or leaves the part of the tick Vanilla flags as handling a tick. */
++    public void mfSetRegionHandlingTick(boolean handling) {
++        if (handling) this.mfRegionHandlingTick.set(Boolean.TRUE);
++        else this.mfRegionHandlingTick.remove();
+     }
+ 
+     public boolean canSleepThroughNights() {
+@@ -1159,7 +1241,7 @@ public class ServerLevel extends Level implements WorldGenLevel, ServerEntityGet
  
      @Override
      public void sendBlockUpdated(BlockPos pos, BlockState old, BlockState current, int updateFlags) {
@@ -118,7 +136,7 @@
              String message = "recursive call to sendBlockUpdated";
              Util.logAndPauseIfInIde("recursive call to sendBlockUpdated", new IllegalStateException("recursive call to sendBlockUpdated"));
          }
-@@ -1172,6 +1245,12 @@ public class ServerLevel extends Level implements WorldGenLevel, ServerEntityGet
+@@ -1172,6 +1254,12 @@ public class ServerLevel extends Level implements WorldGenLevel, ServerEntityGet
              List<PathNavigation> navigationsToUpdate = new ObjectArrayList<>();
  
              for (Mob navigatingMob : this.navigatingMobs) {
@@ -131,7 +149,7 @@
                  PathNavigation pathNavigation = navigatingMob.getNavigation();
                  if (pathNavigation.shouldRecomputePath(pos)) {
                      navigationsToUpdate.add(pathNavigation);
-@@ -1179,13 +1258,13 @@ public class ServerLevel extends Level implements WorldGenLevel, ServerEntityGet
+@@ -1179,13 +1267,13 @@ public class ServerLevel extends Level implements WorldGenLevel, ServerEntityGet
              }
  
              try {
@@ -147,7 +165,7 @@
              }
          }
      }
-@@ -1279,11 +1358,30 @@ public class ServerLevel extends Level implements WorldGenLevel, ServerEntityGet
+@@ -1279,11 +1367,30 @@ public class ServerLevel extends Level implements WorldGenLevel, ServerEntityGet
  
      @Override
      public void blockEvent(BlockPos pos, Block block, int b0, int b1) {
@@ -178,7 +196,7 @@
  
          while (!this.blockEvents.isEmpty()) {
              BlockEventData eventData = this.blockEvents.removeFirst();
-@@ -1682,6 +1780,9 @@ public class ServerLevel extends Level implements WorldGenLevel, ServerEntityGet
+@@ -1682,6 +1789,9 @@ public class ServerLevel extends Level implements WorldGenLevel, ServerEntityGet
  
      @VisibleForTesting
      public void clearBlockEvents(BoundingBox bb) {
@@ -188,7 +206,7 @@
          this.blockEvents.removeIf(e -> bb.isInside(e.pos()));
      }
  
-@@ -1957,7 +2058,7 @@ public class ServerLevel extends Level implements WorldGenLevel, ServerEntityGet
+@@ -1957,7 +2067,7 @@ public class ServerLevel extends Level implements WorldGenLevel, ServerEntityGet
              }
  
              if (entity instanceof Mob mob) {
@@ -197,7 +215,7 @@
                      String message = "onTrackingStart called during navigation iteration";
                      Util.logAndPauseIfInIde(
                          "onTrackingStart called during navigation iteration", new IllegalStateException("onTrackingStart called during navigation iteration")
-@@ -1985,7 +2086,7 @@ public class ServerLevel extends Level implements WorldGenLevel, ServerEntityGet
+@@ -1985,7 +2095,7 @@ public class ServerLevel extends Level implements WorldGenLevel, ServerEntityGet
              }
  
              if (entity instanceof Mob mob) {

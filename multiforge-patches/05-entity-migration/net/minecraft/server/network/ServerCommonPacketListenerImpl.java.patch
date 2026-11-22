@@ -1,0 +1,30 @@
+--- a/net/minecraft/server/network/ServerCommonPacketListenerImpl.java
++++ b/net/minecraft/server/network/ServerCommonPacketListenerImpl.java
+@@ -214,11 +214,27 @@ public abstract class ServerCommonPacketListenerImpl implements ServerCommonPack
+     }
+ 
+     public void disconnect(DisconnectionDetails details) {
++        // MultiForge (docs/design/shared-state-audit.md): removing a player rewrites the player list, tracker and distance
++        // maps that regions read, so a kick during the region phase lands at the barrier.
++        if (net.multiforge.runtime.region.RegionPhase.deferUntilWorkersStop(
++                ServerCommonPacketListenerImpl.MfLambdas.disconnect(this, details), "player.disconnect.deferred")) {
++            return;
++        }
+         this.connection.send(new ClientboundDisconnectPacket(details.reason()), PacketSendListener.thenRun(() -> this.connection.disconnect(details)));
+         this.connection.setReadOnly();
+         this.server.executeBlocking(this.connection::handleDisconnection);
+     }
+ 
++    static final class MfLambdas {
++        private MfLambdas() {}
++
++        static net.multiforge.runtime.region.RegionPhase.Deferred disconnect(
++            ServerCommonPacketListenerImpl listener, DisconnectionDetails details
++        ) {
++            return () -> listener.disconnect(details);
++        }
++    }
++
+     protected boolean isSingleplayerOwner() {
+         return this.server.isSingleplayerOwner(new NameAndId(this.playerProfile()));
+     }

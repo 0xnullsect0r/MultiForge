@@ -67,6 +67,15 @@ public final class OwnershipGuard {
         return canMutateAt(site, level, net.minecraft.core.SectionPos.blockToSectionCoord(pos.getX()), net.minecraft.core.SectionPos.blockToSectionCoord(pos.getZ()));
     }
 
+    /** Is the caller a region worker reading a chunk its region does not own? Counts nothing. */
+    public static boolean isForeignRead(Level level, BlockPos pos) {
+        if (level.isClientSide()) return false;
+        return OwnershipEnforcer.isForeignRead(
+                level.mfWorldRef(),
+                net.minecraft.core.SectionPos.blockToSectionCoord(pos.getX()),
+                net.minecraft.core.SectionPos.blockToSectionCoord(pos.getZ()));
+    }
+
     /**
      * Hands {@code mutation} to the region owning chunk ({@code chunkX},
      * {@code chunkZ}), or to the server thread when no region owns it.

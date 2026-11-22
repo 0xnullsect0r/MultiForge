@@ -1,6 +1,6 @@
 --- a/net/minecraft/world/entity/ai/village/poi/PoiManager.java
 +++ b/net/minecraft/world/entity/ai/village/poi/PoiManager.java
-@@ -69,73 +69,77 @@ public class PoiManager extends SectionStorage<PoiSection, PoiSection.Packed> {
+@@ -69,73 +69,78 @@ public class PoiManager extends SectionStorage<PoiSection, PoiSection.Packed> {
          this.distanceTracker = new PoiManager.DistanceTracker();
      }
  
@@ -76,8 +76,8 @@
          return this.findAllWithType(predicate, filter, center, radius, occupancy).sorted(Comparator.comparingDouble(p -> p.getSecond().distSqr(center)));
      }
  
--    public Optional<BlockPos> find(
-+    public synchronized Optional<BlockPos> find(
++    // MultiForge (docs/design/shared-state-audit.md): getInRange takes the monitor and materializes; the caller's filter may wait on a chunk, so it runs outside.
+     public Optional<BlockPos> find(
          Predicate<Holder<PoiType>> predicate, Predicate<BlockPos> filter, BlockPos center, int radius, PoiManager.Occupancy occupancy
      ) {
          return this.findAll(predicate, filter, center, radius, occupancy).findFirst();
@@ -93,16 +93,15 @@
          Predicate<Holder<PoiType>> predicate, BlockPos center, int radius, PoiManager.Occupancy occupancy
      ) {
          return this.getInRange(predicate, center, radius, occupancy)
-@@ -143,7 +147,7 @@ public class PoiManager extends SectionStorage<PoiSection, PoiSection.Packed> {
+@@ -143,6 +148,7 @@ public class PoiManager extends SectionStorage<PoiSection, PoiSection.Packed> {
              .map(p -> Pair.of(p.getPoiType(), p.getPos()));
      }
  
--    public Optional<BlockPos> findClosest(
-+    public synchronized Optional<BlockPos> findClosest(
++    // MultiForge (docs/design/shared-state-audit.md): getInRange takes the monitor and materializes; the caller's filter may wait on a chunk, so it runs outside.
+     public Optional<BlockPos> findClosest(
          Predicate<Holder<PoiType>> predicate, Predicate<BlockPos> filter, BlockPos center, int radius, PoiManager.Occupancy occupancy
      ) {
-         return this.getInRange(predicate, center, radius, occupancy)
-@@ -152,7 +156,7 @@ public class PoiManager extends SectionStorage<PoiSection, PoiSection.Packed> {
+@@ -152,7 +158,7 @@ public class PoiManager extends SectionStorage<PoiSection, PoiSection.Packed> {
              .min(Comparator.comparingDouble(pos -> pos.distSqr(center)));
      }
  
@@ -111,15 +110,15 @@
          return this.getInRange(predicate, center, radius, PoiManager.Occupancy.HAS_SPACE)
              .filter(poi -> filter.test(poi.getPoiType(), poi.getPos()))
              .findFirst()
-@@ -162,33 +166,33 @@ public class PoiManager extends SectionStorage<PoiSection, PoiSection.Packed> {
+@@ -162,6 +168,7 @@ public class PoiManager extends SectionStorage<PoiSection, PoiSection.Packed> {
              });
      }
  
--    public Optional<BlockPos> getRandom(
-+    public synchronized Optional<BlockPos> getRandom(
++    // MultiForge (docs/design/shared-state-audit.md): getInRange takes the monitor and materializes; the caller's filter may wait on a chunk, so it runs outside.
+     public Optional<BlockPos> getRandom(
          Predicate<Holder<PoiType>> predicate, Predicate<BlockPos> filter, PoiManager.Occupancy occupancy, BlockPos center, int radius, RandomSource random
      ) {
-         List<PoiRecord> collect = Util.toShuffledList(this.getInRange(predicate, center, radius, occupancy), random);
+@@ -169,26 +176,26 @@ public class PoiManager extends SectionStorage<PoiSection, PoiSection.Packed> {
          return collect.stream().filter(poi -> filter.test(poi.getPos())).findFirst().map(PoiRecord::getPos);
      }
  
@@ -151,7 +150,7 @@
          this.distanceTracker.runAllUpdates();
          return this.distanceTracker.getLevel(sectionPos.asLong());
      }
-@@ -201,23 +205,23 @@ public class PoiManager extends SectionStorage<PoiSection, PoiSection.Packed> {
+@@ -201,23 +208,23 @@ public class PoiManager extends SectionStorage<PoiSection, PoiSection.Packed> {
      }
  
      @Override
@@ -179,7 +178,7 @@
          Util.ifElse(this.getOrLoad(sectionPos.asLong()), section -> section.refresh(output -> {
              if (mayHavePoi(blockSection)) {
                  this.updateFromSection(blockSection, sectionPos, output);
-@@ -247,14 +251,23 @@ public class PoiManager extends SectionStorage<PoiSection, PoiSection.Packed> {
+@@ -247,14 +254,23 @@ public class PoiManager extends SectionStorage<PoiSection, PoiSection.Packed> {
      }
  
      public void ensureLoadedAndValid(LevelReader reader, BlockPos center, int radius) {
@@ -205,7 +204,7 @@
      }
  
      private final class DistanceTracker extends SectionTracker {
-@@ -306,4 +319,14 @@ public class PoiManager extends SectionStorage<PoiSection, PoiSection.Packed> {
+@@ -306,4 +322,14 @@ public class PoiManager extends SectionStorage<PoiSection, PoiSection.Packed> {
              return this.test;
          }
      }

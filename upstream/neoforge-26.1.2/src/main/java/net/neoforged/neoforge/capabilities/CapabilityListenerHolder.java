@@ -37,7 +37,7 @@ public class CapabilityListenerHolder {
     /**
      * Adds a listener.
      */
-    public void addListener(BlockPos pos, ICapabilityInvalidationListener listener) {
+    public synchronized void addListener(BlockPos pos, ICapabilityInvalidationListener listener) {
         pos = pos.immutable();
         var chunkHolder = byChunkThenBlock.computeIfAbsent(ChunkPos.pack(pos), l -> new Long2ReferenceOpenHashMap<>());
         var listenersSet = chunkHolder.computeIfAbsent(pos.asLong(), l -> new ObjectOpenHashSet<>());
@@ -53,36 +53,54 @@ public class CapabilityListenerHolder {
      * Invalidates listeners at a specific block position.
      */
     public void invalidatePos(BlockPos pos) {
-        var chunkHolder = byChunkThenBlock.get(ChunkPos.pack(pos));
-        if (chunkHolder != null) {
-            var caches = chunkHolder.get(pos.asLong());
-            if (caches != null)
-                invalidateList(caches);
+        Set<ListenerReference> caches = null;
+        synchronized (this) {
+            var chunkHolder = byChunkThenBlock.get(ChunkPos.pack(pos));
+            if (chunkHolder != null)
+                caches = chunkHolder.get(pos.asLong());
         }
+        if (caches != null)
+            invalidateList(caches);
     }
 
     /**
      * Invalidates listeners at a specific chunk position.
      */
     public void invalidateChunk(ChunkPos chunkPos) {
-        var chunkHolder = byChunkThenBlock.get(chunkPos.pack());
-        if (chunkHolder != null) {
-            for (var caches : chunkHolder.values())
-                invalidateList(caches);
+        java.util.List<Set<ListenerReference>> lists = java.util.List.of();
+        synchronized (this) {
+            var chunkHolder = byChunkThenBlock.get(chunkPos.pack());
+            if (chunkHolder != null)
+                lists = java.util.List.copyOf(chunkHolder.values());
         }
+        for (var caches : lists)
+            invalidateList(caches);
     }
 
     private void invalidateList(Set<ListenerReference> caches) {
-        caches.removeIf(ref -> {
+        // MultiForge: regions invalidate concurrently. The listeners are foreign code, so they
+        // run outside the lock, which guards only these collections.
+        java.util.List<ListenerReference> references;
+        synchronized (this) {
+            references = java.util.List.copyOf(caches);
+        }
+        java.util.List<ListenerReference> finished = new java.util.ArrayList<>();
+        for (var ref : references) {
             var listener = ref.get();
-            return listener == null || !listener.onInvalidate();
-        });
+            if (listener == null || !listener.onInvalidate())
+                finished.add(ref);
+        }
+        if (!finished.isEmpty()) {
+            synchronized (this) {
+                finished.forEach(caches::remove);
+            }
+        }
     }
 
     /**
      * Poll the reference queue, and remove garbage-collected listener references entries from {@link #byChunkThenBlock}.
      */
-    public void clean() {
+    public synchronized void clean() {
         while (true) {
             ListenerReference ref = (ListenerReference) queue.poll();
             if (ref == null)
