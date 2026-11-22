@@ -156,9 +156,14 @@ public class SharedStateAuditTests {
                             host.regionizerFor(level.mfWorldRef()).regionAtChunk(farChunk.x(), farChunk.z()) != null,
                             "far chunk has no region yet"))
                     .thenExecute(() -> {
-                        level.setBlock(far, Blocks.CHEST.defaultBlockState(), 3);
+                        // A barrel has no ticker, so nothing on the owner's side touches it during the read.
+                        level.setBlock(far, Blocks.BARREL.defaultBlockState(), 3);
                         placed.set(level.getBlockEntity(far));
-                        helper.assertTrue(placed.get() != null, "no chest at the far position");
+                        helper.assertTrue(placed.get() != null, "no barrel at the far position");
+                    })
+                    // The new block's broadcast reads its block entity on the server thread, which
+                    // would replace a removed one. Let it pass before marking this one removed.
+                    .thenExecuteAfter(3, () -> {
                         placed.get().setRemoved();
                         LevelChunk chunk = level.getChunkAt(far);
                         onWorker(host, level, here, () -> {
@@ -273,6 +278,67 @@ public class SharedStateAuditTests {
                     }))
                     .thenWaitUntil(() -> helper.assertTrue(outcome.get() != null, "worker task has not run"))
                     .thenExecute(() -> helper.assertTrue("ok".equals(outcome.get()), outcome.get()))
+                    .thenSucceed();
+        });
+    }
+
+    @GameTest(template = TestsMod.TEMPLATE_3x3, timeoutTicks = 300)
+    @TestHolder(description = "Health, absorption, experience and exhaustion changes on a player in another region land after the barrier.")
+    static void playerStateChangesFromAnotherRegionAreDeferred(final DynamicTest test) {
+        test.onGameTest(helper -> {
+            MultiThreadedSchedulerHost host = MultiForgeRegionizedRuntime.current();
+            if (host == null) {
+                helper.succeed(); // mode = "off"
+                return;
+            }
+            ServerLevel level = helper.getLevel();
+            BlockPos here = helper.absolutePos(new BlockPos(1, 1, 1));
+            BlockPos far = here.offset(2000, 40, 0);
+            ChunkPos farChunk = ChunkPos.containing(far);
+            Runnable release = TestForcedChunks.force(level, farChunk);
+            long deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(60);
+            level.getServer().managedBlock(() -> level.isPositionEntityTicking(far) || System.nanoTime() > deadline);
+            helper.assertTrue(level.isPositionEntityTicking(far), "the far chunk did not load within 60 s");
+            var player = helper.makeTickingMockServerPlayerInLevel(GameType.SURVIVAL);
+            player.setNoGravity(true);
+            player.teleportTo(far.getX() + 0.5, far.getY(), far.getZ() + 0.5);
+            helper.addEndListener(passed -> release.run());
+            AtomicReference<String> outcome = new AtomicReference<>();
+            helper.startSequence()
+                    .thenWaitUntil(() -> helper.assertTrue(
+                            ChunkPos.containing(player.blockPosition()).equals(farChunk)
+                                    && host.regionizerFor(level.mfWorldRef()).regionAtChunk(farChunk.x(), farChunk.z()) != null,
+                            "the player has not reached the far region"))
+                    .thenExecute(() -> {
+                        player.setHealth(10.0F);
+                        player.setAbsorptionAmount(0.0F);
+                        player.getFoodData().setFoodLevel(10);
+                        onWorker(host, level, here, () -> {
+                            long exhaustionDeferred = ProbeRegistry.get("Player.causeFoodExhaustion:deferred-cross-region");
+                            // Absorption clamps to a maximum of 0 without the effect, so its probe is the evidence.
+                            long absorptionDeferred = ProbeRegistry.get("LivingEntity.setAbsorptionAmount:deferred-cross-region");
+                            int xpBefore = player.totalExperience;
+                            int levelBefore = player.experienceLevel;
+                            player.heal(2.0F);
+                            player.setAbsorptionAmount(4.0F);
+                            player.giveExperiencePoints(5);
+                            player.giveExperienceLevels(1);
+                            player.causeFoodExhaustion(1.0F);
+                            boolean untouched = player.getHealth() == 10.0F
+                                    && ProbeRegistry.get("LivingEntity.setAbsorptionAmount:deferred-cross-region") > absorptionDeferred
+                                    && player.totalExperience == xpBefore
+                                    && player.experienceLevel == levelBefore
+                                    && ProbeRegistry.get("Player.causeFoodExhaustion:deferred-cross-region") > exhaustionDeferred;
+                            outcome.set(untouched ? "ok" : "a change was applied from the wrong region's worker");
+                        });
+                    })
+                    .thenWaitUntil(() -> helper.assertTrue(outcome.get() != null, "worker task has not run"))
+                    .thenExecute(() -> helper.assertTrue("ok".equals(outcome.get()), outcome.get()))
+                    .thenWaitUntil(() -> helper.assertTrue(
+                            player.getHealth() >= 12.0F
+                                    && player.totalExperience >= 5
+                                    && player.experienceLevel >= 1,
+                            "the deferred changes have not landed"))
                     .thenSucceed();
         });
     }

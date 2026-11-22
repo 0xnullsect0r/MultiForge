@@ -359,6 +359,69 @@ public class RegionTickBehaviourTests {
         });
     }
 
+    @GameTest(template = TestsMod.TEMPLATE_3x3, timeoutTicks = 300)
+    @TestHolder(description = {
+            "A block entity on a worker changing the effects of an entity in another region",
+            "does not touch that entity's maps from its own thread: the change lands after the barrier."
+    })
+    static void effectsOnAnEntityInAnotherRegionAreDeferred(final DynamicTest test) {
+        test.onGameTest(helper -> {
+            MultiThreadedSchedulerHost host = MultiForgeRegionizedRuntime.current();
+            helper.assertTrue(host != null, "runtime must be installed");
+            net.minecraft.server.level.ServerLevel level = helper.getLevel();
+            BlockPos here = helper.absolutePos(new BlockPos(1, 1, 1));
+            BlockPos far = here.offset(-2000, 0, 0);
+            int farChunkX = far.getX() >> 4;
+            int farChunkZ = far.getZ() >> 4;
+            Runnable releaseFar = TestForcedChunks.force(level, new net.minecraft.world.level.ChunkPos(farChunkX, farChunkZ));
+            // 26.1's GameTest server does not wait between ticks: bound the load by wall clock.
+            long loadDeadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(60);
+            level.getServer().managedBlock(() -> level.isPositionEntityTicking(far) || System.nanoTime() > loadDeadline);
+            helper.assertTrue(level.isPositionEntityTicking(far), "the far chunk did not reach entity-ticking within 60 s");
+            Pig pig = EntityType.PIG.create(level, net.minecraft.world.entity.EntitySpawnReason.TRIGGERED);
+            helper.assertTrue(pig != null, "pig");
+            pig.snapTo(far.getX() + 0.5, far.getY(), far.getZ() + 0.5, 0, 0);
+            pig.setNoAi(true);
+            pig.setNoGravity(true);
+            helper.addEndListener(passed -> {
+                pig.discard();
+                releaseFar.run();
+            });
+            java.util.concurrent.ConcurrentHashMap<String, Boolean> results = new java.util.concurrent.ConcurrentHashMap<>();
+            helper.startSequence()
+                    .thenWaitUntil(() -> helper.assertTrue(
+                            level.hasChunk(farChunkX, farChunkZ)
+                                    && host.regionizerFor(level.mfWorldRef()).regionAtChunk(farChunkX, farChunkZ) != null,
+                            "far chunk not loaded and regionized yet"))
+                    // The sequence runs on this test's region; strict mode refuses a cross-region add,
+                    // so the region owning the far chunk adds the pig itself.
+                    .thenExecute(() -> host.taskQueue().queueChunkTask(level.mfWorldRef(), farChunkX, farChunkZ, () -> level.addFreshEntity(pig)))
+                    .thenWaitUntil(() -> helper.assertTrue(level.getEntity(pig.getUUID()) != null, "pig not in the level yet"))
+                    .thenExecute(() -> host.taskQueue().queueChunkTask(level.mfWorldRef(), here.getX() >> 4, here.getZ() >> 4, () -> {
+                        results.put("worker", Thread.currentThread().getName().startsWith("multiforge-tick-"));
+                        results.put("added", pig.addEffect(new net.minecraft.world.effect.MobEffectInstance(
+                                net.minecraft.world.effect.MobEffects.RESISTANCE, 6000, 1)));
+                        results.put("visibleToCaller", pig.hasEffect(net.minecraft.world.effect.MobEffects.RESISTANCE));
+                    }))
+                    .thenWaitUntil(() -> helper.assertTrue(results.containsKey("visibleToCaller"), "worker task has not run yet"))
+                    .thenExecute(() -> {
+                        helper.assertTrue(results.get("worker"), "task did not run on a region worker");
+                        helper.assertTrue(results.get("added"), "deferred addEffect returned false");
+                        helper.assertFalse(results.get("visibleToCaller"), "effect was applied from the wrong region's worker");
+                    })
+                    .thenWaitUntil(() -> helper.assertTrue(
+                            pig.hasEffect(net.minecraft.world.effect.MobEffects.RESISTANCE), "effect has not landed yet"))
+                    .thenExecute(() -> host.taskQueue().queueChunkTask(level.mfWorldRef(), here.getX() >> 4, here.getZ() >> 4, () -> {
+                        pig.removeEffect(net.minecraft.world.effect.MobEffects.RESISTANCE);
+                        results.put("removed", true);
+                    }))
+                    .thenWaitUntil(() -> helper.assertTrue(results.containsKey("removed"), "removal task has not run yet"))
+                    .thenWaitUntil(() -> helper.assertFalse(
+                            pig.hasEffect(net.minecraft.world.effect.MobEffects.RESISTANCE), "effect has not been removed yet"))
+                    .thenSucceed();
+        });
+    }
+
     /**
      * Not {@code TicketType.FORCED}: at distance 2 that ticket equals the one {@code
      * setChunkForced} adds, and this test's end listener runs after the runner has
