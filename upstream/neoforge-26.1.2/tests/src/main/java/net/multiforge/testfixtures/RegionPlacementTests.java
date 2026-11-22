@@ -12,9 +12,15 @@
  */
 package net.multiforge.testfixtures;
 
+import java.util.Locale;
 import java.util.concurrent.atomic.AtomicReference;
 import net.minecraft.core.BlockPos;
+import net.minecraft.server.level.ServerLevel;
+import net.minecraft.world.entity.EntitySpawnReason;
+import net.minecraft.world.entity.EntityType;
+import net.minecraft.world.entity.animal.pig.Pig;
 import net.multiforge.runtime.region.Region;
+import net.multiforge.runtime.region.RegionWorkerThread;
 import net.multiforge.runtime.region.ThreadedRegionizer;
 import net.multiforge.runtime.region.TickRegionScheduler;
 import net.multiforge.runtime.scheduler.MultiForgeRegionizedRuntime;
@@ -68,6 +74,44 @@ public class RegionPlacementTests {
                                 !ranOn.get().equals(helper.getLevel().getServer().getRunningThread().getName()),
                                 "the region's mailbox task ran on the server thread (" + ranOn.get() + ")");
                     })
+                    .thenSucceed();
+        });
+    }
+
+    /**
+     * Cupboard holds back an entity added from a thread without "server" in its name, where no
+     * mob cap can count it. This applies that check on a real worker, around a real add.
+     */
+    @GameTest(template = TestsMod.TEMPLATE_3x3, timeoutTicks = 100)
+    @TestHolder(description = "An entity added on a region worker passes a Cupboard-style thread-name check and is visible at once.")
+    static void workerEntityAddPassesACupboardStyleThreadCheck(final DynamicTest test) {
+        test.onGameTest(helper -> {
+            MultiThreadedSchedulerHost host = MultiForgeRegionizedRuntime.current();
+            if (host == null) {
+                helper.succeed(); // mode = "off"
+                return;
+            }
+            ServerLevel level = helper.getLevel();
+            BlockPos abs = helper.absolutePos(new BlockPos(1, 2, 1));
+            AtomicReference<String> outcome = new AtomicReference<>();
+            helper.startSequence()
+                    .thenExecute(() -> host.taskQueue().queueChunkTask(level.mfWorldRef(), abs.getX() >> 4, abs.getZ() >> 4, () -> {
+                        Thread thread = Thread.currentThread();
+                        if (!(thread instanceof RegionWorkerThread)) {
+                            outcome.set("the add ran on " + thread.getName() + ", not a region worker");
+                        } else if (!thread.getName().toLowerCase(Locale.ROOT).contains("server")) {
+                            outcome.set("Cupboard would hold back an add from " + thread.getName());
+                        } else {
+                            Pig pig = EntityType.PIG.create(level, EntitySpawnReason.TRIGGERED);
+                            pig.setPos(abs.getX() + 0.5, abs.getY(), abs.getZ() + 0.5);
+                            boolean added = level.addFreshEntity(pig);
+                            boolean visible = level.getEntity(pig.getUUID()) == pig;
+                            pig.discard();
+                            outcome.set(added && visible ? "ok" : "added=" + added + " visible=" + visible);
+                        }
+                    }))
+                    .thenWaitUntil(() -> helper.assertTrue(outcome.get() != null, "mailbox task has not run yet"))
+                    .thenExecute(() -> helper.assertTrue("ok".equals(outcome.get()), outcome.get()))
                     .thenSucceed();
         });
     }
