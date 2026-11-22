@@ -91,6 +91,23 @@ public class DispatchingEventBus implements IEventBus {
             inner.register(target);
             return;
         }
+        // FML's @EventBusSubscriber registers one listener at a time, by its Method. The
+        // bus accepts only a static @SubscribeEvent method here.
+        if (target instanceof Method method) {
+            SubscribeEvent annotation = method.getAnnotation(SubscribeEvent.class);
+            if (!Modifier.isStatic(method.getModifiers())) {
+                throw new IllegalArgumentException("Expected a static method: " + method);
+            }
+            if (annotation == null) {
+                throw new IllegalArgumentException("Expected a @SubscribeEvent method: " + method);
+            }
+            Method canonical = canonicalMethods.computeIfAbsent(method, m -> m);
+            synchronized (registrations) {
+                if (!registeredTargets.add(canonical)) return;
+            }
+            registerSubscribeEventMethod(canonical, method, annotation, null);
+            return;
+        }
         // NeoForge's bus ignores a second register of the same object (a mod with
         // @EventBusSubscriber that also registers the class itself); so must this one,
         // or every listener of that object fires twice.
@@ -260,6 +277,11 @@ public class DispatchingEventBus implements IEventBus {
     private final java.util.Set<Object> registeredTargets =
             java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>());
 
+    // Reflection returns a new, equal Method on every lookup, while the registration
+    // maps are by identity: one instance per method keeps register/unregister paired.
+    private final java.util.concurrent.ConcurrentMap<Method, Method> canonicalMethods =
+            new java.util.concurrent.ConcurrentHashMap<>();
+
     private void track(Object owner, RoutingListenerWrapper<?> wrapped) {
         synchronized (registrations) {
             registrations
@@ -306,6 +328,10 @@ public class DispatchingEventBus implements IEventBus {
 
     @Override
     public void unregister(Object target) {
+        if (target instanceof Method method) {
+            Method canonical = canonicalMethods.get(method);
+            if (canonical != null) target = canonical;
+        }
         java.util.List<Consumer<?>> wrappers;
         synchronized (registrations) {
             wrappers = registrations.remove(target);
