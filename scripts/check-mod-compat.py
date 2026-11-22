@@ -13,7 +13,7 @@
 Report which mod jars a MultiForge server can actually load.
 
     scripts/check-mod-compat.py mods/*.jar
-    scripts/check-mod-compat.py --base 21.1.300 mods/*.jar   # model a newer base
+    scripts/check-mod-compat.py --base 26.1.2.200 mods/*.jar   # model a newer base
 
 MultiForge is forked from a specific NeoForge release and reports that as
 its `neoforge` version (see docs/compatibility.md). A mod requiring a
@@ -38,7 +38,7 @@ DEP_SPLIT = re.compile(r"\[\[dependencies\.")
 IS_NEOFORGE = re.compile(r'modId\s*=\s*"neoforge"')
 RANGE = re.compile(r'versionRange\s*=\s*"([^"]*)"')
 # Leading bound of a Maven range: "[21.1.187,)" -> 21.1.187
-FLOOR = re.compile(r"^[\[(]\s*(\d+)(?:\.(\d+))?(?:\.(\d+))?")
+FLOOR = re.compile(r"^[\[(]\s*(\d+)(?:\.(\d+))?(?:\.(\d+))?(?:\.(\d+))?")
 
 
 def floor_of(spec):
@@ -67,7 +67,7 @@ def requirements(path):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--base", default="21.1.251", help="NeoForge version MultiForge reports (default: 21.1.251)")
+    ap.add_argument("--base", default="26.1.2.129", help="NeoForge version MultiForge reports (default: 26.1.2.129)")
     ap.add_argument("jars", nargs="+")
     args = ap.parse_args()
 

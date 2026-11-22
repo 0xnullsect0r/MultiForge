@@ -42,7 +42,7 @@ fail() {
     exit 1
 }
 pass() { echo "ok: $*"; }
-# The JDK 21 to run Java with: JAVA_HOME when set (the machine default may be newer).
+# The JDK to run Java with: JAVA_HOME when set (the machine default may be another version).
 JAVA="${JAVA_HOME:+$JAVA_HOME/bin/}java"
 sum() { sha256sum "$1" | awk '{print $1}'; }
 launched() { sed -n 's|.*libraries/net/neoforged/neoforge/\([^/]*\)/unix_args\.txt.*|\1|p' run.sh | head -n 1; }

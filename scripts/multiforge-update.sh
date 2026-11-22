@@ -19,8 +19,10 @@
 #   curl -fsSL .../multiforge-update.sh | sh -s -- /path/to/server
 #   curl -fsSL .../multiforge-update.sh | sh -s -- --rollback [/path/to/server]
 #
-# Afterwards start the server with `<jdk21>/bin/java -Xmx8G -jar server.jar nogui`
-# (or ./run.sh, which refuses to start on anything but Java 21). server.jar is replaced on every run; it launches whatever
+# Afterwards start the server with `<jdk>/bin/java -Xmx8G -jar server.jar nogui`, on
+# Java 21 for Minecraft 1.21.1 and Java 25 for 26.1 (or ./run.sh, which refuses any
+# other Java). A 26.1 server must name its release with MF_VERSION: `latest` is always
+# a 1.21.1 release. server.jar is replaced on every run; it launches whatever
 # run.sh names, and the installer rewrites run.sh to the new version.
 #
 # Leaves alone: config/ (multiforge-server.toml included), mods/, worlds,
@@ -32,7 +34,7 @@
 #   MF_BASE_URL  where to download the release assets from, overriding GitHub
 #                (a directory URL; file:// works) — for testing and mirrors
 #   MF_ALLOW_UNVERIFIED=1  install even if the release's SHA256SUMS cannot be fetched
-#   JAVA_HOME    JDK 21 to use; default: java on PATH
+#   JAVA_HOME    JDK to use (21 for Minecraft 1.21.1, 25 for 26.1); default: java on PATH
 #
 # The whole script is one function called on the last line, so a download cut
 # short by the network never runs half a script.
@@ -146,10 +148,17 @@ mf_main() {
     else
         JAVA=$(command -v java || true)
     fi
-    [ -n "$JAVA" ] || fail "no java on PATH and JAVA_HOME is unset. Install a JDK 21 (e.g. Temurin 21)."
-    java_major=$("$JAVA" -XshowSettings:properties -version 2>&1 | sed -n 's/^ *java\.specification\.version = //p' | head -n 1)
-    [ "${java_major:-0}" = "21" ] || fail "MultiForge needs Java 21; $JAVA is Java ${java_major:-unknown}.
-       Re-run with JAVA_HOME pointing at a JDK 21."
+    [ -n "$JAVA" ] || fail "no java on PATH and JAVA_HOME is unset. Install a JDK (21 for Minecraft 1.21.1, 25 for 26.1)."
+
+    # GitHub's `latest` is always a 1.21.1 release, so it can never update a 26.x server.
+    case "$(launched_version)" in
+        26.*)
+            if [ -z "${MF_VERSION:-}" ] && [ -z "${MF_BASE_URL:-}" ]; then
+                fail "this server is on Minecraft 26.x, and the latest MultiForge release is for 1.21.1.
+       Nothing was changed. Name a 26.x release: MF_VERSION=v2.0.0-alpha.1"
+            fi
+            ;;
+    esac
 
     # --- download ---------------------------------------------------------------
 
@@ -243,6 +252,18 @@ mf_main() {
         fi
     fi
 
+    # --- Java for the Minecraft version being installed --------------------------
+
+    target_mc=$(installer_minecraft)
+    case "$target_mc" in
+        1.21 | 1.21.*) need_java=21 ;;
+        26.*) need_java=25 ;;
+        *) fail "could not tell which Minecraft this release is for (got '${target_mc:-nothing}'); nothing was changed." ;;
+    esac
+    java_major=$("$JAVA" -XshowSettings:properties -version 2>&1 | sed -n 's/^ *java\.specification\.version = //p' | head -n 1)
+    [ "${java_major:-0}" = "$need_java" ] || fail "MultiForge for Minecraft $target_mc needs Java $need_java; $JAVA is Java ${java_major:-unknown}.
+       Nothing was changed. Re-run with JAVA_HOME pointing at a JDK $need_java."
+
     # --- install ---------------------------------------------------------------
 
     stage="$BACKUP.new"
@@ -312,8 +333,8 @@ mf_main() {
         say "MultiForge $current installed"
     fi
     [ -f eula.txt ] || say "first run: accept the Minecraft EULA by setting eula=true in eula.txt"
-    # server.jar runs in the JVM that starts it, so name the Java 21 checked above:
-    # a bare `java` may be a newer JDK, which NeoForge 1.21.1 mods cannot load on.
+    # server.jar runs in the JVM that starts it, so name the Java checked above:
+    # a bare `java` may be another JDK, which this version's mods cannot load on.
     say "start the server with:  \"$JAVA\" -Xms4G -Xmx8G -jar server.jar nogui   (or ./run.sh, which checks the JDK)"
     say "set -Xmx to what this machine can give the server (8G is a starting point for modpacks)"
 }

@@ -9,7 +9,7 @@
 # General Public License for more details.
 # You should have received a copy of the GNU General Public License
 # along with this program. If not, see <https://www.gnu.org/licenses/>.
-"""Download NeoForge 1.21.1 mods from Modrinth, with their required dependencies.
+"""Download NeoForge 26.1.2 mods from Modrinth, with their required dependencies.
 
 Builds the mod directory for a compatibility run (see
 docs/verification/README.md, "Mod matrix"):
@@ -18,7 +18,7 @@ docs/verification/README.md, "Mod matrix"):
   ./gradlew :multiforge-bench:atm10 -PmodpackDir=<dir containing mods/>
 
 Each slug resolves to its newest release for loader neoforge and game
-version 1.21.1 (the newest version of any type if there is no release);
+version 26.1.2 (the newest version of any type if there is no release);
 required dependencies are followed. A file already present is not
 downloaded again. Talks only to api.modrinth.com and its CDN.
 """
@@ -37,7 +37,7 @@ queue = list(slugs)
 while queue:
     s = queue.pop(0)
     if s in seen: continue
-    q = urllib.parse.urlencode({"loaders": '["neoforge"]', "game_versions": '["1.21.1"]'})
+    q = urllib.parse.urlencode({"loaders": '["neoforge"]', "game_versions": '["26.1.2"]'})
     vs = get(f"https://api.modrinth.com/v2/project/{s}/version?{q}")
     if not vs:
         print("NO VERSION", s); seen[s] = None; continue
