@@ -57,19 +57,20 @@ public final class LimboMod {
 
     private static void onEntityTick(EntityTickEvent.Post event) {
         Entity entity = event.getEntity();
-        if (!(entity.level() instanceof ServerLevel level) || !entity.getTags().contains("mftest_limbo")) return;
+        if (!(entity.level() instanceof ServerLevel level)
+                || !entity.entityTags().contains("mftest_limbo")) return;
         CompoundTag data = entity.getPersistentData();
         int tick = entity.tickCount;
         if (data.contains("fx") && tick % 7 == 0) {
-            level.setChunkForced(data.getInt("fx"), data.getInt("fz"), (tick / 7) % 2 == 0);
+            level.setChunkForced(data.getIntOr("fx", 0), data.getIntOr("fz", 0), (tick / 7) % 2 == 0);
             TOGGLES.incrementAndGet();
         }
-        int every = Math.max(1, data.contains("every") ? data.getInt("every") : 2);
+        int every = Math.max(1, data.getIntOr("every", 2));
         if (data.contains("lx") && tick % every == 0) {
             long n = LOADS.getAndIncrement();
             int i = (int) (n % 256);
             long start = System.nanoTime();
-            level.getChunk(data.getInt("lx") + i % 16, data.getInt("lz") + i / 16);
+            level.getChunk(data.getIntOr("lx", 0) + i % 16, data.getIntOr("lz", 0) + i / 16);
             LOAD_NANOS.addAndGet(System.nanoTime() - start);
         }
     }
@@ -77,7 +78,7 @@ public final class LimboMod {
     private static void onRegisterCommands(RegisterCommandsEvent event) {
         event.getDispatcher()
                 .register(Commands.literal("mftest_limbo")
-                        .requires(src -> src.hasPermission(2))
+                        .requires(Commands.hasPermission(Commands.LEVEL_GAMEMASTERS))
                         .then(Commands.literal("stats").executes(ctx -> {
                             ctx.getSource()
                                     .sendSuccess(

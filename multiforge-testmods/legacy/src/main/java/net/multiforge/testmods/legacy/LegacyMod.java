@@ -58,7 +58,7 @@ public final class LegacyMod {
     private static void onRegisterCommands(RegisterCommandsEvent event) {
         event.getDispatcher()
                 .register(Commands.literal("mftest_legacy")
-                        .requires(src -> src.hasPermission(2))
+                        .requires(Commands.hasPermission(Commands.LEVEL_GAMEMASTERS))
                         .then(Commands.literal("stats").executes(ctx -> {
                             int sum = TICKS_BY_TYPE.values().stream()
                                     .mapToInt(Integer::intValue)

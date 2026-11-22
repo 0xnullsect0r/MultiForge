@@ -53,11 +53,11 @@ public final class WriterMod {
 
     private static void onEntityTick(EntityTickEvent.Post event) {
         Entity entity = event.getEntity();
-        if (entity.level().isClientSide() || !entity.getTags().contains("mftest_writer")) return;
+        if (entity.level().isClientSide() || !entity.entityTags().contains("mftest_writer")) return;
         if (entity.tickCount % 20 != 0) return;
         CompoundTag data = entity.getPersistentData();
         if (!data.contains("tx")) return;
-        BlockPos target = new BlockPos(data.getInt("tx"), data.getInt("ty"), data.getInt("tz"));
+        BlockPos target = new BlockPos(data.getIntOr("tx", 0), data.getIntOr("ty", 0), data.getIntOr("tz", 0));
         long n = WRITES.getAndIncrement();
         if (!entity.level().setBlock(target, WOOL[(int) (n % WOOL.length)].defaultBlockState(), Block.UPDATE_ALL)) {
             FALSE_RETURNS.incrementAndGet();
@@ -67,7 +67,7 @@ public final class WriterMod {
     private static void onRegisterCommands(RegisterCommandsEvent event) {
         event.getDispatcher()
                 .register(Commands.literal("mftest_writer")
-                        .requires(src -> src.hasPermission(2))
+                        .requires(Commands.hasPermission(Commands.LEVEL_GAMEMASTERS))
                         .then(Commands.literal("stats").executes(ctx -> {
                             ctx.getSource()
                                     .sendSuccess(

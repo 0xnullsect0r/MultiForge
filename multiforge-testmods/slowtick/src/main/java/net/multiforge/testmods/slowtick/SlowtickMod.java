@@ -62,7 +62,7 @@ public final class SlowtickMod {
     private static void onRegisterCommands(RegisterCommandsEvent event) {
         event.getDispatcher()
                 .register(Commands.literal("mftest_slowtick")
-                        .requires(src -> src.hasPermission(2))
+                        .requires(Commands.hasPermission(Commands.LEVEL_GAMEMASTERS))
                         .then(Commands.literal("run")
                                 .then(Commands.argument("ticks", IntegerArgumentType.integer(1))
                                         .then(Commands.argument("ms", IntegerArgumentType.integer(0))
