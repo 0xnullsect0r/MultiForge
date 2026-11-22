@@ -1,5 +1,16 @@
 # CHANGELOG
 
+## v1.12.1 — Fix a crash from effects applied across regions
+
+**Upgrade if your modpack has blocks that apply potion effects to players at a
+distance**, such as Pylons' Infusion Pylon in All the Mods 10.
+
+- **Fixed a server crash.** A block entity on one region's worker could change
+  the effects of an entity ticking on another, corrupting that entity's
+  attribute data. Effect changes aimed at another region now apply on the server
+  thread at the end of the tick. The caller is told the change succeeded, and it
+  becomes visible one tick boundary later.
+
 ## v1.12.0 — PROXY protocol, and updates that cannot change your Minecraft version
 
 **Upgrade if you run MultiForge behind a TCP router or proxy.** Nothing changes
