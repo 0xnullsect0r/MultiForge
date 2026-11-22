@@ -25,7 +25,9 @@ authors = "MultiForge authors"
 [[dependencies.multiforge_debug]]
 modId = "neoforge"
 type = "required"
-versionRange = "[21.1.251,21.2)"
+# Client-only, so it follows the player's modpack rather than the server's
+# NeoForge. The floor is the oldest version this mod has been compiled against.
+versionRange = "[21.1.234,21.2)"
 ordering = "NONE"
 side = "CLIENT"
 
