@@ -247,6 +247,17 @@ public final class Main {
                     say "         Continuing — the installer will lay out a fresh server."
                 fi
 
+                # A world loaded in another Minecraft version is upgraded for good, and a
+                # modpack's mods only load on their own version.
+                PACK_NEOFORGE=""
+                if [ -f run.sh ]; then
+                    PACK_NEOFORGE="$(sed -n 's|.*libraries/net/neoforged/neoforge/\\([^/]*\\)/unix_args\\.txt.*|\\1|p' run.sh | head -n 1)"
+                fi
+                case "$PACK_NEOFORGE" in
+                    "" | 21.1.*) ;;
+                    *) fail "This server runs NeoForge $PACK_NEOFORGE, but this MultiForge is for Minecraft 1.21.1 (NeoForge 21.1.x). Nothing was changed." ;;
+                esac
+
                 # ---- 3. Back up the existing launcher ------------------------------
                 # Only the first run backs up: a second run would otherwise back up
                 # the MultiForge launcher and bury the original under it.
@@ -307,6 +318,16 @@ public final class Main {
                     echo [multiforge] with "Unsupported class file major version 7X" at mod-scan.
                     echo [multiforge] Install Temurin 21 and set JAVA_HOME, then retry.
                     exit /b 1
+                )
+
+                REM A world loaded in another Minecraft version is upgraded for good.
+                if exist run.bat (
+                    findstr /i /c:"libraries/net/neoforged/neoforge/" /c:"libraries\\net\\neoforged\\neoforge\\" run.bat >nul && (
+                        findstr /i /c:"neoforge/21.1." /c:"neoforge\\21.1." run.bat >nul || (
+                            echo [multiforge] This server is not on NeoForge 21.1.x ^(Minecraft 1.21.1^). Nothing was changed.
+                            exit /b 1
+                        )
+                    )
                 )
 
                 REM Only the first run backs up, so a second run cannot overwrite the original launcher.

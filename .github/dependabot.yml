@@ -21,6 +21,8 @@ updates:
       - dependency-name: "org.slf4j:slf4j-api"
       - dependency-name: "com.electronwill.night-config:*"
       - dependency-name: "net.jodah:typetools"
+      # The bench speaks Minecraft 1.21.1's protocol (767); newer releases target newer versions.
+      - dependency-name: "org.geysermc.mcprotocollib:*"
 
   - package-ecosystem: "github-actions"
     directory: "/"

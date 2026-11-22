@@ -206,9 +206,45 @@ mf_main() {
         fi
     fi
 
+    # --- Minecraft version guard ------------------------------------------------
+
+    # NeoForge 21.1.x is Minecraft 1.21.1; from 26.1 on, the first three parts are the version.
+    minecraft_of() {
+        printf '%s\n' "$1" | awk -F'[.-]' '$1 + 0 >= 26 { print $1 "." $2 "." $3; exit }
+            $1 + 0 > 0 { if ($2 + 0 == 0) print "1." $1; else print "1." $1 "." $2; exit }'
+    }
+
+    # The Minecraft version the downloaded installer installs.
+    installer_minecraft() {
+        if command -v unzip >/dev/null 2>&1; then
+            profile=$(unzip -p "$TMP/multiforge-installer.jar" install_profile.json 2>/dev/null) || profile=
+        elif [ -x "$(dirname "$JAVA")/jar" ]; then
+            profile=$(cd "$TMP" && "$(dirname "$JAVA")/jar" xf multiforge-installer.jar install_profile.json \
+                && cat install_profile.json) || profile=
+        else
+            profile=
+        fi
+        printf '%s' "$profile" | tr -d '\r\n' | sed -n 's/.*"minecraft"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p'
+    }
+
+    # Loading a world in a newer Minecraft upgrades it permanently, and a modpack's mods
+    # only load on their own version, so an update never crosses versions by itself.
+    previous=$(launched_version)
+    if [ -n "$previous" ]; then
+        from_mc=$(minecraft_of "$previous")
+        to_mc=$(installer_minecraft)
+        [ -n "$from_mc" ] && [ -n "$to_mc" ] || fail "could not compare Minecraft versions (server: ${from_mc:-unknown},
+       this release: ${to_mc:-unknown}); nothing was changed."
+        if [ "$from_mc" != "$to_mc" ] && [ "${MF_ALLOW_MINECRAFT_CHANGE:-0}" != 1 ]; then
+            fail "this server is on Minecraft $from_mc, but this MultiForge release is for Minecraft $to_mc.
+       Nothing was changed. Updating would permanently upgrade the world and break its mods.
+       Pin a release for $from_mc with MF_VERSION=<tag>. To migrate on purpose, back up the
+       server, install a modpack for $to_mc, and re-run with MF_ALLOW_MINECRAFT_CHANGE=1."
+        fi
+    fi
+
     # --- install ---------------------------------------------------------------
 
-    previous=$(launched_version)
     stage="$BACKUP.new"
     rm -rf "$stage"
     mkdir -p "$stage/versions"

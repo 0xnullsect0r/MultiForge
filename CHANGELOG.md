@@ -1,5 +1,36 @@
 # CHANGELOG
 
+## v1.12.0 — PROXY protocol, and updates that cannot change your Minecraft version
+
+**Upgrade if you run MultiForge behind a TCP router or proxy.** Nothing changes
+unless you turn the new setting on.
+
+### Networking
+
+- **Real player IPs behind a proxy.** With `[network] proxyProtocol = true`,
+  MultiForge reads a HAProxy PROXY protocol v1 or v2 header, so logins, IP bans
+  and `/ban-ip` see the player's address instead of the proxy's. This lets
+  several servers share one port behind `mc-router`.
+- **Only your proxy can use it.** `trustedProxies` lists its IPs or CIDR blocks.
+  Any other peer is closed before a byte is read, so a client cannot forge an
+  address or bypass the proxy. An invalid setting stops the server at startup.
+  With the setting on, direct connections stop working, including panels that
+  ping the server directly for player counts.
+- **IPv6 IP bans now match.** Vanilla cut the address at its first `:`, so a
+  banned IPv6 player was never actually blocked.
+
+### Updates
+
+- **The updater and the replacement zip refuse to change Minecraft version.**
+  Loading a world in a newer version upgrades it permanently and a modpack's
+  mods only load on their own version, so the check runs before anything is
+  changed. `MF_ALLOW_MINECRAFT_CHANGE=1` allows a deliberate migration.
+
+### Dependencies
+
+- Adds `io.netty:netty-codec-haproxy` 4.1.97.Final (Apache-2.0, about 38 KB),
+  matching the Netty version Minecraft ships.
+
 ## v1.11.3 — natural spawning respects mob caps with Cupboard installed
 
 **Upgrade if your server runs Cupboard** (All the Mods 10 does). Without this

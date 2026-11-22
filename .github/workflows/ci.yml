@@ -35,6 +35,9 @@ jobs:
       - name: Spotless check
         run: ./gradlew spotlessCheck --no-daemon --stacktrace
 
+      - name: Updater Minecraft version guard
+        run: sh scripts/test-multiforge-update-guard.sh
+
       - name: Build + test
         # Enumerate the CI-scoped modules explicitly. `./gradlew build`
         # at the root also pulls in :multiforge-client, whose moddev
@@ -192,7 +195,7 @@ jobs:
           ./gradlew --no-configuration-cache --stacktrace :tests:runGameTestServer 2>&1 | tee gametest.log
           ../../.github/scripts/check-gametest-log.sh gametest.log "$MIN_REQUIRED_GAMETESTS"
         env:
-          MIN_REQUIRED_GAMETESTS: "197"
+          MIN_REQUIRED_GAMETESTS: "205"
 
       - name: GameTest server in strict mode
         # The same suite with ownership violations and region overruns thrown
@@ -203,7 +206,7 @@ jobs:
           ./gradlew --no-configuration-cache --stacktrace :tests:runGameTestServer -PmultiforgeMode=strict 2>&1 | tee gametest-strict.log
           ../../.github/scripts/check-gametest-log.sh gametest-strict.log "$MIN_REQUIRED_GAMETESTS"
         env:
-          MIN_REQUIRED_GAMETESTS: "197"
+          MIN_REQUIRED_GAMETESTS: "205"
 
       - name: Upload fork reports on failure
         if: failure()
