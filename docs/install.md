@@ -73,6 +73,16 @@ v1.11.0 fixes entities left in limbo by v1.10 (known to the world but never tick
 
 **Entity activation range is on by default.** A mob more than 32 blocks from every player (16 for water and ambient mobs, 48 for raiders) runs its full tick only once a second and otherwise just ages. Items, projectiles, minecarts, Create contraptions, bosses, and busy mobs (targeting, leashed, ridden, hurt, in love, falling or in water) always tick. Mob farms that run with nobody nearby (breeders, villager trading halls and iron farms far from any player, and AI-driven farms) will run slower. Add their mobs to `activationExempt` in `config/multiforge-server.toml`, raise the range, or set `activation = false`. See [compatibility.md §3.1](compatibility.md#31-entity-activation-range-and-the-push-cap-behaviour-change). Entity pushing is also capped at 8 entities per tick; cramming damage is unchanged.
 
+**Behind a TCP router or proxy (`mc-router`, HAProxy).** To see real player IPs, have the proxy send PROXY protocol and set this in `config/multiforge-server.toml`:
+
+```toml
+[network]
+proxyProtocol = true
+trustedProxies = ["10.0.0.5/32"]   # the proxy's IP or CIDR block; host names are not accepted
+```
+
+Change the server and the proxy together and restart: with this on, every connection must come from a trusted proxy and carry the header, so direct connections, including a panel's player-count ping, are closed. Keep `prevent-proxy-connections=false` until real IPs show up in the login log.
+
 **Kill switches.** Every new behaviour has a switch in `config/multiforge-server.toml`, and a JVM flag for one run: `entities.activation`, `entities.maxEntityCollisions` (`0` = Vanilla), `entities.deferVisibility`, `perf.lockFreeOutsidePhase`, `perf.workerChunkCache`, plus `-Dmultiforge.entities.autoHeal=false` and `-Dmultiforge.hangReport=false`. The table is in [perf-tuning.md § Kill switches](perf-tuning.md#kill-switches). An existing config file gets no new keys written; they take their defaults until you add them.
 
 ---

@@ -222,6 +222,9 @@ jobs:
               unzip -Z1 /tmp/universal.jar | grep -qE "^META-INF/jarjar/${m}-${VER}\.jar$" \
                   || { echo "::error::the universal jar does not embed ${m}-${VER}.jar"; exit 1; }
           done
+          # PROXY protocol fails at the first connection without its decoder.
+          unzip -Z1 /tmp/universal.jar | grep -qE '^META-INF/jarjar/netty-codec-haproxy-[^/]+\.jar$' \
+              || { echo "::error::the universal jar does not embed netty-codec-haproxy"; exit 1; }
           cp "$FORK_JAR" "release/multiforge-${VER}-installer.jar"
           # Stable alias — the URL the README + docs point at.
           # multiforge-installer.jar now == the fork installer (v1.3.3+).

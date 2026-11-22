@@ -19,7 +19,7 @@ they implement is `docs/design/barrier-tick-model.md`.
 | `03-world-data/`       | Empty. Per-region tick state lives in `LevelTicks`' per-chunk containers and `ServerLevel`'s per-region block-event queues (02). |
 | `04-chunk-system/`     | `ServerChunkCache.getChunk`/`getChunkNow`: region workers read loaded chunks directly and hand real loads to the server thread. |
 | `05-entity-migration/` | Cross-region teleports and player dimension changes deferred to the server thread; leaf locks on entity storage, the entity tick list and the tracker map. (Named for the M4 design it replaced.) |
-| `06-networking/`       | Empty. Packets are handled on the server thread, between barriers, as in Vanilla. |
+| `06-networking/`       | Inbound PROXY protocol (`ProxyProtocol`) and canonical IPv6 addresses in IP bans. Packets are still handled on the server thread, between barriers, as in Vanilla. |
 | `07-persistence/`      | Empty. Chunks are saved by Vanilla's own `ChunkMap` save path on the server thread. |
 | `08-globals/`          | Command and function execution started on a region worker is deferred to the server thread; `Scoreboard` synchronisation. |
 | `09-events/`           | NeoForge `EVENT_BUS` replaced by MultiForge's dispatch-domain routing bus (committed `net/neoforged` tree). |

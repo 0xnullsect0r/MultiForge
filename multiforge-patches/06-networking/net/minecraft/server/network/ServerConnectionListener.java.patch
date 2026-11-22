@@ -1,0 +1,20 @@
+--- a/net/minecraft/server/network/ServerConnectionListener.java
++++ b/net/minecraft/server/network/ServerConnectionListener.java
+@@ -66,6 +66,8 @@ public class ServerConnectionListener {
+     }
+ 
+     public void startTcpServerListener(@Nullable InetAddress p_9712_, int p_9713_) throws IOException {
++        // MultiForge (multiforge-patches/06-networking/): read [network] before the port accepts anyone.
++        net.multiforge.neoforge.network.ProxyProtocol.prepare(this.server);
+         if (p_9712_ == null) p_9712_ = new java.net.InetSocketAddress(p_9713_).getAddress();
+         net.neoforged.neoforge.network.DualStackUtils.checkIPv6(p_9712_);
+         synchronized (this.channels) {
+@@ -90,6 +92,8 @@ public class ServerConnectionListener {
+                     }
+ 
+                     ChannelPipeline channelpipeline = p_9729_.pipeline().addLast("timeout", new ReadTimeoutHandler(READ_TIMEOUT));
++                    // MultiForge (multiforge-patches/06-networking/): PROXY protocol guard, before anything reads the stream.
++                    net.multiforge.neoforge.network.ProxyProtocol.install(channelpipeline, ServerConnectionListener.this.server);
+                     if (ServerConnectionListener.this.server.repliesToStatus()) {
+                         channelpipeline.addLast("legacy_query", new LegacyQueryHandler(ServerConnectionListener.this.getServer()));
+                     }

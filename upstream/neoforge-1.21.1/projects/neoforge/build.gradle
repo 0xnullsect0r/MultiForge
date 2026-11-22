@@ -150,6 +150,10 @@ dependencies {
     // artifacts from Mojang/NeoForged repositories.
     jarJar "net.multiforge:multiforge-runtime:${project.multiforge_runtime_version}"
     jarJar "net.multiforge:multiforge-api:${project.multiforge_runtime_version}"
+    // PROXY protocol decoder (Apache-2.0), pinned to the Netty version Minecraft ships.
+    // Non-transitive: its netty-codec dependency is already on the server.
+    implementation("io.netty:netty-codec-haproxy:${project.multiforge_netty_haproxy_version}") { transitive = false }
+    jarJar("io.netty:netty-codec-haproxy:${project.multiforge_netty_haproxy_version}") { transitive = false }
 
     // Must be implementation instead of compileOnly so that running dependent projects such as tests will trigger (re)compilation of coremods.
     // (Only needed when compiling through IntelliJ non-delegated builds - otherwise `compileOnly` would work).
@@ -432,6 +436,9 @@ neoDev.runs.configureEach { run ->
             dependencies.create("net.multiforge:multiforge-runtime:${project.multiforge_runtime_version}"))
     run.additionalRuntimeClasspathConfiguration.dependencies.add(
             dependencies.create("net.multiforge:multiforge-api:${project.multiforge_runtime_version}"))
+    def haproxy = dependencies.create("io.netty:netty-codec-haproxy:${project.multiforge_netty_haproxy_version}")
+    haproxy.transitive = false
+    run.additionalRuntimeClasspathConfiguration.dependencies.add(haproxy)
 }
 
 // MultiForge fork addition — pipe System.in into runServer so headless

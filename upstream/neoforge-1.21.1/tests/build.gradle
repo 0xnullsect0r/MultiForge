@@ -162,4 +162,7 @@ neoDev.runs.configureEach { run ->
             dependencies.create("net.multiforge:multiforge-runtime:${project.multiforge_runtime_version}"))
     run.additionalRuntimeClasspathConfiguration.dependencies.add(
             dependencies.create("net.multiforge:multiforge-api:${project.multiforge_runtime_version}"))
+    def haproxy = dependencies.create("io.netty:netty-codec-haproxy:${project.multiforge_netty_haproxy_version}")
+    haproxy.transitive = false
+    run.additionalRuntimeClasspathConfiguration.dependencies.add(haproxy)
 }

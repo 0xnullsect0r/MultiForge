@@ -56,6 +56,10 @@ import org.slf4j.LoggerFactory;
  *   lockFreeOutsidePhase = true       # server-thread entity queries skip the storage lock
  *                                     # while no region worker runs
  *   workerChunkCache = true           # region workers cache their last 4 full-chunk reads
+ *
+ *   [network]
+ *   proxyProtocol = false             # connections carry a HAProxy PROXY protocol header
+ *   trustedProxies = []               # IPs / CIDR blocks allowed to send it; others are closed
  * </pre>
  * A file written by an older version lacks the newer keys; they take their defaults.
  */
@@ -72,7 +76,8 @@ public record MultiForgeConfig(
         boolean deferVisibility,
         boolean lockFreeOutsidePhase,
         boolean workerChunkCache,
-        ActivationConfig activation) {
+        ActivationConfig activation,
+        NetworkConfig network) {
 
     /**
      * Smallest region section an operator may configure: 8 chunks (shift 3). Two
@@ -99,6 +104,37 @@ public record MultiForgeConfig(
 
     public MultiForgeConfig {
         if (activation == null) activation = ActivationConfig.DEFAULTS;
+        if (network == null) network = NetworkConfig.DEFAULTS;
+    }
+
+    /** The layout before {@code [network]}; it takes its defaults. */
+    public MultiForgeConfig(
+            int cores,
+            int threadsPerCore,
+            Mode mode,
+            int regionSize,
+            ViolationPolicy violationPolicy,
+            int warnPerMin,
+            boolean inlineSingleRegion,
+            int serialLaneHotWaitMs,
+            boolean deferVisibility,
+            boolean lockFreeOutsidePhase,
+            boolean workerChunkCache,
+            ActivationConfig activation) {
+        this(
+                cores,
+                threadsPerCore,
+                mode,
+                regionSize,
+                violationPolicy,
+                warnPerMin,
+                inlineSingleRegion,
+                serialLaneHotWaitMs,
+                deferVisibility,
+                lockFreeOutsidePhase,
+                workerChunkCache,
+                activation,
+                NetworkConfig.DEFAULTS);
     }
 
     /** The layout before the activation-range keys of {@code [entities]}; they take their defaults. */
@@ -332,7 +368,8 @@ public record MultiForgeConfig(
                 deferVisibility,
                 lockFreeOutsidePhase,
                 workerChunkCache,
-                activation);
+                activation,
+                network);
     }
 
     public MultiForgeConfig withThreadsPerCore(int v) {
@@ -348,7 +385,8 @@ public record MultiForgeConfig(
                 deferVisibility,
                 lockFreeOutsidePhase,
                 workerChunkCache,
-                activation);
+                activation,
+                network);
     }
 
     public MultiForgeConfig withMode(Mode v) {
@@ -364,7 +402,8 @@ public record MultiForgeConfig(
                 deferVisibility,
                 lockFreeOutsidePhase,
                 workerChunkCache,
-                activation);
+                activation,
+                network);
     }
 
     public MultiForgeConfig withRegionSize(int v) {
@@ -380,7 +419,8 @@ public record MultiForgeConfig(
                 deferVisibility,
                 lockFreeOutsidePhase,
                 workerChunkCache,
-                activation);
+                activation,
+                network);
     }
 
     public MultiForgeConfig withViolationPolicy(ViolationPolicy v) {
@@ -396,7 +436,8 @@ public record MultiForgeConfig(
                 deferVisibility,
                 lockFreeOutsidePhase,
                 workerChunkCache,
-                activation);
+                activation,
+                network);
     }
 
     public MultiForgeConfig withWarnPerMin(int v) {
@@ -412,7 +453,8 @@ public record MultiForgeConfig(
                 deferVisibility,
                 lockFreeOutsidePhase,
                 workerChunkCache,
-                activation);
+                activation,
+                network);
     }
 
     public MultiForgeConfig withInlineSingleRegion(boolean v) {
@@ -428,7 +470,8 @@ public record MultiForgeConfig(
                 deferVisibility,
                 lockFreeOutsidePhase,
                 workerChunkCache,
-                activation);
+                activation,
+                network);
     }
 
     public MultiForgeConfig withSerialLaneHotWaitMs(int v) {
@@ -444,7 +487,8 @@ public record MultiForgeConfig(
                 deferVisibility,
                 lockFreeOutsidePhase,
                 workerChunkCache,
-                activation);
+                activation,
+                network);
     }
 
     public MultiForgeConfig withDeferVisibility(boolean v) {
@@ -460,7 +504,8 @@ public record MultiForgeConfig(
                 v,
                 lockFreeOutsidePhase,
                 workerChunkCache,
-                activation);
+                activation,
+                network);
     }
 
     public MultiForgeConfig withLockFreeOutsidePhase(boolean v) {
@@ -476,7 +521,8 @@ public record MultiForgeConfig(
                 deferVisibility,
                 v,
                 workerChunkCache,
-                activation);
+                activation,
+                network);
     }
 
     public MultiForgeConfig withWorkerChunkCache(boolean v) {
@@ -492,7 +538,8 @@ public record MultiForgeConfig(
                 deferVisibility,
                 lockFreeOutsidePhase,
                 v,
-                activation);
+                activation,
+                network);
     }
 
     public MultiForgeConfig withActivation(ActivationConfig v) {
@@ -508,6 +555,24 @@ public record MultiForgeConfig(
                 deferVisibility,
                 lockFreeOutsidePhase,
                 workerChunkCache,
+                v,
+                network);
+    }
+
+    public MultiForgeConfig withNetwork(NetworkConfig v) {
+        return new MultiForgeConfig(
+                cores,
+                threadsPerCore,
+                mode,
+                regionSize,
+                violationPolicy,
+                warnPerMin,
+                inlineSingleRegion,
+                serialLaneHotWaitMs,
+                deferVisibility,
+                lockFreeOutsidePhase,
+                workerChunkCache,
+                activation,
                 v);
     }
 
@@ -558,5 +623,14 @@ public record MultiForgeConfig(
         ActivationConfig a = activation.effective();
         if (effectiveMode() == Mode.OFF) a = a.withActivation(false).withMaxEntityCollisions(0);
         return a;
+    }
+
+    /**
+     * The {@code [network]} settings the server runs with: {@link #network()}
+     * with its {@code -Dmultiforge.network.*} overrides. Mode {@code off} does not
+     * change them, because a proxy in front of the server keeps sending its header.
+     */
+    public NetworkConfig effectiveNetwork() {
+        return network.effective();
     }
 }
