@@ -1,0 +1,31 @@
+--- a/net/minecraft/world/level/block/CommandBlock.java
++++ b/net/minecraft/world/level/block/CommandBlock.java
+@@ -84,6 +84,14 @@ public class CommandBlock extends BaseEntityBlock implements GameMasterBlock {
+ 
+     @Override
+     protected void tick(BlockState state, ServerLevel level, BlockPos pos, RandomSource random) {
++        // MultiForge (multiforge-patches/08-globals/): on a region worker the command runs on the
++        // server thread after the barrier (it can reach any region). Defer the whole tick
++        // with it, so the success count the conditional chain and comparator read is the
++        // command's own. A region the server thread ticks itself runs it inline.
++        if (net.multiforge.neoforge.OwnershipGuard.deferToServerThread(
++                "CommandBlock.tick", CommandBlock.MfLambdas.tick(this, state, level, pos, random))) {
++            return;
++        }
+         if (level.getBlockEntity(pos) instanceof CommandBlockEntity commandBlock) {
+             BaseCommandBlock baseCommandBlock = commandBlock.getCommandBlock();
+             boolean commandSet = !StringUtil.isNullOrEmpty(baseCommandBlock.getCommand());
+@@ -216,4 +224,13 @@ public class CommandBlock extends BaseEntityBlock implements GameMasterBlock {
+             LOGGER.warn("Command Block chain tried to execute more than {} steps!", limit);
+         }
+     }
++
++    /** MultiForge: kept out of this class so a lambda does not renumber Vanilla's. */
++    static final class MfLambdas {
++        private MfLambdas() {}
++
++        static Runnable tick(CommandBlock block, BlockState state, ServerLevel level, BlockPos pos, RandomSource random) {
++            return () -> block.tick(state, level, pos, random);
++        }
++    }
+ }

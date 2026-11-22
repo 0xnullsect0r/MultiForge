@@ -1,116 +1,447 @@
 --- a/net/minecraft/world/level/entity/PersistentEntitySectionManager.java
 +++ b/net/minecraft/world/level/entity/PersistentEntitySectionManager.java
-@@ -115,6 +115,15 @@ public class PersistentEntitySectionManager<T extends EntityAccess> implements A
+@@ -42,6 +42,19 @@ public class PersistentEntitySectionManager<T extends EntityAccess> implements A
+     private final Long2ObjectMap<PersistentEntitySectionManager.ChunkLoadStatus> chunkLoadStatuses = new Long2ObjectOpenHashMap<>();
+     private final LongSet chunksToUnload = new LongOpenHashSet();
+     private final Queue<ChunkEntities<T>> loadingInbox = Queues.newConcurrentLinkedQueue();
++    // MultiForge (multiforge-patches/05-entity-migration/): region workers add,
++    // move and remove entities concurrently. Every read or write of this manager's own
++    // structures (knownUuids, sectionStorage and its sections, visibleEntityStorage,
++    // chunkVisibility, chunkLoadStatuses, chunksToUnload) happens under this lock. It is a
++    // leaf: callbacks (tracking/ticking starts and ends, NeoForge events, mod hooks) and
++    // getter consumers always run after it is released, so no foreign code, which could
++    // wait on the server thread, ever runs while it is held on a region worker.
++    final Object mfLock = new Object();
++    // The transition list of the updateChunkStatus call in progress; guarded by mfLock.
++    private List<Runnable> mfTransitions;
++    // MultiForge test hook (GameTests only): run by updateChunkStatus between releasing
++    // mfLock and applying the transitions it recorded, where a worker's move could interleave.
++    public static volatile Runnable mfTestHook;
+ 
+     public PersistentEntitySectionManager(Class<T> entityClass, LevelCallback<T> callbacks, EntityPersistentStorage<T> permanentStorage) {
+         this.visibleEntityStorage = new EntityLookup<>();
+@@ -50,7 +63,8 @@ public class PersistentEntitySectionManager<T extends EntityAccess> implements A
+         this.chunkLoadStatuses.defaultReturnValue(PersistentEntitySectionManager.ChunkLoadStatus.FRESH);
+         this.callbacks = callbacks;
+         this.permanentStorage = permanentStorage;
+-        this.entityGetter = new LevelEntityGetterAdapter<>(this.visibleEntityStorage, this.sectionStorage);
++        this.entityGetter = new net.multiforge.neoforge.world.LockingEntityGetter<>(
++                new LevelEntityGetterAdapter<>(this.visibleEntityStorage, this.sectionStorage), this.mfLock);
+     }
+ 
+     private void removeSectionIfEmpty(long sectionPos, EntitySection<T> section) {
+@@ -60,7 +74,11 @@ public class PersistentEntitySectionManager<T extends EntityAccess> implements A
+     }
+ 
+     private boolean addEntityUuid(T entity) {
+-        if (!this.knownUuids.add(entity.getUUID())) {
++        boolean mf$added;
++        synchronized (this.mfLock) {
++            mf$added = this.knownUuids.add(entity.getUUID());
++        }
++        if (!mf$added) {
+             LOGGER.warn("UUID of added entity already exists: {}", entity);
+             return false;
+         } else {
+@@ -86,14 +104,19 @@ public class PersistentEntitySectionManager<T extends EntityAccess> implements A
+             return false;
+         } else {
+             long sectionKey = SectionPos.asLong(entity.blockPosition());
+-            EntitySection<T> entitySection = this.sectionStorage.getOrCreateSection(sectionKey);
+-            entitySection.add(entity);
++            EntitySection<T> entitySection;
++            Visibility mf$status;
++            synchronized (this.mfLock) {
++                entitySection = this.sectionStorage.getOrCreateSection(sectionKey);
++                entitySection.add(entity);
++                mf$status = entitySection.getStatus();
++            }
+             entity.setLevelCallback(new PersistentEntitySectionManager.Callback(entity, sectionKey, entitySection));
+             if (!loaded) {
+                 this.callbacks.onCreated(entity);
+             }
+ 
+-            Visibility status = getEffectiveStatus(entity, entitySection.getStatus());
++            Visibility status = getEffectiveStatus(entity, mf$status);
+             if (status.isAccessible()) {
+                 this.startTracking(entity);
+             }
+@@ -111,7 +134,9 @@ public class PersistentEntitySectionManager<T extends EntityAccess> implements A
+     }
+ 
+     public boolean isTicking(ChunkPos pos) {
+-        return this.chunkVisibility.get(pos.pack()).isTicking();
++        synchronized (this.mfLock) {
++            return this.chunkVisibility.get(pos.pack()).isTicking();
++        }
      }
  
      public void addLegacyChunkEntities(Stream<T> entities) {
-+        // MultiForge: as updateChunkStatus. The stream is drained now, while its source is valid.
-+        if (net.multiforge.runtime.region.RegionPhase.workersInFlight()) {
-+            java.util.List<T> mf$entities = entities.toList();
-+            if (net.multiforge.runtime.region.RegionPhase.deferUntilWorkersStop(
-+                    PersistentEntitySectionManager.MfLambdas.addLegacyChunkEntities(this, mf$entities), "entity.storage.deferred-chunk-entities")) {
-+                return;
-+            }
-+            entities = mf$entities.stream();
-+        }
-         entities.forEach(e -> {
-             this.addEntity(e, true);
-             if (e instanceof Entity entity) entity.onAddedToLevel();
-@@ -122,6 +131,15 @@ public class PersistentEntitySectionManager<T extends EntityAccess> implements A
+@@ -137,22 +162,42 @@ public class PersistentEntitySectionManager<T extends EntityAccess> implements A
      }
  
-     public void addWorldGenChunkEntities(Stream<T> entities) {
-+        // MultiForge: as updateChunkStatus. The stream is drained now, while its source is valid.
-+        if (net.multiforge.runtime.region.RegionPhase.workersInFlight()) {
-+            java.util.List<T> mf$entities = entities.toList();
-+            if (net.multiforge.runtime.region.RegionPhase.deferUntilWorkersStop(
-+                    PersistentEntitySectionManager.MfLambdas.addWorldGenChunkEntities(this, mf$entities), "entity.storage.deferred-chunk-entities")) {
-+                return;
-+            }
-+            entities = mf$entities.stream();
+     private void startTracking(T entity) {
+-        this.visibleEntityStorage.add(entity);
++        synchronized (this.mfLock) {
++            this.visibleEntityStorage.add(entity);
 +        }
-         entities.forEach(e -> {
-             this.addEntity(e, false);
-             if (e instanceof Entity entity) entity.onAddedToLevel();
-@@ -147,6 +165,13 @@ public class PersistentEntitySectionManager<T extends EntityAccess> implements A
+         this.callbacks.onTrackingStart(entity);
+     }
+ 
+     private void stopTracking(T entity) {
+         this.callbacks.onTrackingEnd(entity);
+-        this.visibleEntityStorage.remove(entity);
++        synchronized (this.mfLock) {
++            this.visibleEntityStorage.remove(entity);
++        }
      }
  
      public void updateChunkStatus(ChunkPos pos, FullChunkStatus fullChunkStatus) {
-+        // MultiForge (05-entity-migration, minimal piece for regions on workers): entity
-+        // storage is frozen while workers run, so they can read it without a lock. A
-+        // change pumped on the server thread in that window is replayed at the barrier.
++        // MultiForge (multiforge-patches/05-entity-migration/): while region workers
++        // run, a chunk promotion or demotion pumped on the server thread would race their
++        // entity moves (a stale stop-ticking landing after a worker's start-ticking leaves
++        // the entity in limbo). Hold the call back; the barrier replays it, in order.
 +        if (net.multiforge.runtime.region.RegionPhase.workersInFlight()
-+                && net.multiforge.runtime.region.RegionPhase.defer(PersistentEntitySectionManager.MfLambdas.updateStatus(this, pos, fullChunkStatus))) {
++                && net.multiforge.runtime.region.RegionPhase.defer(new PersistentEntitySectionManager.MfDeferredStatus(this, pos, fullChunkStatus))) {
 +            return;
 +        }
          Visibility chunkStatus = Visibility.fromFullChunkStatus(fullChunkStatus);
          this.updateChunkStatus(pos, chunkStatus);
      }
-@@ -391,6 +416,8 @@ public class PersistentEntitySectionManager<T extends EntityAccess> implements A
-         private final Entity realEntity;
-         private long currentSectionKey;
-         private EntitySection<T> currentSection;
-+        // MultiForge: onRemove was deferred to the barrier; later moves are moot.
-+        private volatile boolean mfRemoveQueued;
  
-         private Callback(T entity, long currentSectionKey, EntitySection<T> currentSection) {
-             Objects.requireNonNull(PersistentEntitySectionManager.this);
-@@ -403,6 +430,10 @@ public class PersistentEntitySectionManager<T extends EntityAccess> implements A
+     public void updateChunkStatus(ChunkPos pos, Visibility chunkStatus) {
+         long chunkPosKey = pos.pack();
++        // MultiForge: structure changes under mfLock, recording the tracking/ticking
++        // transitions in Vanilla's order; the transitions (which call out) run after the
++        // lock is released. The list is read by the lambda through the field, so that
++        // lambda captures exactly what Vanilla's does and keeps its descriptor.
++        List<Runnable> mf$transitions = new java.util.ArrayList<>();
++        synchronized (this.mfLock) {
++            List<Runnable> mf$outer = this.mfTransitions;
++            this.mfTransitions = mf$transitions;
+         if (chunkStatus == Visibility.HIDDEN) {
+             this.chunkVisibility.remove(chunkPosKey);
+             this.chunksToUnload.add(chunkPosKey);
+@@ -169,19 +214,24 @@ public class PersistentEntitySectionManager<T extends EntityAccess> implements A
+             boolean wasTicking = previousStatus.isTicking();
+             boolean isTicking = chunkStatus.isTicking();
+             if (wasTicking && !isTicking) {
+-                section.getEntities().filter(e -> !e.isAlwaysTicking()).forEach(this::stopTicking);
++                section.getEntities().filter(e -> !e.isAlwaysTicking()).forEach(PersistentEntitySectionManager.MfLambdas.defer(this.mfTransitions, this::stopTicking));
+             }
  
-         @Override
-         public void onMove() {
-+            // MultiForge: storage is frozen while workers run. The entity's position is
-+            // already updated; its section catches up at the barrier (this call re-reads it).
-+            if (this.mfRemoveQueued) return;
-+            if (net.multiforge.runtime.region.RegionPhase.deferUntilWorkersStop(this::onMove, "entity.storage.deferred-move")) return;
+             if (wasAccessible && !isAccessible) {
+-                section.getEntities().filter(e -> !e.isAlwaysTicking()).forEach(this::stopTracking);
++                section.getEntities().filter(e -> !e.isAlwaysTicking()).forEach(PersistentEntitySectionManager.MfLambdas.defer(this.mfTransitions, this::stopTracking));
+             } else if (!wasAccessible && isAccessible) {
+-                section.getEntities().filter(e -> !e.isAlwaysTicking()).forEach(this::startTracking);
++                section.getEntities().filter(e -> !e.isAlwaysTicking()).forEach(PersistentEntitySectionManager.MfLambdas.defer(this.mfTransitions, this::startTracking));
+             }
+ 
+             if (!wasTicking && isTicking) {
+-                section.getEntities().filter(e -> !e.isAlwaysTicking()).forEach(this::startTicking);
++                section.getEntities().filter(e -> !e.isAlwaysTicking()).forEach(PersistentEntitySectionManager.MfLambdas.defer(this.mfTransitions, this::startTicking));
+             }
+         });
++            this.mfTransitions = mf$outer;
++        }
++        Runnable mf$hook = mfTestHook;
++        if (mf$hook != null) mf$hook.run();
++        mf$transitions.forEach(Runnable::run);
+     }
+ 
+     private void ensureChunkQueuedForLoad(long chunkPos) {
+@@ -257,8 +307,12 @@ public class PersistentEntitySectionManager<T extends EntityAccess> implements A
+     }
+ 
+     public void tick() {
+-        this.processPendingLoads();
+-        this.processUnloads();
++        // MultiForge: server-thread only, while no region runs: the lock is uncontended
++        // and only guards against a pumped chunk task.
++        synchronized (this.mfLock) {
++            this.processPendingLoads();
++            this.processUnloads();
++        }
+     }
+ 
+     private LongSet getAllChunksToSave() {
+@@ -274,6 +328,7 @@ public class PersistentEntitySectionManager<T extends EntityAccess> implements A
+     }
+ 
+     public void autoSave() {
++        synchronized (this.mfLock) {
+         this.getAllChunksToSave().forEach(chunkKey -> {
+             boolean shouldUnload = this.chunkVisibility.get(chunkKey) == Visibility.HIDDEN;
+             if (shouldUnload) {
+@@ -282,9 +337,11 @@ public class PersistentEntitySectionManager<T extends EntityAccess> implements A
+                 this.storeChunkSections(chunkKey, e -> {});
+             }
+         });
++        }
+     }
+ 
+     public void saveAll() {
++        synchronized (this.mfLock) {
+         LongSet chunksToSave = this.getAllChunksToSave();
+ 
+         while (!chunksToSave.isEmpty()) {
+@@ -297,6 +354,7 @@ public class PersistentEntitySectionManager<T extends EntityAccess> implements A
+         }
+ 
+         this.permanentStorage.flush(true);
++        }
+     }
+ 
+     @Override
+@@ -306,26 +364,60 @@ public class PersistentEntitySectionManager<T extends EntityAccess> implements A
+     }
+ 
+     public boolean isLoaded(UUID uuid) {
++        synchronized (this.mfLock) {
+         return this.knownUuids.contains(uuid);
++        }
+     }
+ 
+     public LevelEntityGetter<T> getEntityGetter() {
+         return this.entityGetter;
+     }
+ 
++    /**
++     * MultiForge: the entities in accessible sections of chunks [{@code minX}, {@code maxX}]
++     * x [{@code minZ}, {@code maxZ}], read under mfLock and returned after it is released.
++     * Accessible sections hold exactly the tracked entities, so this is how ChunkMap finds
++     * the tracked entities near a player without scanning the whole level.
++     */
++    public List<T> mfEntitiesInChunks(int minX, int minZ, int maxX, int maxZ) {
++        List<T> found = new java.util.ArrayList<>();
++        synchronized (this.mfLock) {
++            for (int x = minX; x <= maxX; x++) {
++                for (int z = minZ; z <= maxZ; z++) {
++                    java.util.Iterator<EntitySection<T>> sections =
++                            this.sectionStorage.getExistingSectionsInChunk(ChunkPos.pack(x, z)).iterator();
++                    while (sections.hasNext()) {
++                        EntitySection<T> section = sections.next();
++                        if (section.isEmpty() || !section.getStatus().isAccessible()) continue;
++                        java.util.Iterator<T> entities = section.getEntities().iterator();
++                        while (entities.hasNext()) found.add(entities.next());
++                    }
++                }
++            }
++        }
++        return found;
++    }
++
+     public boolean canPositionTick(BlockPos pos) {
++        synchronized (this.mfLock) {
+         return this.chunkVisibility.get(ChunkPos.pack(pos)).isTicking();
++        }
+     }
+ 
+     public boolean canPositionTick(ChunkPos pos) {
++        synchronized (this.mfLock) {
+         return this.chunkVisibility.get(pos.pack()).isTicking();
++        }
+     }
+ 
+     public boolean areEntitiesLoaded(long chunkKey) {
++        synchronized (this.mfLock) {
+         return this.chunkLoadStatuses.get(chunkKey) == PersistentEntitySectionManager.ChunkLoadStatus.LOADED;
++        }
+     }
+ 
+     public void dumpSections(Writer output) throws IOException {
++        synchronized (this.mfLock) {
+         CsvOutput csvOutput = CsvOutput.builder()
+             .addColumn("x")
+             .addColumn("y")
+@@ -362,10 +454,12 @@ public class PersistentEntitySectionManager<T extends EntityAccess> implements A
+                         );
+                 }
+             );
++        }
+     }
+ 
+     @VisibleForDebug
+     public String gatherStats() {
++        synchronized (this.mfLock) {
+         return this.knownUuids.size()
+             + ","
+             + this.visibleEntityStorage.count()
+@@ -379,11 +473,90 @@ public class PersistentEntitySectionManager<T extends EntityAccess> implements A
+             + this.loadingInbox.size()
+             + ","
+             + this.chunksToUnload.size();
++        }
+     }
+ 
+     @VisibleForDebug
+     public int count() {
++        synchronized (this.mfLock) {
+         return this.visibleEntityStorage.count();
++        }
++    }
++
++    /**
++     * MultiForge: a raw census of this manager, read under mfLock (no foreign code runs;
++     * the lists are returned after it is released). Every sectioned entity is listed once,
++     * by its section's effective status; see net.multiforge.neoforge.world.EntityAudit.
++     */
++    public net.multiforge.neoforge.world.EntityAudit.Raw<T> mfCensus() {
++        synchronized (this.mfLock) {
++            List<T> hidden = new java.util.ArrayList<>();
++            List<T> accessible = new java.util.ArrayList<>();
++            List<T> ticking = new java.util.ArrayList<>();
++            for (it.unimi.dsi.fastutil.longs.LongIterator chunks = this.sectionStorage.getAllChunksWithExistingSections().iterator(); chunks.hasNext(); ) {
++                java.util.Iterator<EntitySection<T>> sections = this.sectionStorage.getExistingSectionsInChunk(chunks.nextLong()).iterator();
++                while (sections.hasNext()) {
++                    EntitySection<T> section = sections.next();
++                    Visibility status = section.getStatus();
++                    java.util.Iterator<T> entities = section.getEntities().iterator();
++                    while (entities.hasNext()) {
++                        T entity = entities.next();
++                        Visibility effective = getEffectiveStatus(entity, status);
++                        if (!effective.isAccessible()) {
++                            hidden.add(entity);
++                            continue;
++                        }
++                        accessible.add(entity);
++                        if (effective.isTicking()) ticking.add(entity);
++                    }
++                }
++            }
++            List<T> visible = new java.util.ArrayList<>(this.visibleEntityStorage.count());
++            this.visibleEntityStorage.getAllEntities().forEach(visible::add);
++            return new net.multiforge.neoforge.world.EntityAudit.Raw<>(this.knownUuids.size(), hidden, accessible, ticking, visible);
++        }
++    }
++
++    /** MultiForge: re-apply a missing tracking start (EntityAudit's heal); calls out, so never under mfLock. */
++    public void mfStartTracking(T entity) {
++        this.startTracking(entity);
++    }
++
++    /** MultiForge: re-apply a missing tracking end (EntityAudit's heal). */
++    public void mfStopTracking(T entity) {
++        this.stopTracking(entity);
++    }
++
++    /** MultiForge: re-apply a missing ticking start (EntityAudit's heal). */
++    public void mfStartTicking(T entity) {
++        this.startTicking(entity);
++    }
++
++    /** MultiForge: re-apply a missing ticking end (EntityAudit's heal). */
++    public void mfStopTicking(T entity) {
++        this.stopTicking(entity);
++    }
++
++    /**
++     * MultiForge: an updateChunkStatus call held back while region workers ran, replayed
++     * on the server thread at the barrier. A class rather than a lambda, which would
++     * renumber Vanilla's.
++     */
++    static final class MfDeferredStatus implements net.multiforge.runtime.region.RegionPhase.Deferred {
++        private final PersistentEntitySectionManager<?> manager;
++        private final ChunkPos pos;
++        private final FullChunkStatus status;
++
++        MfDeferredStatus(PersistentEntitySectionManager<?> manager, ChunkPos pos, FullChunkStatus status) {
++            this.manager = manager;
++            this.pos = pos;
++            this.status = status;
++        }
++
++        @Override
++        public void replay() {
++            this.manager.updateChunkStatus(this.pos, this.status);
++        }
+     }
+ 
+     private class Callback implements EntityInLevelCallback {
+@@ -406,19 +579,27 @@ public class PersistentEntitySectionManager<T extends EntityAccess> implements A
              BlockPos pos = this.entity.blockPosition();
              long newSectionPos = SectionPos.asLong(pos);
              if (newSectionPos != this.currentSectionKey) {
-@@ -455,6 +486,18 @@ public class PersistentEntitySectionManager<T extends EntityAccess> implements A
+-                Visibility previousStatus = this.currentSection.getStatus();
+-                if (!this.currentSection.remove(this.entity)) {
++                Visibility previousStatus;
++                boolean mf$found;
++                EntitySection<T> newSection;
++                Visibility mf$newStatus;
++                synchronized (PersistentEntitySectionManager.this.mfLock) {
++                    previousStatus = this.currentSection.getStatus();
++                    mf$found = this.currentSection.remove(this.entity);
++                    PersistentEntitySectionManager.this.removeSectionIfEmpty(this.currentSectionKey, this.currentSection);
++                    newSection = PersistentEntitySectionManager.this.sectionStorage.getOrCreateSection(newSectionPos);
++                    newSection.add(this.entity);
++                    mf$newStatus = newSection.getStatus();
++                }
++                if (!mf$found) {
+                     PersistentEntitySectionManager.LOGGER
+                         .warn("Entity {} wasn't found in section {} (moving to {})", this.entity, SectionPos.of(this.currentSectionKey), newSectionPos);
+                 }
+ 
+-                PersistentEntitySectionManager.this.removeSectionIfEmpty(this.currentSectionKey, this.currentSection);
+-                EntitySection<T> newSection = PersistentEntitySectionManager.this.sectionStorage.getOrCreateSection(newSectionPos);
+-                newSection.add(this.entity);
+                 long oldSectionKey = currentSectionKey;
+                 this.currentSection = newSection;
+                 this.currentSectionKey = newSectionPos;
+-                this.updateStatus(previousStatus, newSection.getStatus());
++                this.updateStatus(previousStatus, mf$newStatus);
+                 if (this.realEntity != null) net.neoforged.neoforge.common.CommonHooks.onEntityEnterSection(this.realEntity, oldSectionKey, newSectionPos);
+             }
+         }
+@@ -455,12 +636,18 @@ public class PersistentEntitySectionManager<T extends EntityAccess> implements A
  
          @Override
          public void onRemove(Entity.RemovalReason reason) {
-+            // MultiForge: as onMove. Entity.isRemoved() is already true for every reader.
-+            if (net.multiforge.runtime.region.RegionPhase.workersInFlight()) {
-+                if (!this.mfRemoveQueued) {
-+                    this.mfRemoveQueued = true;
-+                    if (net.multiforge.runtime.region.RegionPhase.deferUntilWorkersStop(
-+                            PersistentEntitySectionManager.MfLambdas.remove(this, reason), "entity.storage.deferred-remove")) {
-+                        return;
-+                    }
-+                } else {
-+                    return;
-+                }
+-            if (!this.currentSection.remove(this.entity)) {
++            boolean mf$found;
++            Visibility mf$status;
++            synchronized (PersistentEntitySectionManager.this.mfLock) {
++                mf$found = this.currentSection.remove(this.entity);
++                mf$status = this.currentSection.getStatus();
 +            }
-             if (!this.currentSection.remove(this.entity)) {
++            if (!mf$found) {
                  PersistentEntitySectionManager.LOGGER
                      .warn("Entity {} wasn't found in section {} (destroying due to {})", this.entity, SectionPos.of(this.currentSectionKey), reason);
-@@ -484,4 +527,28 @@ public class PersistentEntitySectionManager<T extends EntityAccess> implements A
+             }
+ 
+-            Visibility status = PersistentEntitySectionManager.getEffectiveStatus(this.entity, this.currentSection.getStatus());
++            Visibility status = PersistentEntitySectionManager.getEffectiveStatus(this.entity, mf$status);
+             if (status.isTicking()) {
+                 PersistentEntitySectionManager.this.stopTicking(this.entity);
+             }
+@@ -473,9 +660,13 @@ public class PersistentEntitySectionManager<T extends EntityAccess> implements A
+                 PersistentEntitySectionManager.this.callbacks.onDestroyed(this.entity);
+             }
+ 
+-            PersistentEntitySectionManager.this.knownUuids.remove(this.entity.getUUID());
++            synchronized (PersistentEntitySectionManager.this.mfLock) {
++                PersistentEntitySectionManager.this.knownUuids.remove(this.entity.getUUID());
++            }
+             this.entity.setLevelCallback(NULL);
+-            PersistentEntitySectionManager.this.removeSectionIfEmpty(this.currentSectionKey, this.currentSection);
++            synchronized (PersistentEntitySectionManager.this.mfLock) {
++                PersistentEntitySectionManager.this.removeSectionIfEmpty(this.currentSectionKey, this.currentSection);
++            }
+         }
+     }
+ 
+@@ -484,4 +675,14 @@ public class PersistentEntitySectionManager<T extends EntityAccess> implements A
          PENDING,
          LOADED;
      }
 +
-+    /**
-+     * MultiForge: the deferred calls, kept out of this class so a lambda does not
-+     * renumber Vanilla's (mixins target those by name).
-+     */
++    /** MultiForge: kept out of this class so a lambda does not renumber Vanilla's. */
 +    static final class MfLambdas {
 +        private MfLambdas() {}
 +
-+        static net.multiforge.runtime.region.RegionPhase.Deferred updateStatus(PersistentEntitySectionManager<?> manager, ChunkPos pos, FullChunkStatus status) {
-+            return () -> manager.updateChunkStatus(pos, status);
-+        }
-+
-+        static <T extends EntityAccess> net.multiforge.runtime.region.RegionPhase.Deferred addLegacyChunkEntities(PersistentEntitySectionManager<T> manager, List<T> entities) {
-+            return () -> manager.addLegacyChunkEntities(entities.stream());
-+        }
-+
-+        static <T extends EntityAccess> net.multiforge.runtime.region.RegionPhase.Deferred addWorldGenChunkEntities(PersistentEntitySectionManager<T> manager, List<T> entities) {
-+            return () -> manager.addWorldGenChunkEntities(entities.stream());
-+        }
-+
-+        static net.multiforge.runtime.region.RegionPhase.Deferred remove(EntityInLevelCallback callback, Entity.RemovalReason reason) {
-+            return () -> callback.onRemove(reason);
++        /** A consumer that records {@code action} for each element, to run later. */
++        static <E> java.util.function.Consumer<E> defer(List<Runnable> into, java.util.function.Consumer<E> action) {
++            return e -> into.add(() -> action.accept(e));
 +        }
 +    }
  }

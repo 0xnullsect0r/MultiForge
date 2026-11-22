@@ -28,6 +28,7 @@ import net.minecraft.resources.Identifier;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
 import net.multiforge.neoforge.MultiForgeServerState;
+import net.multiforge.neoforge.world.EntityAudit;
 import net.multiforge.runtime.commands.MultiForgeCommandDispatcher;
 import net.multiforge.runtime.config.MultiForgeConfigStore;
 import net.multiforge.runtime.diagnostics.EntityCensus;
@@ -253,8 +254,7 @@ public final class MultiForgeCommandBinder {
         for (ServerLevel l : server.getAllLevels()) {
             Identifier id = l.dimension().identifier();
             if (level == null || id.toString().equals(level) || id.getPath().equals(level)) {
-                // Port step 3: EntityAudit needs the entity-storage census of group 05 (step 4).
-                throw new IllegalStateException("/multiforge entities is not ported to 26.1.2 yet");
+                out.add(EntityAudit.take(l, heal));
             }
         }
         return out;

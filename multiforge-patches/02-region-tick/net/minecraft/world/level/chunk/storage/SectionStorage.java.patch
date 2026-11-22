@@ -1,0 +1,88 @@
+--- a/net/minecraft/world/level/chunk/storage/SectionStorage.java
++++ b/net/minecraft/world/level/chunk/storage/SectionStorage.java
+@@ -77,7 +77,9 @@ public class SectionStorage<R, P> implements AutoCloseable {
+         this.levelHeightAccessor = levelHeightAccessor;
+     }
+ 
+-    protected void tick(BooleanSupplier haveTime) {
++    // MultiForge (multiforge-patches/02-region-tick/): region workers read and write this
++    // storage (POI) concurrently; every access holds this storage's monitor. See PoiManager.
++    protected synchronized void tick(BooleanSupplier haveTime) {
+         LongIterator iterator = this.dirtyChunks.iterator();
+ 
+         while (iterator.hasNext() && haveTime.getAsBoolean()) {
+@@ -106,18 +108,18 @@ public class SectionStorage<R, P> implements AutoCloseable {
+         }
+     }
+ 
+-    public void flushAll() {
++    public synchronized void flushAll() {
+         if (!this.dirtyChunks.isEmpty()) {
+             this.dirtyChunks.forEach(pos -> this.writeChunk(ChunkPos.unpack(pos)));
+             this.dirtyChunks.clear();
+         }
+     }
+ 
+-    public boolean hasWork() {
++    public synchronized boolean hasWork() {
+         return !this.dirtyChunks.isEmpty();
+     }
+ 
+-    protected @Nullable Optional<R> get(long sectionPos) {
++    protected synchronized @Nullable Optional<R> get(long sectionPos) {
+         return this.storage.get(sectionPos);
+     }
+ 
+@@ -129,8 +131,14 @@ public class SectionStorage<R, P> implements AutoCloseable {
+             if (r != null) {
+                 return r;
+             } else {
+-                this.unpackChunk(SectionPos.of(sectionPos).chunk());
+-                r = this.get(sectionPos);
++                // MultiForge: wait for the disk without this storage's monitor, which every
++                // region's villager queries share, when the caller does not already hold it.
++                ChunkPos mf$column = SectionPos.of(sectionPos).chunk();
++                if (!Thread.holdsLock(this)) this.prefetch(mf$column).join();
++                synchronized (this) {
++                    this.unpackChunk(mf$column);
++                    r = this.get(sectionPos);
++                }
+                 if (r == null) {
+                     throw (IllegalStateException)Util.pauseInIde(new IllegalStateException());
+                 } else {
+@@ -145,7 +153,7 @@ public class SectionStorage<R, P> implements AutoCloseable {
+         return this.levelHeightAccessor.isOutsideBuildHeight(y);
+     }
+ 
+-    protected R getOrCreate(long sectionPos) {
++    protected synchronized R getOrCreate(long sectionPos) {
+         if (this.outsideStoredRange(sectionPos)) {
+             throw (IllegalArgumentException)Util.pauseInIde(new IllegalArgumentException("sectionPos out of bounds"));
+         } else {
+@@ -279,7 +287,7 @@ public class SectionStorage<R, P> implements AutoCloseable {
+     protected void onSectionLoad(long sectionPos) {
+     }
+ 
+-    protected void setDirty(long sectionPos) {
++    protected synchronized void setDirty(long sectionPos) {
+         Optional<R> r = this.storage.get(sectionPos);
+         if (r != null && !r.isEmpty()) {
+             this.dirtyChunks.add(ChunkPos.pack(SectionPos.x(sectionPos), SectionPos.z(sectionPos)));
+@@ -288,7 +296,7 @@ public class SectionStorage<R, P> implements AutoCloseable {
+         }
+     }
+ 
+-    public void flush(ChunkPos chunkPos) {
++    public synchronized void flush(ChunkPos chunkPos) {
+         if (this.dirtyChunks.remove(chunkPos.pack())) {
+             this.writeChunk(chunkPos);
+         }
+@@ -303,7 +311,7 @@ public class SectionStorage<R, P> implements AutoCloseable {
+      * Neo: Removes the data for the given chunk position.
+      * See PR #937
+      */
+-    public void remove(ChunkPos chunkPos) {
++    public synchronized void remove(ChunkPos chunkPos) {
+         synchronized (this.loadLock) {
+             for (int y = this.levelHeightAccessor.getMinSectionY(); y <= this.levelHeightAccessor.getMaxSectionY(); y++) {
+                 this.storage.remove(getKey(chunkPos, y));

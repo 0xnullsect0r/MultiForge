@@ -134,13 +134,26 @@ public final class RegionizedTickCoordinator {
         // A throwable from a region's tick is rethrown here, after every region
         // finished, so MinecraftServer.tickChildren's "Exception ticking world"
         // crash handling applies exactly as for Vanilla's inline level tick.
-        // Scheduled ticks due now, by region, so a region visits only chunks with due ticks.
+        // Entity activation range: where this level's players are, before any region reads it.
+        net.multiforge.neoforge.world.EntityActivation.snapshotPlayers(level);
+        // Scheduled ticks due now, by region, so a region visits only chunks with due
+        // ticks; and navigating mobs by region, for sendBlockUpdated on a worker.
         net.multiforge.runtime.chunk.ChunkHolderManager chunks = host.chunkManagerForOrNull(world);
         if (chunks != null) level.mfBucketScheduledTicks(ownerOf(chunks));
-        checkOverrun(world, host.driveRegions(world, DISPATCH_DEADLINE_NANOS, pump));
+        level.mfIndexNavigatingMobs();
+        try {
+            checkOverrun(world, host.driveRegions(world, DISPATCH_DEADLINE_NANOS, pump));
+        } finally {
+            level.mfEndNavigatingMobsIndex();
+        }
+        // Entities no region ticked (outside every region, or moved across a
+        // region border mid-tick).
+        level.mfTickEntitiesAfterRegions();
         // Chunk work a region could not take this tick, then the block-change
         // broadcast Vanilla sends right after its chunk loop.
         level.getChunkSource().mfAfterRegions();
+        // Every minute: census the level's entities and heal any left in limbo.
+        net.multiforge.neoforge.world.EntityAudit.autoAudit(level);
     }
 
     /**

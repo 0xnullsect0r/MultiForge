@@ -64,7 +64,7 @@ public final class VanillaTickingBlockEntityAdapter implements net.multiforge.ru
 
     @Override
     public boolean shouldTick() {
-        return (!(level instanceof net.minecraft.server.level.ServerLevel serverLevel) || serverLevel.mfRegionRunsBlockEntities)
+        return (!(level instanceof net.minecraft.server.level.ServerLevel serverLevel) || serverLevel.mfRegionRunsEntities)
                 && level.tickRateManager().runsNormally()
                 && level.shouldTickBlocksAt(delegate.getPos());
     }

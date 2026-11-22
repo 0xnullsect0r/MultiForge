@@ -1,0 +1,33 @@
+--- a/net/minecraft/server/level/ServerPlayer.java
++++ b/net/minecraft/server/level/ServerPlayer.java
+@@ -1132,6 +1132,9 @@ public class ServerPlayer extends Player {
+     }
+ 
+     public @Nullable ServerPlayer teleport(TeleportTransition transition) {
++        // MultiForge (multiforge-patches/05-entity-migration/): a player moving into another
++        // region, or to another dimension, moves on the server thread after the barrier.
++        if (net.multiforge.neoforge.OwnershipGuard.deferTeleport("ServerPlayer.teleport", this, transition)) return this;
+         if (!net.neoforged.neoforge.common.CommonHooks.onTravelToDimension(this, transition.newLevel().dimension())) return null;
+         if (this.isRemoved()) {
+             return null;
+@@ -1792,16 +1795,20 @@ public class ServerPlayer extends Player {
+ 
+     @Override
+     public void teleportTo(double x, double y, double z) {
++        if (net.multiforge.neoforge.OwnershipGuard.deferTeleportTo("ServerPlayer.teleportTo", this, x, z, y)) return; // MultiForge: see teleport
+         this.connection.teleport(new PositionMoveRotation(new Vec3(x, y, z), Vec3.ZERO, 0.0F, 0.0F), Relative.union(Relative.DELTA, Relative.ROTATION));
+     }
+ 
+     @Override
+     public void teleportRelative(double dx, double dy, double dz) {
++        if (net.multiforge.neoforge.OwnershipGuard.deferTeleportRelative(this, dx, dy, dz)) return; // MultiForge: see teleport
+         this.connection.teleport(new PositionMoveRotation(new Vec3(dx, dy, dz), Vec3.ZERO, 0.0F, 0.0F), Relative.ALL);
+     }
+ 
+     @Override
+     public boolean teleportTo(ServerLevel level, double x, double y, double z, Set<Relative> relatives, float newYRot, float newXRot, boolean resetCamera) {
++        // MultiForge: see teleport. Before the sleep and camera changes, which belong to the move.
++        if (net.multiforge.neoforge.OwnershipGuard.deferPlayerTeleportTo(this, level, x, y, z, relatives, newYRot, newXRot, resetCamera)) return true;
+         if (this.isSleeping()) {
+             this.stopSleepInBed(true, true);
+         }

@@ -1,0 +1,38 @@
+--- a/net/minecraft/world/level/entity/EntityTickList.java
++++ b/net/minecraft/world/level/entity/EntityTickList.java
+@@ -8,6 +8,9 @@ import java.util.function.Consumer;
+ import net.minecraft.world.entity.Entity;
+ import org.jspecify.annotations.Nullable;
+ 
++// MultiForge (multiforge-patches/05-entity-migration/): entities start and stop ticking on
++// any region worker, so add/remove/contains are synchronized. The list is only iterated on
++// the server thread, when regions do not tick entities or to split them between regions.
+ public class EntityTickList {
+     private Int2ObjectMap<Entity> active = new Int2ObjectLinkedOpenHashMap<>();
+     private Int2ObjectMap<Entity> passive = new Int2ObjectLinkedOpenHashMap<>();
+@@ -27,21 +30,21 @@ public class EntityTickList {
+         }
+     }
+ 
+-    public void add(Entity entity) {
++    public synchronized void add(Entity entity) {
+         this.ensureActiveIsNotIterated();
+         this.active.put(entity.getId(), entity);
+     }
+ 
+-    public void remove(Entity entity) {
++    public synchronized void remove(Entity entity) {
+         this.ensureActiveIsNotIterated();
+         this.active.remove(entity.getId());
+     }
+ 
+-    public boolean contains(Entity entity) {
++    public synchronized boolean contains(Entity entity) {
+         return this.active.containsKey(entity.getId());
+     }
+ 
+-    public void forEach(Consumer<Entity> output) {
++    public synchronized void forEach(Consumer<Entity> output) {
+         if (this.iterated != null) {
+             throw new UnsupportedOperationException("Only one concurrent iteration supported");
+         } else {

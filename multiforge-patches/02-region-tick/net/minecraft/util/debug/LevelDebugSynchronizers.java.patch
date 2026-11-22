@@ -1,0 +1,116 @@
+--- a/net/minecraft/util/debug/LevelDebugSynchronizers.java
++++ b/net/minecraft/util/debug/LevelDebugSynchronizers.java
+@@ -83,6 +83,7 @@ public class LevelDebugSynchronizers {
+ 
+     public void registerChunk(LevelChunk chunk) {
+         if (!this.sleeping) {
++            if (net.multiforge.runtime.region.RegionPhase.deferUntilWorkersStop(LevelDebugSynchronizers.MfLambdas.registerChunk(this, chunk), "debug.synchronizer.deferred")) return;
+             chunk.registerDebugValues(this.level, new DebugValueSource.Registration() {
+                 {
+                     Objects.requireNonNull(LevelDebugSynchronizers.this);
+@@ -99,6 +100,7 @@ public class LevelDebugSynchronizers {
+ 
+     public void dropChunk(ChunkPos chunkPos) {
+         if (!this.sleeping) {
++            if (net.multiforge.runtime.region.RegionPhase.deferUntilWorkersStop(LevelDebugSynchronizers.MfLambdas.dropChunk(this, chunkPos), "debug.synchronizer.deferred")) return;
+             for (TrackingDebugSynchronizer.SourceSynchronizer<?> synchronizer : this.sourceSynchronizers.values()) {
+                 synchronizer.dropChunk(chunkPos);
+             }
+@@ -107,6 +109,7 @@ public class LevelDebugSynchronizers {
+ 
+     public void registerBlockEntity(BlockEntity blockEntity) {
+         if (!this.sleeping) {
++            if (net.multiforge.runtime.region.RegionPhase.deferUntilWorkersStop(LevelDebugSynchronizers.MfLambdas.registerBlockEntity(this, blockEntity), "debug.synchronizer.deferred")) return;
+             blockEntity.registerDebugValues(this.level, new DebugValueSource.Registration() {
+                 {
+                     Objects.requireNonNull(LevelDebugSynchronizers.this);
+@@ -122,6 +125,7 @@ public class LevelDebugSynchronizers {
+ 
+     public void dropBlockEntity(BlockPos blockPos) {
+         if (!this.sleeping) {
++            if (net.multiforge.runtime.region.RegionPhase.deferUntilWorkersStop(LevelDebugSynchronizers.MfLambdas.dropBlockEntity(this, blockPos), "debug.synchronizer.deferred")) return;
+             for (TrackingDebugSynchronizer.SourceSynchronizer<?> synchronizer : this.sourceSynchronizers.values()) {
+                 synchronizer.dropBlockEntity(this.level, blockPos);
+             }
+@@ -130,6 +134,7 @@ public class LevelDebugSynchronizers {
+ 
+     public void registerEntity(Entity entity) {
+         if (!this.sleeping) {
++            if (net.multiforge.runtime.region.RegionPhase.deferUntilWorkersStop(LevelDebugSynchronizers.MfLambdas.registerEntity(this, entity), "debug.synchronizer.deferred")) return;
+             entity.registerDebugValues(this.level, new DebugValueSource.Registration() {
+                 {
+                     Objects.requireNonNull(LevelDebugSynchronizers.this);
+@@ -145,6 +150,7 @@ public class LevelDebugSynchronizers {
+ 
+     public void dropEntity(Entity entity) {
+         if (!this.sleeping) {
++            if (net.multiforge.runtime.region.RegionPhase.deferUntilWorkersStop(LevelDebugSynchronizers.MfLambdas.dropEntity(this, entity), "debug.synchronizer.deferred")) return;
+             for (TrackingDebugSynchronizer.SourceSynchronizer<?> synchronizer : this.sourceSynchronizers.values()) {
+                 synchronizer.dropEntity(entity);
+             }
+@@ -153,6 +159,7 @@ public class LevelDebugSynchronizers {
+ 
+     public void startTrackingChunk(ServerPlayer player, ChunkPos chunkPos) {
+         if (!this.sleeping) {
++            if (net.multiforge.runtime.region.RegionPhase.deferUntilWorkersStop(LevelDebugSynchronizers.MfLambdas.startTrackingChunk(this, player, chunkPos), "debug.synchronizer.deferred")) return;
+             for (TrackingDebugSynchronizer<?> synchronizer : this.allSynchronizers) {
+                 synchronizer.startTrackingChunk(player, chunkPos);
+             }
+@@ -161,6 +168,7 @@ public class LevelDebugSynchronizers {
+ 
+     public void startTrackingEntity(ServerPlayer player, Entity entity) {
+         if (!this.sleeping) {
++            if (net.multiforge.runtime.region.RegionPhase.deferUntilWorkersStop(LevelDebugSynchronizers.MfLambdas.startTrackingEntity(this, player, entity), "debug.synchronizer.deferred")) return;
+             for (TrackingDebugSynchronizer<?> synchronizer : this.allSynchronizers) {
+                 synchronizer.startTrackingEntity(player, entity);
+             }
+@@ -169,6 +177,7 @@ public class LevelDebugSynchronizers {
+ 
+     public void registerPoi(PoiRecord poi) {
+         if (!this.sleeping) {
++            if (net.multiforge.runtime.region.RegionPhase.deferUntilWorkersStop(LevelDebugSynchronizers.MfLambdas.registerPoi(this, poi), "debug.synchronizer.deferred")) return;
+             this.poiSynchronizer.onPoiAdded(this.level, poi);
+             this.villageSectionSynchronizer.onPoiAdded(this.level, poi);
+         }
+@@ -176,12 +185,14 @@ public class LevelDebugSynchronizers {
+ 
+     public void updatePoi(BlockPos pos) {
+         if (!this.sleeping) {
++            if (net.multiforge.runtime.region.RegionPhase.deferUntilWorkersStop(LevelDebugSynchronizers.MfLambdas.updatePoi(this, pos), "debug.synchronizer.deferred")) return;
+             this.poiSynchronizer.onPoiTicketCountChanged(this.level, pos);
+         }
+     }
+ 
+     public void dropPoi(BlockPos pos) {
+         if (!this.sleeping) {
++            if (net.multiforge.runtime.region.RegionPhase.deferUntilWorkersStop(LevelDebugSynchronizers.MfLambdas.dropPoi(this, pos), "debug.synchronizer.deferred")) return;
+             this.poiSynchronizer.onPoiRemoved(this.level, pos);
+             this.villageSectionSynchronizer.onPoiRemoved(this.level, pos);
+         }
+@@ -237,4 +248,26 @@ public class LevelDebugSynchronizers {
+         ChunkMap chunkMap = this.level.getChunkSource().chunkMap;
+         chunkMap.sendToTrackingPlayersFiltered(trackedEntity, packet, player -> player.debugSubscriptions().contains(subscription));
+     }
++
++    /**
++     * MultiForge (multiforge-patches/02-region-tick/): these synchronizers' maps are the
++     * server thread's. With a debug client subscribed, a call from a region worker (or
++     * pumped while workers run) replays at the barrier. Kept out of this class so a
++     * lambda does not renumber Vanilla's.
++     */
++    static final class MfLambdas {
++        private MfLambdas() {}
++
++        static net.multiforge.runtime.region.RegionPhase.Deferred registerChunk(LevelDebugSynchronizers s, LevelChunk chunk) { return () -> s.registerChunk(chunk); }
++        static net.multiforge.runtime.region.RegionPhase.Deferred dropChunk(LevelDebugSynchronizers s, ChunkPos pos) { return () -> s.dropChunk(pos); }
++        static net.multiforge.runtime.region.RegionPhase.Deferred registerBlockEntity(LevelDebugSynchronizers s, BlockEntity blockEntity) { return () -> s.registerBlockEntity(blockEntity); }
++        static net.multiforge.runtime.region.RegionPhase.Deferred dropBlockEntity(LevelDebugSynchronizers s, BlockPos pos) { BlockPos immutable = pos.immutable(); return () -> s.dropBlockEntity(immutable); }
++        static net.multiforge.runtime.region.RegionPhase.Deferred registerEntity(LevelDebugSynchronizers s, Entity entity) { return () -> s.registerEntity(entity); }
++        static net.multiforge.runtime.region.RegionPhase.Deferred dropEntity(LevelDebugSynchronizers s, Entity entity) { return () -> s.dropEntity(entity); }
++        static net.multiforge.runtime.region.RegionPhase.Deferred startTrackingChunk(LevelDebugSynchronizers s, ServerPlayer player, ChunkPos pos) { return () -> s.startTrackingChunk(player, pos); }
++        static net.multiforge.runtime.region.RegionPhase.Deferred startTrackingEntity(LevelDebugSynchronizers s, ServerPlayer player, Entity entity) { return () -> s.startTrackingEntity(player, entity); }
++        static net.multiforge.runtime.region.RegionPhase.Deferred registerPoi(LevelDebugSynchronizers s, PoiRecord poi) { return () -> s.registerPoi(poi); }
++        static net.multiforge.runtime.region.RegionPhase.Deferred updatePoi(LevelDebugSynchronizers s, BlockPos pos) { BlockPos immutable = pos.immutable(); return () -> s.updatePoi(immutable); }
++        static net.multiforge.runtime.region.RegionPhase.Deferred dropPoi(LevelDebugSynchronizers s, BlockPos pos) { BlockPos immutable = pos.immutable(); return () -> s.dropPoi(immutable); }
++    }
+ }

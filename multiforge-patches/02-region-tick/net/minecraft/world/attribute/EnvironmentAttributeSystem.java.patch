@@ -1,0 +1,26 @@
+--- a/net/minecraft/world/attribute/EnvironmentAttributeSystem.java
++++ b/net/minecraft/world/attribute/EnvironmentAttributeSystem.java
+@@ -204,7 +204,10 @@ public class EnvironmentAttributeSystem implements EnvironmentAttributeReader {
+         private final Value baseValue;
+         private final List<EnvironmentAttributeLayer<Value>> layers;
+         private final boolean isAffectedByPosition;
+-        private @Nullable Value cachedTickValue;
++        // MultiForge (multiforge-patches/02-region-tick/): volatile: region workers fill and read
++        // this per-tick cache. Invalidated on the server thread before they start; each
++        // computes the same value for the tick, so a racing write is harmless.
++        private volatile @Nullable Value cachedTickValue;
+         private int cacheTickId;
+ 
+         private ValueSampler(
+@@ -222,8 +225,9 @@ public class EnvironmentAttributeSystem implements EnvironmentAttributeReader {
+         }
+ 
+         public Value getDimensionValue() {
+-            if (this.cachedTickValue != null) {
+-                return this.cachedTickValue;
++            Value mf$cached = this.cachedTickValue;
++            if (mf$cached != null) {
++                return mf$cached;
+             } else {
+                 Value result = this.computeValueNotPositional();
+                 this.cachedTickValue = result;

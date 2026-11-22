@@ -1,0 +1,14 @@
+--- a/net/minecraft/server/level/DistanceManager.java
++++ b/net/minecraft/server/level/DistanceManager.java
+@@ -133,6 +133,11 @@ public abstract class DistanceManager {
+         return Math.max(0, ChunkLevel.byStatus(FullChunkStatus.ENTITY_TICKING) - this.simulationDistance);
+     }
+ 
++    /** MultiForge (multiforge-patches/02-region-tick/): the chunks holding a tracked player (server thread). */
++    public it.unimi.dsi.fastutil.longs.LongSet mfPlayerChunks() {
++        return this.playersPerChunk.keySet();
++    }
++
+     public boolean inEntityTickingRange(long key) {
+         return ChunkLevel.isEntityTicking(this.simulationChunkTracker.getLevel(key));
+     }

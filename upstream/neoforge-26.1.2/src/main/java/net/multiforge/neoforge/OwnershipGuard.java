@@ -145,18 +145,71 @@ public final class OwnershipGuard {
         rerouteAt("Entity.remove", entity.level(), entity.blockPosition(), () -> entity.remove(reason));
     }
 
+    /** {@code LevelChunk.addAndRegisterBlockEntity} for a chunk the caller does not own: its owner runs it. */
+    public static void rerouteAddBlockEntity(
+            net.minecraft.world.level.chunk.LevelChunk chunk, net.minecraft.world.level.block.entity.BlockEntity blockEntity) {
+        rerouteAt("LevelChunk.addAndRegisterBlockEntity", chunk.getLevel(), chunk.getPos().x(), chunk.getPos().z(),
+                () -> chunk.addAndRegisterBlockEntity(blockEntity));
+    }
+
+    private static double absolute(java.util.Set<net.minecraft.world.entity.Relative> relatives, net.minecraft.world.entity.Relative axis, double current, double value) {
+        return relatives.contains(axis) ? current + value : value;
+    }
+
     /**
-     * Port step 3: entity storage is frozen while region workers run, so a worker's
-     * add runs whole at the barrier ({@code RegionPhase}). The caller returns what
-     * Vanilla would have.
-     *
-     * @return {@code true} if deferred and the caller must return
+     * {@code Entity.teleport} / {@code ServerPlayer.teleport}: see {@link #deferCrossRegionMove}.
+     * A transition's coordinates can be relative to the entity.
      */
-    public static boolean deferAddEntity(
+    public static boolean deferTeleport(
+            String site, net.minecraft.world.entity.Entity entity, net.minecraft.world.level.portal.TeleportTransition transition) {
+        double x = absolute(transition.relatives(), net.minecraft.world.entity.Relative.X, entity.getX(), transition.position().x);
+        double z = absolute(transition.relatives(), net.minecraft.world.entity.Relative.Z, entity.getZ(), transition.position().z);
+        return deferCrossRegionMove(site, entity, transition.newLevel(), x, z, () -> entity.teleport(transition));
+    }
+
+    /** {@code teleportTo(x, y, z)} within the entity's level. */
+    public static boolean deferTeleportTo(String site, net.minecraft.world.entity.Entity entity, double x, double z, double y) {
+        return deferCrossRegionMove(site, entity, entity.level(), x, z, () -> entity.teleportTo(x, y, z));
+    }
+
+    /** {@code ServerPlayer.teleportRelative}. */
+    public static boolean deferTeleportRelative(net.minecraft.server.level.ServerPlayer player, double dx, double dy, double dz) {
+        return deferCrossRegionMove("ServerPlayer.teleportRelative", player, player.level(), player.getX() + dx, player.getZ() + dz,
+                () -> player.teleportRelative(dx, dy, dz));
+    }
+
+    /** {@code ServerPlayer.teleportTo(level, ...)}, deferred before its sleep and camera changes. */
+    public static boolean deferPlayerTeleportTo(
+            net.minecraft.server.level.ServerPlayer player,
             net.minecraft.server.level.ServerLevel level,
-            net.minecraft.world.entity.Entity entity,
-            java.util.function.Predicate<net.minecraft.world.entity.Entity> add) {
-        return net.multiforge.runtime.region.RegionPhase.deferUntilWorkersStop(() -> add.test(entity), "entity.storage.deferred-add");
+            double x, double y, double z,
+            java.util.Set<net.minecraft.world.entity.Relative> relatives,
+            float yRot, float xRot, boolean resetCamera) {
+        double absX = absolute(relatives, net.minecraft.world.entity.Relative.X, player.getX(), x);
+        double absZ = absolute(relatives, net.minecraft.world.entity.Relative.Z, player.getZ(), z);
+        return deferCrossRegionMove("ServerPlayer.teleportTo", player, level, absX, absZ,
+                () -> player.teleportTo(level, x, y, z, relatives, yRot, xRot, resetCamera));
+    }
+
+    /** {@code Commands.performPrefixedCommand} on a region worker: see {@link #deferToServerThread}. */
+    public static boolean deferPrefixedCommand(net.minecraft.commands.Commands commands, net.minecraft.commands.CommandSourceStack source, String command) {
+        return deferToServerThread("Commands.performPrefixedCommand", () -> commands.performPrefixedCommand(source, command));
+    }
+
+    /** {@code Commands.performCommand} on a region worker: see {@link #deferToServerThread}. */
+    public static boolean deferCommand(
+            net.minecraft.commands.Commands commands,
+            com.mojang.brigadier.ParseResults<net.minecraft.commands.CommandSourceStack> parse,
+            String command) {
+        return deferToServerThread("Commands.performCommand", () -> commands.performCommand(parse, command));
+    }
+
+    /** {@code ServerFunctionManager.execute} on a region worker: see {@link #deferToServerThread}. */
+    public static boolean deferFunction(
+            net.minecraft.server.ServerFunctionManager manager,
+            net.minecraft.commands.functions.CommandFunction<net.minecraft.commands.CommandSourceStack> function,
+            net.minecraft.commands.CommandSourceStack source) {
+        return deferToServerThread("ServerFunctionManager.execute", () -> manager.execute(function, source));
     }
 
     /** Runs one task of a Vanilla consecutive executor (worldgen, light, IO) as the global owner. */

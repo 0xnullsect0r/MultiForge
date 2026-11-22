@@ -1,0 +1,87 @@
+--- a/net/minecraft/server/waypoints/ServerWaypointManager.java
++++ b/net/minecraft/server/waypoints/ServerWaypointManager.java
+@@ -21,6 +21,7 @@ public class ServerWaypointManager implements WaypointManager<WaypointTransmitte
+     private final Table<ServerPlayer, WaypointTransmitter, WaypointTransmitter.Connection> connections = HashBasedTable.create();
+ 
+     public void trackWaypoint(WaypointTransmitter waypoint) {
++        if (net.multiforge.runtime.region.RegionPhase.deferUntilWorkersStop(ServerWaypointManager.MfLambdas.trackWaypoint(this, waypoint), "waypoint.deferred")) return;
+         this.waypoints.add(waypoint);
+ 
+         for (ServerPlayer player : this.players) {
+@@ -29,6 +30,7 @@ public class ServerWaypointManager implements WaypointManager<WaypointTransmitte
+     }
+ 
+     public void updateWaypoint(WaypointTransmitter waypoint) {
++        if (net.multiforge.runtime.region.RegionPhase.deferUntilWorkersStop(ServerWaypointManager.MfLambdas.updateWaypoint(this, waypoint), "waypoint.deferred")) return;
+         if (this.waypoints.contains(waypoint)) {
+             Map<ServerPlayer, WaypointTransmitter.Connection> playerConnection = Tables.transpose(this.connections).row(waypoint);
+             SetView<ServerPlayer> potentialPlayers = Sets.difference(this.players, playerConnection.keySet());
+@@ -44,12 +46,14 @@ public class ServerWaypointManager implements WaypointManager<WaypointTransmitte
+     }
+ 
+     public void untrackWaypoint(WaypointTransmitter waypoint) {
++        if (net.multiforge.runtime.region.RegionPhase.deferUntilWorkersStop(ServerWaypointManager.MfLambdas.untrackWaypoint(this, waypoint), "waypoint.deferred")) return;
+         this.connections.column(waypoint).forEach((player, connection) -> connection.disconnect());
+         Tables.transpose(this.connections).row(waypoint).clear();
+         this.waypoints.remove(waypoint);
+     }
+ 
+     public void addPlayer(ServerPlayer player) {
++        if (net.multiforge.runtime.region.RegionPhase.deferUntilWorkersStop(ServerWaypointManager.MfLambdas.addPlayer(this, player), "waypoint.deferred")) return;
+         this.players.add(player);
+ 
+         for (WaypointTransmitter waypoint : this.waypoints) {
+@@ -62,6 +66,7 @@ public class ServerWaypointManager implements WaypointManager<WaypointTransmitte
+     }
+ 
+     public void updatePlayer(ServerPlayer player) {
++        if (net.multiforge.runtime.region.RegionPhase.deferUntilWorkersStop(ServerWaypointManager.MfLambdas.updatePlayer(this, player), "waypoint.deferred")) return;
+         Map<WaypointTransmitter, WaypointTransmitter.Connection> waypointConnections = this.connections.row(player);
+         SetView<WaypointTransmitter> potentialWaypoints = Sets.difference(this.waypoints, waypointConnections.keySet());
+ 
+@@ -75,6 +80,7 @@ public class ServerWaypointManager implements WaypointManager<WaypointTransmitte
+     }
+ 
+     public void removePlayer(ServerPlayer player) {
++        if (net.multiforge.runtime.region.RegionPhase.deferUntilWorkersStop(ServerWaypointManager.MfLambdas.removePlayer(this, player), "waypoint.deferred")) return;
+         this.connections.row(player).values().removeIf(connection -> {
+             connection.disconnect();
+             return true;
+@@ -84,11 +90,13 @@ public class ServerWaypointManager implements WaypointManager<WaypointTransmitte
+     }
+ 
+     public void breakAllConnections() {
++        if (net.multiforge.runtime.region.RegionPhase.deferUntilWorkersStop(ServerWaypointManager.MfLambdas.breakAllConnections(this), "waypoint.deferred")) return;
+         this.connections.values().forEach(WaypointTransmitter.Connection::disconnect);
+         this.connections.clear();
+     }
+ 
+     public void remakeConnections(WaypointTransmitter waypoint) {
++        if (net.multiforge.runtime.region.RegionPhase.deferUntilWorkersStop(ServerWaypointManager.MfLambdas.remakeConnections(this, waypoint), "waypoint.deferred")) return;
+         for (ServerPlayer player : this.players) {
+             this.createConnection(player, waypoint);
+         }
+@@ -135,4 +143,23 @@ public class ServerWaypointManager implements WaypointManager<WaypointTransmitte
+             }
+         }
+     }
++
++    /**
++     * MultiForge (multiforge-patches/05-entity-migration/): the locator bar's sets and
++     * connections are plain collections, and a connection reads other entities' positions
++     * across regions. Calls made while region workers run replay at the barrier, in order.
++     * Kept out of this class so a lambda does not renumber Vanilla's.
++     */
++    static final class MfLambdas {
++        private MfLambdas() {}
++
++        static net.multiforge.runtime.region.RegionPhase.Deferred trackWaypoint(ServerWaypointManager m, WaypointTransmitter w) { return () -> m.trackWaypoint(w); }
++        static net.multiforge.runtime.region.RegionPhase.Deferred updateWaypoint(ServerWaypointManager m, WaypointTransmitter w) { return () -> m.updateWaypoint(w); }
++        static net.multiforge.runtime.region.RegionPhase.Deferred untrackWaypoint(ServerWaypointManager m, WaypointTransmitter w) { return () -> m.untrackWaypoint(w); }
++        static net.multiforge.runtime.region.RegionPhase.Deferred addPlayer(ServerWaypointManager m, ServerPlayer p) { return () -> m.addPlayer(p); }
++        static net.multiforge.runtime.region.RegionPhase.Deferred updatePlayer(ServerWaypointManager m, ServerPlayer p) { return () -> m.updatePlayer(p); }
++        static net.multiforge.runtime.region.RegionPhase.Deferred removePlayer(ServerWaypointManager m, ServerPlayer p) { return () -> m.removePlayer(p); }
++        static net.multiforge.runtime.region.RegionPhase.Deferred breakAllConnections(ServerWaypointManager m) { return m::breakAllConnections; }
++        static net.multiforge.runtime.region.RegionPhase.Deferred remakeConnections(ServerWaypointManager m, WaypointTransmitter w) { return () -> m.remakeConnections(w); }
++    }
+ }

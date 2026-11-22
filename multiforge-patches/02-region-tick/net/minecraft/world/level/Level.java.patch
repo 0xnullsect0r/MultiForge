@@ -157,3 +157,22 @@
                  ? null
                  : this.getChunkAt(pos).getBlockEntity(pos, LevelChunk.EntityCreationType.IMMEDIATE);
          }
+@@ -1070,8 +1146,16 @@ public abstract class Level extends net.neoforged.neoforge.attachment.Attachment
+     public abstract RecipeAccess recipeAccess();
+ 
+     public BlockPos getBlockRandomPos(int xo, int yo, int zo, int yMask) {
+-        this.randValue = this.randValue * 3 + 1013904223;
+-        int val = this.randValue >> 2;
++        // MultiForge (multiforge-patches/02-region-tick/): randValue is an unsynchronised
++        // read-modify-write. The level's thread keeps Vanilla's sequence; any other thread
++        // draws from its own stream (Level.random is per thread).
++        int val;
++        if (Thread.currentThread() == this.thread) {
++            this.randValue = this.randValue * 3 + 1013904223;
++            val = this.randValue >> 2;
++        } else {
++            val = this.random.nextInt() >> 2;
++        }
+         return new BlockPos(xo + (val & 15), yo + (val >> 16 & yMask), zo + (val >> 8 & 15));
+     }
+ 

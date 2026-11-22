@@ -15,6 +15,7 @@ package net.multiforge.neoforge;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
 import net.multiforge.neoforge.tick.BlockEntityTickerBridge;
+import net.multiforge.neoforge.tick.EntityTickRunnerBridge;
 import net.multiforge.neoforge.tick.ScheduledTickRunnerBridge;
 import net.multiforge.runtime.diagnostics.ViolationLogger;
 import net.multiforge.runtime.scheduler.MultiThreadedSchedulerHost;
@@ -25,7 +26,8 @@ import org.jetbrains.annotations.ApiStatus;
 /**
  * Binds the Vanilla-backed per-region runners to a freshly installed
  * {@link MultiThreadedSchedulerHost}: scheduled block/fluid ticks and block
- * events ({@link ScheduledTickRunnerBridge}), block-entity ticking ({@link
+ * events ({@link ScheduledTickRunnerBridge}), entity ticking ({@link
+ * EntityTickRunnerBridge}), block-entity ticking ({@link
  * BlockEntityTickerBridge}), and M12 event-bus domain routing ({@link
  * net.multiforge.neoforge.event.EventBusBridge}). Also materialises a
  * regionizer for every level up front so no level falls back to inline
@@ -49,8 +51,7 @@ public final class RegionRuntimeInit {
 
         ScheduledTickRunnerBridge.installOnEventBus();
         host.setBlockFluidRunner(new ScheduledTickRunnerBridge());
-        // Port step 3: no EntityTickRunner is bound, so entities keep ticking in Vanilla's
-        // pass on the server thread until group 05 is ported (step 4).
+        host.setEntityTickRunner(new EntityTickRunnerBridge(host, server));
         installBlockEntityTickerBridgeListeners();
 
         boolean eventBusAttached = net.multiforge.neoforge.event.EventBusBridge.attach(NeoForge.EVENT_BUS, host);

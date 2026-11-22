@@ -1,0 +1,15 @@
+--- a/net/minecraft/world/level/chunk/LevelChunk.java
++++ b/net/minecraft/world/level/chunk/LevelChunk.java
+@@ -398,6 +398,12 @@ public class LevelChunk extends ChunkAccess implements DebugValueSource, net.neo
+     }
+ 
+     public void addAndRegisterBlockEntity(BlockEntity blockEntity) {
++        // MultiForge (multiforge-patches/05-entity-migration/): no direct
++        // block-entity list mutation off-owner; see BlockEntity.setChanged.
++        if (!net.multiforge.neoforge.OwnershipGuard.canMutateAt("LevelChunk.addAndRegisterBlockEntity", this.level, this.chunkPos.x(), this.chunkPos.z())) {
++            net.multiforge.neoforge.OwnershipGuard.rerouteAddBlockEntity(this, blockEntity);
++            return;
++        }
+         this.setBlockEntity(blockEntity);
+         if (this.isInLevel()) {
+             if (this.level instanceof ServerLevel serverLevel) {

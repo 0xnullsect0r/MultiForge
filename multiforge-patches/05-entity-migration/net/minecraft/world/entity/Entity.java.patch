@@ -1,0 +1,21 @@
+--- a/net/minecraft/world/entity/Entity.java
++++ b/net/minecraft/world/entity/Entity.java
+@@ -2981,6 +2981,9 @@ public abstract class Entity
+     }
+ 
+     public @Nullable Entity teleport(TeleportTransition transition) {
++        // MultiForge (multiforge-patches/05-entity-migration/): a move into another
++        // region's chunk runs on the server thread after the tick barrier.
++        if (net.multiforge.neoforge.OwnershipGuard.deferTeleport("Entity.teleport", this, transition)) return this;
+         if (!net.neoforged.neoforge.common.CommonHooks.onTravelToDimension(this, transition.newLevel().dimension())) return null;
+         if (this.level() instanceof ServerLevel serverLevel && !this.isRemoved()) {
+             ServerLevel newLevel = transition.newLevel();
+@@ -3270,6 +3273,8 @@ public abstract class Entity
+ 
+     public void teleportTo(double x, double y, double z) {
+         if (this.level() instanceof ServerLevel) {
++            // MultiForge (multiforge-patches/05-entity-migration/): see teleport.
++            if (net.multiforge.neoforge.OwnershipGuard.deferTeleportTo("Entity.teleportTo", this, x, z, y)) return;
+             this.snapTo(x, y, z, this.getYRot(), this.getXRot());
+             this.teleportPassengers();
+         }

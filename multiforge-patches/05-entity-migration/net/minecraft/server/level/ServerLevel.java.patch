@@ -1,0 +1,366 @@
+--- a/net/minecraft/server/level/ServerLevel.java
++++ b/net/minecraft/server/level/ServerLevel.java
+@@ -191,7 +191,10 @@ public class ServerLevel extends Level implements WorldGenLevel, ServerEntityGet
+     private static final Logger LOGGER = LogUtils.getLogger();
+     private static final int EMPTY_TIME_NO_TICK = 300;
+     private static final int MAX_SCHEDULED_TICKS_PER_TICK = 65536;
+-    private final List<ServerPlayer> players = Lists.newArrayList();
++    // MultiForge (multiforge-patches/05-entity-migration/): region workers iterate the
++    // player list (nearest-player queries, broadcasts); a copy-on-write list gives every
++    // iteration a stable snapshot.
++    private final List<ServerPlayer> players = new java.util.concurrent.CopyOnWriteArrayList<>();
+     private final ServerChunkCache chunkSource;
+     private final MinecraftServer server;
+     private final ServerLevelData serverLevelData;
+@@ -207,11 +210,29 @@ public class ServerLevel extends Level implements WorldGenLevel, ServerEntityGet
+     private final LevelTicks<Block> blockTicks = new LevelTicks<>(this::isPositionTickingWithEntitiesLoaded);
+     private final LevelTicks<Fluid> fluidTicks = new LevelTicks<>(this::isPositionTickingWithEntitiesLoaded);
+     private final PathTypeCache pathTypesByPosCache = new PathTypeCache();
+-    private final Set<Mob> navigatingMobs = new ObjectOpenHashSet<>();
++    // MultiForge (multiforge-patches/05-entity-migration/): mobs start and stop being
++    // tracked on any region worker; sendBlockUpdated iterates this concurrently.
++    private final Set<Mob> navigatingMobs = java.util.concurrent.ConcurrentHashMap.newKeySet();
+     private volatile boolean isUpdatingNavigations;
+     // MultiForge (multiforge-patches/02-region-tick/): per thread, each worker has
+     // its own navigation-update pass. Vanilla's field stays for mixins.
+     private final ThreadLocal<Boolean> mfUpdatingNavigations = new ThreadLocal<>();
++    // MultiForge: while this level's regions tick, navigatingMobs split by owning region
++    // (mfIndexNavigatingMobs), and the mobs that started navigating since; sendBlockUpdated
++    // on a region worker scans only its own region's mobs.
++    private volatile boolean mfNavigatingIndexed;
++    private volatile it.unimi.dsi.fastutil.longs.Long2ObjectMap<java.util.List<Mob>> mfRegionNavigatingMobs =
++            it.unimi.dsi.fastutil.longs.Long2ObjectMaps.emptyMap();
++    private final java.util.concurrent.ConcurrentLinkedQueue<Mob> mfNavigatingMobsAdded = new java.util.concurrent.ConcurrentLinkedQueue<>();
++    // This tick's entityTickList split by owning region, and entities a region found had
++    // crossed into another region, left for the server thread.
++    private final java.util.concurrent.ConcurrentHashMap<Long, java.util.List<Entity>> mfRegionEntities =
++            new java.util.concurrent.ConcurrentHashMap<>();
++    private final java.util.concurrent.ConcurrentLinkedQueue<Entity> mfEntityStragglers = new java.util.concurrent.ConcurrentLinkedQueue<>();
++    // This tick's per-entity lambda (Vanilla's, from tick), run by the regions and by mfTickEntitiesAfterRegions.
++    private volatile java.util.function.Consumer<Entity> mfEntityTick;
++    // getPartEntities' snapshot, see mfRebuildPartSnapshot.
++    private volatile java.util.List<net.neoforged.neoforge.entity.PartEntity<?>> mfPartSnapshot = List.of();
+     // MultiForge (multiforge-patches/02-region-tick/): what this level's regions run
+     // this tick: Vanilla's gates for the inline work they replace, set by tick().
+     public boolean mfRegionRunsBlockTicks;
+@@ -229,7 +250,8 @@ public class ServerLevel extends Level implements WorldGenLevel, ServerEntityGet
+     private boolean handlingTick;
+     private final List<CustomSpawner> customSpawners;
+     private @Nullable EnderDragonFight dragonFight;
+-    final Int2ObjectMap<net.neoforged.neoforge.entity.PartEntity<?>> dragonParts = new Int2ObjectOpenHashMap<>();
++    final Int2ObjectMap<net.neoforged.neoforge.entity.PartEntity<?>> dragonParts =
++            it.unimi.dsi.fastutil.ints.Int2ObjectMaps.synchronize(new Int2ObjectOpenHashMap<>());
+     private final StructureManager structureManager;
+     private final StructureCheck structureCheck;
+     private final boolean tickTime;
+@@ -275,6 +297,9 @@ public class ServerLevel extends Level implements WorldGenLevel, ServerEntityGet
+             server
+         );
+         this.entityManager = new PersistentEntitySectionManager<>(Entity.class, new ServerLevel.EntityCallbacks(), entityStorage);
++        // MultiForge (multiforge-patches/05-entity-migration/): entity queries from this
++        // thread, while no region worker runs, skip the storage lock (LockingEntityGetter).
++        ((net.multiforge.neoforge.world.LockingEntityGetter<Entity>) this.entityManager.getEntityGetter()).bindServerThread(server.getRunningThread());
+         this.chunkSource = new ServerChunkCache(
+             this,
+             levelStorage,
+@@ -365,7 +390,9 @@ public class ServerLevel extends Level implements WorldGenLevel, ServerEntityGet
+     }
+ 
+     public void tick(BooleanSupplier haveTime) {
+-        ProfilerFiller profiler = Profiler.get();
++        // MultiForge: the per-entity lambda below captures this and runs on region workers;
++        // a copy that ignores other threads keeps them out of the server's profiler.
++        ProfilerFiller profiler = net.multiforge.neoforge.world.ThreadConfinedProfiler.confine(Profiler.get());
+         this.handlingTick = true;
+         TickRateManager tickRateManager = this.tickRateManager();
+         boolean runs = tickRateManager.runsNormally();
+@@ -446,8 +473,11 @@ public class ServerLevel extends Level implements WorldGenLevel, ServerEntityGet
+                 profiler.pop();
+             }
+ 
+-            this.entityTickList
+-                .forEach(
++            // MultiForge (multiforge-patches/02-region-tick/): Vanilla's per-entity pass,
++            // unchanged and still this lambda, which mixins target. Without regions it runs
++            // over the whole list here; with regions each region runs this same lambda over
++            // its share (mfTickEntitiesForRegion), so a mixin injected into it applies to both.
++            java.util.function.Consumer<Entity> mf$entityTick =
+                     entity -> {
+                         if (!entity.isRemoved()) {
+                             if (!tickRateManager.isEntityFrozen(entity)) {
+@@ -473,8 +503,12 @@ public class ServerLevel extends Level implements WorldGenLevel, ServerEntityGet
+                                 }
+                             }
+                         }
+-                    }
+-                );
++                    };
++            if (!net.multiforge.neoforge.RegionizedTickCoordinator.regionsHandleEntityTicks(this)) {
++                this.entityTickList.forEach(mf$entityTick);
++            } else {
++                this.mfQueueRegionEntityTicks(mf$entityTick);
++            }
+             profiler.popPush("blockEntities");
+             this.tickBlockEntities();
+             profiler.pop();
+@@ -496,6 +530,162 @@ public class ServerLevel extends Level implements WorldGenLevel, ServerEntityGet
+         this.environmentAttributes().invalidateTickCache();
+     }
+ 
++    /**
++     * MultiForge (multiforge-patches/02-region-tick/): server thread, before the regions
++     * run: split this tick's entityTickList by the region owning each entity's chunk. Each
++     * region runs Vanilla's per-entity lambda over its share, in list order; anything no
++     * region took runs on the server thread afterwards. As in Vanilla's own pass, an entity
++     * added during the tick waits for the next.
++     */
++    private void mfQueueRegionEntityTicks(java.util.function.Consumer<Entity> entityTick) {
++        this.mfEntityTick = entityTick;
++        this.mfRegionEntities.clear();
++        this.mfEntityStragglers.clear();
++        this.entityTickList.forEach(this::mfAssignEntityToRegion);
++    }
++
++    private void mfAssignEntityToRegion(Entity entity) {
++        ChunkPos pos = entity.chunkPosition();
++        long region = net.multiforge.neoforge.RegionizedTickCoordinator.regionIdAt(this, pos.x(), pos.z());
++        java.util.List<Entity> entities = this.mfRegionEntities.get(region);
++        if (entities == null) {
++            entities = new java.util.ArrayList<>();
++            this.mfRegionEntities.put(region, entities);
++        }
++        entities.add(entity);
++    }
++
++    /** MultiForge: the entities in the chunk rectangle's accessible sections, for ChunkMap's indexed tracking. */
++    public java.util.List<Entity> mfEntitiesInChunks(int minX, int minZ, int maxX, int maxZ) {
++        return this.entityManager.mfEntitiesInChunks(minX, minZ, maxX, maxZ);
++    }
++
++    /** MultiForge: this level's entity manager, for the census and heal (EntityAudit). */
++    public PersistentEntitySectionManager<Entity> mfEntityManager() {
++        return this.entityManager;
++    }
++
++    /** MultiForge: adds this level's entity tick list to {@code into}, in list order (server thread, no region running). */
++    public void mfCopyEntityTickList(java.util.List<Entity> into) {
++        this.entityTickList.forEach(into::add);
++    }
++
++    /**
++     * MultiForge: server thread, right before this level's regions tick: split
++     * navigatingMobs by owning region. Ownership does not change while regions tick and a
++     * mob cannot walk between regions (an unloaded section apart; cross-region teleports
++     * are deferred), so a region's mobs are those indexed under it plus new ones.
++     */
++    public void mfIndexNavigatingMobs() {
++        it.unimi.dsi.fastutil.longs.Long2ObjectMap<java.util.List<Mob>> byRegion = new it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap<>();
++        for (Mob mob : this.navigatingMobs) {
++            ChunkPos pos = mob.chunkPosition();
++            long region = net.multiforge.neoforge.RegionizedTickCoordinator.regionIdAt(this, pos.x(), pos.z());
++            if (region < 0L) continue;
++            java.util.List<Mob> mobs = byRegion.get(region);
++            if (mobs == null) {
++                mobs = new java.util.ArrayList<>();
++                byRegion.put(region, mobs);
++            }
++            mobs.add(mob);
++        }
++        this.mfNavigatingMobsAdded.clear();
++        this.mfRegionNavigatingMobs = byRegion;
++        this.mfNavigatingIndexed = true;
++    }
++
++    /** MultiForge: server thread, after this level's regions ticked: drop the index. */
++    public void mfEndNavigatingMobsIndex() {
++        this.mfNavigatingIndexed = false;
++        this.mfRegionNavigatingMobs = it.unimi.dsi.fastutil.longs.Long2ObjectMaps.emptyMap();
++        this.mfNavigatingMobsAdded.clear();
++    }
++
++    /**
++     * MultiForge: the mobs sendBlockUpdated checks. On a region worker while the index is
++     * up, the calling region's indexed mobs still navigating and those that started since,
++     * each once; anywhere else, navigatingMobs. A {@code Set} so the loop still calls
++     * {@code Set.iterator()}, as Vanilla's does: mods inject there.
++     */
++    private java.util.Set<Mob> mfNavigatingMobsForCaller() {
++        if (!this.mfNavigatingIndexed) return this.navigatingMobs;
++        net.multiforge.runtime.ownership.OwnerToken token = net.multiforge.runtime.ownership.OwnerToken.current();
++        if (token.domain() != net.multiforge.runtime.ownership.Domain.REGION) return this.navigatingMobs;
++        java.util.List<Mob> indexed = this.mfRegionNavigatingMobs.get(token.regionId());
++        java.util.Set<Mob> added = null;
++        if (!this.mfNavigatingMobsAdded.isEmpty()) {
++            added = java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>());
++            for (Mob mob : this.mfNavigatingMobsAdded) added.add(mob);
++        }
++        java.util.List<Mob> out = new java.util.ArrayList<>((indexed == null ? 0 : indexed.size()) + (added == null ? 0 : added.size()));
++        if (indexed != null) {
++            for (Mob mob : indexed) {
++                if ((added == null || !added.contains(mob)) && this.navigatingMobs.contains(mob)) out.add(mob);
++            }
++        }
++        if (added != null) {
++            for (Mob mob : added) {
++                if (this.navigatingMobs.contains(mob)) out.add(mob);
++            }
++        }
++        return new it.unimi.dsi.fastutil.objects.ObjectArraySet<>(out.toArray(new Mob[0]), out.size());
++    }
++
++    /**
++     * MultiForge: region worker: run this tick's per-entity lambda over the entities
++     * assigned to {@code regionId}. One moved into another region since is left for the
++     * server thread.
++     *
++     * @return how many entities it ticked
++     */
++    public int mfTickEntitiesForRegion(long regionId) {
++        if (!this.mfRegionRunsEntities) return 0;
++        java.util.List<Entity> entities = this.mfRegionEntities.remove(regionId);
++        if (entities == null) return 0;
++        java.util.function.Consumer<Entity> entityTick = this.mfEntityTick;
++        int mf$ticked = 0;
++        for (Entity entity : entities) {
++            ChunkPos pos = entity.chunkPosition();
++            if (net.multiforge.neoforge.RegionizedTickCoordinator.regionIdAt(this, pos.x(), pos.z()) != regionId) {
++                this.mfEntityStragglers.add(entity);
++                continue;
++            }
++            long mf$cost = net.multiforge.runtime.diagnostics.ChunkCost.start();
++            entityTick.accept(entity);
++            net.multiforge.runtime.diagnostics.ChunkCost.end(pos.x(), pos.z(), mf$cost);
++            mf$ticked++;
++        }
++        return mf$ticked;
++    }
++
++    /**
++     * MultiForge: server thread, after the regions finished: tick the entities no region
++     * took (in no region's chunk, their region merged or split away mid-tick, or moved
++     * across a region border).
++     */
++    public void mfTickEntitiesAfterRegions() {
++        java.util.function.Consumer<Entity> entityTick = this.mfEntityTick;
++        this.mfEntityTick = null;
++        if (entityTick == null) return;
++        for (java.util.Iterator<java.util.List<Entity>> it = this.mfRegionEntities.values().iterator(); it.hasNext(); ) {
++            java.util.List<Entity> entities = it.next();
++            it.remove();
++            if (this.mfRegionRunsEntities) {
++                for (Entity entity : entities) entityTick.accept(entity);
++            }
++        }
++        for (Entity entity; (entity = this.mfEntityStragglers.poll()) != null; ) {
++            entityTick.accept(entity);
++        }
++    }
++
++    /** MultiForge: republish dragonParts()' copy-on-write snapshot; built under the map's monitor. */
++    void mfRebuildPartSnapshot() {
++        synchronized (this.dragonParts) {
++            this.mfPartSnapshot = this.dragonParts.isEmpty() ? List.of() : List.copyOf(this.dragonParts.values());
++        }
++    }
++
+     /** MultiForge (multiforge-patches/02-region-tick/): region worker: due block and fluid ticks of its chunks. */
+     public void mfTickRegionScheduledTicks(long regionId, java.util.function.Supplier<java.util.List<ChunkPos>> chunks) {
+         if (!this.mfRegionRunsBlockTicks) return;
+@@ -909,6 +1099,9 @@ public class ServerLevel extends Level implements WorldGenLevel, ServerEntityGet
+     }
+ 
+     public void tickNonPassenger(Entity entity) {
++        // MultiForge (multiforge-patches/02-region-tick/): entity activation range: a mob
++        // far from every player runs an inactive tick instead (EntityActivation).
++        if (net.multiforge.neoforge.world.EntityActivation.skipTick(this, entity)) return;
+         entity.setOldPosAndRot();
+         ProfilerFiller profiler = Profiler.get();
+         entity.tickCount++;
+@@ -1089,6 +1282,11 @@ public class ServerLevel extends Level implements WorldGenLevel, ServerEntityGet
+     }
+ 
+     private boolean addEntity(Entity entity) {
++        // MultiForge (multiforge-patches/05-entity-migration/): addFreshEntity carries an
++        // ownership check, but addWithUUID and addDuringTeleport funnel through here without one.
++        if (!net.multiforge.neoforge.OwnershipGuard.canMutateAt("ServerLevel.addEntity", this, entity.blockPosition())) {
++            return net.multiforge.neoforge.OwnershipGuard.rerouteAddEntity("ServerLevel.addEntity", this, entity, ServerLevel.MfLambdas.addEntity(this, entity));
++        }
+         if (entity.isRemoved()) {
+             LOGGER.warn("Tried to add entity {} but it was marked as removed already", entity.typeHolder().getRegisteredName());
+             return false;
+@@ -1244,7 +1442,7 @@ public class ServerLevel extends Level implements WorldGenLevel, ServerEntityGet
+         if (Shapes.joinIsNotEmpty(oldShape, newShape, BooleanOp.NOT_SAME)) {
+             List<PathNavigation> navigationsToUpdate = new ObjectArrayList<>();
+ 
+-            for (Mob navigatingMob : this.navigatingMobs) {
++            for (Mob navigatingMob : this.mfNavigatingMobsForCaller()) {
+                 // MultiForge: a region worker only re-paths its own mobs; a block change
+                 // here cannot lie on another region's path (an unloaded section apart).
+                 if (net.multiforge.runtime.ownership.OwnershipEnforcer.isCrossRegionFromWorker(
+@@ -1257,14 +1455,18 @@ public class ServerLevel extends Level implements WorldGenLevel, ServerEntityGet
+                 }
+             }
+ 
++            // MultiForge: Vanilla's field stays for mixins, and mirrors the server thread's pass.
++            boolean mf$onLevelThread = Thread.currentThread() == this.getServer().getRunningThread();
+             try {
+                 this.mfUpdatingNavigations.set(Boolean.TRUE);
++                if (mf$onLevelThread) this.isUpdatingNavigations = true;
+ 
+                 for (PathNavigation navigation : navigationsToUpdate) {
+                     navigation.recomputePath();
+                 }
+             } finally {
+                 this.mfUpdatingNavigations.remove();
++                if (mf$onLevelThread) this.isUpdatingNavigations = false;
+             }
+         }
+     }
+@@ -1538,7 +1740,8 @@ public class ServerLevel extends Level implements WorldGenLevel, ServerEntityGet
+ 
+     @Override
+     public Collection<net.neoforged.neoforge.entity.PartEntity<?>> dragonParts() {
+-        return this.dragonParts.values();
++        // MultiForge: a snapshot; region workers read this while parts come and go.
++        return this.mfPartSnapshot;
+     }
+ 
+     public @Nullable BlockPos findNearestMapStructure(TagKey<Structure> structureTag, BlockPos origin, int maxSearchRadius, boolean createReference) {
+@@ -2070,12 +2273,15 @@ public class ServerLevel extends Level implements WorldGenLevel, ServerEntityGet
+                 }
+ 
+                 ServerLevel.this.navigatingMobs.add(mob);
++                // MultiForge: covered by sendBlockUpdated on its region's worker this phase.
++                if (ServerLevel.this.mfNavigatingIndexed) ServerLevel.this.mfNavigatingMobsAdded.add(mob);
+             }
+ 
+             if (entity.isMultipartEntity()) {
+                 for(net.neoforged.neoforge.entity.PartEntity<?> subEntity : entity.getParts()) {
+                     ServerLevel.this.dragonParts.put(subEntity.getId(), subEntity);
+                 }
++                ServerLevel.this.mfRebuildPartSnapshot();
+             }
+ 
+             entity.updateDynamicGameEventListener(DynamicGameEventListener::add);
+@@ -2104,6 +2310,7 @@ public class ServerLevel extends Level implements WorldGenLevel, ServerEntityGet
+                 for(net.neoforged.neoforge.entity.PartEntity<?> subEntity : entity.getParts()) {
+                     ServerLevel.this.dragonParts.remove(subEntity.getId());
+                 }
++                ServerLevel.this.mfRebuildPartSnapshot();
+             }
+ 
+             entity.updateDynamicGameEventListener(DynamicGameEventListener::remove);
+@@ -2151,4 +2358,13 @@ public class ServerLevel extends Level implements WorldGenLevel, ServerEntityGet
+     public void cleanCapabilityListenerReferences() {
+         capListenerHolder.clean();
+     }
++
++    /** MultiForge: the lambdas its patches need, kept out of this class so Vanilla's keep their numbers. */
++    static final class MfLambdas {
++        private MfLambdas() {}
++
++        static java.util.function.BooleanSupplier addEntity(ServerLevel level, Entity entity) {
++            return () -> level.addEntity(entity);
++        }
++    }
+ }

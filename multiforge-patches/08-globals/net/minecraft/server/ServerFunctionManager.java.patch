@@ -1,0 +1,12 @@
+--- a/net/minecraft/server/ServerFunctionManager.java
++++ b/net/minecraft/server/ServerFunctionManager.java
+@@ -61,6 +61,9 @@ public class ServerFunctionManager {
+     }
+ 
+     public void execute(CommandFunction<CommandSourceStack> functionIn, CommandSourceStack sender) {
++        // MultiForge (multiforge-patches/08-globals/): a function started on a region worker
++        // (an advancement reward) runs on the server thread after the barrier, like a command.
++        if (net.multiforge.neoforge.OwnershipGuard.deferFunction(this, functionIn, sender)) return;
+         ProfilerFiller profiler = Profiler.get();
+         profiler.push(() -> "function " + functionIn.id());
+ 

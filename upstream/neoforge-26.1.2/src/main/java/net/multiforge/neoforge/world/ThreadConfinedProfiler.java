@@ -39,6 +39,16 @@ public final class ThreadConfinedProfiler implements ProfilerFiller {
         this.owner = owner;
     }
 
+    /**
+     * {@code filler}, confined to the calling thread; the inactive profiler is returned
+     * as it is, since it has no state to protect and this runs every level tick.
+     */
+    public static ProfilerFiller confine(ProfilerFiller filler) {
+        return filler == net.minecraft.util.profiling.InactiveProfiler.INSTANCE
+                ? filler
+                : new ThreadConfinedProfiler(filler, Thread.currentThread());
+    }
+
     /** The profiler this wraps. */
     public ProfilerFiller delegate() {
         return delegate;

@@ -1,0 +1,21 @@
+--- a/net/minecraft/server/level/SimulationChunkTracker.java
++++ b/net/minecraft/server/level/SimulationChunkTracker.java
+@@ -26,13 +26,16 @@ public class SimulationChunkTracker extends ChunkTracker {
+         return this.getLevel(node.pack());
+     }
+ 
++    // MultiForge (multiforge-patches/02-region-tick/): region workers read this (entity and
++    // block ticking range) while the barrier pump's distance-manager updates can write
++    // it. A leaf lock around one hash-map operation.
+     @Override
+-    protected int getLevel(long node) {
++    protected synchronized int getLevel(long node) {
+         return this.chunks.get(node);
+     }
+ 
+     @Override
+-    protected void setLevel(long node, int level) {
++    protected synchronized void setLevel(long node, int level) {
+         if (level >= 33) {
+             this.chunks.remove(node);
+         } else {

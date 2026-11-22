@@ -1,0 +1,25 @@
+--- a/net/minecraft/world/timeline/AttributeTrackSampler.java
++++ b/net/minecraft/world/timeline/AttributeTrackSampler.java
+@@ -35,11 +35,18 @@ public class AttributeTrackSampler<Value, Argument> implements EnvironmentAttrib
+ 
+     @Override
+     public Value applyTimeBased(Value baseValue, int cacheTickId) {
+-        if (this.cachedArgument == null || cacheTickId != this.cachedTickId) {
+-            this.cachedTickId = cacheTickId;
+-            this.cachedArgument = this.argumentSampler.sample(this.clockManager.getTotalTicks(this.clock));
++        // MultiForge (multiforge-patches/02-region-tick/): region workers sample this
++        // concurrently, and the id/argument pair must be read and written together. A leaf
++        // lock: only the keyframe lookup runs under it, and the modifier runs outside.
++        Argument mf$argument;
++        synchronized (this) {
++            if (this.cachedArgument == null || cacheTickId != this.cachedTickId) {
++                this.cachedTickId = cacheTickId;
++                this.cachedArgument = this.argumentSampler.sample(this.clockManager.getTotalTicks(this.clock));
++            }
++            mf$argument = this.cachedArgument;
+         }
+ 
+-        return this.modifier.apply(baseValue, this.cachedArgument);
++        return this.modifier.apply(baseValue, mf$argument);
+     }
+ }
