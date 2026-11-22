@@ -1,0 +1,159 @@
+--- a/net/minecraft/world/level/Level.java
++++ b/net/minecraft/world/level/Level.java
+@@ -118,7 +118,9 @@ public abstract class Level extends net.neoforged.neoforge.attachment.Attachment
+     public float rainLevel;
+     public float oThunderLevel;
+     public float thunderLevel;
+-    protected final RandomSource random = RandomSource.create();
++    // MultiForge (multiforge-patches/02-region-tick/): one stream per thread —
++    // region workers draw from this concurrently (see PerThreadRandomSource).
++    protected final RandomSource random = net.multiforge.neoforge.world.PerThreadRandomSource.create();
+     @Deprecated
+     private final RandomSource soundSeedGenerator = RandomSource.createThreadSafe();
+     private final Holder<DimensionType> dimensionTypeRegistration;
+@@ -153,7 +155,9 @@ public abstract class Level extends net.neoforged.neoforge.attachment.Attachment
+         this.thread = Thread.currentThread();
+         this.biomeManager = new BiomeManager(this, biomeZoomSeed);
+         this.isDebug = isDebug;
+-        this.neighborUpdater = new CollectingNeighborUpdater(this, maxChainedNeighborUpdates);
++        // MultiForge (multiforge-patches/02-region-tick/): one update chain per
++        // thread — region workers update neighbours concurrently.
++        this.neighborUpdater = new net.multiforge.neoforge.world.PerThreadNeighborUpdater(this, maxChainedNeighborUpdates);
+         this.registryAccess = registryAccess;
+         this.palettedContainerFactory = PalettedContainerFactory.create(registryAccess);
+         this.damageSources = new DamageSources(registryAccess);
+@@ -503,32 +507,99 @@ public abstract class Level extends net.neoforged.neoforge.attachment.Attachment
+     }
+ 
+     public void addBlockEntityTicker(TickingBlockEntity ticker) {
+-        (this.tickingBlockEntities ? this.pendingBlockEntityTickers : this.blockEntityTickers).add(ticker);
++        // MultiForge (multiforge-patches/02-region-tick/): once regions tick this
++        // level's block entities, a new ticker goes to its owning region. One whose chunk
++        // is not regionized yet stays on this level's list, and tickBlockEntities routes
++        // it on a later tick. The level's lists share the fresh-block-entity monitor.
++        if (net.multiforge.neoforge.RegionizedTickCoordinator.regionsHandleBlockEntities(this)
++                && net.multiforge.neoforge.tick.BlockEntityTickerBridge.onTickerAdded(this, ticker)) {
++            return;
++        }
++        synchronized (this.freshBlockEntities) {
++            (this.tickingBlockEntities ? this.pendingBlockEntityTickers : this.blockEntityTickers).add(ticker);
++        }
++    }
++
++    /**
++     * MultiForge (multiforge-patches/02-region-tick/): run NeoForge's {@code onLoad}
++     * for the block entity at {@code pos} if it is still waiting for it, and take it
++     * off the fresh lists. Called by a region worker right before the first tick of a
++     * block entity it placed this tick; NeoForge promises onLoad runs before that.
++     */
++    public void mfLoadFreshBlockEntityAt(BlockPos pos) {
++        BlockEntity found;
++        synchronized (this.freshBlockEntities) {
++            found = mfTakeFresh(this.freshBlockEntities, pos);
++            if (found == null) found = mfTakeFresh(this.pendingFreshBlockEntities, pos);
++        }
++        if (found != null && !found.isRemoved() && found.hasLevel()) {
++            found.onLoad();
++        }
++    }
++
++    private static @Nullable BlockEntity mfTakeFresh(java.util.List<BlockEntity> list, BlockPos pos) {
++        for (Iterator<BlockEntity> it = list.iterator(); it.hasNext(); ) {
++            BlockEntity be = it.next();
++            if (be.getBlockPos().equals(pos)) {
++                it.remove();
++                return be;
++            }
++        }
++        return null;
+     }
+ 
+     public void addFreshBlockEntities(java.util.Collection<BlockEntity> beList) {
+-        if (this.tickingBlockEntities) {
+-            this.pendingFreshBlockEntities.addAll(beList);
+-        } else {
+-            this.freshBlockEntities.addAll(beList);
++        // MultiForge (multiforge-patches/02-region-tick/): region workers land here concurrently.
++        synchronized (this.freshBlockEntities) {
++            if (this.tickingBlockEntities) {
++                this.pendingFreshBlockEntities.addAll(beList);
++            } else {
++                this.freshBlockEntities.addAll(beList);
++            }
+         }
+     }
+ 
+     public void tickBlockEntities() {
+-        if (!this.pendingFreshBlockEntities.isEmpty()) {
+-            this.freshBlockEntities.addAll(this.pendingFreshBlockEntities);
+-            this.pendingFreshBlockEntities.clear();
++        java.util.List<BlockEntity> mf$fresh;
++        synchronized (this.freshBlockEntities) {
++            if (!this.pendingFreshBlockEntities.isEmpty()) {
++                this.freshBlockEntities.addAll(this.pendingFreshBlockEntities);
++                this.pendingFreshBlockEntities.clear();
++            }
++            this.tickingBlockEntities = true;
++            mf$fresh = java.util.List.copyOf(this.freshBlockEntities);
++            this.freshBlockEntities.clear();
+         }
+-        this.tickingBlockEntities = true;
+-        if (!this.freshBlockEntities.isEmpty()) {
+-            this.freshBlockEntities.forEach(blockEntity -> {
++        // NeoForge's onLoad pass always runs here, on the server thread, even when
++        // regions tick the block entities (they tick after this method returns).
++        if (!mf$fresh.isEmpty()) {
++            mf$fresh.forEach(blockEntity -> {
+                 // Only call onLoad() on BEs which have been fully added to the level, prevents crashes with BEs that
+                 // were discarded due to incompatibility with the BlockState at their position
+                 if (!blockEntity.isRemoved() && blockEntity.hasLevel()) {
+                     blockEntity.onLoad();
+                 }
+             });
+-            this.freshBlockEntities.clear();
++        }
++        if (net.multiforge.neoforge.RegionizedTickCoordinator.regionsHandleBlockEntities(this)) {
++            // Route the tickers this level still holds into their regions; those whose
++            // chunk is not regionized yet stay here for the next tick.
++            java.util.List<TickingBlockEntity> mf$held;
++            synchronized (this.freshBlockEntities) {
++                mf$held = new java.util.ArrayList<>(this.blockEntityTickers);
++                mf$held.addAll(this.pendingBlockEntityTickers);
++                this.blockEntityTickers.clear();
++                this.pendingBlockEntityTickers.clear();
++                this.tickingBlockEntities = false;
++            }
++            if (!mf$held.isEmpty()) {
++                java.util.List<TickingBlockEntity> mf$left = net.multiforge.neoforge.tick.BlockEntityTickerBridge.routePending(
++                        (net.minecraft.server.level.ServerLevel) this, mf$held);
++                synchronized (this.freshBlockEntities) {
++                    this.blockEntityTickers.addAll(mf$left);
++                }
++            }
++            return;
+         }
+         if (!this.pendingBlockEntityTickers.isEmpty()) {
+             this.blockEntityTickers.addAll(this.pendingBlockEntityTickers);
+@@ -547,7 +618,9 @@ public abstract class Level extends net.neoforged.neoforge.attachment.Attachment
+             }
+         }
+ 
+-        this.tickingBlockEntities = false;
++        synchronized (this.freshBlockEntities) {
++            this.tickingBlockEntities = false;
++        }
+     }
+ 
+     public <T extends Entity> void guardEntityTick(Consumer<T> tick, T entity) {
+@@ -693,7 +766,10 @@ public abstract class Level extends net.neoforged.neoforge.attachment.Attachment
+         if (!this.isInValidBounds(pos)) {
+             return null;
+         } else {
+-            return !this.isClientSide() && Thread.currentThread() != this.thread
++            // MultiForge (multiforge-patches/02-region-tick/): Vanilla answers null off the
++            // level's own thread; region workers tick this level's blocks and must see its
++            // block entities, as they already see its block states.
++            return !this.isClientSide() && Thread.currentThread() != this.thread && !net.multiforge.neoforge.OwnershipGuard.isTickDomain()
+                 ? null
+                 : this.getChunkAt(pos).getBlockEntity(pos, LevelChunk.EntityCreationType.IMMEDIATE);
+         }

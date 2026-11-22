@@ -1,0 +1,94 @@
+--- a/net/minecraft/server/level/ServerChunkCache.java
++++ b/net/minecraft/server/level/ServerChunkCache.java
+@@ -71,7 +71,9 @@ public class ServerChunkCache extends ChunkSource implements net.neoforged.neofo
+     private final @Nullable ChunkStatus[] lastChunkStatus = new ChunkStatus[4];
+     private final @Nullable ChunkAccess[] lastChunk = new ChunkAccess[4];
+     private final List<LevelChunk> spawningChunks = new ObjectArrayList<>();
+-    private final Set<ChunkHolder> chunkHoldersToBroadcast = new ReferenceOpenHashSet<>();
++    // MultiForge (multiforge-patches/02-region-tick/): region workers add holders as they
++    // change blocks; broadcast at the barrier, when no worker runs.
++    private final Set<ChunkHolder> chunkHoldersToBroadcast = java.util.Collections.synchronizedSet(new ReferenceOpenHashSet<>());
+     @VisibleForDebug
+     private NaturalSpawner.@Nullable SpawnState lastSpawnState;
+ 
+@@ -404,6 +406,13 @@ public class ServerChunkCache extends ChunkSource implements net.neoforged.neofo
+         }
+ 
+         profiler.popPush("tickTickingChunks");
++        // MultiForge (multiforge-patches/02-region-tick/): with regions active, each
++        // chunk's random ticks run in the region owning it (mfTickRegionChunks).
++        if (net.multiforge.neoforge.RegionizedTickCoordinator.regionsHandleChunkTicks(this.level)) {
++            this.mfRandomTickSpeed = tickSpeed;
++            this.mfRegionChunkTicks.clear();
++            this.chunkMap.forEachBlockTickingChunk(this::mfQueueRegionChunkTick);
++        } else
+         this.chunkMap.forEachBlockTickingChunk(chunkx -> this.level.tickChunk(chunkx, tickSpeed));
+         if (doMobSpawning) {
+             profiler.popPush("customSpawners");
+@@ -427,6 +436,54 @@ public class ServerChunkCache extends ChunkSource implements net.neoforged.neofo
+         }
+     }
+ 
++    // MultiForge (multiforge-patches/02-region-tick/): per-region random ticks.
++    private final java.util.concurrent.ConcurrentHashMap<Long, List<LevelChunk>> mfRegionChunkTicks = new java.util.concurrent.ConcurrentHashMap<>();
++    private final java.util.concurrent.ConcurrentLinkedQueue<LevelChunk> mfChunkTickStragglers = new java.util.concurrent.ConcurrentLinkedQueue<>();
++    private int mfRandomTickSpeed;
++
++    /** Server thread: file this chunk's random ticks under its region; no region runs it inline. */
++    private void mfQueueRegionChunkTick(LevelChunk chunk) {
++        long region = net.multiforge.neoforge.RegionizedTickCoordinator.regionIdAt(this.level, chunk.getPos().x(), chunk.getPos().z());
++        if (region < 0) {
++            this.level.tickChunk(chunk, this.mfRandomTickSpeed);
++            return;
++        }
++        List<LevelChunk> chunks = this.mfRegionChunkTicks.get(region);
++        if (chunks == null) {
++            chunks = new java.util.ArrayList<>();
++            this.mfRegionChunkTicks.put(region, chunks);
++        }
++        chunks.add(chunk);
++    }
++
++    /**
++     * Region worker: run the random ticks queued for {@code regionId}. A chunk that
++     * passed to another region since (a split) is left for the server thread.
++     */
++    public void mfTickRegionChunks(long regionId) {
++        List<LevelChunk> chunks = this.mfRegionChunkTicks.remove(regionId);
++        if (chunks == null) return;
++        net.multiforge.runtime.diagnostics.ProbeRegistry.bump("region-tick.chunk-ticks");
++        for (LevelChunk chunk : chunks) {
++            if (net.multiforge.neoforge.RegionizedTickCoordinator.regionIdAt(this.level, chunk.getPos().x(), chunk.getPos().z()) != regionId) {
++                this.mfChunkTickStragglers.add(chunk);
++                continue;
++            }
++            this.level.tickChunk(chunk, this.mfRandomTickSpeed);
++        }
++    }
++
++    /** Server thread, regions finished: chunk work no region took, then the block-change broadcast. */
++    public void mfAfterRegions() {
++        for (java.util.Iterator<List<LevelChunk>> it = this.mfRegionChunkTicks.values().iterator(); it.hasNext(); ) {
++            List<LevelChunk> chunks = it.next();
++            it.remove();
++            for (LevelChunk chunk : chunks) this.level.tickChunk(chunk, this.mfRandomTickSpeed);
++        }
++        for (LevelChunk chunk; (chunk = this.mfChunkTickStragglers.poll()) != null; ) this.level.tickChunk(chunk, this.mfRandomTickSpeed);
++        this.broadcastChangedChunks(Profiler.get());
++    }
++
+     private void getFullChunk(long chunkKey, Consumer<LevelChunk> output) {
+         ChunkHolder chunkHolder = this.getVisibleChunkIfPresent(chunkKey);
+         if (chunkHolder != null) {
+@@ -597,7 +654,10 @@ public class ServerChunkCache extends ChunkSource implements net.neoforged.neofo
+ 
+         @Override
+         public Runnable wrapRunnable(Runnable runnable) {
+-            return runnable;
++            // MultiForge (02-region-tick): a task a region worker hands this executor is
++            // tracked, so the tick barrier runs it even when the worker waits for it
++            // through code other than getChunk (a mod replacing getChunk, or a join).
++            return net.multiforge.neoforge.chunk.MainThreadHandoff.track(runnable);
+         }
+ 
+         @Override

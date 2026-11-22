@@ -1,0 +1,331 @@
+--- a/net/minecraft/world/ticks/LevelTicks.java
++++ b/net/minecraft/world/ticks/LevelTicks.java
+@@ -49,10 +49,13 @@ public class LevelTicks<T> implements LevelTickAccess<T> {
+ 
+     public void addContainer(ChunkPos pos, LevelChunkTicks<T> container) {
+         long posKey = pos.pack();
+-        this.allContainers.put(posKey, container);
+-        ScheduledTick<T> nextTick = container.peek();
+-        if (nextTick != null) {
+-            this.nextTickForContainer.put(posKey, nextTick.triggerTick());
++        synchronized (this.mfLock) {
++            this.allContainers.put(posKey, container);
++            ScheduledTick<T> nextTick = container.peek();
++            if (nextTick != null) {
++                this.nextTickForContainer.put(posKey, nextTick.triggerTick());
++                this.mfNoteDue(posKey, nextTick.triggerTick());
++            }
+         }
+ 
+         container.setOnTickAdded(this.chunkScheduleUpdater);
+@@ -60,17 +63,235 @@ public class LevelTicks<T> implements LevelTickAccess<T> {
+ 
+     public void removeContainer(ChunkPos pos) {
+         long chunkKey = pos.pack();
+-        LevelChunkTicks<T> removedContainer = this.allContainers.remove(chunkKey);
+-        this.nextTickForContainer.remove(chunkKey);
++        LevelChunkTicks<T> removedContainer;
++        synchronized (this.mfLock) {
++            removedContainer = this.allContainers.remove(chunkKey);
++            this.nextTickForContainer.remove(chunkKey);
++        }
+         if (removedContainer != null) {
+             removedContainer.setOnTickAdded(null);
+         }
+     }
+ 
++    // MultiForge (multiforge-patches/02-region-tick/): region workers schedule
++    // and drain ticks concurrently. The level-wide maps (allContainers,
++    // nextTickForContainer) are only touched under this lock; a chunk's own
++    // LevelChunkTicks is touched only by the region owning that chunk, so it
++    // needs none. The lock is a leaf: nothing is called while holding it.
++    private final Object mfLock = new Object();
++
++    private LevelChunkTicks<T> mfContainer(long chunkPos) {
++        synchronized (this.mfLock) {
++            return this.allContainers.get(chunkPos);
++        }
++    }
++
++    /** One region's in-flight batch — see {@link #mfTickRegion}. */
++    private static final class MfRegionBatch<T> {
++        final java.util.ArrayDeque<ScheduledTick<T>> toRun = new java.util.ArrayDeque<>();
++        final Set<ScheduledTick<?>> toRunSet = new ObjectOpenCustomHashSet<>(ScheduledTick.UNIQUE_TICK_HASH);
++    }
++
++    private final ThreadLocal<MfRegionBatch<T>> mfActiveBatch = new ThreadLocal<>();
++
++    /**
++     * MultiForge (multiforge-patches/02-region-tick/): Vanilla's {@link #tick}
++     * restricted to one region's chunks, run on that region's worker
++     * (docs/design/m13-b3-region-tick.md §5.1). Same semantics as Vanilla —
++     * due ticks of every ticking chunk are collected in intra-tick drain
++     * order first, then run, and {@link #willTickThisTick} sees the collected
++     * batch — only scoped to {@code chunks}. The fallback when {@link
++     * #mfTickRegionDue} has no buckets for this tick.
++     */
++    public void mfTickRegion(long gameTime, int maxTicks, Iterable<ChunkPos> chunks, BiConsumer<BlockPos, T> runner) {
++        Queue<LevelChunkTicks<T>> containers = new PriorityQueue<>(CONTAINER_DRAIN_ORDER);
++        for (ChunkPos pos : chunks) {
++            long key = pos.pack();
++            LevelChunkTicks<T> container = this.mfContainer(key);
++            if (container == null) continue;
++            ScheduledTick<T> next = container.peek();
++            if (next != null && next.triggerTick() <= gameTime && this.tickCheck.test(key)) {
++                containers.add(container);
++            }
++        }
++        this.mfDrainRegion(gameTime, maxTicks, containers, runner);
++    }
++
++    // MultiForge (multiforge-patches/02-region-tick/): the containers that may be
++    // due this tick, bucketed by owning region on the server thread before the
++    // regions run (mfBucketDue), so a region visits only chunks with due ticks,
++    // not all of its chunks. A container that becomes due after the bucketing (a
++    // tick scheduled for this very tick by a region's mailbox or random ticks) is
++    // noted in mfLateDue. All guarded by mfLock.
++    private long mfDueTick = Long.MIN_VALUE;
++    private Long2ObjectMap<it.unimi.dsi.fastutil.longs.LongArrayList> mfDueByRegion;
++    private final it.unimi.dsi.fastutil.longs.LongArrayList mfLateDue = new it.unimi.dsi.fastutil.longs.LongArrayList();
++    private java.util.function.LongUnaryOperator mfRegionOf;
++
++    /** Caller holds mfLock: {@code chunkPos}'s container now has a tick due at {@code triggerTick}. */
++    private void mfNoteDue(long chunkPos, long triggerTick) {
++        if (triggerTick <= this.mfDueTick) this.mfLateDue.add(chunkPos);
++    }
++
++    /**
++     * MultiForge (multiforge-patches/02-region-tick/): server thread, no region
++     * running: bucket the containers that may have a tick due at {@code
++     * gameTime} by the region owning their chunk ({@code regionOf}: chunk key to
++     * region id, or a negative value for none). A container's {@code
++     * nextTickForContainer} entry is never later than its first tick, so every
++     * container with a due tick is in some bucket or unowned. {@code regionOf}
++     * must be safe to call from any thread; it also places {@link #mfLateDue}
++     * keys.
++     */
++    public void mfBucketDue(long gameTime, java.util.function.LongUnaryOperator regionOf) {
++        it.unimi.dsi.fastutil.longs.LongArrayList due = new it.unimi.dsi.fastutil.longs.LongArrayList();
++        synchronized (this.mfLock) {
++            ObjectIterator<Entry> it = Long2LongMaps.fastIterator(this.nextTickForContainer);
++            while (it.hasNext()) {
++                Entry entry = it.next();
++                if (entry.getLongValue() <= gameTime) due.add(entry.getLongKey());
++            }
++            // From here on, a container becoming due at gameTime is noted as late.
++            this.mfDueTick = gameTime;
++            this.mfDueByRegion = null;
++            this.mfLateDue.clear();
++        }
++        Long2ObjectMap<it.unimi.dsi.fastutil.longs.LongArrayList> byRegion = new Long2ObjectOpenHashMap<>();
++        for (int i = 0; i < due.size(); i++) {
++            long key = due.getLong(i);
++            long region = regionOf.applyAsLong(key);
++            if (region < 0L) continue;
++            it.unimi.dsi.fastutil.longs.LongArrayList bucket = byRegion.get(region);
++            if (bucket == null) {
++                bucket = new it.unimi.dsi.fastutil.longs.LongArrayList();
++                byRegion.put(region, bucket);
++            }
++            bucket.add(key);
++        }
++        synchronized (this.mfLock) {
++            this.mfRegionOf = regionOf;
++            this.mfDueByRegion = byRegion;
++        }
++    }
++
++    /**
++     * MultiForge (multiforge-patches/02-region-tick/): {@link #mfTickRegion} for
++     * region {@code regionId}, over only the chunks {@link #mfBucketDue} found
++     * with a possibly due tick (plus those that became due since). The set of
++     * containers drained, and so the order ticks run in, is exactly {@link
++     * #mfTickRegion}'s over all of the region's chunks. A candidate with nothing
++     * due has its stale {@code nextTickForContainer} entry refreshed, as
++     * Vanilla's {@code sortContainersToTick} does. Returns {@code false}, doing
++     * nothing, when there are no buckets for {@code gameTime}.
++     */
++    public boolean mfTickRegionDue(long regionId, long gameTime, int maxTicks, BiConsumer<BlockPos, T> runner) {
++        it.unimi.dsi.fastutil.longs.LongArrayList bucket;
++        long[] late;
++        java.util.function.LongUnaryOperator regionOf;
++        synchronized (this.mfLock) {
++            if (this.mfDueTick != gameTime || this.mfDueByRegion == null) return false;
++            bucket = this.mfDueByRegion.get(regionId);
++            late = this.mfLateDue.isEmpty() ? null : this.mfLateDue.toLongArray();
++            regionOf = this.mfRegionOf;
++        }
++        it.unimi.dsi.fastutil.longs.LongList keys = bucket;
++        if (late != null) {
++            // Late keys of this region not already bucketed, each once.
++            it.unimi.dsi.fastutil.longs.LongOpenHashSet seen = bucket == null
++                    ? new it.unimi.dsi.fastutil.longs.LongOpenHashSet()
++                    : new it.unimi.dsi.fastutil.longs.LongOpenHashSet(bucket);
++            it.unimi.dsi.fastutil.longs.LongArrayList merged = bucket == null
++                    ? new it.unimi.dsi.fastutil.longs.LongArrayList()
++                    : new it.unimi.dsi.fastutil.longs.LongArrayList(bucket);
++            for (long key : late) {
++                if (regionOf.applyAsLong(key) == regionId && seen.add(key)) merged.add(key);
++            }
++            keys = merged;
++        }
++        if (keys == null || keys.isEmpty()) return true;
++        int n = keys.size();
++        java.util.List<LevelChunkTicks<T>> found = new ArrayList<>(n);
++        synchronized (this.mfLock) {
++            for (int i = 0; i < n; i++) found.add(this.allContainers.get(keys.getLong(i)));
++        }
++        Queue<LevelChunkTicks<T>> containers = new PriorityQueue<>(CONTAINER_DRAIN_ORDER);
++        it.unimi.dsi.fastutil.longs.LongArrayList empty = null;
++        for (int i = 0; i < n; i++) {
++            LevelChunkTicks<T> container = found.get(i);
++            if (container == null) continue; // unloaded: removeContainer dropped its entry
++            long key = keys.getLong(i);
++            ScheduledTick<T> next = container.peek();
++            if (next == null) {
++                if (empty == null) empty = new it.unimi.dsi.fastutil.longs.LongArrayList();
++                empty.add(key);
++            } else if (next.triggerTick() > gameTime) {
++                this.updateContainerScheduling(next);
++            } else if (this.tickCheck.test(key)) {
++                containers.add(container);
++            }
++        }
++        if (empty != null) {
++            synchronized (this.mfLock) {
++                for (int i = 0; i < empty.size(); i++) {
++                    long key = empty.getLong(i);
++                    LevelChunkTicks<T> container = this.allContainers.get(key);
++                    if (container == null || container.peek() == null) this.nextTickForContainer.remove(key);
++                }
++            }
++        }
++        this.mfDrainRegion(gameTime, maxTicks, containers, runner);
++        return true;
++    }
++
++    /** Vanilla's collect-then-run over one region's due {@code containers}: see {@link #mfTickRegion}. */
++    private void mfDrainRegion(long gameTime, int maxTicks, Queue<LevelChunkTicks<T>> containers, BiConsumer<BlockPos, T> runner) {
++        if (containers.isEmpty()) return;
++        MfRegionBatch<T> batch = new MfRegionBatch<>();
++        LevelChunkTicks<T> container;
++        while (batch.toRun.size() < maxTicks && (container = containers.poll()) != null) {
++            batch.toRun.add(container.poll());
++            LevelChunkTicks<T> competitor = containers.peek();
++            ScheduledTick<T> competitorNext = competitor != null ? competitor.peek() : null;
++            while (batch.toRun.size() < maxTicks) {
++                ScheduledTick<T> next = container.peek();
++                if (next == null
++                        || next.triggerTick() > gameTime
++                        || competitorNext != null && ScheduledTick.INTRA_TICK_DRAIN_ORDER.compare(next, competitorNext) > 0) {
++                    break;
++                }
++                container.poll();
++                batch.toRun.add(next);
++            }
++            ScheduledTick<T> leftover = container.peek();
++            if (leftover != null) {
++                if (leftover.triggerTick() <= gameTime && batch.toRun.size() < maxTicks) {
++                    containers.add(container);
++                } else {
++                    this.updateContainerScheduling(leftover);
++                }
++            }
++        }
++        for (LevelChunkTicks<T> left : containers) {
++            this.updateContainerScheduling(left.peek());
++        }
++        batch.toRunSet.addAll(batch.toRun);
++        this.mfActiveBatch.set(batch);
++        try {
++            ScheduledTick<T> tick;
++            while ((tick = batch.toRun.poll()) != null) {
++                batch.toRunSet.remove(tick);
++                runner.accept(tick.pos(), tick.type());
++            }
++        } finally {
++            this.mfActiveBatch.remove();
++        }
++    }
++
++
+     @Override
+     public void schedule(ScheduledTick<T> tick) {
+         long chunkKey = ChunkPos.pack(tick.pos());
+-        LevelChunkTicks<T> tickContainer = this.allContainers.get(chunkKey);
++        LevelChunkTicks<T> tickContainer = this.mfContainer(chunkKey);
+         if (tickContainer == null) {
+             Util.logAndPauseIfInIde("Trying to schedule tick in not loaded position " + tick.pos());
+         } else {
+@@ -81,7 +302,9 @@ public class LevelTicks<T> implements LevelTickAccess<T> {
+     public void tick(long currentTick, int maxTicksToProcess, BiConsumer<BlockPos, T> output) {
+         ProfilerFiller profiler = Profiler.get();
+         profiler.push("collect");
+-        this.collectTicks(currentTick, maxTicksToProcess, profiler);
++        synchronized (this.mfLock) {
++            this.collectTicks(currentTick, maxTicksToProcess, profiler);
++        }
+         profiler.popPush("run");
+         profiler.incrementCounter("ticksToRun", this.toRunThisTick.size());
+         this.runCollectedTicks(output);
+@@ -147,7 +370,10 @@ public class LevelTicks<T> implements LevelTickAccess<T> {
+     }
+ 
+     private void updateContainerScheduling(ScheduledTick<T> nextTick) {
+-        this.nextTickForContainer.put(ChunkPos.pack(nextTick.pos()), nextTick.triggerTick());
++        synchronized (this.mfLock) {
++            this.nextTickForContainer.put(ChunkPos.pack(nextTick.pos()), nextTick.triggerTick());
++            this.mfNoteDue(ChunkPos.pack(nextTick.pos()), nextTick.triggerTick());
++        }
+     }
+ 
+     private void drainFromCurrentContainer(
+@@ -200,12 +426,16 @@ public class LevelTicks<T> implements LevelTickAccess<T> {
+ 
+     @Override
+     public boolean hasScheduledTick(BlockPos pos, T block) {
+-        LevelChunkTicks<T> tickContainer = this.allContainers.get(ChunkPos.pack(pos));
++        LevelChunkTicks<T> tickContainer = this.mfContainer(ChunkPos.pack(pos));
+         return tickContainer != null && tickContainer.hasScheduledTick(pos, block);
+     }
+ 
+     @Override
+     public boolean willTickThisTick(BlockPos pos, T type) {
++        MfRegionBatch<T> mfBatch = this.mfActiveBatch.get();
++        if (mfBatch != null) {
++            return mfBatch.toRunSet.contains(ScheduledTick.probe(type, pos));
++        }
+         this.calculateTickSetIfNeeded();
+         return this.toRunThisTickSet.contains(ScheduledTick.probe(type, pos));
+     }
+@@ -225,7 +455,7 @@ public class LevelTicks<T> implements LevelTickAccess<T> {
+         for (int x = xMin; x <= xMax; x++) {
+             for (int z = zMin; z <= zMax; z++) {
+                 long containerPos = ChunkPos.pack(x, z);
+-                LevelChunkTicks<T> container = this.allContainers.get(containerPos);
++                LevelChunkTicks<T> container = this.mfContainer(containerPos);
+                 if (container != null) {
+                     ouput.accept(containerPos, container);
+                 }
+@@ -243,7 +473,9 @@ public class LevelTicks<T> implements LevelTickAccess<T> {
+                 if (newTop != null) {
+                     this.updateContainerScheduling(newTop);
+                 } else {
+-                    this.nextTickForContainer.remove(pos);
++                    synchronized (this.mfLock) {
++                        this.nextTickForContainer.remove(pos);
++                    }
+                 }
+             }
+         });
+@@ -275,7 +507,9 @@ public class LevelTicks<T> implements LevelTickAccess<T> {
+ 
+     @Override
+     public int count() {
+-        return this.allContainers.values().stream().mapToInt(TickAccess::count).sum();
++        synchronized (this.mfLock) {
++            return this.allContainers.values().stream().mapToInt(TickAccess::count).sum();
++        }
+     }
+ 
+     @FunctionalInterface

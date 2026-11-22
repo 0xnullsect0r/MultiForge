@@ -1,0 +1,32 @@
+--- a/net/minecraft/server/MinecraftServer.java
++++ b/net/minecraft/server/MinecraftServer.java
+@@ -262,6 +262,9 @@ public abstract class MinecraftServer extends ReentrantBlockableEventLoop<TickTa
+     private long taskExecutionStartNanos = Util.getNanos();
+     private long idleTimeNanos;
+     protected long nextTickTimeNanos = Util.getNanos();
++    // MultiForge (multiforge-patches/02-region-tick/): the watchdog's heartbeat,
++    // set at the head of every tickServer (TickHangDetector, HangReporter).
++    public volatile long mfTickStartNanos = Util.getNanos();
+     private boolean waitingForNextTick = false;
+     private long delayedTasksMaxNextTickTimeNanos;
+     private boolean mayHaveDelayedTasks;
+@@ -978,6 +981,7 @@ public abstract class MinecraftServer extends ReentrantBlockableEventLoop<TickTa
+ 
+     protected void tickServer(BooleanSupplier haveTime) {
+         long nano = Util.getNanos();
++        this.mfTickStartNanos = nano;
+         int emptyTickThreshold = this.pauseWhenEmptySeconds() * 20;
+         if (emptyTickThreshold > 0) {
+             if (this.playerList.getPlayerCount() == 0 && !this.tickRateManager.isSprinting()) {
+@@ -1147,7 +1151,10 @@ public abstract class MinecraftServer extends ReentrantBlockableEventLoop<TickTa
+             net.neoforged.neoforge.event.EventHooks.fireLevelTickPre(level, haveTime);
+ 
+             try {
+-                level.tick(haveTime);
++                // MultiForge (multiforge-patches/02-region-tick/): run Vanilla's level tick,
++                // then drive every region of the level once on the worker pool (barrier tick
++                // model, docs/design/barrier-tick-model.md).
++                net.multiforge.neoforge.RegionizedTickCoordinator.dispatchLevelTick(level, haveTime);
+             } catch (Throwable var7) {
+                 CrashReport report = CrashReport.forThrowable(var7, "Exception ticking world");
+                 level.fillReportDetails(report);

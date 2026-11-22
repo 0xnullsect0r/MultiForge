@@ -87,6 +87,141 @@ public class ServerLifecycleHooks {
     }
 
     public static void handleServerAboutToStart(final MinecraftServer server) {
+        // MultiForge fork addition: this method runs on the dedicated
+        // server's own "Server thread" (called from
+        // DedicatedServer.initServer(), before loadLevel()), so this is
+        // the earliest safe point to record which thread is the
+        // legitimate single-threaded tick executor for
+        // net.multiforge.runtime.ownership.OwnershipEnforcer's ownership
+        // guard (multiforge-patches/01-ownership/) — without touching
+        // MinecraftServer.runServer itself. The reroute target is the
+        // server's own executor: it takes mutations of chunks no region owns;
+        // mutations of owned chunks go to the owner's mailbox through the
+        // host's position router.
+        net.multiforge.runtime.ownership.OwnershipEnforcer.bindTickThread(Thread.currentThread());
+        // The serial event lane runs on the server thread, pumped at the tick barrier.
+        net.multiforge.runtime.event.SerialLane.bind(Thread.currentThread());
+        // Per-mod listener safety (config/multiforge-mods.toml, mods' declarations).
+        net.multiforge.neoforge.event.ModSafetyClassifier.bind(server);
+        // Wrap server::execute in a RejectedExecutionException-catching
+        // adapter so the reroute target is no-throw even after server
+        // shutdown. /67 round-2 finding: the fundamental race (a caller
+        // that already loaded the old reroute-target reference into a
+        // local variable) can't be closed by any swap protocol —
+        // volatile reads don't invalidate cached locals. But making the
+        // target no-throw makes the race benign: worst case the
+        // deferred mutation runs on the shutdown-executor and gets
+        // silently rejected (with a rate-limited warn), instead of
+        // crashing the caller with RejectedExecutionException.
+        net.multiforge.runtime.ownership.OwnershipEnforcer.bindRerouteTarget(runnable -> {
+            try {
+                // From the server thread itself (a serial-lane job while region
+                // workers run), queue the task for after this tick: execute() would
+                // run it at once, on this thread, still inside the job that deferred
+                // it, and a guard checked again in there would defer again forever.
+                if (server.isSameThread()) server.schedule(new net.minecraft.server.TickTask(server.getTickCount(), runnable));
+                else server.execute(runnable);
+            } catch (java.util.concurrent.RejectedExecutionException rejected) {
+                net.multiforge.runtime.diagnostics.ViolationLogger.warn(
+                        "OwnershipEnforcer.reroute",
+                        "reroute target rejected — server executor is shut down; mutation dropped");
+            }
+        });
+
+        // MultiForge M8 sub-step 4: bring up the process-wide regionized
+        // runtime in barrier mode — the server thread drives every region
+        // tick (net.multiforge.neoforge.RegionizedTickCoordinator), so region
+        // work never overlaps the Vanilla main loop. The real per-region
+        // phase body is installed below, once the per-region runners are
+        // bound. Sizing comes from
+        // config/multiforge-server.toml (defaults when absent).
+        // M5 (Track B) §4.3: whether this call actually constructed a new
+        // MultiThreadedSchedulerHost (fresh boot) vs. reused an existing
+        // one (GameTestServer, same JVM, successive server instances) —
+        // gates the runner binding below so a reused host is not bound twice.
+        boolean freshInstall = true;
+        net.multiforge.runtime.config.MultiForgeConfig mfConfig = net.multiforge.neoforge.MultiForgeServerState.loadConfig(server);
+        net.multiforge.runtime.config.MultiForgeConfig.Mode mfMode = mfConfig.effectiveMode();
+        net.multiforge.neoforge.MultiForgeServerState.applyConfig(mfConfig);
+        if (mfMode == net.multiforge.runtime.config.MultiForgeConfig.Mode.OFF) {
+            // mode = "off": no regionized runtime. Every MultiForge guard falls
+            // through and RegionizedTickCoordinator runs Vanilla's level tick
+            // unchanged — the kill switch, and the control for regression runs.
+            org.slf4j.LoggerFactory.getLogger("multiforge.lifecycle")
+                    .info("MultiForge mode=off: running Vanilla's single-threaded tick");
+            // ServerDomains still works for mods: world tasks run on the server
+            // thread through its own executor, as on a Vanilla server.
+            mfOffHost = new net.multiforge.runtime.scheduler.SingleThreadedSchedulerHost(server);
+            mfOffHost.install();
+            freshInstall = false;
+        } else try {
+            net.multiforge.runtime.scheduler.MultiForgeRegionizedRuntime.install(
+                    mfConfig,
+                    region -> {},
+                    net.multiforge.runtime.region.TickRegionScheduler.Mode.BARRIER);
+        } catch (net.multiforge.runtime.scheduler.MultiForgeRegionizedRuntime.AlreadyInstalledException already) {
+            // Test harnesses (GameTestServer) may install once per JVM and reuse
+            // across successive server instances — that's fine, keep going.
+            freshInstall = false;
+        } catch (IllegalStateException foreign) {
+            // /67 round-4 fix (1.4): the pre-fix catch swallowed BOTH the
+            // benign "already installed same instance" case AND the "foreign
+            // SchedulerHost bound to ServerDomains — refuse to overwrite"
+            // case, leaving MultiForgeRegionizedRuntime.current() null for
+            // the whole server lifetime with no operator warning. Now the
+            // benign case has its own subclass (AlreadyInstalledException,
+            // caught above) and every other IllegalStateException gets
+            // logged loudly + rethrown so a rogue ServiceLoader binding
+            // does not silently degrade MultiForge to a no-op.
+            net.multiforge.runtime.diagnostics.ViolationLogger.warn(
+                    "MultiForgeRegionizedRuntime.install",
+                    "install rejected — a non-MultiForge SchedulerHost is bound to ServerDomains: "
+                            + foreign.getMessage());
+            throw foreign;
+        }
+        net.multiforge.runtime.scheduler.MultiThreadedSchedulerHost mfHost = net.multiforge.runtime.scheduler.MultiForgeRegionizedRuntime.current();
+        // M8 sub-step 6a: install the ChunkEvent.Load/Unload listeners
+        // that keep the regionizer in sync with Vanilla-loaded chunks.
+        // Idempotent per JVM.
+        net.multiforge.neoforge.RegionizedChunkLifecycle.installOnEventBus();
+
+        // Bind the per-region runners and install the real per-region phase
+        // body — once per fresh runtime (see freshInstall above).
+        if (mfHost != null && freshInstall) {
+            // A write rerouted to a region whose last chunk then unloaded runs on the
+            // server thread instead of vanishing with the region's mailbox.
+            mfHost.taskQueue().setDeadRegionSink(
+                    task -> net.multiforge.runtime.ownership.OwnershipEnforcer.reroute("RegionizedTaskQueue.region-died", task));
+            net.multiforge.neoforge.RegionRuntimeInit.install(mfHost, server);
+            // The per-region phase body: block/fluid ticks and the block events
+            // they queue, entities, block entities.
+            mfHost.installRegionTickBody(net.multiforge.runtime.region.PhasedRegionTickBody.builder());
+            // Region pins (/multiforge region pin): keep each pinned area's
+            // loaded chunks in one region.
+            mfHost.bindPins(net.multiforge.neoforge.MultiForgeServerState.pinManagerFor(server));
+        }
+        if (mfHost != null) {
+            // /multiforge config changes apply live: pool size, region size,
+            // ownership mode and violation logging. Fires once now, syncing a
+            // host reused across GameTest server instances to this server's config.
+            final net.multiforge.runtime.scheduler.MultiThreadedSchedulerHost mfLiveHost = mfHost;
+            net.multiforge.neoforge.MultiForgeServerState.configStoreFor(server).subscribe(cfg -> {
+                net.multiforge.neoforge.MultiForgeServerState.applyConfig(cfg);
+                mfLiveHost.applyConfig(cfg);
+            });
+        } else {
+            // No regionized runtime (mode = "off"): the process-wide settings —
+            // violation policy and logging budget — still apply live.
+            net.multiforge.neoforge.MultiForgeServerState.configStoreFor(server)
+                    .subscribe(net.multiforge.neoforge.MultiForgeServerState::applyConfig);
+        }
+
+        // MultiForge v1.3.5-1.3.9 hook point moved to handleServerStarting
+        // in v1.3.10 — at AboutToStart, server.getCommands() is null (Commands
+        // is built inside loadLevel() which runs AFTER this method returns).
+        // See MultiForgeCommandBinder for the direct-dispatcher registration
+        // approach that replaces the earlier RegisterCommandsEvent listener.
+
         currentServer = server;
         // on the dedi server we need to force the stuff to setup properly
         ConfigTracker.INSTANCE.loadConfigs(ModConfig.Type.SERVER, FMLPaths.CONFIGDIR.get(), getServerConfigPath(server));
@@ -99,22 +234,57 @@ public class ServerLifecycleHooks {
             LanguageHook.loadModLanguages(server);
         }
         PermissionAPI.initializePermissionAPI();
+        // MultiForge v1.3.10: wire /multiforge directly into the server's
+        // command dispatcher now that loadLevel() has built Commands.
+        net.multiforge.neoforge.commands.MultiForgeCommandBinder.register(server);
         NeoForge.EVENT_BUS.post(new ServerStartingEvent(server));
     }
 
     public static void handleServerStarted(final MinecraftServer server) {
+        // MultiForge: early warning (stacks of the server thread and busy region
+        // workers) for a tick stalled 10 s, well before the watchdog's limit.
+        net.multiforge.neoforge.ServerHangReporting.start(server);
         NeoForge.EVENT_BUS.post(new ServerStartedEvent(server));
     }
 
     public static void handleServerStopping(final MinecraftServer server) {
         NeoForge.EVENT_BUS.post(new ServerStoppingEvent(server));
+        // MultiForge: the tick loop has ended and no region runs; apply every
+        // rerouted mutation still waiting in a region mailbox before the
+        // world is saved.
+        net.multiforge.runtime.scheduler.MultiThreadedSchedulerHost mfHost = net.multiforge.runtime.scheduler.MultiForgeRegionizedRuntime.current();
+        if (mfHost != null) mfHost.drainMailboxesOnCaller();
     }
 
     public static void expectServerStopped() {
         exitLatch = new CountDownLatch(1);
     }
 
+    /** The {@code ServerDomains} host of a server running with MultiForge {@code mode = "off"}. */
+    private static net.multiforge.runtime.scheduler.SingleThreadedSchedulerHost mfOffHost;
+
     public static void handleServerStopped(final MinecraftServer server) {
+        // MultiForge M8 sub-step 4: tear down the regionized runtime.
+        // Called from every server-stop path, including the dedi
+        // GameTestServer between test runs, so a fresh install can
+        // happen next boot.
+        try {
+            net.multiforge.runtime.event.SerialLane.unbind();
+            net.multiforge.runtime.scheduler.MultiForgeRegionizedRuntime.shutdown();
+            if (mfOffHost != null) {
+                net.multiforge.api.scheduler.ServerDomains.uninstall();
+                mfOffHost.shutdown();
+                mfOffHost = null;
+            }
+            // B3.4 teardown: drop the per-world "installed" bridge state
+            // (docs/design/m13-b3-region-tick.md §5.3), for the
+            // reused-JVM-across-server-instances case.
+            net.multiforge.neoforge.tick.BlockEntityTickerBridge.unbind();
+        } catch (Throwable t) {
+            // Never let a runtime-shutdown hiccup prevent normal server-stop cleanup.
+            org.slf4j.LoggerFactory.getLogger("multiforge.lifecycle")
+                    .warn("MultiForge regionized runtime shutdown threw; continuing normal shutdown", t);
+        }
         NeoForge.EVENT_BUS.post(new ServerStoppedEvent(server));
         currentServer = null;
         CountDownLatch latch = exitLatch;

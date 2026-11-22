@@ -1,0 +1,44 @@
+--- a/net/minecraft/world/level/block/Block.java
++++ b/net/minecraft/world/level/block/Block.java
+@@ -434,8 +434,9 @@ public class Block extends BlockBehaviour implements ItemLike, net.neoforged.neo
+             ItemEntity entity = entityFactory.get();
+             entity.setDefaultPickUpDelay();
+             // Neo: Add drops to the captured list if capturing is enabled.
+-            if (capturedDrops != null) {
+-                capturedDrops.add(entity);
++            List<ItemEntity> captured = capturedDrops.get();
++            if (captured != null) {
++                captured.add(entity);
+             }
+             else {
+                 level.addFreshEntity(entity);
+@@ -607,7 +608,8 @@ public class Block extends BlockBehaviour implements ItemLike, net.neoforged.neo
+      * When not null, records all item entities from {@link #popResource(Level, Supplier, ItemStack)} instead of adding them to the world.
+      */
+     @Nullable
+-    private static List<ItemEntity> capturedDrops = null;
++    // MultiForge (02-region-tick): one per thread; region workers break blocks in parallel.
++    private static final ThreadLocal<List<ItemEntity>> capturedDrops = new ThreadLocal<>();
+ 
+     /**
+      * Initializes {@link #capturedDrops}, starting the drop capture process.
+@@ -615,7 +617,7 @@ public class Block extends BlockBehaviour implements ItemLike, net.neoforged.neo
+      * Must only be called on the server thread.
+      */
+     private static void beginCapturingDrops() {
+-        capturedDrops = new java.util.ArrayList<>();
++        capturedDrops.set(new java.util.ArrayList<>());
+     }
+ 
+     /**
+@@ -624,8 +626,8 @@ public class Block extends BlockBehaviour implements ItemLike, net.neoforged.neo
+      * Must only be called on the server thread.
+      */
+     private static List<ItemEntity> stopCapturingDrops() {
+-        List<ItemEntity> drops = capturedDrops;
+-        capturedDrops = null;
++        List<ItemEntity> drops = capturedDrops.get();
++        capturedDrops.remove();
+         return drops;
+     }
+ 

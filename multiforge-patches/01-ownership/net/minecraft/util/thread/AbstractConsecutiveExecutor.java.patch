@@ -1,0 +1,16 @@
+--- a/net/minecraft/util/thread/AbstractConsecutiveExecutor.java
++++ b/net/minecraft/util/thread/AbstractConsecutiveExecutor.java
+@@ -44,7 +44,12 @@ public abstract class AbstractConsecutiveExecutor<T extends Runnable> implements
+             if (runnable == null) {
+                 return false;
+             } else {
+-                Util.runNamed(runnable, this.name);
++                // MultiForge (multiforge-patches/01-ownership/): worldgen, light and IO
++                // executors run one task at a time and are authoritative for what they
++                // touch; without an owner token their writes (BlockEntity.setChanged, ...)
++                // would be rerouted to the server thread, in an order that depends on
++                // scheduler timing and breaks deterministic worldgen.
++                net.multiforge.neoforge.OwnershipGuard.runConsecutiveTask(runnable, this.name);
+                 return true;
+             }
+         }

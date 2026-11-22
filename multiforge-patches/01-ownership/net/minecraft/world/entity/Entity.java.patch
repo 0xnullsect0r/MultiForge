@@ -1,0 +1,14 @@
+--- a/net/minecraft/world/entity/Entity.java
++++ b/net/minecraft/world/entity/Entity.java
+@@ -427,6 +427,11 @@ public abstract class Entity
+     }
+ 
+     public void remove(Entity.RemovalReason reason) {
++        // MultiForge (multiforge-patches/01-ownership/): see Level.setBlock.
++        if (!net.multiforge.neoforge.OwnershipGuard.canMutateAt("Entity.remove", this.level(), this.blockPosition())) {
++            net.multiforge.neoforge.OwnershipGuard.rerouteEntityRemove(this, reason);
++            return;
++        }
+         this.setRemoved(reason);
+     }
+ 

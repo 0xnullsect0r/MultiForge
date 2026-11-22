@@ -1,0 +1,14 @@
+--- a/net/minecraft/server/level/ServerLevel.java
++++ b/net/minecraft/server/level/ServerLevel.java
+@@ -974,6 +974,11 @@ public class ServerLevel extends Level implements WorldGenLevel, ServerEntityGet
+ 
+     @Override
+     public boolean addFreshEntity(Entity entity) {
++        // MultiForge (multiforge-patches/01-ownership/): see Level.setBlock. Returns
++        // whether the entity will be added, as Vanilla would.
++        if (!net.multiforge.neoforge.OwnershipGuard.canMutateAt("ServerLevel.addFreshEntity", this, entity.blockPosition())) {
++            return net.multiforge.neoforge.OwnershipGuard.rerouteAddFreshEntity(this, entity);
++        }
+         return this.addEntity(entity);
+     }
+ 

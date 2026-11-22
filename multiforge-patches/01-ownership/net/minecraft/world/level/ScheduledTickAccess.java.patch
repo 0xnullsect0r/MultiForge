@@ -1,0 +1,31 @@
+--- a/net/minecraft/world/level/ScheduledTickAccess.java
++++ b/net/minecraft/world/level/ScheduledTickAccess.java
+@@ -15,20 +15,28 @@ public interface ScheduledTickAccess {
+     LevelTickAccess<Block> getBlockTicks();
+ 
+     default void scheduleTick(BlockPos pos, Block type, int tickDelay, TickPriority priority) {
++        // MultiForge (multiforge-patches/01-ownership/): a level's tick for a chunk the caller does not own goes to its owner.
++        if (net.multiforge.neoforge.OwnershipGuard.rerouteScheduleTick(this, pos, type, tickDelay, priority)) return;
+         this.getBlockTicks().schedule(this.createTick(pos, type, tickDelay, priority));
+     }
+ 
+     default void scheduleTick(BlockPos pos, Block type, int tickDelay) {
++        // MultiForge (multiforge-patches/01-ownership/): a level's tick for a chunk the caller does not own goes to its owner.
++        if (net.multiforge.neoforge.OwnershipGuard.rerouteScheduleTick(this, pos, type, tickDelay)) return;
+         this.getBlockTicks().schedule(this.createTick(pos, type, tickDelay));
+     }
+ 
+     LevelTickAccess<Fluid> getFluidTicks();
+ 
+     default void scheduleTick(BlockPos pos, Fluid type, int tickDelay, TickPriority priority) {
++        // MultiForge (multiforge-patches/01-ownership/): a level's tick for a chunk the caller does not own goes to its owner.
++        if (net.multiforge.neoforge.OwnershipGuard.rerouteScheduleTick(this, pos, type, tickDelay, priority)) return;
+         this.getFluidTicks().schedule(this.createTick(pos, type, tickDelay, priority));
+     }
+ 
+     default void scheduleTick(BlockPos pos, Fluid type, int tickDelay) {
++        // MultiForge (multiforge-patches/01-ownership/): a level's tick for a chunk the caller does not own goes to its owner.
++        if (net.multiforge.neoforge.OwnershipGuard.rerouteScheduleTick(this, pos, type, tickDelay)) return;
+         this.getFluidTicks().schedule(this.createTick(pos, type, tickDelay));
+     }
+ }

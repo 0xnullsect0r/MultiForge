@@ -1,0 +1,37 @@
+--- a/net/minecraft/world/level/Level.java
++++ b/net/minecraft/world/level/Level.java
+@@ -220,6 +220,13 @@ public abstract class Level extends net.neoforged.neoforge.attachment.Attachment
+ 
+     @Override
+     public boolean setBlock(BlockPos pos, BlockState blockState, @Block.UpdateFlags int updateFlags, int updateLimit) {
++        // MultiForge (multiforge-patches/01-ownership/): reroute+warn if the caller does
++        // not own the chunk being written (a foreign region's worker, or a non-tick
++        // thread). Returns whether the block will change, as Vanilla would.
++        if (!net.multiforge.neoforge.OwnershipGuard.canMutateAt("Level.setBlock", this, pos)) {
++            return net.multiforge.neoforge.OwnershipGuard.rerouteSetBlock(this, pos.immutable(), blockState, updateFlags, updateLimit);
++        }
++
+         if (!this.isInValidBounds(pos)) {
+             return false;
+         } else if (!this.isClientSide() && this.isDebug()) {
+@@ -481,6 +488,20 @@ public abstract class Level extends net.neoforged.neoforge.attachment.Attachment
+     public void addAlwaysVisibleParticle(ParticleOptions particle, boolean overrideLimiter, double x, double y, double z, double xd, double yd, double zd) {
+     }
+ 
++    // MultiForge (multiforge-patches/01-ownership/): the runtime's identifier for this
++    // level, cached because ownership checks read it on every guarded mutation. A racy
++    // double computation yields an equal value, so no synchronisation is needed.
++    private net.multiforge.api.world.@Nullable WorldRef mfWorldRef;
++
++    public net.multiforge.api.world.WorldRef mfWorldRef() {
++        net.multiforge.api.world.WorldRef ref = this.mfWorldRef;
++        if (ref == null) {
++            ref = net.multiforge.api.world.WorldRef.of(this.dimension.identifier().toString());
++            this.mfWorldRef = ref;
++        }
++        return ref;
++    }
++
+     public void addBlockEntityTicker(TickingBlockEntity ticker) {
+         (this.tickingBlockEntities ? this.pendingBlockEntityTickers : this.blockEntityTickers).add(ticker);
+     }

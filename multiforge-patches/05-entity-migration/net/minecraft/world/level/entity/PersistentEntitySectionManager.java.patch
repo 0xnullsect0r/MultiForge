@@ -1,0 +1,116 @@
+--- a/net/minecraft/world/level/entity/PersistentEntitySectionManager.java
++++ b/net/minecraft/world/level/entity/PersistentEntitySectionManager.java
+@@ -115,6 +115,15 @@ public class PersistentEntitySectionManager<T extends EntityAccess> implements A
+     }
+ 
+     public void addLegacyChunkEntities(Stream<T> entities) {
++        // MultiForge: as updateChunkStatus. The stream is drained now, while its source is valid.
++        if (net.multiforge.runtime.region.RegionPhase.workersInFlight()) {
++            java.util.List<T> mf$entities = entities.toList();
++            if (net.multiforge.runtime.region.RegionPhase.deferUntilWorkersStop(
++                    PersistentEntitySectionManager.MfLambdas.addLegacyChunkEntities(this, mf$entities), "entity.storage.deferred-chunk-entities")) {
++                return;
++            }
++            entities = mf$entities.stream();
++        }
+         entities.forEach(e -> {
+             this.addEntity(e, true);
+             if (e instanceof Entity entity) entity.onAddedToLevel();
+@@ -122,6 +131,15 @@ public class PersistentEntitySectionManager<T extends EntityAccess> implements A
+     }
+ 
+     public void addWorldGenChunkEntities(Stream<T> entities) {
++        // MultiForge: as updateChunkStatus. The stream is drained now, while its source is valid.
++        if (net.multiforge.runtime.region.RegionPhase.workersInFlight()) {
++            java.util.List<T> mf$entities = entities.toList();
++            if (net.multiforge.runtime.region.RegionPhase.deferUntilWorkersStop(
++                    PersistentEntitySectionManager.MfLambdas.addWorldGenChunkEntities(this, mf$entities), "entity.storage.deferred-chunk-entities")) {
++                return;
++            }
++            entities = mf$entities.stream();
++        }
+         entities.forEach(e -> {
+             this.addEntity(e, false);
+             if (e instanceof Entity entity) entity.onAddedToLevel();
+@@ -147,6 +165,13 @@ public class PersistentEntitySectionManager<T extends EntityAccess> implements A
+     }
+ 
+     public void updateChunkStatus(ChunkPos pos, FullChunkStatus fullChunkStatus) {
++        // MultiForge (05-entity-migration, minimal piece for regions on workers): entity
++        // storage is frozen while workers run, so they can read it without a lock. A
++        // change pumped on the server thread in that window is replayed at the barrier.
++        if (net.multiforge.runtime.region.RegionPhase.workersInFlight()
++                && net.multiforge.runtime.region.RegionPhase.defer(PersistentEntitySectionManager.MfLambdas.updateStatus(this, pos, fullChunkStatus))) {
++            return;
++        }
+         Visibility chunkStatus = Visibility.fromFullChunkStatus(fullChunkStatus);
+         this.updateChunkStatus(pos, chunkStatus);
+     }
+@@ -391,6 +416,8 @@ public class PersistentEntitySectionManager<T extends EntityAccess> implements A
+         private final Entity realEntity;
+         private long currentSectionKey;
+         private EntitySection<T> currentSection;
++        // MultiForge: onRemove was deferred to the barrier; later moves are moot.
++        private volatile boolean mfRemoveQueued;
+ 
+         private Callback(T entity, long currentSectionKey, EntitySection<T> currentSection) {
+             Objects.requireNonNull(PersistentEntitySectionManager.this);
+@@ -403,6 +430,10 @@ public class PersistentEntitySectionManager<T extends EntityAccess> implements A
+ 
+         @Override
+         public void onMove() {
++            // MultiForge: storage is frozen while workers run. The entity's position is
++            // already updated; its section catches up at the barrier (this call re-reads it).
++            if (this.mfRemoveQueued) return;
++            if (net.multiforge.runtime.region.RegionPhase.deferUntilWorkersStop(this::onMove, "entity.storage.deferred-move")) return;
+             BlockPos pos = this.entity.blockPosition();
+             long newSectionPos = SectionPos.asLong(pos);
+             if (newSectionPos != this.currentSectionKey) {
+@@ -455,6 +486,18 @@ public class PersistentEntitySectionManager<T extends EntityAccess> implements A
+ 
+         @Override
+         public void onRemove(Entity.RemovalReason reason) {
++            // MultiForge: as onMove. Entity.isRemoved() is already true for every reader.
++            if (net.multiforge.runtime.region.RegionPhase.workersInFlight()) {
++                if (!this.mfRemoveQueued) {
++                    this.mfRemoveQueued = true;
++                    if (net.multiforge.runtime.region.RegionPhase.deferUntilWorkersStop(
++                            PersistentEntitySectionManager.MfLambdas.remove(this, reason), "entity.storage.deferred-remove")) {
++                        return;
++                    }
++                } else {
++                    return;
++                }
++            }
+             if (!this.currentSection.remove(this.entity)) {
+                 PersistentEntitySectionManager.LOGGER
+                     .warn("Entity {} wasn't found in section {} (destroying due to {})", this.entity, SectionPos.of(this.currentSectionKey), reason);
+@@ -484,4 +527,28 @@ public class PersistentEntitySectionManager<T extends EntityAccess> implements A
+         PENDING,
+         LOADED;
+     }
++
++    /**
++     * MultiForge: the deferred calls, kept out of this class so a lambda does not
++     * renumber Vanilla's (mixins target those by name).
++     */
++    static final class MfLambdas {
++        private MfLambdas() {}
++
++        static net.multiforge.runtime.region.RegionPhase.Deferred updateStatus(PersistentEntitySectionManager<?> manager, ChunkPos pos, FullChunkStatus status) {
++            return () -> manager.updateChunkStatus(pos, status);
++        }
++
++        static <T extends EntityAccess> net.multiforge.runtime.region.RegionPhase.Deferred addLegacyChunkEntities(PersistentEntitySectionManager<T> manager, List<T> entities) {
++            return () -> manager.addLegacyChunkEntities(entities.stream());
++        }
++
++        static <T extends EntityAccess> net.multiforge.runtime.region.RegionPhase.Deferred addWorldGenChunkEntities(PersistentEntitySectionManager<T> manager, List<T> entities) {
++            return () -> manager.addWorldGenChunkEntities(entities.stream());
++        }
++
++        static net.multiforge.runtime.region.RegionPhase.Deferred remove(EntityInLevelCallback callback, Entity.RemovalReason reason) {
++            return () -> callback.onRemove(reason);
++        }
++    }
+ }

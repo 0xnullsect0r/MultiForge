@@ -1,0 +1,100 @@
+--- a/net/minecraft/server/level/ServerChunkCache.java
++++ b/net/minecraft/server/level/ServerChunkCache.java
+@@ -147,7 +147,32 @@ public class ServerChunkCache extends ChunkSource implements net.neoforged.neofo
+     @Override
+     public @Nullable ChunkAccess getChunk(int x, int z, ChunkStatus targetStatus, boolean loadOrGenerate) {
+         if (Thread.currentThread() != this.mainThread) {
++            // MultiForge (04-chunk-system, required by regions on workers): the server
++            // thread waits at the barrier, so Vanilla's hop would stall every block read.
++            // A chunk that reached the status is read from the visible holder (a volatile
++            // copy-on-write map and atomic futures); only a real load goes to the server
++            // thread, announced to the barrier through MainThreadHandoff.
++            long mf$key = ChunkPos.pack(x, z);
++            net.multiforge.runtime.region.WorkerChunkCache mf$cache =
++                    targetStatus == ChunkStatus.FULL ? net.multiforge.runtime.region.WorkerChunkCache.current() : null;
++            if (mf$cache != null && mf$cache.get(this, mf$key) instanceof ChunkAccess mf$hit) return mf$hit;
++            ChunkHolder mf$holder = this.getVisibleChunkIfPresent(mf$key);
++            if (mf$holder != null) {
++                ChunkAccess mf$loaded = mf$holder.getChunkIfPresent(targetStatus);
++                if (mf$loaded != null) {
++                    if (mf$cache != null) mf$cache.put(this, mf$key, mf$loaded);
++                    return mf$loaded;
++                }
++            }
++            if (!loadOrGenerate) return null;
++            boolean mf$regionWorker = net.multiforge.runtime.ownership.OwnerToken.current().domain()
++                    == net.multiforge.runtime.ownership.Domain.REGION;
++            if (mf$regionWorker) net.multiforge.neoforge.chunk.MainThreadHandoff.enter();
++            try {
+             return CompletableFuture.<ChunkAccess>supplyAsync(() -> this.getChunk(x, z, targetStatus, loadOrGenerate), this.mainThreadProcessor).join();
++            } finally {
++                if (mf$regionWorker) net.multiforge.neoforge.chunk.MainThreadHandoff.exit();
++            }
+         } else {
+             ProfilerFiller profiler = Profiler.get();
+             profiler.incrementCounter("getChunk");
+@@ -168,7 +193,14 @@ public class ServerChunkCache extends ChunkSource implements net.neoforged.neofo
+ 
+             profiler.incrementCounter("getChunkCacheMiss");
+             CompletableFuture<ChunkResult<ChunkAccess>> serverFuture = this.getChunkFutureMainThread(x, z, targetStatus, loadOrGenerate);
++            // MultiForge: a region ticked inline waits here for the load itself; like a
++            // worker's hand-off, that is not the region's own time.
++            boolean mf$inlineWait = net.multiforge.neoforge.chunk.MainThreadHandoff.enterInline(serverFuture);
++            try {
+             this.mainThreadProcessor.managedBlock(serverFuture::isDone);
++            } finally {
++                net.multiforge.neoforge.chunk.MainThreadHandoff.exitInline(mf$inlineWait);
++            }
+             ChunkResult<ChunkAccess> chunkResult = serverFuture.join();
+             ChunkAccess chunk = chunkResult.orElse(null);
+             if (chunk == null && loadOrGenerate) {
+@@ -183,7 +215,16 @@ public class ServerChunkCache extends ChunkSource implements net.neoforged.neofo
+     @Override
+     public @Nullable LevelChunk getChunkNow(int x, int z) {
+         if (Thread.currentThread() != this.mainThread) {
+-            return null;
++            // MultiForge (04-chunk-system): Vanilla answers null off the server thread,
++            // so every worker would see the world as unloaded; see getChunk.
++            long mf$key = ChunkPos.pack(x, z);
++            net.multiforge.runtime.region.WorkerChunkCache mf$cache = net.multiforge.runtime.region.WorkerChunkCache.current();
++            if (mf$cache != null && mf$cache.get(this, mf$key) instanceof LevelChunk mf$hit) return mf$hit;
++            ChunkHolder mf$holder = this.getVisibleChunkIfPresent(mf$key);
++            if (mf$holder == null) return null;
++            if (!(mf$holder.getChunkIfPresent(ChunkStatus.FULL) instanceof LevelChunk mf$chunk)) return null;
++            if (mf$cache != null) mf$cache.put(this, mf$key, mf$chunk);
++            return mf$chunk;
+         } else {
+             Profiler.get().incrementCounter("getChunkNow");
+             long pos = ChunkPos.pack(x, z);
+@@ -214,6 +255,8 @@ public class ServerChunkCache extends ChunkSource implements net.neoforged.neofo
+     }
+ 
+     private void clearCache() {
++        // MultiForge (04-chunk-system): region workers' chunk caches follow Vanilla's.
++        net.multiforge.runtime.region.WorkerChunkCache.invalidateAll();
+         Arrays.fill(this.lastChunkPos, ChunkPos.INVALID_CHUNK_POS);
+         Arrays.fill(this.lastChunkStatus, null);
+         Arrays.fill(this.lastChunk, null);
+@@ -542,6 +585,9 @@ public class ServerChunkCache extends ChunkSource implements net.neoforged.neofo
+     }
+ 
+     public void addTicket(Ticket ticket, ChunkPos pos) {
++        // MultiForge (04-chunk-system, required by regions on workers): tickets are the
++        // server thread's; a region worker's change is applied there after the barrier.
++        if (net.multiforge.neoforge.OwnershipGuard.deferAddTicket(this, ticket, pos)) return;
+         this.ticketStorage.addTicket(ticket, pos);
+     }
+ 
+@@ -560,10 +606,12 @@ public class ServerChunkCache extends ChunkSource implements net.neoforged.neofo
+     }
+ 
+     public void addTicketWithRadius(TicketType type, ChunkPos pos, int radius) {
++        if (net.multiforge.neoforge.OwnershipGuard.deferTicketWithRadius(this, true, type, pos, radius)) return; // MultiForge: see addTicket
+         this.ticketStorage.addTicketWithRadius(type, pos, radius);
+     }
+ 
+     public void removeTicketWithRadius(TicketType type, ChunkPos pos, int radius) {
++        if (net.multiforge.neoforge.OwnershipGuard.deferTicketWithRadius(this, false, type, pos, radius)) return; // MultiForge: see addTicket
+         this.ticketStorage.removeTicketWithRadius(type, pos, radius);
+     }
+ 

@@ -1,0 +1,220 @@
+--- a/net/minecraft/server/level/ServerLevel.java
++++ b/net/minecraft/server/level/ServerLevel.java
+@@ -209,6 +209,20 @@ public class ServerLevel extends Level implements WorldGenLevel, ServerEntityGet
+     private final PathTypeCache pathTypesByPosCache = new PathTypeCache();
+     private final Set<Mob> navigatingMobs = new ObjectOpenHashSet<>();
+     private volatile boolean isUpdatingNavigations;
++    // MultiForge (multiforge-patches/02-region-tick/): per thread, each worker has
++    // its own navigation-update pass. Vanilla's field stays for mixins.
++    private final ThreadLocal<Boolean> mfUpdatingNavigations = new ThreadLocal<>();
++    // MultiForge (multiforge-patches/02-region-tick/): what this level's regions run
++    // this tick: Vanilla's gates for the inline work they replace, set by tick().
++    public boolean mfRegionRunsBlockTicks;
++    public boolean mfRegionRunsBlockEvents;
++    public boolean mfRegionRunsBlockEntities;
++    // The regionizer lookup cached by RegionizedTickCoordinator.regionizerOf.
++    public volatile Object mfRegionizerCache;
++    // Block events queued by a region worker, one ordered set per region, touched
++    // only by that region's worker (and by the server thread while no region runs).
++    private final java.util.concurrent.ConcurrentHashMap<Long, ObjectLinkedOpenHashSet<BlockEventData>> mfRegionBlockEvents =
++            new java.util.concurrent.ConcurrentHashMap<>();
+     protected final Raids raids;
+     private final ObjectLinkedOpenHashSet<BlockEventData> blockEvents = new ObjectLinkedOpenHashSet<>();
+     private final List<BlockEventData> blockEventsToReschedule = new ArrayList<>(64);
+@@ -386,12 +400,17 @@ public class ServerLevel extends Level implements WorldGenLevel, ServerEntityGet
+         }
+ 
+         profiler.push("tickPending");
++        // MultiForge (multiforge-patches/02-region-tick/): Vanilla's gates decide what
++        // this level's regions do after this method returns.
++        this.mfRegionRunsBlockTicks = !this.isDebug() && runs;
++        this.mfRegionRunsBlockEvents = runs;
++        boolean mf$regionTicks = net.multiforge.neoforge.RegionizedTickCoordinator.regionsHandleBlockFluidTicks(this);
+         if (!this.isDebug() && runs) {
+             long tick = this.getGameTime();
+             profiler.push("blockTicks");
+-            this.blockTicks.tick(tick, 65536, this::tickBlock);
++            if (!mf$regionTicks) this.blockTicks.tick(tick, 65536, this::tickBlock);
+             profiler.popPush("fluidTicks");
+-            this.fluidTicks.tick(tick, 65536, this::tickFluid);
++            if (!mf$regionTicks) this.fluidTicks.tick(tick, 65536, this::tickFluid);
+             profiler.pop();
+         }
+ 
+@@ -418,6 +437,7 @@ public class ServerLevel extends Level implements WorldGenLevel, ServerEntityGet
+             this.emptyTime++;
+         }
+ 
++        this.mfRegionRunsBlockEntities = this.emptyTime < 300;
+         if (this.emptyTime < 300) {
+             profiler.push("entities");
+             if (this.dragonFight != null && runs) {
+@@ -476,6 +496,59 @@ public class ServerLevel extends Level implements WorldGenLevel, ServerEntityGet
+         this.environmentAttributes().invalidateTickCache();
+     }
+ 
++    /** MultiForge (multiforge-patches/02-region-tick/): region worker: due block and fluid ticks of its chunks. */
++    public void mfTickRegionScheduledTicks(long regionId, java.util.function.Supplier<java.util.List<ChunkPos>> chunks) {
++        if (!this.mfRegionRunsBlockTicks) return;
++        long gameTime = this.getGameTime();
++        if (!this.blockTicks.mfTickRegionDue(regionId, gameTime, 65536, this::tickBlock)) {
++            this.blockTicks.mfTickRegion(gameTime, 65536, chunks.get(), this::tickBlock);
++        }
++        if (!this.fluidTicks.mfTickRegionDue(regionId, gameTime, 65536, this::tickFluid)) {
++            this.fluidTicks.mfTickRegion(gameTime, 65536, chunks.get(), this::tickFluid);
++        }
++    }
++
++    /** MultiForge (multiforge-patches/02-region-tick/): server thread, no region running: bucket due ticks by region. */
++    public void mfBucketScheduledTicks(java.util.function.LongUnaryOperator regionOf) {
++        if (!this.mfRegionRunsBlockTicks) return;
++        long gameTime = this.getGameTime();
++        this.blockTicks.mfBucketDue(gameTime, regionOf);
++        this.fluidTicks.mfBucketDue(gameTime, regionOf);
++    }
++
++    /**
++     * MultiForge (multiforge-patches/02-region-tick/): run the block events the
++     * region queued so far this tick, on its own worker. Events in chunks that are
++     * not block-ticking stay queued, as in Vanilla.
++     */
++    public void mfRegionBlockEvents(long regionId) {
++        if (!this.mfRegionRunsBlockEvents) return;
++        ObjectLinkedOpenHashSet<BlockEventData> queued = this.mfRegionBlockEvents.get(regionId);
++        if (queued == null || queued.isEmpty()) return;
++        List<BlockEventData> reschedule = new ArrayList<>();
++        while (!queued.isEmpty()) {
++            BlockEventData eventData = queued.removeFirst();
++            if (this.shouldTickBlocksAt(eventData.pos())) {
++                if (this.doBlockEvent(eventData)) {
++                    this.server
++                        .getPlayerList()
++                        .broadcast(
++                            null,
++                            eventData.pos().getX(),
++                            eventData.pos().getY(),
++                            eventData.pos().getZ(),
++                            64.0,
++                            this.dimension(),
++                            new ClientboundBlockEventPacket(eventData.pos(), eventData.block(), eventData.paramA(), eventData.paramB())
++                        );
++                }
++            } else {
++                reschedule.add(eventData);
++            }
++        }
++        queued.addAll(reschedule);
++    }
++
+     @Override
+     public boolean shouldTickBlocksAt(long chunkPos) {
+         return this.chunkSource.chunkMap.getDistanceManager().inBlockTickingRange(chunkPos);
+@@ -1016,6 +1089,11 @@ public class ServerLevel extends Level implements WorldGenLevel, ServerEntityGet
+     }
+ 
+     private boolean addEntity(Entity entity) {
++        // MultiForge (multiforge-patches/02-region-tick/): entity storage is frozen
++        // while region workers run; the add happens at the barrier. Returns Vanilla's answer.
++        if (net.multiforge.neoforge.OwnershipGuard.deferAddEntity(this, entity, this::addEntity)) {
++            return !entity.isRemoved();
++        }
+         if (entity.isRemoved()) {
+             LOGGER.warn("Tried to add entity {} but it was marked as removed already", entity.typeHolder().getRegisteredName());
+             return false;
+@@ -1159,7 +1237,7 @@ public class ServerLevel extends Level implements WorldGenLevel, ServerEntityGet
+ 
+     @Override
+     public void sendBlockUpdated(BlockPos pos, BlockState old, BlockState current, int updateFlags) {
+-        if (this.isUpdatingNavigations) {
++        if (Boolean.TRUE.equals(this.mfUpdatingNavigations.get())) {
+             String message = "recursive call to sendBlockUpdated";
+             Util.logAndPauseIfInIde("recursive call to sendBlockUpdated", new IllegalStateException("recursive call to sendBlockUpdated"));
+         }
+@@ -1172,6 +1250,12 @@ public class ServerLevel extends Level implements WorldGenLevel, ServerEntityGet
+             List<PathNavigation> navigationsToUpdate = new ObjectArrayList<>();
+ 
+             for (Mob navigatingMob : this.navigatingMobs) {
++                // MultiForge: a region worker only re-paths its own mobs; a block change
++                // here cannot lie on another region's path (an unloaded section apart).
++                if (net.multiforge.runtime.ownership.OwnershipEnforcer.isCrossRegionFromWorker(
++                        this.mfWorldRef(), navigatingMob.chunkPosition().x(), navigatingMob.chunkPosition().z())) {
++                    continue;
++                }
+                 PathNavigation pathNavigation = navigatingMob.getNavigation();
+                 if (pathNavigation.shouldRecomputePath(pos)) {
+                     navigationsToUpdate.add(pathNavigation);
+@@ -1179,13 +1263,13 @@ public class ServerLevel extends Level implements WorldGenLevel, ServerEntityGet
+             }
+ 
+             try {
+-                this.isUpdatingNavigations = true;
++                this.mfUpdatingNavigations.set(Boolean.TRUE);
+ 
+                 for (PathNavigation navigation : navigationsToUpdate) {
+                     navigation.recomputePath();
+                 }
+             } finally {
+-                this.isUpdatingNavigations = false;
++                this.mfUpdatingNavigations.remove();
+             }
+         }
+     }
+@@ -1279,11 +1363,30 @@ public class ServerLevel extends Level implements WorldGenLevel, ServerEntityGet
+ 
+     @Override
+     public void blockEvent(BlockPos pos, Block block, int b0, int b1) {
++        // MultiForge (multiforge-patches/02-region-tick/): a region worker queues into
++        // its own region's set, drained right after its scheduled and random ticks.
++        net.multiforge.runtime.ownership.OwnerToken mf$token = net.multiforge.runtime.ownership.OwnerToken.current();
++        if (mf$token.domain() == net.multiforge.runtime.ownership.Domain.REGION) {
++            if (net.multiforge.neoforge.OwnershipGuard.rerouteBlockEvent(this, pos, block, b0, b1)) return;
++            ObjectLinkedOpenHashSet<BlockEventData> mf$queue = this.mfRegionBlockEvents.get(mf$token.regionId());
++            if (mf$queue == null) {
++                mf$queue = new ObjectLinkedOpenHashSet<>();
++                this.mfRegionBlockEvents.put(mf$token.regionId(), mf$queue);
++            }
++            mf$queue.add(new BlockEventData(pos, block, b0, b1));
++            return;
++        }
+         this.blockEvents.add(new BlockEventData(pos, block, b0, b1));
+     }
+ 
+     private void runBlockEvents() {
+         this.blockEventsToReschedule.clear();
++        // MultiForge: absorb what regions queued after their block-event pass last
++        // tick; no region runs while the server thread is here.
++        for (java.util.Iterator<ObjectLinkedOpenHashSet<BlockEventData>> mf$it = this.mfRegionBlockEvents.values().iterator(); mf$it.hasNext(); ) {
++            this.blockEvents.addAll(mf$it.next());
++            mf$it.remove();
++        }
+ 
+         while (!this.blockEvents.isEmpty()) {
+             BlockEventData eventData = this.blockEvents.removeFirst();
+@@ -1682,6 +1785,9 @@ public class ServerLevel extends Level implements WorldGenLevel, ServerEntityGet
+ 
+     @VisibleForTesting
+     public void clearBlockEvents(BoundingBox bb) {
++        for (ObjectLinkedOpenHashSet<BlockEventData> mf$set : this.mfRegionBlockEvents.values()) {
++            mf$set.removeIf(net.multiforge.neoforge.OwnershipGuard.blockEventInside(bb));
++        }
+         this.blockEvents.removeIf(e -> bb.isInside(e.pos()));
+     }
+ 
+@@ -1957,7 +2063,7 @@ public class ServerLevel extends Level implements WorldGenLevel, ServerEntityGet
+             }
+ 
+             if (entity instanceof Mob mob) {
+-                if (ServerLevel.this.isUpdatingNavigations) {
++                if (Boolean.TRUE.equals(ServerLevel.this.mfUpdatingNavigations.get())) {
+                     String message = "onTrackingStart called during navigation iteration";
+                     Util.logAndPauseIfInIde(
+                         "onTrackingStart called during navigation iteration", new IllegalStateException("onTrackingStart called during navigation iteration")
+@@ -1985,7 +2091,7 @@ public class ServerLevel extends Level implements WorldGenLevel, ServerEntityGet
+             }
+ 
+             if (entity instanceof Mob mob) {
+-                if (ServerLevel.this.isUpdatingNavigations) {
++                if (Boolean.TRUE.equals(ServerLevel.this.mfUpdatingNavigations.get())) {
+                     String message = "onTrackingStart called during navigation iteration";
+                     Util.logAndPauseIfInIde(
+                               "onTrackingStart called during navigation iteration", new IllegalStateException("onTrackingStart called during navigation iteration")
