@@ -1,0 +1,17 @@
+--- a/net/minecraft/network/Connection.java
++++ b/net/minecraft/network/Connection.java
+@@ -88,6 +88,14 @@ public class Connection extends SimpleChannelInboundHandler<Packet<?>> {
+         this.receiving = receiving;
+     }
+ 
++    /**
++     * MultiForge (multiforge-patches/06-networking/): the client's address from a
++     * trusted proxy's PROXY protocol header. Netty thread, before the first packet.
++     */
++    public void mfSetRemoteAddress(SocketAddress mf$address) {
++        this.address = mf$address;
++    }
++
+     @Override
+     public void channelActive(ChannelHandlerContext ctx) throws Exception {
+         super.channelActive(ctx);

@@ -1,0 +1,15 @@
+--- a/net/minecraft/server/players/IpBanList.java
++++ b/net/minecraft/server/players/IpBanList.java
+@@ -31,6 +31,12 @@ public class IpBanList extends StoredUserList<String, IpBanListEntry> {
+     }
+ 
+     private String getIpFromAddress(SocketAddress address) {
++        // MultiForge (multiforge-patches/06-networking/): the canonical form /ban-ip stores.
++        // Cutting the text at the first ':' turned every IPv6 address into "[2001", so its bans never matched.
++        if (address instanceof java.net.InetSocketAddress mf$socket && mf$socket.getAddress() != null) {
++            return com.google.common.net.InetAddresses.toAddrString(mf$socket.getAddress());
++        }
++
+         String ip = address.toString();
+         if (ip.contains("/")) {
+             ip = ip.substring(ip.indexOf(47) + 1);
