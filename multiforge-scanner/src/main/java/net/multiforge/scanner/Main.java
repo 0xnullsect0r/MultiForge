@@ -185,8 +185,7 @@ public final class Main {
     }
 
     private static void usage(PrintStream err) {
-        err.println(
-                """
+        err.println("""
                 multiforge-scanner
 
                   java -jar multiforge-scanner.jar [--sarif|--json] [--severity=warn|error] \
@@ -202,7 +201,6 @@ public final class Main {
 
                   Exit codes: 0 = no unsuppressed ERROR finding, 1 = at least one unsuppressed ERROR
                   finding, 2 = usage/I-O error.
-                """
-                        .stripIndent());
+                """.stripIndent());
     }
 }

@@ -214,8 +214,9 @@ class TerrainHashTest {
 
     @Test
     void heightmapsAreTerrain() {
-        java.util.function.LongFunction<String> withHeight = h -> hashWith("Heightmaps", () -> new NbtCompound()
-                .put("WORLD_SURFACE", new WorldDiff.NbtLongArray(new long[] {h, 0L})));
+        java.util.function.LongFunction<String> withHeight = h -> hashWith(
+                "Heightmaps",
+                () -> new NbtCompound().put("WORLD_SURFACE", new WorldDiff.NbtLongArray(new long[] {h, 0L})));
         assertThat(withHeight.apply(70)).isEqualTo(withHeight.apply(70)).isNotEqualTo(withHeight.apply(71));
     }
 

@@ -56,8 +56,9 @@ class RegionMapEmitterTest {
         DebugPayload.RegionSnapshot snapshot = (DebugPayload.RegionSnapshot) received.get(0);
         // At least the touched-chunk region + the always-live global region.
         assertThat(snapshot.regions()).isNotEmpty();
-        assertThat(snapshot.regions()).anySatisfy(stat -> assertThat(stat.regionId())
-                .isEqualTo(region.id().value()));
+        assertThat(snapshot.regions())
+                .anySatisfy(stat ->
+                        assertThat(stat.regionId()).isEqualTo(region.id().value()));
         assertThat(snapshot.regions())
                 .allSatisfy(stat -> assertThat(stat.sectionCount()).isGreaterThanOrEqualTo(1));
     }

@@ -451,13 +451,12 @@ public final class WorldDiff {
             return out;
         }
         ByteArrayInputStream bais = new ByteArrayInputStream(bytes, off, len);
-        try (java.io.InputStream in =
-                switch (compressionType) {
-                    case 1 -> new java.util.zip.GZIPInputStream(bais);
-                    case 2 -> new InflaterInputStream(bais);
-                    case 4 -> new net.jpountz.lz4.LZ4BlockInputStream(bais);
-                    default -> null;
-                }) {
+        try (java.io.InputStream in = switch (compressionType) {
+            case 1 -> new java.util.zip.GZIPInputStream(bais);
+            case 2 -> new InflaterInputStream(bais);
+            case 4 -> new net.jpountz.lz4.LZ4BlockInputStream(bais);
+            default -> null;
+        }) {
             if (in == null) return null;
             return in.readAllBytes();
         } catch (IOException e) {
@@ -1016,13 +1015,15 @@ public final class WorldDiff {
                 var mm = mismatched();
                 if (!mm.isEmpty()) {
                     sb.append("    content differs (").append(mm.size()).append("):\n");
-                    mm.entrySet().stream().limit(20).forEach(e -> sb.append("      ")
-                            .append(e.getKey())
-                            .append("  baseline=")
-                            .append(e.getValue()[0], 0, 12)
-                            .append("  patched=")
-                            .append(e.getValue()[1], 0, 12)
-                            .append('\n'));
+                    mm.entrySet().stream()
+                            .limit(20)
+                            .forEach(e -> sb.append("      ")
+                                    .append(e.getKey())
+                                    .append("  baseline=")
+                                    .append(e.getValue()[0], 0, 12)
+                                    .append("  patched=")
+                                    .append(e.getValue()[1], 0, 12)
+                                    .append('\n'));
                     if (mm.size() > 20)
                         sb.append("      ... (").append(mm.size() - 20).append(" more)\n");
                 }

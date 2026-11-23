@@ -101,9 +101,11 @@ public final class ConfigCodec {
                 MultiForgeConfig.MIN_REGION_SIZE_SHIFT,
                 MultiForgeConfig.MAX_REGION_SIZE_SHIFT);
         MultiForgeConfig.ViolationPolicy vp = enumOr(
-                r, "violations.policy", MultiForgeConfig.ViolationPolicy.class, d.violationPolicy(), s -> s.replace(
-                                '-', '_')
-                        .toUpperCase(Locale.ROOT));
+                r,
+                "violations.policy",
+                MultiForgeConfig.ViolationPolicy.class,
+                d.violationPolicy(),
+                s -> s.replace('-', '_').toUpperCase(Locale.ROOT));
         int warnPerMin =
                 clamp("violations.warnPerMin", intOr(r, "violations.warnPerMin", d.warnPerMin()), 0, Integer.MAX_VALUE);
         boolean inlineSingle = boolOr(r, "tick.inlineSingleRegion", d.inlineSingleRegion());

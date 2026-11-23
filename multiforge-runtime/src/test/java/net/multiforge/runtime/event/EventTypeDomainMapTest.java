@@ -192,8 +192,9 @@ class EventTypeDomainMapTest {
         assertThat(done.await(10, TimeUnit.SECONDS)).isTrue();
         pool.shutdown();
 
-        assertThat(results).hasSize(threadCount).allSatisfy(result -> assertThat(result)
-                .contains(DispatchDomainKind.ASYNC));
+        assertThat(results)
+                .hasSize(threadCount)
+                .allSatisfy(result -> assertThat(result).contains(DispatchDomainKind.ASYNC));
     }
 
     private static class FakeEvent {}

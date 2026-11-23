@@ -41,14 +41,13 @@ class WorldDiffCompressionTest {
     }
 
     private static byte[] compress(int type, byte[] raw) throws IOException {
-        Compressor c =
-                switch (type) {
-                    case 1 -> GZIPOutputStream::new;
-                    case 2 -> DeflaterOutputStream::new;
-                    case 3 -> out -> out;
-                    case 4 -> LZ4BlockOutputStream::new;
-                    default -> throw new IllegalArgumentException("type " + type);
-                };
+        Compressor c = switch (type) {
+            case 1 -> GZIPOutputStream::new;
+            case 2 -> DeflaterOutputStream::new;
+            case 3 -> out -> out;
+            case 4 -> LZ4BlockOutputStream::new;
+            default -> throw new IllegalArgumentException("type " + type);
+        };
         ByteArrayOutputStream bos = new ByteArrayOutputStream();
         try (OutputStream out = c.wrap(bos)) {
             out.write(raw);

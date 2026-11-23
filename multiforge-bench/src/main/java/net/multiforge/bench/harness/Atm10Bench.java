@@ -43,8 +43,7 @@ import java.util.stream.Stream;
  */
 public final class Atm10Bench {
 
-    private static final String HELP_MESSAGE =
-            """
+    private static final String HELP_MESSAGE = """
             Atm10Bench: no modpack given. Either point at an unpacked server pack:
 
               ./gradlew :multiforge-bench:atm10 -PmodpackDir=/path/to/server-pack

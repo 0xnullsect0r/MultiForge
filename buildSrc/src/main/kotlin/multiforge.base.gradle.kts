@@ -59,7 +59,7 @@ tasks.withType<Test>().configureEach {
 configure<SpotlessExtension> {
     java {
         target("src/**/*.java")
-        palantirJavaFormat()
+        palantirJavaFormat("2.103.0")
         removeUnusedImports()
         trimTrailingWhitespace()
         endWithNewline()

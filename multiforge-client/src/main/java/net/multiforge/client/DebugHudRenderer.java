@@ -247,8 +247,8 @@ public final class DebugHudRenderer {
             case SERVER_THREAD_NO_REGIONS -> "server thread (no regions)";
             case SERVER_THREAD_SINGLE_REGION -> "server thread (" + regions + ", nothing to run beside it)";
             case WORKERS -> "worker threads (" + regions + ")";
-            case WORKERS_AND_SERVER_THREAD -> "worker threads + server thread (" + regions
-                    + ", busy-lane ones on the server)";
+            case WORKERS_AND_SERVER_THREAD ->
+                "worker threads + server thread (" + regions + ", busy-lane ones on the server)";
         };
     }
 

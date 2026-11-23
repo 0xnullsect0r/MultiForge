@@ -254,12 +254,11 @@ public final class ScenarioRun {
         if (violations != 0) out.add("multiforge: " + violations + " ownership violation(s) (or probes unreadable)");
         long mismatches = parseLong(mf.get("info.reroute_mismatches"));
         if (mismatches != 0) out.add("multiforge: " + mismatches + " reroute mismatch(es) (or probes unreadable)");
-        int minRegions =
-                switch (name) {
-                    case "x1" -> 4; // four spots 2000 blocks apart
-                    case "x4" -> 2; // the writer's target is another region
-                    default -> 0;
-                };
+        int minRegions = switch (name) {
+            case "x1" -> 4; // four spots 2000 blocks apart
+            case "x4" -> 2; // the writer's target is another region
+            default -> 0;
+        };
         if (minRegions > 0) {
             int regions = regionCount(mf.get("info.regions"));
             if (regions < minRegions) out.add("multiforge: " + regions + " region(s), expected at least " + minRegions);

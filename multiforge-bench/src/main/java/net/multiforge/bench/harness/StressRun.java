@@ -64,16 +64,15 @@ public final class StressRun {
         boolean pass = true;
         for (String name : which.split(",")) {
             Map<String, Object> obs = new LinkedHashMap<>();
-            boolean ok =
-                    switch (name.strip()) {
-                        case "limbo" -> limbo(logDir, obs);
-                        case "slowtick" -> slowtick(logDir, obs);
-                        default -> {
-                            System.err.println("StressRun: unknown check " + name + " (known: limbo, slowtick)");
-                            System.exit(2);
-                            yield false;
-                        }
-                    };
+            boolean ok = switch (name.strip()) {
+                case "limbo" -> limbo(logDir, obs);
+                case "slowtick" -> slowtick(logDir, obs);
+                default -> {
+                    System.err.println("StressRun: unknown check " + name + " (known: limbo, slowtick)");
+                    System.exit(2);
+                    yield false;
+                }
+            };
             obs.forEach((k, v) -> System.out.println("  [" + name + "] " + k + " = " + v));
             System.out.println("StressRun: " + name + (ok ? " PASS" : " FAIL"));
             pass &= ok;

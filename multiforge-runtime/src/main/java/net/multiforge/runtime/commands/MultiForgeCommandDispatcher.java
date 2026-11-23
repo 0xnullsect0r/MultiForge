@@ -412,12 +412,11 @@ public final class MultiForgeCommandDispatcher {
             return false;
         }
         for (EntityCensus c : censuses) {
-            List<String> lines =
-                    switch (view) {
-                        case "region" -> c.renderRegion(regionId, topN);
-                        case "audit" -> c.renderAudit();
-                        default -> c.render(topN);
-                    };
+            List<String> lines = switch (view) {
+                case "region" -> c.renderRegion(regionId, topN);
+                case "audit" -> c.renderAudit();
+                default -> c.render(topN);
+            };
             lines.forEach(output);
         }
         if (heal) {
@@ -568,41 +567,40 @@ public final class MultiForgeCommandDispatcher {
         String key = args[1];
         String value = args[2];
         try {
-            java.util.function.UnaryOperator<MultiForgeConfig> change =
-                    switch (key) {
-                        case "cores", "threads", "warnPerMin" -> {
-                            int n;
-                            try {
-                                n = Integer.parseInt(value);
-                            } catch (NumberFormatException e) {
-                                output.accept("Not a number: " + value);
-                                yield null;
-                            }
-                            int min = key.equals("warnPerMin") ? 0 : 1;
-                            if (n < min || n > 100_000) {
-                                output.accept("Value out of range: " + n);
-                                yield null;
-                            }
-                            yield switch (key) {
-                                case "cores" -> c -> c.withCores(n);
-                                case "threads" -> c -> c.withThreadsPerCore(n);
-                                default -> c -> c.withWarnPerMin(n);
-                            };
-                        }
-                        case "mode" -> {
-                            MultiForgeConfig.Mode mode = parseEnum(MultiForgeConfig.Mode.class, value, output);
-                            yield mode == null ? null : c -> c.withMode(mode);
-                        }
-                        case "policy" -> {
-                            MultiForgeConfig.ViolationPolicy policy =
-                                    parseEnum(MultiForgeConfig.ViolationPolicy.class, value, output);
-                            yield policy == null ? null : c -> c.withViolationPolicy(policy);
-                        }
-                        default -> {
-                            output.accept("Unknown config key: " + key);
-                            yield null;
-                        }
+            java.util.function.UnaryOperator<MultiForgeConfig> change = switch (key) {
+                case "cores", "threads", "warnPerMin" -> {
+                    int n;
+                    try {
+                        n = Integer.parseInt(value);
+                    } catch (NumberFormatException e) {
+                        output.accept("Not a number: " + value);
+                        yield null;
+                    }
+                    int min = key.equals("warnPerMin") ? 0 : 1;
+                    if (n < min || n > 100_000) {
+                        output.accept("Value out of range: " + n);
+                        yield null;
+                    }
+                    yield switch (key) {
+                        case "cores" -> c -> c.withCores(n);
+                        case "threads" -> c -> c.withThreadsPerCore(n);
+                        default -> c -> c.withWarnPerMin(n);
                     };
+                }
+                case "mode" -> {
+                    MultiForgeConfig.Mode mode = parseEnum(MultiForgeConfig.Mode.class, value, output);
+                    yield mode == null ? null : c -> c.withMode(mode);
+                }
+                case "policy" -> {
+                    MultiForgeConfig.ViolationPolicy policy =
+                            parseEnum(MultiForgeConfig.ViolationPolicy.class, value, output);
+                    yield policy == null ? null : c -> c.withViolationPolicy(policy);
+                }
+                default -> {
+                    output.accept("Unknown config key: " + key);
+                    yield null;
+                }
+            };
             if (change == null) return false;
             MultiForgeConfig before = configStore.get();
             MultiForgeConfig next = configStore.update(change);

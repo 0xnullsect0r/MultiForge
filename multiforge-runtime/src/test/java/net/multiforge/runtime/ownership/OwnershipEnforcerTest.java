@@ -72,8 +72,9 @@ class OwnershipEnforcerTest {
     @Test
     void aRegionWorkerIsATickThread() {
         OwnershipEnforcer.bindTickThread(new Thread(() -> {}));
-        OwnerToken.runAs(OwnerToken.forRegion(1L), () -> assertThat(OwnershipEnforcer.isTickThread())
-                .isTrue());
+        OwnerToken.runAs(
+                OwnerToken.forRegion(1L),
+                () -> assertThat(OwnershipEnforcer.isTickThread()).isTrue());
     }
 
     @Test

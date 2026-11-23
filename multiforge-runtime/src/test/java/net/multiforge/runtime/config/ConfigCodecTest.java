@@ -38,8 +38,7 @@ class ConfigCodecTest {
 
     @Test
     void partialTomlOverridesOnlyExplicitKeys() {
-        String toml =
-                """
+        String toml = """
             [mtserver]
             cores = 12
             [violations]
@@ -75,8 +74,7 @@ class ConfigCodecTest {
     @Test
     void aFileFromBeforeTheTickSectionLoadsWithDefaultsAndIsLeftAlone(@TempDir Path tmp) throws IOException {
         // A v1.7 multiforge-server.toml: no [tick] section.
-        String old =
-                """
+        String old = """
                 [mtserver]
                 cores = 6
                 threadsPerCore = 1
@@ -105,8 +103,7 @@ class ConfigCodecTest {
 
     @Test
     void tickKeysParseAndRoundTrip() {
-        MultiForgeConfig c = ConfigCodec.parse(
-                """
+        MultiForgeConfig c = ConfigCodec.parse("""
                 [tick]
                 inlineSingleRegion = false
                 serialLaneHotWaitMs = 0

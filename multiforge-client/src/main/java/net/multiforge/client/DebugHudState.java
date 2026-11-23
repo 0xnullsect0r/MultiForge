@@ -274,9 +274,10 @@ public final class DebugHudState {
         return switch (t.placement()) {
             case SERVER_THREAD_SINGLE -> "server";
             case SERVER_THREAD_HOT -> "server, busy lane";
-            case WORKER, UNKNOWN -> t.thread().startsWith("multiforge-")
-                    ? t.thread().substring("multiforge-".length()).replaceFirst("-server$", "")
-                    : t.thread();
+            case WORKER, UNKNOWN ->
+                t.thread().startsWith("multiforge-")
+                        ? t.thread().substring("multiforge-".length()).replaceFirst("-server$", "")
+                        : t.thread();
         };
     }
 
