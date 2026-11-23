@@ -49,11 +49,31 @@ class OwnershipEnforcerTest {
     }
 
     @Test
-    void globalDomainPassesThrough() {
+    void globalDomainOnTheTickThreadPassesThrough() {
+        OwnershipEnforcer.bindTickThread(Thread.currentThread());
         OwnerToken.runAs(OwnerToken.GLOBAL, () -> {
             assertThat(OwnershipEnforcer.canMutate("Level.setBlock")).isTrue();
+            assertThat(OwnershipEnforcer.isTickThread()).isTrue();
         });
         assertThat(ProbeRegistry.get("Level.setBlock:off-thread")).isZero();
+    }
+
+    @Test
+    void globalDomainOnABackgroundThreadIsNotATickThread() {
+        // Vanilla's worldgen, light and IO tasks carry GLOBAL on Worker-Main threads.
+        OwnershipEnforcer.bindTickThread(new Thread(() -> {}));
+        OwnerToken.runAs(OwnerToken.GLOBAL, () -> {
+            assertThat(OwnershipEnforcer.isTickThread()).isFalse();
+            assertThat(OwnershipEnforcer.canMutate("Level.setBlock")).isFalse();
+        });
+        assertThat(ProbeRegistry.get("Level.setBlock:off-thread")).isEqualTo(1L);
+    }
+
+    @Test
+    void aRegionWorkerIsATickThread() {
+        OwnershipEnforcer.bindTickThread(new Thread(() -> {}));
+        OwnerToken.runAs(OwnerToken.forRegion(1L), () -> assertThat(OwnershipEnforcer.isTickThread())
+                .isTrue());
     }
 
     @Test

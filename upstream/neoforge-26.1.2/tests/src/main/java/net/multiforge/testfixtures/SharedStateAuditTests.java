@@ -54,6 +54,38 @@ public class SharedStateAuditTests {
     private static final int DRAWS_PER_THREAD = 20_000;
     private static final int THREADS = 4;
 
+    /**
+     * The ATM 10 deadlock: a light task asked for a block entity, was served because its
+     * GLOBAL token counted as a tick thread, and joined the server thread for a chunk that
+     * was waiting on that same light task. Vanilla answers such a thread {@code null}.
+     */
+    @GameTest(template = TestsMod.TEMPLATE_3x3, timeoutTicks = 100)
+    @TestHolder(description = "A task on a Vanilla background executor is not a tick thread and gets Vanilla's null block entity.")
+    static void backgroundExecutorTaskIsNotATickThread(final DynamicTest test) {
+        test.onGameTest(helper -> {
+            ServerLevel level = helper.getLevel();
+            BlockPos relative = new BlockPos(1, 1, 1);
+            BlockPos pos = helper.absolutePos(relative);
+            AtomicReference<String> outcome = new AtomicReference<>();
+            helper.startSequence()
+                    .thenExecute(() -> helper.setBlock(relative, Blocks.BARREL))
+                    .thenExecute(() -> {
+                        helper.assertTrue(level.getBlockEntity(pos) != null, "the server thread cannot see the barrel");
+                        new net.minecraft.util.thread.ConsecutiveExecutor(
+                                java.util.concurrent.ForkJoinPool.commonPool(), "multiforge-audit-test").schedule(() -> {
+                                    boolean tickThread = net.multiforge.neoforge.OwnershipGuard.isTickDomain();
+                                    BlockEntity seen = level.getBlockEntity(pos);
+                                    outcome.set(!tickThread && seen == null
+                                            ? "ok"
+                                            : "background task: tickThread=" + tickThread + " blockEntity=" + seen);
+                                });
+                    })
+                    .thenWaitUntil(() -> helper.assertTrue(outcome.get() != null, "the background task has not run"))
+                    .thenExecute(() -> helper.assertTrue("ok".equals(outcome.get()), outcome.get()))
+                    .thenSucceed();
+        });
+    }
+
     private static void onWorker(MultiThreadedSchedulerHost host, ServerLevel level, BlockPos pos, Runnable task) {
         host.taskQueue().queueChunkTask(level.mfWorldRef(), pos.getX() >> 4, pos.getZ() >> 4, task);
     }

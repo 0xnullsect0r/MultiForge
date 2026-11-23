@@ -124,12 +124,20 @@ class OwnershipEnforcerPositionalTest {
     }
 
     @Test
-    void globalRegionAndTickThreadAreAllowed() {
+    void tickThreadIsAllowedWithOrWithoutTheGlobalToken() {
+        OwnershipEnforcer.bindTickThread(Thread.currentThread());
         AtomicBoolean global = new AtomicBoolean();
         OwnerToken.runAs(OwnerToken.GLOBAL, () -> global.set(OwnershipEnforcer.canMutateAt("site", WORLD, 5, 0)));
         assertThat(global.get()).isTrue();
-        OwnershipEnforcer.bindTickThread(Thread.currentThread());
         assertThat(OwnershipEnforcer.canMutateAt("site", WORLD, 5, 0)).isTrue();
+    }
+
+    @Test
+    void aBackgroundTaskWithTheGlobalTokenIsNotAllowed() {
+        OwnershipEnforcer.bindTickThread(new Thread(() -> {}));
+        AtomicBoolean global = new AtomicBoolean(true);
+        OwnerToken.runAs(OwnerToken.GLOBAL, () -> global.set(OwnershipEnforcer.canMutateAt("site", WORLD, 5, 0)));
+        assertThat(global.get()).isFalse();
     }
 
     @Test

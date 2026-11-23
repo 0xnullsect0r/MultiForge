@@ -231,6 +231,16 @@ public final class OwnershipEnforcer {
     }
 
     /**
+     * Is the caller really ticking the world: the bound server thread, or a region worker?
+     * A background task under the {@link OwnerToken#GLOBAL} token is not. Vanilla answers
+     * such threads differently (a {@code null} block entity), and serving them can deadlock:
+     * a light task waiting on a chunk the server thread cannot finish without that task.
+     */
+    public static boolean isTickThread() {
+        return OwnerToken.current().domain() == Domain.REGION || Thread.currentThread() == tickThread;
+    }
+
+    /**
      * @param site short symbolic id of the call site, e.g. {@code "Level.setBlock"}.
      * @return {@code true} if the caller may run {@code site}'s mutation body inline right now.
      *         {@code false} means the caller must instead hand its mutation to {@link #reroute}.
@@ -242,7 +252,9 @@ public final class OwnershipEnforcer {
 
         OwnerToken tok = OwnerToken.current();
         Domain domain = tok.domain();
-        if (domain == Domain.REGION || domain == Domain.GLOBAL) return true;
+        // GLOBAL alone is not enough: Vanilla's worldgen, light and IO tasks carry it on
+        // background threads, which must not be treated as ticking the world.
+        if (domain == Domain.REGION) return true;
 
         Thread expected = tickThread;
         Thread current = Thread.currentThread();
