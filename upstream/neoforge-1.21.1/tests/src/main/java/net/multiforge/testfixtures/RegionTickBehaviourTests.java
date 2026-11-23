@@ -408,6 +408,32 @@ public class RegionTickBehaviourTests {
         });
     }
 
+    @GameTest(template = TestsMod.TEMPLATE_3x3, timeoutTicks = 300)
+    @TestHolder(description = {
+            "A background mailbox task, such as the light engine, gets Vanilla's null from getBlockEntity.",
+            "Serving it would make the task wait on a chunk that may be waiting on that task."
+    })
+    static void backgroundMailboxGetsNoBlockEntity(final DynamicTest test) {
+        test.onGameTest(helper -> {
+            net.minecraft.server.level.ServerLevel level = helper.getLevel();
+            BlockPos relative = new BlockPos(1, 1, 1);
+            BlockPos chest = helper.absolutePos(relative);
+            BlockPos unloaded = chest.offset(30000, 0, 30000);
+            java.util.concurrent.atomic.AtomicReference<String> result = new java.util.concurrent.atomic.AtomicReference<>();
+            net.minecraft.util.thread.ProcessorMailbox<Runnable> mailbox = net.minecraft.util.thread.ProcessorMailbox.create(
+                    net.minecraft.Util.backgroundExecutor(), "multiforge-test-mailbox");
+            helper.addEndListener(passed -> mailbox.close());
+            helper.startSequence()
+                    .thenExecute(() -> helper.setBlock(relative, Blocks.CHEST))
+                    .thenWaitUntil(() -> helper.assertTrue(level.getBlockEntity(chest) != null, "chest block entity not there yet"))
+                    .thenExecute(() -> mailbox.tell(() -> result.set(
+                            level.getBlockEntity(chest) == null && level.getBlockEntity(unloaded) == null ? "null" : "served")))
+                    .thenWaitUntil(() -> helper.assertTrue(result.get() != null, "mailbox task has not run yet"))
+                    .thenExecute(() -> helper.assertTrue("null".equals(result.get()), "a mailbox task was served a block entity"))
+                    .thenSucceed();
+        });
+    }
+
     /**
      * Not {@code TicketType.FORCED}: at distance 2 that ticket equals the one {@code
      * setChunkForced} adds, and this test's end listener runs after the runner has

@@ -336,9 +336,13 @@ public final class OwnershipGuard {
      * @return whether the calling thread is ticking the world on MultiForge's
      *         behalf right now — a region worker or the global region. Vanilla
      *         code that only serves "the level's own thread" (e.g. {@code
-     *     Level.getBlockEntity}) must serve these threads too.
+     *     Level.getBlockEntity}) must serve these threads too. A background
+     *         mailbox task also runs as {@code GLOBAL} but is not one of them: if the
+     *         light engine could reach {@code getBlockEntity}, it would wait on a chunk
+     *         that is waiting on that same light task.
      */
     public static boolean isTickDomain() {
+        if (!(Thread.currentThread() instanceof net.multiforge.runtime.region.RegionWorkerThread)) return false;
         net.multiforge.runtime.ownership.Domain domain = net.multiforge.runtime.ownership.OwnerToken.current().domain();
         return domain == net.multiforge.runtime.ownership.Domain.REGION
                 || domain == net.multiforge.runtime.ownership.Domain.GLOBAL;
