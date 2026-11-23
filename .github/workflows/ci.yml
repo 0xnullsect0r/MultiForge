@@ -41,6 +41,9 @@ jobs:
       - name: Updater Minecraft version guard
         run: sh scripts/test-multiforge-update-guard.sh
 
+      - name: Release line rules
+        run: sh scripts/test-mf-line.sh
+
       - name: Build + test
         # Enumerate the CI-scoped modules explicitly. `./gradlew build`
         # at the root also pulls in :multiforge-client, whose moddev

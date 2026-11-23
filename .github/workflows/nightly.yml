@@ -34,10 +34,6 @@ jobs:
       - name: Resolve the release line
         run: .github/scripts/mf-line.sh --tree >> "$GITHUB_ENV"
 
-      - name: Does this tree carry the MultiForge patches?
-        # false only while a new line is being bootstrapped from stock NeoForge.
-        run: echo "MF_PATCHES=$(sed -n 's/^multiforge_patches_enabled=//p' "$MF_TREE/gradle.properties" | grep . || echo true)" >> "$GITHUB_ENV"
-
       - name: Set up JDK ${{ env.MF_JAVA }}
         uses: actions/setup-java@v6
         with:
@@ -58,11 +54,7 @@ jobs:
       - name: Refuse a tree without the MultiForge patches
         # These checks compare MultiForge against stock; on an unpatched
         # bootstrap tree they would compare stock against itself and pass.
-        run: |
-          if [ "$MF_PATCHES" != true ]; then
-              echo "::error::$MF_TREE has multiforge_patches_enabled=$MF_PATCHES; the live checks cannot run yet"
-              exit 1
-          fi
+        run: .github/scripts/mf-patches-gate.sh
 
       - name: Publish multiforge-runtime + api to mavenLocal
         run: ./gradlew :multiforge-api:publishToMavenLocal :multiforge-runtime:publishToMavenLocal --no-daemon

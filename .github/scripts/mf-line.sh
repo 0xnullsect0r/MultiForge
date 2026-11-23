@@ -20,7 +20,9 @@
 #
 # A 26.x build must never become GitHub's "latest" release: old updaters and
 # imported eggs follow `latest`, and would move a 1.21.1 world to 26.x. So that
-# line releases only as `v2.*-alpha.*` prereleases with MF_MAKE_LATEST=false.
+# line releases only as `mc26.1.2-v2.X.Y-alpha.N` prereleases with
+# MF_MAKE_LATEST=false. --tag also prints MF_RELEASE_VERSION, the version inside
+# the tag, which must equal the tree's `version` and names the release assets.
 
 set -euo pipefail
 
@@ -42,7 +44,7 @@ line_261() {
 MF_LINE=26.1
 MF_TREE=upstream/neoforge-26.1.2
 MF_JAVA=25
-MF_TAG_REGEX=^v2\.[0-9]+\.[0-9]+-alpha\.[0-9]+$
+MF_TAG_REGEX=^mc26\.1\.2-v2\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)-alpha\.[1-9][0-9]*$
 MF_RELEASE_BRANCHES=port/26.1.2
 MF_FORK_VERSION_REGEX=^26\.1\.2\.[0-9]+-multiforge-2\.
 MF_PRERELEASE=true
@@ -59,12 +61,15 @@ usage() {
 case "$1" in
     --tag)
         [ $# -eq 2 ] || usage
+        alpha_261='^mc26\.1\.2-v(2\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)-alpha\.[1-9][0-9]*)$'
         if [[ "$2" =~ ^v1\.[0-9]+\.[0-9]+$ ]]; then
             line_121
-        elif [[ "$2" =~ ^v2\.[0-9]+\.[0-9]+-alpha\.[0-9]+$ ]]; then
+            echo "MF_RELEASE_VERSION=${2#v}"
+        elif [[ "$2" =~ $alpha_261 ]]; then
             line_261
+            echo "MF_RELEASE_VERSION=${BASH_REMATCH[1]}"
         else
-            echo "::error::tag '$2' matches no release line (v1.X.Y, or v2.X.Y-alpha.N)" >&2
+            echo "::error::tag '$2' matches no release line (v1.X.Y, or mc26.1.2-v2.X.Y-alpha.N)" >&2
             exit 1
         fi
         ;;

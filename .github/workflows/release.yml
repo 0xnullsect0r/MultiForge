@@ -4,6 +4,7 @@ on:
   push:
     tags:
       - "v*"
+      - "mc*"
 
 permissions:
   contents: write
@@ -21,10 +22,6 @@ jobs:
       - name: Resolve the release line
         run: .github/scripts/mf-line.sh --tag "$GITHUB_REF_NAME" >> "$GITHUB_ENV"
 
-      - name: Does this tree carry the MultiForge patches?
-        # false only while a new line is being bootstrapped from stock NeoForge.
-        run: echo "MF_PATCHES=$(sed -n 's/^multiforge_patches_enabled=//p' "$MF_TREE/gradle.properties" | grep . || echo true)" >> "$GITHUB_ENV"
-
       - name: Does this line ship the client mod?
         # The 1.x line always does; mf-client.sh refuses to let it opt out.
         run: .github/scripts/mf-client.sh >> "$GITHUB_ENV"
@@ -33,17 +30,17 @@ jobs:
         # A tag pushed without the version bump shipped jars named for the tag
         # that reported the previous version. Each line releases only from its
         # own branches (.github/scripts/mf-line.sh): 1.x from main or
-        # release/1.21.x, 2.x alphas from port/26.1.2.
+        # release/1.21.x, mc26.1.2-v2.x alphas from port/26.1.2.
         run: |
           set -euo pipefail
-          if [ "$MF_PATCHES" != true ]; then
-              echo "::error::$MF_TREE has multiforge_patches_enabled=$MF_PATCHES: it is stock NeoForge, not MultiForge"
-              exit 1
-          fi
-          TAG="${GITHUB_REF_NAME#v}"
+          .github/scripts/mf-patches-gate.sh
+          TREE_LINE=$(.github/scripts/mf-line.sh --tree | sed -n 's/^MF_LINE=//p')
+          [ "$TREE_LINE" = "$MF_LINE" ] \
+              || { echo "::error::$GITHUB_REF_NAME is a $MF_LINE tag on a $TREE_LINE tree"; exit 1; }
+          TAG="$MF_RELEASE_VERSION"
           OUTER=$(sed -n 's/^version=//p' gradle.properties)
           FORK=$(sed -n 's/^multiforge_runtime_version=//p' "$MF_TREE/gradle.properties")
-          echo "tag=$TAG gradle.properties=$OUTER fork=$FORK"
+          echo "tag=$GITHUB_REF_NAME version=$TAG gradle.properties=$OUTER fork=$FORK"
           [ "$TAG" = "$OUTER" ] || { echo "::error::tag $GITHUB_REF_NAME but gradle.properties version=$OUTER"; exit 1; }
           [ "$TAG" = "$FORK" ] || { echo "::error::tag $GITHUB_REF_NAME but the fork's multiforge_runtime_version=$FORK"; exit 1; }
           ON_BRANCH=
@@ -92,7 +89,7 @@ jobs:
       - name: Assemble release bundle
         run: |
           set -euo pipefail
-          VER="${GITHUB_REF_NAME#v}"
+          VER="$MF_RELEASE_VERSION"
           RELEASE_DIR="release"
           mkdir -p "$RELEASE_DIR"
 
@@ -239,11 +236,18 @@ jobs:
                    "anything else refuses every mod. See docs/compatibility.md."
               exit 1
           fi
+          # A prerelease must report exactly the version in its tag.
+          if [ "$MF_PRERELEASE" = true ]; then
+              case "$VER" in
+                  *-multiforge-"$MF_RELEASE_VERSION") ;;
+                  *) echo "::error::Fork version '$VER' does not end in -multiforge-$MF_RELEASE_VERSION"; exit 1 ;;
+              esac
+          fi
 
       - name: Stage fork installer with release-friendly name
         run: |
           set -euo pipefail
-          VER="${GITHUB_REF_NAME#v}"
+          VER="$MF_RELEASE_VERSION"
           mkdir -p release
           # Fork installer output path (NeoDev's installerJar task):
           # projects/neoforge/build/libs/neoforge-<version>-installer.jar
@@ -276,7 +280,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          VER="${GITHUB_REF_NAME#v}"
+          VER="$MF_RELEASE_VERSION"
           # The ZIP embeds the fork installer and a converter script that
           # runs it in place against an existing NeoForge server dir. It
           # cannot ship a finished server: that tree is ~180 MB and
@@ -438,7 +442,7 @@ jobs:
             heatmap and region-pin selection are unavailable. Servers and normal clients are
             unaffected: the debug channel is optional.
 
-            See [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/${{ github.ref_name }}/CHANGELOG.md) for what changed.
+            See [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/${{ github.ref_name }}/CHANGELOG.md) for what changed, what was tested and what was not.
 
       - name: Publish the release
         env:
