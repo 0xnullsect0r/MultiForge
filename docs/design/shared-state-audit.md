@@ -36,20 +36,21 @@ concurrent structure), **deferred** (rerouted to the owner or the barrier),
 | Cause | Fix | Regression test |
 |---|---|---|
 | A worker's `markUnsaved` wrote the eager-save set | Handoff queue | `workerUnsavedMarkGoesThroughTheHandoff` |
-| The barrier pump promoted a chunk to ticking while its owner ticked it | Promotion waits for the barrier | None dedicated; covered by the suite, stress and swarm |
+| The barrier pump promoted a chunk to ticking while its owner ticked it | Promotion waits for the barrier | `chunkPromotionWaitsForTheBarrier` |
 | A foreign `getBlockEntity` removed, promoted or created block entities | Foreign reads only read | `foreignBlockEntityReadDoesNotMutate` |
 | A spectator's tick ran `ChunkMap.move` on a worker | Deferred to the barrier | `workerPlayerChunkMoveWaitsForTheBarrier` |
-| A kick during the region phase rewrote player and tracker maps | Deferred to the barrier | None dedicated |
-| Portal destinations built platforms in an idle level from several regions | Deferred to the barrier | None dedicated |
+| A kick during the region phase rewrote player and tracker maps | Deferred to the barrier | `kickFromARegionWaitsForTheBarrier` |
+| Portal destinations built platforms in an idle level from several regions | Deferred to the barrier | `portalDestinationWaitsForTheBarrier` |
 | `subTickCount` lost updates | Atomic | `subTickOrdersAreUniqueAcrossThreads` |
 | `isHandlingTick` was false in a region's block phase (changes piston behaviour) | Per-thread flag | `regionBlockTickCountsAsHandlingATick` |
 | Random sequences were shared without a lock | Leaf lock | `randomSequenceDrawsAreNotLostOrRepeated` |
 | Block-snapshot capture was level-wide | Per worker | `blockCaptureStaysOnItsWorker` |
 | A POI filter could wait on a chunk inside the POI monitor (deadlock) | Filter runs outside it | `poiFilterRunsOutsideTheMonitor` |
-| Dragon crystal callbacks ran on the crystal's worker | Deferred to the barrier | None dedicated; scenario x3 |
-| Capability listeners were unsynchronized | Locked; listeners run outside | None dedicated |
+| Dragon crystal callbacks ran on the crystal's worker | Deferred to the barrier | `dragonCrystalCallbackWaitsForTheBarrier` |
+| Capability listeners were unsynchronized | Locked; listeners run outside | `capabilityListenersSurviveConcurrentRegions` |
 | Effects changed on an entity in another region (ATM 10 crash) | `CrossRegionEffects` | `effectsOnAnEntityInAnotherRegionAreDeferred` |
 | Health, absorption, XP and exhaustion on a foreign player | `CrossRegionEffects` | `playerStateChangesFromAnotherRegionAreDeferred` |
+| Worldgen, light and IO tasks carried the GLOBAL token and counted as tick threads, so a mod reading a block entity from the light engine deadlocked the server (ATM 10) | Only the server thread and region workers qualify | `backgroundExecutorTaskIsNotATickThread` |
 
 ## Still unsafe
 
@@ -61,6 +62,11 @@ concurrent structure), **deferred** (rerouted to the owner or the barrier),
   atomic. Vanilla's filter builds a path without waiting on a chunk load, but it can
   hold the monitor for longer than a leaf lock should.
 - Foreign reads of `PalettedContainer` are unsynchronized: fine on x86, not verified on ARM.
+- A **mod's own `hurtServer` override** runs its code before reaching a guarded `super`, on the
+  caller's worker. Vanilla's 53 implementations are guarded at their first line; a mod's cannot be
+  without a class transformer.
+- A mod holding a `FoodData`, `ItemStack` or `Abilities` reference and mutating it directly, or
+  changing a held `ItemStack` of a foreign player, bypasses these guards.
 - Game events assume regions are at least one empty section apart. A mod's very large
   event radius, or a very small `region.size`, can cross that.
 
@@ -75,12 +81,15 @@ from another region.
 | `heal`, `setHealth`, `setAbsorptionAmount` | Lost updates | **Fixed**, tested |
 | `giveExperiencePoints`, `giveExperienceLevels`, `causeFoodExhaustion` | Lost updates | **Fixed**, tested |
 | `teleportTo`, dimension changes | Handled | Already deferred |
-| `hurtServer` | **Unsafe**: runs combat, death and drops on the wrong worker | Not fixed: overrides mutate before `super`, and callers use the result |
-| `Inventory.add`, `setItem`, `removeItem`, `Player.addItem` | **Unsafe**: races the owner's inventory | Not fixed: callers need the result to avoid losing or duplicating items |
-| `AttributeInstance` modifiers, `setBaseValue` | **Unsafe**: the same dirty-set corruption as the ATM 10 crash | Not fixed: the instance does not know its entity, so this needs a design |
-| `FoodData` direct setters | **Unsafe**: lost updates | Not fixed: `FoodData` does not know its player |
-| `Abilities` fields | **Unsafe**: plain public fields, stale reads | Not fixed: direct field writes cannot be guarded |
-| `setItemSlot` | **Unsafe**: equipment and attribute changes | Not fixed |
+| `AttributeInstance` modifiers, `setBaseValue`, `AttributeMap` | Same corruption as the ATM 10 crash | **Fixed**, tested: a leaf lock, so **every caller keeps Vanilla's result** |
+| `hurtServer` (all 53 Vanilla implementations) | Combat, death and drops on the wrong worker | **Fixed**, tested: runs after the barrier. Caller gets `false` if the target is gone or immune, otherwise `true`, though armor or an event may still reduce or cancel it |
+| `Inventory.add`, `placeItemBackInInventory` | Races the owner's inventory | **Fixed**, tested: caller's stack is emptied, `add` returns `true`, and what does not fit drops at the player |
+| `Inventory.removeItem`, `removeItemNoUpdate`, `removeFromSelected`, removing `clearOrCountMatchingItems` | Could duplicate or lose items | **Fixed**, tested: nothing moves; caller gets `ItemStack.EMPTY` or `0`, with a rate-limited warning |
+| `Inventory.setItem`, `setSelectedSlot`, `setSelectedItem`, `addAndPickItem`, `pickSlot`, `removeItem(stack)`, `dropAll`, `replaceWith`, `clearContent` | Races the owner's inventory | **Fixed**: runs after the barrier on a copy. `setSelectedItem` returns the current item. Tested through `add` and removal, not each method |
+| `setItemSlot` | Equipment and attribute changes | **Fixed**, tested: runs after the barrier on a copy |
+| `FoodData.eat`, `addExhaustion`, `setFoodLevel`, `setSaturation` | Lost updates | **Fixed**, tested: runs after the barrier |
+| `ServerPlayer.onUpdateAbilities` | Sends and refreshes from the wrong worker | **Fixed**, tested: runs after the barrier |
+| `Abilities` fields | Plain public fields | **Partly**: now volatile, so a write is seen. A direct field write cannot be intercepted, and two fields set together are not atomic |
 | `knockback`, `setDeltaMovement` | Race on movement | Not fixed: worst case is a lost push |
 
 ## Every field
