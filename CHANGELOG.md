@@ -1,15 +1,44 @@
 # CHANGELOG
 
-## v2.0.0-alpha.1 — Minecraft 26.1.2 (draft, not released)
+## mc26.1.2-v2.0.0-alpha.1 — Minecraft 26.1.2 (draft, not released)
 
-**Alpha. Do not use it on a world you cannot lose.** Needs Java 25 and a pinned
-release (`MF_VERSION=v2.0.0-alpha.1`): `latest` stays on the 1.21.1 line.
+**Alpha. Not for important worlds.** Use it only on a world you can lose. Loading
+a 1.21.1 world in 26.1.2 upgrades it permanently. Needs Java 25 and a pinned
+release (`MF_VERSION=mc26.1.2-v2.0.0-alpha.1`): `latest` stays on the 1.21.1 line,
+and this prerelease is never offered to 1.21.1 servers.
+
+Install into a new, empty server directory:
+
+```
+curl -fsSL https://github.com/0xnullsect0r/MultiForge/releases/download/mc26.1.2-v2.0.0-alpha.1/multiforge-update.sh | MF_VERSION=mc26.1.2-v2.0.0-alpha.1 JAVA_HOME=/path/to/jdk-25 sh
+```
 
 ### Known gaps
 
 - **No client debug mod.** `multiforge-client` is not ported to 26.1.2, so there
   is no `multiforge-client.jar`, F3 overlay, chunk-border renderer, MSPT heatmap
   or region-pin selection. Servers and normal clients are unaffected.
+
+### What has been tested
+
+- **ATM 11 0.15.0-beta** booted privately on this build and ran 10 idle minutes
+  at 20 TPS with two regions and no MultiForge-only errors. **No real player has
+  joined it**, so gameplay with this pack is untested.
+- All 272 required GameTests pass, with every region on a worker, in hybrid and
+  in strict mode.
+- A server installed from the locally built installer boots to `Done` without a
+  mod pack. The updater installs, updates from stock NeoForge 26.1.2.129, rolls
+  back and forward, and refuses to move a server between 1.21.1 and 26.x.
+
+### What has not been tested
+
+- Real players on any modpack, long runs, and worlds with real history.
+- Upgrading a world from 1.21.1. Do not do this with an alpha.
+
+### Updating
+
+- **Updates stay on the server's own Minecraft version.** A pinned tag for another
+  version is refused before anything is downloaded.
 
 ### Changing an entity in another region
 
