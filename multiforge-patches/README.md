@@ -1,15 +1,15 @@
 # multiforge-patches
 
-> **Port status (`port/26.1.2`): partly ported, not safe to ship.** The `NN-*`
+> **Port status (`port/26.1.2`): every group ported, alpha only.** The `NN-*`
 > directories hold the 26.1.2 patch set. `spec-1.21.1/` holds the complete
-> 1.21.1 set, unapplied, as the specification. `multiforge_patches_enabled=partial`
-> in the fork's `gradle.properties` makes the release workflow and the nightly
-> refuse this tree.
+> 1.21.1 set, unapplied, as the specification.
+> `multiforge_patches_enabled=prerelease` in the fork's `gradle.properties` lets
+> this tree ship only as a GitHub prerelease; a stable release needs `true`.
 >
 > | Group | 26.1.2 state |
 > |---|---|
-> | `01-ownership`, `02-region-tick`, `04-chunk-system`, `05-entity-migration`, `08-globals`, `09-events` | Ported. GameTests, the parity gate and a two-region soak pass; see the port report before relying on them |
-> | `06-networking` | Not ported (PROXY protocol, IPv6 ban normalisation) |
+> | `01-ownership`, `02-region-tick`, `04-chunk-system`, `05-entity-migration`, `06-networking`, `08-globals`, `09-events` | Ported. `ProcessorMailbox` is now `AbstractConsecutiveExecutor`, and `LevelAccessor.scheduleTick` is now in `ScheduledTickAccess` |
+> | `03-world-data`, `07-persistence` | Empty, as in 1.21.1 |
 >
 > Changes beyond the 1.21.1 spec, for state new in 26.1: locator-bar waypoints and
 > debug synchronizers replay at the barrier; the time-based attribute sampler,
