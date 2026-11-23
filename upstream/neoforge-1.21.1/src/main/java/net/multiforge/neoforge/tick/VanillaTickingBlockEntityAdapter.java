@@ -41,9 +41,9 @@ public final class VanillaTickingBlockEntityAdapter implements net.multiforge.ru
     private final Level level;
     private final TickingBlockEntity delegate;
     private final net.multiforge.api.world.BlockPos pos;
-    // Set for a ticker a region added during its own tick: NeoForge's onLoad has not
-    // run yet (the server thread's pass is next tick), and the region may tick it this
-    // tick. Read and cleared only by the owning region's thread.
+    // Set until the first tick: NeoForge's onLoad may not have run yet (the block entity
+    // was placed this tick, or its chunk loaded after this tick's server-thread pass).
+    // Read and cleared only by the thread ticking this region.
     private boolean loadPending;
 
     public VanillaTickingBlockEntityAdapter(Level level, TickingBlockEntity delegate) {
@@ -51,8 +51,8 @@ public final class VanillaTickingBlockEntityAdapter implements net.multiforge.ru
     }
 
     /**
-     * @param loadPending the block entity was placed during a region's tick, so its
-     *                    {@code onLoad} must run right before its first tick (see {@link #tick})
+     * @param loadPending the block entity may still be waiting for {@code onLoad}, which
+     *                    must run right before its first tick (see {@link #tick})
      */
     public VanillaTickingBlockEntityAdapter(Level level, TickingBlockEntity delegate, boolean loadPending) {
         this.level = level;
