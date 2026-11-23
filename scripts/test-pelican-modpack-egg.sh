@@ -43,7 +43,8 @@ fail() {
 
 # run <MULTIFORGE_VERSION> <MC_VERSION>: prints BASE and ASSET, or fails as the egg would.
 run() {
-    env -i PATH="$PATH" MULTIFORGE_VERSION="$1" MC_VERSION="$2" bash -c '
+    # --norc: bash reads ~/.bashrc when stdin is a socket, and its output would mix with the URLs.
+    env -i PATH="$PATH" MULTIFORGE_VERSION="$1" MC_VERSION="$2" bash --noprofile --norc -c '
         set -euo pipefail
         fail() { echo "ERROR: $*" >&2; exit 1; }
         source "$0"
