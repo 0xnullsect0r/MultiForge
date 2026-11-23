@@ -1,5 +1,15 @@
 # CHANGELOG
 
+## v1.12.4 — Fix a crash from machines that use fake players
+
+**Upgrade if your modpack has machines that act through fake players**, such as
+Just Dire Things in All the Mods 10.
+
+- **Fixed a server crash.** Block entities on different region workers could
+  request fake players at the same time, which corrupted NeoForge's shared map.
+  The lookup is now safe across threads, and each profile still gets one fake
+  player.
+
 ## v1.12.3 — Fix a server freeze from the light engine
 
 **Upgrade if your modpack includes PneumaticCraft, or any block that reads its

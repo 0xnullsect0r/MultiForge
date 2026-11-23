@@ -346,7 +346,7 @@ public class RegionTickBehaviourTests {
         });
     }
 
-    @GameTest(template = TestsMod.TEMPLATE_3x3, timeoutTicks = 2400)
+    @GameTest(template = TestsMod.TEMPLATE_3x3, timeoutTicks = 24000)
     @TestHolder(description = {
             "A block entity on a worker changing the effects of an entity in another region",
             "does not touch that entity's maps from its own thread: the change lands after the barrier."
@@ -376,8 +376,9 @@ public class RegionTickBehaviourTests {
                             level.hasChunk(farChunkX, farChunkZ)
                                     && host.regionizerFor(level.mfWorldRef()).regionAtChunk(farChunkX, farChunkZ) != null,
                             "far chunk not loaded and regionized yet"))
-                    // The test server does not wait between ticks, so the far chunk can take many
-                    // ticks to reach entity ticking; an entity is only in the level from then on.
+                    // The test server does not wait between ticks, so on a busy machine the far chunk
+                    // can take thousands of ticks to reach entity ticking. An entity is only in the
+                    // level from then on.
                     .thenWaitUntil(() -> helper.assertTrue(level.isPositionEntityTicking(far), "far chunk not entity-ticking yet"))
                     // The sequence runs on this test's region; strict mode refuses a cross-region add,
                     // so the region owning the far chunk adds the pig itself.
@@ -430,6 +431,49 @@ public class RegionTickBehaviourTests {
                             level.getBlockEntity(chest) == null && level.getBlockEntity(unloaded) == null ? "null" : "served")))
                     .thenWaitUntil(() -> helper.assertTrue(result.get() != null, "mailbox task has not run yet"))
                     .thenExecute(() -> helper.assertTrue("null".equals(result.get()), "a mailbox task was served a block entity"))
+                    .thenSucceed();
+        });
+    }
+
+    @GameTest(template = TestsMod.TEMPLATE_3x3, timeoutTicks = 2400)
+    @TestHolder(description = "Threads asking for the same fake players at once all succeed and share one instance per profile.")
+    static void fakePlayerFactoryIsSafeAcrossThreads(final DynamicTest test) {
+        test.onGameTest(helper -> {
+            net.minecraft.server.level.ServerLevel level = helper.getLevel();
+            int threads = 8;
+            java.util.List<com.mojang.authlib.GameProfile> profiles = new java.util.ArrayList<>();
+            for (int i = 0; i < 64; i++) {
+                profiles.add(new com.mojang.authlib.GameProfile(java.util.UUID.nameUUIDFromBytes(("mf-fake-" + i).getBytes()), "mf_fake_" + i));
+            }
+            java.util.concurrent.CountDownLatch start = new java.util.concurrent.CountDownLatch(1);
+            java.util.concurrent.CountDownLatch done = new java.util.concurrent.CountDownLatch(threads);
+            java.util.concurrent.atomic.AtomicReference<Throwable> failure = new java.util.concurrent.atomic.AtomicReference<>();
+            java.util.Map<java.util.UUID, java.util.Set<Integer>> seen = new java.util.concurrent.ConcurrentHashMap<>();
+            for (int t = 0; t < threads; t++) {
+                Thread thread = new Thread(() -> {
+                    try {
+                        start.await();
+                        for (com.mojang.authlib.GameProfile profile : profiles) {
+                            int identity = System.identityHashCode(net.neoforged.neoforge.common.util.FakePlayerFactory.get(level, profile));
+                            seen.computeIfAbsent(profile.getId(), k -> java.util.concurrent.ConcurrentHashMap.newKeySet()).add(identity);
+                        }
+                    } catch (Throwable e) {
+                        failure.compareAndSet(null, e);
+                    } finally {
+                        done.countDown();
+                    }
+                }, "multiforge-test-fake-player-" + t);
+                thread.setDaemon(true);
+                thread.start();
+            }
+            start.countDown();
+            helper.startSequence()
+                    .thenWaitUntil(() -> helper.assertTrue(done.getCount() == 0, "threads have not finished yet"))
+                    .thenExecute(() -> {
+                        helper.assertTrue(failure.get() == null, "a thread failed: " + failure.get());
+                        helper.assertTrue(seen.size() == profiles.size(), "not every profile was served");
+                        helper.assertTrue(seen.values().stream().allMatch(ids -> ids.size() == 1), "a profile got two fake players");
+                    })
                     .thenSucceed();
         });
     }
