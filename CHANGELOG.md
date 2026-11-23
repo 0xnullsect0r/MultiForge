@@ -1,5 +1,16 @@
 # CHANGELOG
 
+## v1.12.3 — Fix a server freeze from the light engine
+
+**Upgrade if your modpack includes PneumaticCraft, or any block that reads its
+block entity to decide how much light it lets through.**
+
+- **Fixed a deadlock that froze the server until the watchdog killed it.** The
+  light engine could be served a block entity, which Vanilla never does off the
+  server thread. It then waited on a chunk that was waiting on that same light
+  work. Background tasks now get Vanilla's `null`, and only real region workers
+  count as tick threads.
+
 ## v1.12.2 — Server panels work behind PROXY protocol
 
 **Upgrade if you use PROXY protocol with a panel such as Crafty on the same
