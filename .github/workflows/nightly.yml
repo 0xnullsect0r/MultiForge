@@ -100,11 +100,15 @@ jobs:
           if [ "$MF_MAKE_LATEST" = true ]; then
               BASELINE_URL="https://github.com/${GITHUB_REPOSITORY}/releases/latest/download/multiforge-installer.jar"
           else
+              # Not this tree's own version: an update to the same version keeps no
+              # rollback point, so it could not exercise the rollback checks.
+              TREE_VERSION=$(sed -n 's/^version=//p' gradle.properties)
               BASELINE_TAG=$(gh release list --repo "$GITHUB_REPOSITORY" --limit 100 \
                   --exclude-drafts --json tagName --jq '.[].tagName' \
-                  | { grep -E "$MF_TAG_REGEX" || true; } | sort -V | tail -n 1)
+                  | { grep -E "$MF_TAG_REGEX" || true; } \
+                  | { grep -vF -x "mc26.1.2-v$TREE_VERSION" || true; } | sort -V | tail -n 1)
               if [ -z "$BASELINE_TAG" ]; then
-                  echo "::notice::no published $MF_LINE release yet; skipping the updater check"
+                  echo "::notice::no earlier published $MF_LINE release; skipping the updater check"
                   exit 0
               fi
               BASELINE_URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/${BASELINE_TAG}/multiforge-installer.jar"
