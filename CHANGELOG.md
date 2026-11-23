@@ -1,5 +1,30 @@
 # CHANGELOG
 
+## v2.0.0-alpha.1 — Minecraft 26.1.2 (draft, not released)
+
+**Alpha. Do not use it on a world you cannot lose.** Needs Java 25 and a pinned
+release (`MF_VERSION=v2.0.0-alpha.1`): `latest` stays on the 1.21.1 line.
+
+### Known gaps
+
+- **No client debug mod.** `multiforge-client` is not ported to 26.1.2, so there
+  is no `multiforge-client.jar`, F3 overlay, chunk-border renderer, MSPT heatmap
+  or region-pin selection. Servers and normal clients are unaffected.
+
+### Changing an entity in another region
+
+A block entity can act on a player or mob that another region is ticking. These
+calls are now safe, and what the caller sees is:
+
+- **Attributes:** applied at once, with Vanilla's results.
+- **Effects, health, XP, food, equipment:** applied after the current tick.
+- **Damage:** applied after the tick. The caller gets `true`, or `false` if the
+  target is gone or immune; armor or an event may still reduce or cancel it.
+- **Adding to an inventory:** the caller's stack is emptied and the call returns
+  `true`. Whatever does not fit drops at the player.
+- **Taking from an inventory:** nothing is taken and the caller gets an empty
+  result, because the real result cannot be known without risking a duplicate.
+
 ## v1.12.0 — PROXY protocol, and updates that cannot change your Minecraft version
 
 **Upgrade if you run MultiForge behind a TCP router or proxy.** Nothing changes

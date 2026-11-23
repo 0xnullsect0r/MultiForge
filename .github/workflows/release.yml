@@ -25,6 +25,10 @@ jobs:
         # false only while a new line is being bootstrapped from stock NeoForge.
         run: echo "MF_PATCHES=$(sed -n 's/^multiforge_patches_enabled=//p' "$MF_TREE/gradle.properties" | grep . || echo true)" >> "$GITHUB_ENV"
 
+      - name: Does this line ship the client mod?
+        # The 1.x line always does; mf-client.sh refuses to let it opt out.
+        run: .github/scripts/mf-client.sh >> "$GITHUB_ENV"
+
       - name: Tag matches the version and is on its line's branch
         # A tag pushed without the version bump shipped jars named for the tag
         # that reported the previous version. Each line releases only from its
@@ -71,13 +75,18 @@ jobs:
         env:
           GRADLE_OPTS: -Xmx6G
         run: |
+          CLIENT=:multiforge-client:build
+          if [ "$MF_CLIENT_PORTED" != true ]; then
+            echo "::warning::multiforge-client is not ported to the $MF_LINE line: this release has no client mod"
+            CLIENT=
+          fi
           ./gradlew \
             :multiforge-api:build \
             :multiforge-runtime:build \
             :multiforge-scanner:build \
             :multiforge-installer:build \
             :multiforge-bench:build \
-            :multiforge-client:build \
+            $CLIENT \
             --no-daemon --stacktrace
 
       - name: Assemble release bundle
@@ -97,14 +106,16 @@ jobs:
           # a stable-alias multiforge-client.jar so docs can link
           # `.../releases/latest/download/multiforge-client.jar` without
           # a version bump every release.
-          CLIENT_JAR=$(find multiforge-client/build/libs -maxdepth 1 -type f \
-              -name 'multiforge-client-*.jar' ! -name '*-sources.jar' | head -1)
-          if [ -z "$CLIENT_JAR" ]; then
-              echo "::error::multiforge-client jar not found under multiforge-client/build/libs"
-              exit 1
+          if [ "$MF_CLIENT_PORTED" = true ]; then
+              CLIENT_JAR=$(find multiforge-client/build/libs -maxdepth 1 -type f \
+                  -name 'multiforge-client-*.jar' ! -name '*-sources.jar' | head -1)
+              if [ -z "$CLIENT_JAR" ]; then
+                  echo "::error::multiforge-client jar not found under multiforge-client/build/libs"
+                  exit 1
+              fi
+              cp "$CLIENT_JAR" "$RELEASE_DIR/"
+              cp "$CLIENT_JAR" "$RELEASE_DIR/multiforge-client.jar"
           fi
-          cp "$CLIENT_JAR" "$RELEASE_DIR/"
-          cp "$CLIENT_JAR" "$RELEASE_DIR/multiforge-client.jar"
 
           # Mod-safety scanner, run by /multiforge certify from the server
           # directory. The updater installs it next to server.jar.
@@ -421,6 +432,11 @@ jobs:
 
             Keep `MF_VERSION` when updating: without it the updater follows `latest`, which is
             the 1.21.1 line. Assets are checked against `SHA256SUMS`.
+
+            **Known gap: no client debug mod.** `multiforge-client` is not ported to 26.1.2, so
+            this release has no `multiforge-client.jar`, and the F3 overlay, chunk borders, MSPT
+            heatmap and region-pin selection are unavailable. Servers and normal clients are
+            unaffected: the debug channel is optional.
 
             See [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/${{ github.ref_name }}/CHANGELOG.md) for what changed.
 
