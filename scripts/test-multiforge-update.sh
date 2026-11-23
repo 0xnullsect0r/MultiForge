@@ -128,7 +128,9 @@ fi
 kill $PID 2>/dev/null || true
 wait $PID 2>/dev/null || true
 [ $booted = 1 ] || fail "server.jar did not boot to Done (see $WORK/boot.out)"
-grep -q -e "--fml.neoForgeVersion, $NEW" logs/latest.log || fail "server.jar booted, but not NeoForge $NEW"
+# 1.21.1 logs its launch arguments; 26.1 logs only the version NeoForge loaded with.
+grep -qF -e "--fml.neoForgeVersion, $NEW" -e "NeoForge mod loading, version $NEW," logs/latest.log \
+    || fail "server.jar booted, but not NeoForge $NEW"
 pass "java -jar server.jar nogui booted $NEW to Done"
 [ "$(sum config/multiforge-server.toml)" = "$TOML" ] || fail "the booted server rewrote config/multiforge-server.toml"
 pass "config/multiforge-server.toml unchanged after a boot"
