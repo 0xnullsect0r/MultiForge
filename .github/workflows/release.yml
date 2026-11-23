@@ -41,7 +41,7 @@ jobs:
           java-version: "21"
 
       - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v3
+        uses: gradle/actions/setup-gradle@v6
 
       - name: Build release artifacts (pure-Java modules + client mod)
         # v1.3.5: :multiforge-client compiles through moddev (NeoForm-produced
@@ -151,7 +151,7 @@ jobs:
           java-version: "21"
 
       - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v3
+        uses: gradle/actions/setup-gradle@v6
 
       - name: Set fork-build heap
         run: echo "GRADLE_OPTS=-Xmx6G" >> "$GITHUB_ENV"
