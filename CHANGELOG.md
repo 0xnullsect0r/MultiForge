@@ -1,6 +1,6 @@
 # CHANGELOG
 
-## mc26.1.2-v2.0.0-alpha.1 — Minecraft 26.1.2 (draft, not released)
+## mc26.1.2-v2.0.0-alpha.1 — Minecraft 26.1.2
 
 **Alpha. Not for important worlds.** Use it only on a world you can lose. Loading
 a 1.21.1 world in 26.1.2 upgrades it permanently. Needs Java 25 and a pinned
