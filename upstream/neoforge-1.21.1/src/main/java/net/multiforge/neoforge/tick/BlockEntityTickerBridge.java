@@ -157,8 +157,7 @@ public final class BlockEntityTickerBridge {
             }
             ChunkHolderManager manager = host.chunkManagerForOrNull(world);
             if (manager == null) return false;
-            manager.regionData(region.id())
-                    .addBlockEntityTicker(new VanillaTickingBlockEntityAdapter(level, ticker, duringRegionTick));
+            manager.regionData(region.id()).addBlockEntityTicker(adapterFor(level, ticker));
             return true;
         } catch (Throwable t) {
             ProbeRegistry.bump("block-entities.ticker-add.failure");
@@ -168,6 +167,15 @@ public final class BlockEntityTickerBridge {
                             + t.getClass().getSimpleName() + ": " + t.getMessage());
             return false;
         }
+    }
+
+    /**
+     * A region's wrapper for {@code ticker}. Its block entity may still be waiting for
+     * {@code onLoad}: placed this tick, or in a chunk that loaded after this tick's pass.
+     * So the first tick always makes sure it ran.
+     */
+    public static VanillaTickingBlockEntityAdapter adapterFor(Level level, TickingBlockEntity ticker) {
+        return new VanillaTickingBlockEntityAdapter(level, ticker, true);
     }
 
     /**
