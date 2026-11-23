@@ -13,7 +13,7 @@
 
 plugins {
     id("multiforge.base")
-    id("net.neoforged.moddev") version "2.0.78"
+    id("net.neoforged.moddev") version "2.0.148"
 }
 
 description = "MultiForge client debug mod — F3 overlay, chunk borders, tick-cost heatmap, pin selection."
