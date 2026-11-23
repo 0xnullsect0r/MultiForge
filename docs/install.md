@@ -10,13 +10,13 @@ MultiForge ships three install methods, each suited to a different starting poin
 
 All three land the same runtime + patched NeoForge fork. Post-install steps (EULA, `multiforge-server.toml`, mods, world) are the same regardless of how you installed.
 
-> **The 26.1.2 line (`v2.x-alpha`) is a pre-release.** Everything below describes the stable 1.21.1 line unless it says otherwise. On 26.1.2:
+> **The 26.1.2 line (`mc26.1.2-v2.x-alpha`) is a pre-release.** Everything below describes the stable 1.21.1 line unless it says otherwise. On 26.1.2:
 >
 > - **JDK 25 exactly.** `run.sh`, `run.bat`, the converter and the updater refuse any other Java.
 > - **Name the release.** GitHub's `latest` is always a 1.21.1 release and never moves a server to 26.x; the updater refuses a 26.x server that does not name one:
->   `curl -fsSL https://github.com/0xnullsect0r/MultiForge/releases/download/v2.0.0-alpha.1/multiforge-update.sh | MF_VERSION=v2.0.0-alpha.1 sh`
+>   `curl -fsSL https://github.com/0xnullsect0r/MultiForge/releases/download/mc26.1.2-v2.0.0-alpha.1/multiforge-update.sh | MF_VERSION=mc26.1.2-v2.0.0-alpha.1 JAVA_HOME=/path/to/jdk-25 sh`
 > - **No crossing versions.** The updater and the converter refuse to move a server between Minecraft versions in either direction, because loading a world in a newer version upgrades it for good and a modpack's mods load on one version only.
-> - **No Pelican egg yet.** `pelican-egg.json` is the 1.21.1 egg (Java 21).
+> - **`pelican-egg.json` is the 1.21.1 egg (Java 21).** Do not use it for 26.1.2; the modpack egg for 26.1 is separate and needs an exact version.
 > - **No client debug mod yet.** `multiforge-client` is not ported to 26.1.2.
 
 **Requirements**

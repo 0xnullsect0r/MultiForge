@@ -74,17 +74,27 @@ and `release.yml` read it.
 | Line | Tags | Released from | Tree | JDK | GitHub release |
 |---|---|---|---|---|---|
 | 1.21 | `v1.X.Y` | `main`, `release/1.21.x` | `upstream/neoforge-1.21.1` | 21 | stable, `latest` |
-| 26.1 | `v2.X.Y-alpha.N` | `port/26.1.2` | `upstream/neoforge-26.1.2` | 25 | prerelease, never `latest` |
+| 26.1 | `mc26.1.2-v2.X.Y-alpha.N` | `port/26.1.2` | `upstream/neoforge-26.1.2` | 25 | prerelease, never `latest` |
 
 Any other tag is refused. **A 26.x build must never become `latest`:** old
 updaters and imported eggs follow it and would move a 1.21.1 world to 26.x. So
 26.1 releases carry tag-pinned install commands and no `pelican-egg.json`.
 
-The release workflow and the nightly refuse a tree whose `gradle.properties` has
-`multiforge_patches_enabled=false`, which marks a line still being bootstrapped
-from stock NeoForge. The nightly is scheduled only on the default branch; on
-another line, dispatch it with `--ref <branch>`. Its updater check starts from
-the newest release of the same line, and is skipped if that line has none.
+The version inside a 26.1 tag is the tree's version: tag
+`mc26.1.2-v2.0.0-alpha.1` needs `version=2.0.0-alpha.1` and
+`multiforge_runtime_version=2.0.0-alpha.1`, and builds fork version
+`26.1.2.129-multiforge-2.0.0-alpha.1`. Assets keep the plain version in their
+names (`multiforge-2.0.0-alpha.1-installer.jar`).
+
+`multiforge_patches_enabled` in the tree's `gradle.properties` decides what may
+ship (`.github/scripts/mf-patches-gate.sh`): `true` on any line, `prerelease` only
+on a prerelease line, and anything else (`false`, `partial`) nowhere. The nightly
+is scheduled only on the default branch; on another line, dispatch it with
+`--ref <branch>`. Its updater check starts from the newest release of the same
+line, and is skipped if that line has none.
+
+`scripts/test-mf-line.sh` and `scripts/test-multiforge-update-guard.sh` check these
+rules without a network, and run in CI.
 
 ## If a release job fails
 
