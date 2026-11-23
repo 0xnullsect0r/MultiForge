@@ -1,0 +1,122 @@
+--- a/net/minecraft/world/entity/player/Inventory.java
++++ b/net/minecraft/world/entity/player/Inventory.java
+@@ -71,6 +71,7 @@ public class Inventory implements Container, Nameable {
+         if (!isHotbarSlot(selected)) {
+             throw new IllegalArgumentException("Invalid selected slot");
+         } else {
++            if (net.multiforge.neoforge.world.CrossRegionInventory.deferSelect(this, selected)) return; // MultiForge: entity in another region
+             this.selected = selected;
+         }
+     }
+@@ -80,6 +81,7 @@ public class Inventory implements Container, Nameable {
+     }
+ 
+     public ItemStack setSelectedItem(ItemStack itemStack) {
++        if (net.multiforge.neoforge.world.CrossRegionInventory.isForeign(this)) return net.multiforge.neoforge.world.CrossRegionInventory.setSelectedItem(this, itemStack); // MultiForge: entity in another region
+         return this.items.set(this.selected, itemStack);
+     }
+ 
+@@ -109,6 +111,7 @@ public class Inventory implements Container, Nameable {
+     }
+ 
+     public void addAndPickItem(ItemStack itemStack) {
++        if (net.multiforge.neoforge.world.CrossRegionInventory.deferAddAndPick(this, itemStack)) return; // MultiForge: entity in another region
+         this.setSelectedSlot(this.getSuitableHotbarSlot());
+         if (!this.items.get(this.selected).isEmpty()) {
+             int freeSlot = this.getFreeSlot();
+@@ -121,6 +124,7 @@ public class Inventory implements Container, Nameable {
+     }
+ 
+     public void pickSlot(int slot) {
++        if (net.multiforge.neoforge.world.CrossRegionInventory.deferPickSlot(this, slot)) return; // MultiForge: entity in another region
+         this.setSelectedSlot(this.getSuitableHotbarSlot());
+         ItemStack tmp = this.items.get(this.selected);
+         this.items.set(this.selected, this.items.get(slot));
+@@ -178,6 +182,7 @@ public class Inventory implements Container, Nameable {
+     }
+ 
+     public int clearOrCountMatchingItems(Predicate<ItemStack> predicate, int amountToRemove, Container craftSlots) {
++        if (amountToRemove != 0 && net.multiforge.neoforge.world.CrossRegionInventory.refuseRemoval(this, "Inventory.clearOrCountMatchingItems")) return 0; // MultiForge: entity in another region
+         int count = 0;
+         boolean countingOnly = amountToRemove == 0;
+         count += ContainerHelper.clearOrCountMatchingItems(this, predicate, amountToRemove - count, countingOnly);
+@@ -250,6 +255,7 @@ public class Inventory implements Container, Nameable {
+     }
+ 
+     public boolean add(int slot, ItemStack itemStack) {
++        if (net.multiforge.neoforge.world.CrossRegionInventory.isForeign(this)) return net.multiforge.neoforge.world.CrossRegionInventory.add(this, slot, itemStack); // MultiForge: entity in another region
+         if (itemStack.isEmpty()) {
+             return false;
+         } else {
+@@ -305,6 +311,7 @@ public class Inventory implements Container, Nameable {
+     }
+ 
+     public void placeItemBackInInventory(ItemStack itemStack, boolean shouldSendSetSlotPacket) {
++        if (net.multiforge.neoforge.world.CrossRegionInventory.deferPlaceBack(this, itemStack, shouldSendSetSlotPacket)) return; // MultiForge: entity in another region
+         while (!itemStack.isEmpty()) {
+             int slot = this.getSlotWithRemainingSpace(itemStack);
+             if (slot == -1) {
+@@ -329,6 +336,7 @@ public class Inventory implements Container, Nameable {
+ 
+     @Override
+     public ItemStack removeItem(int slot, int count) {
++        if (net.multiforge.neoforge.world.CrossRegionInventory.refuseRemoval(this, "Inventory.removeItem")) return ItemStack.EMPTY; // MultiForge: entity in another region
+         if (slot < this.items.size()) {
+             return ContainerHelper.removeItem(this.items, slot, count);
+         } else {
+@@ -345,6 +353,7 @@ public class Inventory implements Container, Nameable {
+     }
+ 
+     public void removeItem(ItemStack itemStack) {
++        if (net.multiforge.neoforge.world.CrossRegionInventory.deferRemoveStack(this, itemStack)) return; // MultiForge: entity in another region
+         for (int slot = 0; slot < this.items.size(); slot++) {
+             if (this.items.get(slot) == itemStack) {
+                 this.items.set(slot, ItemStack.EMPTY);
+@@ -363,6 +372,7 @@ public class Inventory implements Container, Nameable {
+ 
+     @Override
+     public ItemStack removeItemNoUpdate(int slot) {
++        if (net.multiforge.neoforge.world.CrossRegionInventory.refuseRemoval(this, "Inventory.removeItemNoUpdate")) return ItemStack.EMPTY; // MultiForge: entity in another region
+         if (slot < this.items.size()) {
+             ItemStack itemStack = this.items.get(slot);
+             this.items.set(slot, ItemStack.EMPTY);
+@@ -375,6 +385,7 @@ public class Inventory implements Container, Nameable {
+ 
+     @Override
+     public void setItem(int slot, ItemStack itemStack) {
++        if (net.multiforge.neoforge.world.CrossRegionInventory.deferSetItem(this, slot, itemStack)) return; // MultiForge: entity in another region
+         if (slot < this.items.size()) {
+             this.items.set(slot, itemStack);
+         }
+@@ -442,6 +453,7 @@ public class Inventory implements Container, Nameable {
+     }
+ 
+     public void dropAll() {
++        if (net.multiforge.neoforge.world.CrossRegionInventory.deferDropAll(this)) return; // MultiForge: entity in another region
+         for (int i = 0; i < this.items.size(); i++) {
+             ItemStack itemStack = this.items.get(i);
+             if (!itemStack.isEmpty()) {
+@@ -498,6 +510,7 @@ public class Inventory implements Container, Nameable {
+     }
+ 
+     public void replaceWith(Inventory other) {
++        if (net.multiforge.neoforge.world.CrossRegionInventory.deferReplaceWith(this, other)) return; // MultiForge: entity in another region
+         for (int i = 0; i < this.getContainerSize(); i++) {
+             this.setItem(i, other.getItem(i));
+         }
+@@ -507,6 +520,7 @@ public class Inventory implements Container, Nameable {
+ 
+     @Override
+     public void clearContent() {
++        if (net.multiforge.neoforge.world.CrossRegionInventory.deferClear(this)) return; // MultiForge: entity in another region
+         this.items.clear();
+         this.equipment.clear();
+     }
+@@ -518,6 +532,7 @@ public class Inventory implements Container, Nameable {
+     }
+ 
+     public ItemStack removeFromSelected(boolean all) {
++        if (net.multiforge.neoforge.world.CrossRegionInventory.refuseRemoval(this, "Inventory.removeFromSelected")) return ItemStack.EMPTY; // MultiForge: entity in another region
+         ItemStack selectedItem = this.getSelectedItem();
+         return selectedItem.isEmpty() ? ItemStack.EMPTY : this.removeItem(this.selected, all ? selectedItem.getCount() : 1);
+     }

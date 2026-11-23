@@ -1,0 +1,10 @@
+--- a/net/minecraft/world/entity/boss/enderdragon/EnderDragonPart.java
++++ b/net/minecraft/world/entity/boss/enderdragon/EnderDragonPart.java
+@@ -51,6 +51,7 @@ public class EnderDragonPart extends net.neoforged.neoforge.entity.PartEntity<En
+ 
+     @Override
+     public final boolean hurtServer(ServerLevel level, DamageSource source, float damage) {
++        if (net.multiforge.neoforge.world.CrossRegionEffects.isForeign(this)) return net.multiforge.neoforge.world.CrossRegionEffects.deferHurt(this, level, source, damage); // MultiForge: entity in another region
+         return this.isInvulnerableToBase(source) ? false : this.parentMob.hurt(level, this, source, damage);
+     }
+ 

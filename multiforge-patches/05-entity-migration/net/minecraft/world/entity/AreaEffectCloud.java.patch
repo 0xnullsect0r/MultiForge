@@ -1,0 +1,10 @@
+--- a/net/minecraft/world/entity/AreaEffectCloud.java
++++ b/net/minecraft/world/entity/AreaEffectCloud.java
+@@ -361,6 +361,7 @@ public class AreaEffectCloud extends Entity implements TraceableEntity {
+ 
+     @Override
+     public final boolean hurtServer(ServerLevel level, DamageSource source, float damage) {
++        if (net.multiforge.neoforge.world.CrossRegionEffects.isForeign(this)) return net.multiforge.neoforge.world.CrossRegionEffects.deferHurt(this, level, source, damage); // MultiForge: entity in another region
+         return false;
+     }
+ 

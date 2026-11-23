@@ -1,0 +1,10 @@
+--- a/net/minecraft/world/entity/monster/EnderMan.java
++++ b/net/minecraft/world/entity/monster/EnderMan.java
+@@ -350,6 +350,7 @@ public class EnderMan extends Monster implements NeutralMob {
+ 
+     @Override
+     public boolean hurtServer(ServerLevel level, DamageSource source, float damage) {
++        if (net.multiforge.neoforge.world.CrossRegionEffects.isForeign(this)) return net.multiforge.neoforge.world.CrossRegionEffects.deferHurt(this, level, source, damage); // MultiForge: entity in another region
+         if (this.isInvulnerableTo(level, source)) {
+             return false;
+         } else {

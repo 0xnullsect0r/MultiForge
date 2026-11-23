@@ -1,6 +1,22 @@
 --- a/net/minecraft/world/entity/player/Player.java
 +++ b/net/minecraft/world/entity/player/Player.java
-@@ -1627,6 +1627,7 @@ public abstract class Player extends Avatar implements ContainerUser, net.neofor
+@@ -179,6 +179,7 @@ public abstract class Player extends Avatar implements ContainerUser, net.neofor
+ 
+     public Player(Level level, GameProfile gameProfile) {
+         super(EntityType.PLAYER, level);
++        this.foodData.mfBindOwner(this); // MultiForge: routes food changes from another region
+         this.setUUID(gameProfile.id());
+         this.gameProfile = gameProfile;
+         this.inventory = new Inventory(this, this.equipment);
+@@ -701,6 +702,7 @@ public abstract class Player extends Avatar implements ContainerUser, net.neofor
+ 
+     @Override
+     public boolean hurtServer(ServerLevel level, DamageSource source, float damage) {
++        if (net.multiforge.neoforge.world.CrossRegionEffects.isForeign(this)) return net.multiforge.neoforge.world.CrossRegionEffects.deferHurt(this, level, source, damage); // MultiForge: entity in another region
+         if (this.isInvulnerableTo(level, source)) {
+             return false;
+         } else if (this.abilities.invulnerable && !source.is(DamageTypeTags.BYPASSES_INVULNERABILITY)) {
+@@ -1627,6 +1629,7 @@ public abstract class Player extends Avatar implements ContainerUser, net.neofor
      }
  
      public void causeFoodExhaustion(float amount) {

@@ -1,0 +1,10 @@
+--- a/net/minecraft/world/entity/animal/bee/Bee.java
++++ b/net/minecraft/world/entity/animal/bee/Bee.java
+@@ -637,6 +637,7 @@ public class Bee extends Animal implements FlyingAnimal, NeutralMob {
+ 
+     @Override
+     public boolean hurtServer(ServerLevel level, DamageSource source, float damage) {
++        if (net.multiforge.neoforge.world.CrossRegionEffects.isForeign(this)) return net.multiforge.neoforge.world.CrossRegionEffects.deferHurt(this, level, source, damage); // MultiForge: entity in another region
+         if (this.isInvulnerableTo(level, source)) {
+             return false;
+         } else {

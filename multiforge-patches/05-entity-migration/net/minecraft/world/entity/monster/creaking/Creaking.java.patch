@@ -1,0 +1,10 @@
+--- a/net/minecraft/world/entity/monster/creaking/Creaking.java
++++ b/net/minecraft/world/entity/monster/creaking/Creaking.java
+@@ -151,6 +151,7 @@ public class Creaking extends Monster {
+ 
+     @Override
+     public boolean hurtServer(ServerLevel level, DamageSource source, float damage) {
++        if (net.multiforge.neoforge.world.CrossRegionEffects.isForeign(this)) return net.multiforge.neoforge.world.CrossRegionEffects.deferHurt(this, level, source, damage); // MultiForge: entity in another region
+         BlockPos homePos = this.getHomePos();
+         if (homePos == null || source.is(DamageTypeTags.BYPASSES_INVULNERABILITY)) {
+             return super.hurtServer(level, source, damage);

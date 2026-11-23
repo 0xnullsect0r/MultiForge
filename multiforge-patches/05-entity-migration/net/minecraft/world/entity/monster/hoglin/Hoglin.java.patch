@@ -1,0 +1,10 @@
+--- a/net/minecraft/world/entity/monster/hoglin/Hoglin.java
++++ b/net/minecraft/world/entity/monster/hoglin/Hoglin.java
+@@ -113,6 +113,7 @@ public class Hoglin extends Animal implements Enemy, HoglinBase {
+ 
+     @Override
+     public boolean hurtServer(ServerLevel level, DamageSource source, float damage) {
++        if (net.multiforge.neoforge.world.CrossRegionEffects.isForeign(this)) return net.multiforge.neoforge.world.CrossRegionEffects.deferHurt(this, level, source, damage); // MultiForge: entity in another region
+         boolean wasHurt = super.hurtServer(level, source, damage);
+         if (wasHurt && source.getEntity() instanceof LivingEntity sourceEntity) {
+             HoglinAi.wasHurtBy(level, this, sourceEntity);

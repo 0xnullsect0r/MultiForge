@@ -1,0 +1,49 @@
+--- a/net/minecraft/world/food/FoodData.java
++++ b/net/minecraft/world/food/FoodData.java
+@@ -15,6 +15,12 @@ public class FoodData {
+     private float saturationLevel = 5.0F;
+     private float exhaustionLevel;
+     private int tickTimer;
++    /** MultiForge (docs/design/shared-state-audit.md): whose food this is, to route a change from another region. */
++    private net.minecraft.world.entity.player.@org.jspecify.annotations.Nullable Player mfOwner;
++
++    public void mfBindOwner(net.minecraft.world.entity.player.Player owner) {
++        this.mfOwner = owner;
++    }
+ 
+     private void add(int food, float saturation) {
+         this.foodLevel = Mth.clamp(food + this.foodLevel, 0, 20);
+@@ -22,10 +28,12 @@ public class FoodData {
+     }
+ 
+     public void eat(int food, float saturationModifier) {
++        if (net.multiforge.neoforge.world.CrossRegionEffects.deferEat(this, this.mfOwner, food, saturationModifier)) return; // MultiForge: entity in another region
+         this.add(food, FoodConstants.saturationByModifier(food, saturationModifier));
+     }
+ 
+     public void eat(FoodProperties foodProperties) {
++        if (net.multiforge.neoforge.world.CrossRegionEffects.deferEat(this, this.mfOwner, foodProperties)) return; // MultiForge: entity in another region
+         this.add(foodProperties.nutrition(), foodProperties.saturation());
+     }
+ 
+@@ -98,6 +106,7 @@ public class FoodData {
+     }
+ 
+     public void addExhaustion(float amount) {
++        if (net.multiforge.neoforge.world.CrossRegionEffects.deferAddExhaustion(this, this.mfOwner, amount)) return; // MultiForge: entity in another region
+         this.exhaustionLevel = Math.min(this.exhaustionLevel + amount, 40.0F);
+     }
+ 
+@@ -106,10 +115,12 @@ public class FoodData {
+     }
+ 
+     public void setFoodLevel(int food) {
++        if (net.multiforge.neoforge.world.CrossRegionEffects.deferSetFoodLevel(this, this.mfOwner, food)) return; // MultiForge: entity in another region
+         this.foodLevel = food;
+     }
+ 
+     public void setSaturation(float saturation) {
++        if (net.multiforge.neoforge.world.CrossRegionEffects.deferSetSaturation(this, this.mfOwner, saturation)) return; // MultiForge: entity in another region
+         this.saturationLevel = saturation;
+     }
+ }

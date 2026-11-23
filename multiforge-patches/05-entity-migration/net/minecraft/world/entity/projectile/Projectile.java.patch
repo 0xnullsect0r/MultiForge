@@ -1,0 +1,10 @@
+--- a/net/minecraft/world/entity/projectile/Projectile.java
++++ b/net/minecraft/world/entity/projectile/Projectile.java
+@@ -373,6 +373,7 @@ public abstract class Projectile extends Entity implements TraceableEntity {
+ 
+     @Override
+     public boolean hurtServer(ServerLevel level, DamageSource source, float damage) {
++        if (net.multiforge.neoforge.world.CrossRegionEffects.isForeign(this)) return net.multiforge.neoforge.world.CrossRegionEffects.deferHurt(this, level, source, damage); // MultiForge: entity in another region
+         if (!this.isInvulnerableToBase(source)) {
+             this.markHurt();
+         }

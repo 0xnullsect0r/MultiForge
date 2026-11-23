@@ -1,0 +1,10 @@
+--- a/net/minecraft/world/entity/ExperienceOrb.java
++++ b/net/minecraft/world/entity/ExperienceOrb.java
+@@ -245,6 +245,7 @@ public class ExperienceOrb extends Entity {
+ 
+     @Override
+     public final boolean hurtServer(ServerLevel level, DamageSource source, float damage) {
++        if (net.multiforge.neoforge.world.CrossRegionEffects.isForeign(this)) return net.multiforge.neoforge.world.CrossRegionEffects.deferHurt(this, level, source, damage); // MultiForge: entity in another region
+         if (this.isInvulnerableToBase(source)) {
+             return false;
+         } else {

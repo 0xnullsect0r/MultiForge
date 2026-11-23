@@ -1,0 +1,10 @@
+--- a/net/minecraft/world/entity/animal/golem/IronGolem.java
++++ b/net/minecraft/world/entity/animal/golem/IronGolem.java
+@@ -205,6 +205,7 @@ public class IronGolem extends AbstractGolem implements NeutralMob {
+ 
+     @Override
+     public boolean hurtServer(ServerLevel level, DamageSource source, float damage) {
++        if (net.multiforge.neoforge.world.CrossRegionEffects.isForeign(this)) return net.multiforge.neoforge.world.CrossRegionEffects.deferHurt(this, level, source, damage); // MultiForge: entity in another region
+         Crackiness.Level previousCrackiness = this.getCrackiness();
+         boolean wasHurt = super.hurtServer(level, source, damage);
+         if (wasHurt && this.getCrackiness() != previousCrackiness) {

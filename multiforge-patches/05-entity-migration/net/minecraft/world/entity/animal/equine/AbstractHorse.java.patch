@@ -1,0 +1,10 @@
+--- a/net/minecraft/world/entity/animal/equine/AbstractHorse.java
++++ b/net/minecraft/world/entity/animal/equine/AbstractHorse.java
+@@ -319,6 +319,7 @@ public abstract class AbstractHorse extends Animal implements PlayerRideableJump
+ 
+     @Override
+     public boolean hurtServer(ServerLevel level, DamageSource source, float damage) {
++        if (net.multiforge.neoforge.world.CrossRegionEffects.isForeign(this)) return net.multiforge.neoforge.world.CrossRegionEffects.deferHurt(this, level, source, damage); // MultiForge: entity in another region
+         boolean wasHurt = super.hurtServer(level, source, damage);
+         if (wasHurt && this.random.nextInt(3) == 0) {
+             this.standIfPossible();

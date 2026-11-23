@@ -1,0 +1,10 @@
+--- a/net/minecraft/world/entity/item/FallingBlockEntity.java
++++ b/net/minecraft/world/entity/item/FallingBlockEntity.java
+@@ -108,6 +108,7 @@ public class FallingBlockEntity extends Entity {
+ 
+     @Override
+     public final boolean hurtServer(ServerLevel level, DamageSource source, float damage) {
++        if (net.multiforge.neoforge.world.CrossRegionEffects.isForeign(this)) return net.multiforge.neoforge.world.CrossRegionEffects.deferHurt(this, level, source, damage); // MultiForge: entity in another region
+         if (!this.isInvulnerableToBase(source)) {
+             this.markHurt();
+         }

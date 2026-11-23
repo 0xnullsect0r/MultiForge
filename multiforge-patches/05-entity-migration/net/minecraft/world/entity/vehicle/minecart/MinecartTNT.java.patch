@@ -1,0 +1,10 @@
+--- a/net/minecraft/world/entity/vehicle/minecart/MinecartTNT.java
++++ b/net/minecraft/world/entity/vehicle/minecart/MinecartTNT.java
+@@ -68,6 +68,7 @@ public class MinecartTNT extends AbstractMinecart {
+ 
+     @Override
+     public boolean hurtServer(ServerLevel level, DamageSource source, float damage) {
++        if (net.multiforge.neoforge.world.CrossRegionEffects.isForeign(this)) return net.multiforge.neoforge.world.CrossRegionEffects.deferHurt(this, level, source, damage); // MultiForge: entity in another region
+         if (source.getDirectEntity() instanceof AbstractArrow projectile && projectile.isOnFire()) {
+             DamageSource damageSource = this.damageSources().explosion(this, source.getEntity());
+             this.explode(damageSource, projectile.getDeltaMovement().lengthSqr());

@@ -1,0 +1,165 @@
+--- a/net/minecraft/world/entity/ai/attributes/AttributeInstance.java
++++ b/net/minecraft/world/entity/ai/attributes/AttributeInstance.java
+@@ -22,9 +22,11 @@ public class AttributeInstance {
+     private final Map<AttributeModifier.Operation, Map<Identifier, AttributeModifier>> modifiersByOperation = Maps.newEnumMap(AttributeModifier.Operation.class);
+     private final Map<Identifier, AttributeModifier> modifierById = new Object2ObjectArrayMap<>();
+     private final Map<Identifier, AttributeModifier> permanentModifiers = new Object2ObjectArrayMap<>();
++    // MultiForge (docs/design/shared-state-audit.md): a block entity may change the attributes of a
++    // player another region is ticking. Every access holds this instance's monitor, a leaf lock.
+     private double baseValue;
+-    private boolean dirty = true;
+-    private double cachedValue;
++    private volatile boolean dirty = true;
++    private volatile double cachedValue;
+     private final Consumer<AttributeInstance> onDirty;
+ 
+     public AttributeInstance(Holder<Attribute> attribute, Consumer<AttributeInstance> onDirty) {
+@@ -37,11 +39,11 @@ public class AttributeInstance {
+         return this.attribute;
+     }
+ 
+-    public double getBaseValue() {
++    public synchronized double getBaseValue() {
+         return this.baseValue;
+     }
+ 
+-    public void setBaseValue(double baseValue) {
++    public synchronized void setBaseValue(double baseValue) {
+         if (baseValue != this.baseValue) {
+             this.baseValue = baseValue;
+             this.setDirty();
+@@ -49,27 +51,27 @@ public class AttributeInstance {
+     }
+ 
+     @VisibleForTesting
+-    Map<Identifier, AttributeModifier> getModifiers(AttributeModifier.Operation operation) {
++    synchronized Map<Identifier, AttributeModifier> getModifiers(AttributeModifier.Operation operation) {
+         return this.modifiersByOperation.computeIfAbsent(operation, key -> new Object2ObjectOpenHashMap<>());
+     }
+ 
+-    public Set<AttributeModifier> getModifiers() {
++    public synchronized Set<AttributeModifier> getModifiers() {
+         return ImmutableSet.copyOf(this.modifierById.values());
+     }
+ 
+-    public Set<AttributeModifier> getPermanentModifiers() {
++    public synchronized Set<AttributeModifier> getPermanentModifiers() {
+         return ImmutableSet.copyOf(this.permanentModifiers.values());
+     }
+ 
+-    public @Nullable AttributeModifier getModifier(Identifier id) {
++    public synchronized @Nullable AttributeModifier getModifier(Identifier id) {
+         return this.modifierById.get(id);
+     }
+ 
+-    public boolean hasModifier(Identifier modifier) {
++    public synchronized boolean hasModifier(Identifier modifier) {
+         return this.modifierById.get(modifier) != null;
+     }
+ 
+-    private void addModifier(AttributeModifier modifier) {
++    private synchronized void addModifier(AttributeModifier modifier) {
+         AttributeModifier previous = this.modifierById.putIfAbsent(modifier.id(), modifier);
+         if (previous != null) {
+             throw new IllegalArgumentException("Modifier is already applied on this attribute!");
+@@ -79,7 +81,7 @@ public class AttributeInstance {
+         }
+     }
+ 
+-    public void addOrUpdateTransientModifier(AttributeModifier modifier) {
++    public synchronized void addOrUpdateTransientModifier(AttributeModifier modifier) {
+         AttributeModifier oldModifier = this.modifierById.put(modifier.id(), modifier);
+         if (modifier != oldModifier) {
+             this.getModifiers(modifier.operation()).put(modifier.id(), modifier);
+@@ -91,18 +93,18 @@ public class AttributeInstance {
+         this.addModifier(modifier);
+     }
+ 
+-    public void addOrReplacePermanentModifier(AttributeModifier modifier) {
++    public synchronized void addOrReplacePermanentModifier(AttributeModifier modifier) {
+         this.removeModifier(modifier.id());
+         this.addModifier(modifier);
+         this.permanentModifiers.put(modifier.id(), modifier);
+     }
+ 
+-    public void addPermanentModifier(AttributeModifier modifier) {
++    public synchronized void addPermanentModifier(AttributeModifier modifier) {
+         this.addModifier(modifier);
+         this.permanentModifiers.put(modifier.id(), modifier);
+     }
+ 
+-    public void addPermanentModifiers(Collection<AttributeModifier> modifiers) {
++    public synchronized void addPermanentModifiers(Collection<AttributeModifier> modifiers) {
+         for (AttributeModifier modifier : modifiers) {
+             this.addPermanentModifier(modifier);
+         }
+@@ -117,7 +119,7 @@ public class AttributeInstance {
+         this.removeModifier(modifier.id());
+     }
+ 
+-    public boolean removeModifier(Identifier id) {
++    public synchronized boolean removeModifier(Identifier id) {
+         AttributeModifier modifier = this.modifierById.remove(id);
+         if (modifier == null) {
+             return false;
+@@ -129,19 +131,26 @@ public class AttributeInstance {
+         }
+     }
+ 
+-    public void removeModifiers() {
++    public synchronized void removeModifiers() {
+         for (AttributeModifier modifier : this.getModifiers()) {
+             this.removeModifier(modifier);
+         }
+     }
+ 
+     public double getValue() {
+-        if (this.dirty) {
+-            this.cachedValue = this.calculateValue();
+-            this.dirty = false;
++        // Hot path: no lock while the cached value is current.
++        if (!this.dirty) {
++            return this.cachedValue;
+         }
+ 
+-        return this.cachedValue;
++        synchronized (this) {
++            if (this.dirty) {
++                this.cachedValue = this.calculateValue();
++                this.dirty = false;
++            }
++
++            return this.cachedValue;
++        }
+     }
+ 
+     private double calculateValue() {
+@@ -169,6 +178,10 @@ public class AttributeInstance {
+     }
+ 
+     public void replaceFrom(AttributeInstance other) {
++        // Both monitors, in one global order, so two opposite copies cannot deadlock.
++        boolean mf$thisFirst = System.identityHashCode(this) <= System.identityHashCode(other);
++        synchronized (mf$thisFirst ? this : other) {
++            synchronized (mf$thisFirst ? other : this) {
+         this.baseValue = other.baseValue;
+         this.modifierById.clear();
+         this.modifierById.putAll(other.modifierById);
+@@ -181,13 +194,15 @@ public class AttributeInstance {
+                     .putAll((Map<? extends Identifier, ? extends AttributeModifier>)attributeModifiers)
+             );
+         this.setDirty();
++            }
++        }
+     }
+ 
+-    public AttributeInstance.Packed pack() {
++    public synchronized AttributeInstance.Packed pack() {
+         return new AttributeInstance.Packed(this.attribute, this.baseValue, List.copyOf(this.permanentModifiers.values()));
+     }
+ 
+-    public void apply(AttributeInstance.Packed packed) {
++    public synchronized void apply(AttributeInstance.Packed packed) {
+         this.baseValue = packed.baseValue;
+ 
+         for (AttributeModifier modifier : packed.modifiers) {

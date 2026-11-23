@@ -1,0 +1,10 @@
+--- a/net/minecraft/world/entity/animal/axolotl/Axolotl.java
++++ b/net/minecraft/world/entity/animal/axolotl/Axolotl.java
+@@ -397,6 +397,7 @@ public class Axolotl extends Animal implements Bucketable {
+ 
+     @Override
+     public boolean hurtServer(ServerLevel level, DamageSource source, float damage) {
++        if (net.multiforge.neoforge.world.CrossRegionEffects.isForeign(this)) return net.multiforge.neoforge.world.CrossRegionEffects.deferHurt(this, level, source, damage); // MultiForge: entity in another region
+         float currentHealth = this.getHealth();
+         if (!this.isNoAi()
+             && this.random.nextInt(3) == 0

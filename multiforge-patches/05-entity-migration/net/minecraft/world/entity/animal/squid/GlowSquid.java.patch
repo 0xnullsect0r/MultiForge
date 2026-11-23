@@ -1,0 +1,10 @@
+--- a/net/minecraft/world/entity/animal/squid/GlowSquid.java
++++ b/net/minecraft/world/entity/animal/squid/GlowSquid.java
+@@ -91,6 +91,7 @@ public class GlowSquid extends Squid {
+ 
+     @Override
+     public boolean hurtServer(ServerLevel level, DamageSource source, float damage) {
++        if (net.multiforge.neoforge.world.CrossRegionEffects.isForeign(this)) return net.multiforge.neoforge.world.CrossRegionEffects.deferHurt(this, level, source, damage); // MultiForge: entity in another region
+         boolean hurt = super.hurtServer(level, source, damage);
+         if (hurt) {
+             this.setDarkTicks(100);

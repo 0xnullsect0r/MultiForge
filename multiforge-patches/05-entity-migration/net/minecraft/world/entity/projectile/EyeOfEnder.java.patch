@@ -1,0 +1,10 @@
+--- a/net/minecraft/world/entity/projectile/EyeOfEnder.java
++++ b/net/minecraft/world/entity/projectile/EyeOfEnder.java
+@@ -170,6 +170,7 @@ public class EyeOfEnder extends Entity implements ItemSupplier {
+ 
+     @Override
+     public boolean hurtServer(ServerLevel level, DamageSource source, float damage) {
++        if (net.multiforge.neoforge.world.CrossRegionEffects.isForeign(this)) return net.multiforge.neoforge.world.CrossRegionEffects.deferHurt(this, level, source, damage); // MultiForge: entity in another region
+         return false;
+     }
+ }

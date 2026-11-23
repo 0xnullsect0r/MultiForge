@@ -49,7 +49,23 @@
          if (net.neoforged.neoforge.event.EventHooks.onEffectRemoved(this, effect)) return false;
          MobEffectInstance effectInstance = this.removeEffectNoUpdate(effect);
          if (effectInstance != null) {
-@@ -1172,6 +1182,7 @@ public abstract class LivingEntity extends Entity implements Attackable, Waypoin
+@@ -1141,11 +1151,12 @@ public abstract class LivingEntity extends Entity implements Attackable, Waypoin
+     private void refreshDirtyAttributes() {
+         Set<AttributeInstance> attributesToUpdate = this.getAttributes().getAttributesToUpdate();
+ 
+-        for (AttributeInstance changedAttributeInstance : attributesToUpdate) {
++        // MultiForge: remove before handling, so a change another region makes meanwhile stays queued.
++        for (java.util.Iterator<AttributeInstance> mf$changed = attributesToUpdate.iterator(); mf$changed.hasNext();) {
++            AttributeInstance changedAttributeInstance = mf$changed.next();
++            mf$changed.remove();
+             this.onAttributeUpdated(changedAttributeInstance.getAttribute());
+         }
+-
+-        attributesToUpdate.clear();
+     }
+ 
+     protected void onAttributeUpdated(Holder<Attribute> attribute) {
+@@ -1172,6 +1183,7 @@ public abstract class LivingEntity extends Entity implements Attackable, Waypoin
      }
  
      public void heal(float heal) {
@@ -57,7 +73,7 @@
          heal = net.neoforged.neoforge.event.EventHooks.onLivingHeal(this, heal);
          if (heal <= 0) return;
          float health = this.getHealth();
-@@ -1185,6 +1196,7 @@ public abstract class LivingEntity extends Entity implements Attackable, Waypoin
+@@ -1185,6 +1197,7 @@ public abstract class LivingEntity extends Entity implements Attackable, Waypoin
      }
  
      public void setHealth(float health) {
@@ -65,7 +81,23 @@
          this.entityData.set(DATA_HEALTH_ID, Mth.clamp(health, 0.0F, this.getMaxHealth()));
      }
  
-@@ -3270,7 +3282,13 @@ public abstract class LivingEntity extends Entity implements Attackable, Waypoin
+@@ -1194,6 +1207,7 @@ public abstract class LivingEntity extends Entity implements Attackable, Waypoin
+ 
+     @Override
+     public boolean hurtServer(ServerLevel level, DamageSource source, float damage) {
++        if (net.multiforge.neoforge.world.CrossRegionEffects.isForeign(this)) return net.multiforge.neoforge.world.CrossRegionEffects.deferHurt(this, level, source, damage); // MultiForge: entity in another region
+         if (this.isInvulnerableTo(level, source)) {
+             return false;
+         } else if (this.isDeadOrDying()) {
+@@ -2336,6 +2350,7 @@ public abstract class LivingEntity extends Entity implements Attackable, Waypoin
+     /** Neo: Passing {@code true} for {@code insideTransaction} sets the item without side-effects (calling {@link #onEquipItem}).
+      * Callers are responsible for performing the deferred side-effects, when the active transaction commits. */
+     public void setItemSlot(EquipmentSlot slot, ItemStack itemStack, boolean insideTransaction) {
++        if (net.multiforge.neoforge.world.CrossRegionEffects.deferSetItemSlot(this, slot, itemStack, insideTransaction)) return; // MultiForge: entity in another region
+         var oldStack = this.equipment.set(slot, itemStack);
+         if (!insideTransaction) this.onEquipItem(slot, oldStack, itemStack);
+     }
+@@ -3270,7 +3285,13 @@ public abstract class LivingEntity extends Entity implements Attackable, Waypoin
                  }
              }
  
@@ -79,7 +111,7 @@
                  this.doPush(entityx);
              }
          }
-@@ -3426,6 +3444,7 @@ public abstract class LivingEntity extends Entity implements Attackable, Waypoin
+@@ -3426,6 +3447,7 @@ public abstract class LivingEntity extends Entity implements Attackable, Waypoin
      }
  
      public final void setAbsorptionAmount(float absorptionAmount) {

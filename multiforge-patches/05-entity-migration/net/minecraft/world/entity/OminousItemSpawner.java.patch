@@ -1,0 +1,10 @@
+--- a/net/minecraft/world/entity/OminousItemSpawner.java
++++ b/net/minecraft/world/entity/OminousItemSpawner.java
+@@ -185,6 +185,7 @@ public class OminousItemSpawner extends Entity {
+ 
+     @Override
+     public final boolean hurtServer(ServerLevel level, DamageSource source, float damage) {
++        if (net.multiforge.neoforge.world.CrossRegionEffects.isForeign(this)) return net.multiforge.neoforge.world.CrossRegionEffects.deferHurt(this, level, source, damage); // MultiForge: entity in another region
+         return false;
+     }
+ }

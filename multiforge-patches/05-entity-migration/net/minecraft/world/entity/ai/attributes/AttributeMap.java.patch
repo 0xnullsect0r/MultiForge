@@ -1,0 +1,16 @@
+--- a/net/minecraft/world/entity/ai/attributes/AttributeMap.java
++++ b/net/minecraft/world/entity/ai/attributes/AttributeMap.java
+@@ -14,9 +14,10 @@ import net.minecraft.resources.Identifier;
+ import org.jspecify.annotations.Nullable;
+ 
+ public class AttributeMap {
+-    private final Map<Holder<Attribute>, AttributeInstance> attributes = new Object2ObjectOpenHashMap<>();
+-    private final Set<AttributeInstance> attributesToSync = new ObjectOpenHashSet<>();
+-    private final Set<AttributeInstance> attributesToUpdate = new ObjectOpenHashSet<>();
++    // MultiForge (docs/design/shared-state-audit.md): another region may read or change these.
++    private final Map<Holder<Attribute>, AttributeInstance> attributes = new java.util.concurrent.ConcurrentHashMap<>();
++    private final Set<AttributeInstance> attributesToSync = java.util.concurrent.ConcurrentHashMap.newKeySet();
++    private final Set<AttributeInstance> attributesToUpdate = java.util.concurrent.ConcurrentHashMap.newKeySet();
+     private final AttributeSupplier supplier;
+ 
+     public AttributeMap(AttributeSupplier supplier) {

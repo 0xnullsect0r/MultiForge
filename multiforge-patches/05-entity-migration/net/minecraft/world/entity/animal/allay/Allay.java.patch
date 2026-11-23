@@ -1,0 +1,10 @@
+--- a/net/minecraft/world/entity/animal/allay/Allay.java
++++ b/net/minecraft/world/entity/animal/allay/Allay.java
+@@ -152,6 +152,7 @@ public class Allay extends PathfinderMob implements InventoryCarrier, VibrationS
+ 
+     @Override
+     public boolean hurtServer(ServerLevel level, DamageSource source, float damage) {
++        if (net.multiforge.neoforge.world.CrossRegionEffects.isForeign(this)) return net.multiforge.neoforge.world.CrossRegionEffects.deferHurt(this, level, source, damage); // MultiForge: entity in another region
+         return this.isLikedPlayer(source.getEntity()) ? false : super.hurtServer(level, source, damage);
+     }
+ 
