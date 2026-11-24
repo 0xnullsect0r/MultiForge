@@ -1,5 +1,15 @@
 # CHANGELOG
 
+## v1.12.5 — Block entities always load before their first tick
+
+**Upgrade if your modpack has pipes or machines that set themselves up when they
+load**, such as Industrial Foregoing Souls in All the Mods 10.
+
+- **Fixed a server crash.** A chunk that loaded partway through a tick could have
+  its block entities ticked before NeoForge called `onLoad`, which it promises
+  never happens. `onLoad` now always runs first, and on the server thread for
+  chunks that loaded before the regions start.
+
 ## v1.12.4 — Fix a crash from machines that use fake players
 
 **Upgrade if your modpack has machines that act through fake players**, such as

@@ -478,6 +478,53 @@ public class RegionTickBehaviourTests {
         });
     }
 
+    @GameTest(template = TestsMod.TEMPLATE_3x3, timeoutTicks = 300)
+    @TestHolder(description = "A block entity whose chunk loaded after this tick's onLoad pass still gets onLoad before its first tick.")
+    static void firstRegionTickRunsAfterOnLoad(final DynamicTest test) {
+        test.onGameTest(helper -> {
+            net.minecraft.server.level.ServerLevel level = helper.getLevel();
+            BlockPos pos = helper.absolutePos(new BlockPos(1, 1, 1));
+            java.util.concurrent.atomic.AtomicInteger loads = new java.util.concurrent.atomic.AtomicInteger();
+            java.util.concurrent.atomic.AtomicInteger loadsAtFirstTick = new java.util.concurrent.atomic.AtomicInteger(-1);
+            net.minecraft.world.level.block.entity.ChestBlockEntity blockEntity = new net.minecraft.world.level.block.entity.ChestBlockEntity(
+                    pos, Blocks.CHEST.defaultBlockState()) {
+                @Override
+                public void onLoad() {
+                    loads.incrementAndGet();
+                }
+            };
+            blockEntity.setLevel(level);
+            net.minecraft.world.level.block.entity.TickingBlockEntity ticker = new net.minecraft.world.level.block.entity.TickingBlockEntity() {
+                @Override
+                public void tick() {
+                    loadsAtFirstTick.compareAndSet(-1, loads.get());
+                }
+
+                @Override
+                public boolean isRemoved() {
+                    return false;
+                }
+
+                @Override
+                public BlockPos getPos() {
+                    return pos;
+                }
+
+                @Override
+                public String getType() {
+                    return "multiforge:on_load_order_test";
+                }
+            };
+            level.addFreshBlockEntities(java.util.List.of(blockEntity));
+            net.multiforge.neoforge.tick.VanillaTickingBlockEntityAdapter adapter = net.multiforge.neoforge.tick.BlockEntityTickerBridge.adapterFor(level, ticker);
+            adapter.tick();
+            adapter.tick();
+            helper.assertTrue(loadsAtFirstTick.get() == 1, "first tick saw onLoad run " + loadsAtFirstTick.get() + " times");
+            helper.assertTrue(loads.get() == 1, "onLoad ran " + loads.get() + " times");
+            helper.succeed();
+        });
+    }
+
     /**
      * Not {@code TicketType.FORCED}: at distance 2 that ticket equals the one {@code
      * setChunkForced} adds, and this test's end listener runs after the runner has

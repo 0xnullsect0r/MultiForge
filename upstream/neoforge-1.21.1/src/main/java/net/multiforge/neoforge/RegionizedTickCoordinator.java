@@ -141,6 +141,8 @@ public final class RegionizedTickCoordinator {
         net.multiforge.runtime.chunk.ChunkHolderManager chunks = host.chunkManagerForOrNull(world);
         if (chunks != null) level.mfBucketScheduledTicks(ownerOf(chunks));
         level.mfIndexNavigatingMobs();
+        // Chunks that loaded since this tick's onLoad pass: their block entities tick below.
+        if (level.mfRegionRunsEntities) level.mfLoadFreshBlockEntities();
         try {
             checkOverrun(world, host.driveRegions(world, DISPATCH_DEADLINE_NANOS, pump));
         } finally {
