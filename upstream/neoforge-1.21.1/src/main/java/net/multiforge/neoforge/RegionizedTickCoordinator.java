@@ -148,6 +148,8 @@ public final class RegionizedTickCoordinator {
         } finally {
             level.mfEndNavigatingMobsIndex();
         }
+        // Block entities' first ticks, held back from the workers.
+        net.multiforge.neoforge.tick.FirstBlockEntityTicks.runQueued();
         // Entities no region ticked (outside every region, or moved across a
         // region border mid-tick).
         level.mfTickEntitiesAfterRegions();
