@@ -479,13 +479,21 @@ public class RegionTickBehaviourTests {
     }
 
     @GameTest(template = TestsMod.TEMPLATE_3x3, timeoutTicks = 300)
-    @TestHolder(description = "A block entity whose chunk loaded after this tick's onLoad pass still gets onLoad before its first tick.")
+    @TestHolder(description = {
+            "A block entity's first tick follows onLoad, and when reached on a region worker runs on the server thread:",
+            "mods do one-time setup there, often in process-wide state (Mekanism's cable network)."
+    })
     static void firstRegionTickRunsAfterOnLoad(final DynamicTest test) {
         test.onGameTest(helper -> {
+            MultiThreadedSchedulerHost host = MultiForgeRegionizedRuntime.current();
+            helper.assertTrue(host != null, "runtime must be installed");
             net.minecraft.server.level.ServerLevel level = helper.getLevel();
             BlockPos pos = helper.absolutePos(new BlockPos(1, 1, 1));
             java.util.concurrent.atomic.AtomicInteger loads = new java.util.concurrent.atomic.AtomicInteger();
+            java.util.concurrent.atomic.AtomicInteger ticks = new java.util.concurrent.atomic.AtomicInteger();
             java.util.concurrent.atomic.AtomicInteger loadsAtFirstTick = new java.util.concurrent.atomic.AtomicInteger(-1);
+            java.util.concurrent.atomic.AtomicReference<Thread> firstTickThread = new java.util.concurrent.atomic.AtomicReference<>();
+            java.util.concurrent.atomic.AtomicBoolean calledOnWorker = new java.util.concurrent.atomic.AtomicBoolean();
             net.minecraft.world.level.block.entity.ChestBlockEntity blockEntity = new net.minecraft.world.level.block.entity.ChestBlockEntity(
                     pos, Blocks.CHEST.defaultBlockState()) {
                 @Override
@@ -497,7 +505,8 @@ public class RegionTickBehaviourTests {
             net.minecraft.world.level.block.entity.TickingBlockEntity ticker = new net.minecraft.world.level.block.entity.TickingBlockEntity() {
                 @Override
                 public void tick() {
-                    loadsAtFirstTick.compareAndSet(-1, loads.get());
+                    ticks.incrementAndGet();
+                    if (loadsAtFirstTick.compareAndSet(-1, loads.get())) firstTickThread.set(Thread.currentThread());
                 }
 
                 @Override
@@ -515,13 +524,24 @@ public class RegionTickBehaviourTests {
                     return "multiforge:on_load_order_test";
                 }
             };
-            level.addFreshBlockEntities(java.util.List.of(blockEntity));
             net.multiforge.neoforge.tick.VanillaTickingBlockEntityAdapter adapter = net.multiforge.neoforge.tick.BlockEntityTickerBridge.adapterFor(level, ticker);
-            adapter.tick();
-            adapter.tick();
-            helper.assertTrue(loadsAtFirstTick.get() == 1, "first tick saw onLoad run " + loadsAtFirstTick.get() + " times");
-            helper.assertTrue(loads.get() == 1, "onLoad ran " + loads.get() + " times");
-            helper.succeed();
+            helper.startSequence()
+                    .thenExecute(() -> host.taskQueue().queueChunkTask(level.mfWorldRef(), pos.getX() >> 4, pos.getZ() >> 4, () -> {
+                        calledOnWorker.set(Thread.currentThread() instanceof net.multiforge.runtime.region.RegionWorkerThread);
+                        level.addFreshBlockEntities(java.util.List.of(blockEntity));
+                        adapter.tick();
+                    }))
+                    .thenWaitUntil(() -> helper.assertTrue(ticks.get() >= 1, "first tick has not run yet"))
+                    .thenExecute(() -> {
+                        helper.assertTrue(loadsAtFirstTick.get() == 1, "first tick saw onLoad run " + loadsAtFirstTick.get() + " times");
+                        helper.assertTrue(loads.get() == 1, "onLoad ran " + loads.get() + " times");
+                        if (calledOnWorker.get()) {
+                            helper.assertFalse(firstTickThread.get() instanceof net.multiforge.runtime.region.RegionWorkerThread,
+                                    "first tick ran on a region worker: " + firstTickThread.get().getName());
+                        }
+                        helper.assertTrue(ticks.get() == 1, "first tick ran " + ticks.get() + " times");
+                    })
+                    .thenSucceed();
         });
     }
 

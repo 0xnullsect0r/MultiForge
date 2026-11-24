@@ -73,11 +73,25 @@ public final class VanillaTickingBlockEntityAdapter implements net.multiforge.ru
     public void tick() {
         if (loadPending) {
             loadPending = false;
+            if (Thread.currentThread() instanceof net.multiforge.runtime.region.RegionWorkerThread
+                    && !delegate.getType().startsWith("minecraft:")) {
+                // A mod's one-time setup often touches process-wide state: see
+                // FirstBlockEntityTicks. Vanilla's stay in order, for parity with stock.
+                FirstBlockEntityTicks.defer(this);
+                return;
+            }
             // NeoForge: onLoad runs right before the first tick. A no-op when the
             // server thread's pass already ran it.
             level.mfLoadFreshBlockEntityAt(delegate.getPos());
         }
         delegate.tick();
+    }
+
+    /** Server thread: the first tick a region worker deferred. */
+    void runFirstTick() {
+        if (delegate.isRemoved()) return;
+        level.mfLoadFreshBlockEntityAt(delegate.getPos());
+        if (shouldTick()) delegate.tick();
     }
 
     @Override
