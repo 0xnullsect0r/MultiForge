@@ -170,6 +170,10 @@ public final class DeterminismRun {
             if (!runner.boot(metrics)) fail(name + " failed to boot — see " + log);
             runner.rcon().command("tick freeze");
             waitLoaded(runner, area);
+            // "if loaded" reads the chunk's ticket level, which is ahead of its promotion: a chunk
+            // can pass while its scheduled ticks are still packed, and a fast sprint can then end
+            // before they run. A flushed save waits for every chunk's ticking future.
+            runner.rcon().command("save-all flush");
             if (runner.hasTickStats()) {
                 String regions = runner.rcon().command("multiforge region list");
                 System.out.println("DeterminismRun: " + name + " regions:\n" + regions.strip());
@@ -180,6 +184,16 @@ public final class DeterminismRun {
                 Thread.sleep(200);
             }
             if (!metrics.sawSprintCompleted()) fail(name + ": sprint did not complete — see " + log);
+            // The stop only rewrites chunks marked unsaved, and running a tick that changes no
+            // block does not mark one: its file would keep the tick list of an earlier save.
+            // Set and clear one block at the top of the world so every chunk's real end state
+            // is written and compared.
+            for (int[] chunk : area.chunks()) {
+                int x = chunk[0] * 16 + 8;
+                int z = chunk[1] * 16 + 8;
+                runner.rcon().command(String.format(Locale.ROOT, "setblock %d 319 %d minecraft:barrier", x, z));
+                runner.rcon().command(String.format(Locale.ROOT, "setblock %d 319 %d minecraft:air", x, z));
+            }
             if (!runner.shutdown(Duration.ofSeconds(1))) fail(name + " did not stop cleanly — see " + log);
         }
         Path kept = cache.resolve(name);

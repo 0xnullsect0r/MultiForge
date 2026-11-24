@@ -205,5 +205,6 @@ public final class BlockEntityTickerBridge {
      */
     public static void unbind() {
         INSTALLED.clear();
+        FirstBlockEntityTicks.clear();
     }
 }

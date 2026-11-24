@@ -1,5 +1,20 @@
 # CHANGELOG
 
+## v1.12.6 — Modded block entities set up safely
+
+**Upgrade if your modpack has machines or cables that join a shared network**,
+such as Mekanism in All the Mods 10.
+
+- **Fixed a crash on server start.** Mods often do one-time setup on a block
+  entity's first tick, and Mekanism registers its cables in a process-wide map
+  there. Cables in different regions could corrupt it. A modded block entity's
+  first tick now runs on the server thread after the regions finish, in the same
+  game tick. Vanilla block entities keep their order.
+- **Known limit.** A mod can still update its own shared state from later ticks
+  or neighbor changes. Mekanism does this when a cable reconnects.
+- **More reliable parity check.** The Vanilla parity gate now compares every
+  chunk's real end state instead of a possibly stale save.
+
 ## v1.12.5 — Block entities always load before their first tick
 
 **Upgrade if your modpack has pipes or machines that set themselves up when they
